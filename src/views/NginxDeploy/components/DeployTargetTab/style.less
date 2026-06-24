@@ -1,0 +1,106 @@
+.nginx-deploy-tab-card {
+  height: 100%;
+  overflow: hidden;
+
+  :deep(.ant-card-body) {
+    display: flex;
+    height: 100%;
+    min-height: 0;
+    flex-direction: column;
+    overflow: hidden;
+  }
+}
+
+.nginx-deploy-table-area {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.target-filter-bar {
+  flex: none;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #f0f0f0;
+
+  :deep(.ant-form) {
+    display: flex;
+    width: 100%;
+    gap: 8px 12px;
+    align-items: flex-end;
+    justify-content: space-between;
+  }
+
+  :deep(.ant-form-item) {
+    margin-right: 0;
+    margin-bottom: 0;
+  }
+
+  :deep(.ant-form-item-label > label) {
+    color: #374151;
+    font-weight: 600;
+  }
+
+  &__fields {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+  }
+
+  &__actions {
+    margin-left: auto;
+
+    :deep(.ant-form-item-control-input-content) {
+      display: flex;
+      justify-content: flex-end;
+    }
+  }
+
+  &__project {
+    width: 260px;
+  }
+
+  &__branch {
+    width: 220px;
+  }
+
+  &__server {
+    width: 320px;
+  }
+}
+
+.branch-tag {
+  display: inline-block;
+  max-width: 100%;
+  margin-right: 0;
+  border-radius: 999px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.visit-link {
+  color: var(--primary-color);
+  font-weight: 650;
+  text-decoration: none;
+  transition: opacity 0.2s;
+
+  &:hover {
+    opacity: 0.8;
+    text-decoration: none;
+  }
+}
+
+:deep(.ant-btn-link),
+:deep(.ant-btn-text) {
+  color: var(--primary-color);
+
+  &:hover {
+    color: var(--primary-color);
+    opacity: 0.8;
+  }
+}

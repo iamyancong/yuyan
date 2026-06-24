@@ -1,0 +1,49 @@
+.project-table {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 10px;
+  background: #ffffff;
+
+  :deep(.vxe-table--header-wrapper) {
+    background: linear-gradient(180deg, #fbfcff 0%, #f6f8fb 100%);
+  }
+
+  :deep(.vxe-header--column) {
+    color: #1f2937;
+    font-weight: 650;
+  }
+
+  :deep(.vxe-body--row.row--hover),
+  :deep(.vxe-body--row.row--current) {
+    background-color: #f7fbff;
+  }
+
+  :deep(.vxe-cell) {
+    line-height: 1.35;
+  }
+
+  :deep(.y-table__pagination),
+  :deep(.ant-pagination) {
+    margin: 14px 0 2px;
+  }
+}
+
+.plain-tag {
+  margin-right: 0;
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+.branch-tag {
+  max-width: 100%;
+  margin-right: 0;
+  overflow: hidden;
+  border-radius: 999px;
+  color: #2563eb;
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -1,0 +1,28 @@
+.nginx-deploy-tab-card {
+  height: 100%;
+  overflow: hidden;
+
+  :deep(.ant-card-body) {
+    display: flex;
+    height: 100%;
+    min-height: 0;
+    flex-direction: column;
+    overflow: hidden;
+  }
+}
+
+.nginx-deploy-table-area {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+:deep(.ant-btn-link),
+:deep(.ant-btn-text) {
+  color: var(--primary-color);
+
+  &:hover {
+    color: var(--primary-color);
+    opacity: 0.8;
+  }
+}

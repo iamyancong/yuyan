@@ -1,0 +1,277 @@
+/* ===== NginxRuntimeDrawer 布局样式 ===== */
+
+:deep(.nginx-runtime-drawer .ant-drawer-body) {
+  padding-top: 16px;
+  background: #f8fafc;
+}
+
+/* -- 外层容器 -- */
+.nginx-runtime-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* -- 顶部概览条 -- */
+.nginx-runtime-summary {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 0px 16px;
+  background: #fff;
+  border-radius: 8px;
+}
+
+.nginx-runtime-summary__item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.nginx-runtime-summary__item--grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.nginx-runtime-summary__label {
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.nginx-runtime-summary__value {
+  min-width: 0;
+  overflow: hidden;
+  color: #111827;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* -- 双栏布局主体 -- */
+.nginx-runtime-body {
+  display: grid;
+  grid-template-columns: 420px minmax(0, 1fr);
+  gap: 14px;
+}
+
+.nginx-runtime-body__left,
+.nginx-runtime-body__right {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+/* -- 通用卡片 -- */
+.nginx-runtime-card {
+  height: 100%;
+  padding: 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.nginx-runtime-muted {
+  color: #6b7280;
+  font-size: 13px;
+}
+
+/* -- 区域标题 -- */
+.nginx-runtime-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+
+  strong {
+    color: #111827;
+    font-size: 15px;
+    line-height: 22px;
+  }
+
+  span {
+    color: #6b7280;
+    font-size: 13px;
+    line-height: 20px;
+  }
+}
+
+.nginx-runtime-section-title__left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* -- 实例列表 -- */
+.nginx-instance-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.nginx-instance-list__item {
+  display: grid;
+  width: 100%;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    border-color 0.2s ease,
+    background 0.2s ease;
+
+  &:hover,
+  &--active {
+    border-color: #7c3aed;
+    background: #f7f2ff;
+  }
+
+  code {
+    min-width: 0;
+    overflow: hidden;
+    color: #4b5563;
+    font-size: 12px;
+    line-height: 18px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.nginx-instance-list__bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+
+  code {
+    flex: 1;
+  }
+}
+
+.nginx-instance-list__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.nginx-instance-list__main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+
+  strong {
+    min-width: 0;
+    overflow: hidden;
+    color: #111827;
+    font-size: 14px;
+    line-height: 22px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  span {
+    color: #6b7280;
+    font-size: 12px;
+    line-height: 18px;
+  }
+}
+
+/* -- 路径预览 -- */
+.nginx-runtime-paths {
+  display: grid;
+  gap: 8px;
+}
+
+.nginx-runtime-path-row {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+
+  span {
+    color: #6b7280;
+    font-size: 13px;
+  }
+
+  code {
+    min-width: 0;
+    padding: 6px 8px;
+    overflow: hidden;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    background: #f9fafb;
+    color: #111827;
+    font-size: 12px;
+    line-height: 18px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+/* -- 状态输出 & 日志 Monaco 容器 -- */
+.nginx-runtime-progress-monaco {
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+/* -- 进度区域 -- */
+.nginx-runtime-progress-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.nginx-runtime-progress-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: #111827;
+}
+
+/* -- 底部操作栏 -- */
+.nginx-runtime-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* -- 响应式：窄屏降级为单栏 -- */
+@media (max-width: 760px) {
+  .nginx-runtime-summary {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .nginx-runtime-body {
+    grid-template-columns: 1fr;
+  }
+
+  .nginx-runtime-section-title {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .nginx-runtime-footer {
+    align-items: flex-end;
+    flex-direction: column;
+  }
+
+  .nginx-instance-list__main {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

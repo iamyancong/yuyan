@@ -1,0 +1,98 @@
+stages:
+  - docker
+  - deploy
+
+variables:
+  DOCKER_TLS_CERTDIR: '/certs'
+  DOCKER_BUILDKIT: '1'
+  # Harbor 默认值（可被项目级变量覆盖）
+  HARBOR_REGISTRY: 'harbor.dm.com'
+  HARBOR_PROJECT: 'yss-datamiddle'
+  IMAGE_NAME: 'yss-frontend-yuyan-ops'
+  NODE_IMAGE: 'harbor.dm.com/yss-datamiddle/yss-node:22.19.0'
+  NPM_REGISTRY: 'http://192.168.167.26:8081/repository/npm-group/'
+  NPM_ALWAYS_AUTH: 'true'
+
+image: docker:24.0.5
+services:
+  - docker:24.0.5-dind
+
+before_script:
+  - |
+    set -e
+    # 若提供了账号则登录；否则依赖 Runner 全局 docker config 或开放推送策略
+    if [ -n "$HARBOR_USERNAME" ] && [ -n "$HARBOR_PASSWORD" ]; then
+      echo "Login Harbor: $HARBOR_REGISTRY"
+      echo "$HARBOR_PASSWORD" | docker login -u "$HARBOR_USERNAME" "$HARBOR_REGISTRY" --password-stdin
+    else
+      echo "Skip harbor login (no credentials provided)"
+    fi
+    export IMAGE_REPO="$HARBOR_REGISTRY/$HARBOR_PROJECT/${IMAGE_NAME:-yuyan-ops}"
+    export IMAGE_TAG="$IMAGE_REPO:$CI_COMMIT_REF_SLUG"
+
+docker:build-push:
+  stage: docker
+  script:
+    - docker build --build-arg NODE_IMAGE="$NODE_IMAGE" -t "$IMAGE_TAG" .
+    - docker push "$IMAGE_TAG"
+  after_script:
+    - docker image prune -f || true
+  only:
+    - main
+
+deploy:dev-local:
+  stage: deploy
+  image: docker:24.0.5
+  services:
+    - docker:24.0.5-dind
+  needs: ['docker:build-push']
+  before_script:
+    - |
+      set -e
+      if [ -n "$HARBOR_USERNAME" ] && [ -n "$HARBOR_PASSWORD" ]; then
+        echo "$HARBOR_PASSWORD" | docker login -u "$HARBOR_USERNAME" "$HARBOR_REGISTRY" --password-stdin
+      else
+        echo "Skip harbor login (no credentials provided)"
+      fi
+      export IMAGE_REPO="$HARBOR_REGISTRY/$HARBOR_PROJECT/${IMAGE_NAME:-yuyan-ops}"
+      export IMAGE_TAG="$IMAGE_REPO:$CI_COMMIT_REF_SLUG"
+  script:
+    - |
+      set -e
+      docker pull "$IMAGE_TAG"
+      docker stop yuyan-ops || true
+      docker rm yuyan-ops || true
+      ENV_ARGS=""
+      if [ -n "$GITLAB_TOKEN" ]; then ENV_ARGS="$ENV_ARGS -e GITLAB_TOKEN"; fi
+      if [ -n "$NPMRC_CONTENT" ]; then ENV_ARGS="$ENV_ARGS -e NPMRC_CONTENT"; fi
+      if [ -n "$NPM_REGISTRY" ]; then ENV_ARGS="$ENV_ARGS -e NPM_REGISTRY"; fi
+      if [ -n "$NPM_AUTH_TOKEN" ]; then ENV_ARGS="$ENV_ARGS -e NPM_AUTH_TOKEN"; fi
+      if [ -n "$NPM_ALWAYS_AUTH" ]; then ENV_ARGS="$ENV_ARGS -e NPM_ALWAYS_AUTH"; fi
+      if [ -z "$DEPLOY_SECRET_KEY" ]; then
+        echo "DEPLOY_SECRET_KEY is required for encrypted deploy credentials"
+        exit 1
+      fi
+      docker volume create yuyan-ops-deploy-data >/dev/null
+      docker run -d --name yuyan-ops -p 3100:3100 \
+        -e TEMPLATE_REPO_PATH=/opt/template \
+        -e TEMPLATE_REPO_URL="${TEMPLATE_REPO_URL:-http://192.168.167.142:8081/Data-Middleground-Develop-Area/product-code/ai-frontend/yss-frontend-template.git}" \
+        -e TEMPLATE_BRANCH="${TEMPLATE_BRANCH:-template}" \
+        -e GITLAB_HOST=${GITLAB_HOST:-http://192.168.167.142:8081} \
+        -e GIT_USER_NAME="${GIT_USER_NAME:-yuyan-ops}" \
+        -e GIT_USER_EMAIL="${GIT_USER_EMAIL:-yuyan-ops@ysstech.com}" \
+        -e DEPLOY_DATA_DIR=/data/yuyan-ops/deploy-data \
+        -e DEPLOY_SECRET_KEY="$DEPLOY_SECRET_KEY" \
+        -v yuyan-ops-deploy-data:/data/yuyan-ops/deploy-data \
+        $ENV_ARGS \
+        --restart unless-stopped \
+        --entrypoint node \
+        "$IMAGE_TAG" \
+        server/index.mjs
+      # 启动后健康检查，最多 30s
+      for i in $(seq 1 30); do
+        if curl -fsS http://127.0.0.1:3100/health >/dev/null; then echo 'service ready'; ready=1; break; fi; sleep 1; done
+      if [ -z "$ready" ]; then echo 'yuyan-ops not ready'; docker logs --tail 200 yuyan-ops || true; exit 1; fi
+  after_script:
+    - docker image prune -f || true
+  only:
+    - main

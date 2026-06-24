@@ -1,0 +1,39 @@
+.nginx-config-path-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+
+  .nginx-config-path-label {
+    color: #606266;
+    font-size: 13px;
+  }
+}
+
+.nginx-config-path {
+  max-width: calc(100% - 96px);
+  margin-right: 0;
+  overflow: hidden;
+  font-family: Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  line-height: 24px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nginx-config-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+
+  .nginx-config-action-tip {
+    margin-right: auto;
+    color: #8c8c8c;
+    font-size: 13px;
+
+    &.is-ready {
+      color: #389e0d;
+    }
+  }
+}

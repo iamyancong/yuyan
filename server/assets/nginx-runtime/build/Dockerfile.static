@@ -1,0 +1,121 @@
+# =============================================================================
+# Dockerfile.static — Alpine 全静态编译 Nginx 1.24.0
+# =============================================================================
+# 描述：基于 Alpine 3.18 的多阶段构建，将 OpenSSL、PCRE2、zlib 全部静态链接
+#       到 Nginx 二进制中，生成零依赖的单文件可执行程序。
+#
+# 产物路径：/output/
+#   ├── sbin/nginx          # 静态链接的 Nginx 可执行文件
+#   ├── conf/mime.types     # MIME 类型映射
+#   ├── html/index.html     # 默认欢迎页
+#   └── html/50x.html       # 默认错误页
+#
+# 构建命令（Apple Silicon Mac 需指定 --platform）：
+#   docker build --platform linux/amd64 -f Dockerfile.static -t yuyan-nginx-build-static .
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 阶段 1：编译环境准备 + 源码编译
+# -----------------------------------------------------------------------------
+FROM alpine:3.18 AS builder
+
+# 版本常量定义
+ARG NGINX_VERSION=1.24.0
+ARG OPENSSL_VERSION=3.1.7
+ARG PCRE2_VERSION=10.42
+ARG ZLIB_VERSION=1.3.1
+
+# 源码下载目录
+WORKDIR /src
+
+# 安装编译工具链
+RUN apk add --no-cache \
+    gcc \
+    g++ \
+    make \
+    musl-dev \
+    linux-headers \
+    perl \
+    wget
+
+# 下载所有依赖源码
+RUN echo ">>> 下载 OpenSSL ${OPENSSL_VERSION}" && \
+    wget -q "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz" && \
+    tar xzf "openssl-${OPENSSL_VERSION}.tar.gz" && \
+    echo ">>> 下载 PCRE2 ${PCRE2_VERSION}" && \
+    wget -q "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-${PCRE2_VERSION}/pcre2-${PCRE2_VERSION}.tar.gz" && \
+    tar xzf "pcre2-${PCRE2_VERSION}.tar.gz" && \
+    echo ">>> 下载 zlib ${ZLIB_VERSION}" && \
+    wget -q "https://github.com/madler/zlib/releases/download/v${ZLIB_VERSION}/zlib-${ZLIB_VERSION}.tar.gz" && \
+    tar xzf "zlib-${ZLIB_VERSION}.tar.gz" && \
+    echo ">>> 下载 Nginx ${NGINX_VERSION}" && \
+    wget -q "https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz" && \
+    tar xzf "nginx-${NGINX_VERSION}.tar.gz"
+
+# 编译 OpenSSL（静态库）
+RUN cd "openssl-${OPENSSL_VERSION}" && \
+    ./config \
+        no-shared \
+        no-tests \
+        --prefix=/usr/local/openssl \
+        --openssldir=/usr/local/openssl && \
+    make -j"$(nproc)" && \
+    make install_sw
+
+# 编译 PCRE2（静态库，启用 JIT）
+RUN cd "pcre2-${PCRE2_VERSION}" && \
+    ./configure \
+        --prefix=/usr/local/pcre2 \
+        --enable-jit \
+        --enable-static \
+        --disable-shared && \
+    make -j"$(nproc)" && \
+    make install
+
+# 编译 zlib（静态库）
+RUN cd "zlib-${ZLIB_VERSION}" && \
+    ./configure \
+        --prefix=/usr/local/zlib \
+        --static && \
+    make -j"$(nproc)" && \
+    make install
+
+# 编译 Nginx（全静态链接）
+RUN cd "nginx-${NGINX_VERSION}" && \
+    ./configure \
+        --prefix=/opt/yuyan/nginx \
+        --with-http_ssl_module \
+        --with-http_gzip_static_module \
+        --with-http_realip_module \
+        --with-pcre-jit \
+        --with-pcre=/src/pcre2-${PCRE2_VERSION} \
+        --with-openssl=/src/openssl-${OPENSSL_VERSION} \
+        --with-zlib=/src/zlib-${ZLIB_VERSION} \
+        --without-http_fastcgi_module \
+        --without-http_uwsgi_module \
+        --without-http_scgi_module \
+        --without-mail_pop3_module \
+        --without-mail_imap_module \
+        --without-mail_smtp_module \
+        --with-ld-opt="-static" \
+        --with-cc-opt="-static" && \
+    make -j"$(nproc)" && \
+    make install
+
+# 剥离调试符号，缩小二进制体积
+RUN strip /opt/yuyan/nginx/sbin/nginx
+
+# 验证静态链接
+RUN file /opt/yuyan/nginx/sbin/nginx && \
+    ! ldd /opt/yuyan/nginx/sbin/nginx 2>/dev/null || true
+
+# -----------------------------------------------------------------------------
+# 阶段 2：提取最小化产物
+# -----------------------------------------------------------------------------
+FROM scratch AS output
+
+# 仅复制必要文件到 /output 目录
+COPY --from=builder /opt/yuyan/nginx/sbin/nginx    /output/sbin/nginx
+COPY --from=builder /opt/yuyan/nginx/conf/mime.types /output/conf/mime.types
+COPY --from=builder /opt/yuyan/nginx/html/index.html /output/html/index.html
+COPY --from=builder /opt/yuyan/nginx/html/50x.html   /output/html/50x.html
