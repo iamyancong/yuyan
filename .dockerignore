@@ -1,17 +1,9 @@
-# Node modules and build artifacts
 node_modules
-dist
-.yuyan-deploy
-
-# Desktop client specific code
-src-tauri
-
-# Version control and config
+.pnpm-store
 .git
 .gitignore
-.npmrc
-pnpm-debug.log
-
-# System files
+.vscode
 .DS_Store
-Thumbs.db
+coverage
+*.log
+/tmp
