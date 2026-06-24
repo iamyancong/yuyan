@@ -404,7 +404,7 @@ export const initNginxRuntime = (serverId: number, payload: NginxRuntimePayload)
 
 /** 流式初始化托管 Nginx 运行时 */
 export async function initNginxRuntimeWithProgress(serverId: number, payload: NginxRuntimePayload, options: NginxRuntimeProgressOptions = {}) {
-  const response = await fetch(`/deploy-api/servers/${serverId}/nginx-runtime/init?stream=1`, {
+  const response = await fetch(getApiBase(`/deploy-api/servers/${serverId}/nginx-runtime/init?stream=1`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
     body: JSON.stringify(payload),
@@ -453,7 +453,7 @@ export async function initNginxRuntimeWithProgress(serverId: number, payload: Ng
 
 /** 流式初始化 Nginx 实例 */
 export async function initNginxInstanceWithProgress(instanceId: number, payload: NginxRuntimePayload, options: NginxRuntimeProgressOptions = {}) {
-  const response = await fetch(`/deploy-api/nginx-instances/${instanceId}/init?stream=1`, {
+  const response = await fetch(getApiBase(`/deploy-api/nginx-instances/${instanceId}/init?stream=1`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
     body: JSON.stringify(payload),
@@ -514,7 +514,7 @@ export const runNginxInstanceAction = (instanceId: number, action: NginxRuntimeA
  * @returns 运行包 Blob 与响应元信息
  */
 export async function downloadNginxInstanceArchive(instanceId: number): Promise<NginxInstanceArchiveDownload> {
-  const response = await fetch(`/deploy-api/nginx-instances/${instanceId}/archive`, { credentials: 'include' });
+  const response = await fetch(getApiBase(`/deploy-api/nginx-instances/${instanceId}/archive`), { credentials: 'include' });
   if (!response.ok) {
     const data = await parseJsonOrText(response);
     throw new Error(typeof data === 'string' ? data : data?.error || data?.message || '下载运行包失败');
@@ -667,7 +667,7 @@ async function consumeProgressStream(response: Response, options: DeployProgress
 
 /** 执行发布 */
 export async function deployTargetWithProgress(targetId: number, payload: DeployTargetPublishPayload, options: DeployProgressOptions = {}) {
-  const response = await fetch(`/deploy-api/targets/${targetId}/deploy?stream=1`, {
+  const response = await fetch(getApiBase(`/deploy-api/targets/${targetId}/deploy?stream=1`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
     body: JSON.stringify(payload),
@@ -678,7 +678,7 @@ export async function deployTargetWithProgress(targetId: number, payload: Deploy
 
 /** 订阅部署目标运行中的发布进度 */
 export async function subscribeTargetDeployProgress(targetId: number, options: DeployProgressOptions = {}) {
-  const response = await fetch(`/deploy-api/targets/${targetId}/deploy-progress?stream=1`, {
+  const response = await fetch(getApiBase(`/deploy-api/targets/${targetId}/deploy-progress?stream=1`), {
     method: 'GET',
     headers: { Accept: 'application/x-ndjson' },
     signal: options.signal,
@@ -688,7 +688,7 @@ export async function subscribeTargetDeployProgress(targetId: number, options: D
 
 /** 执行回滚 */
 export async function rollbackRecordWithProgress(recordId: number, payload: { operator?: string }, options: DeployProgressOptions = {}) {
-  const response = await fetch(`/deploy-api/records/${recordId}/rollback?stream=1`, {
+  const response = await fetch(getApiBase(`/deploy-api/records/${recordId}/rollback?stream=1`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
     body: JSON.stringify(payload),
@@ -699,7 +699,7 @@ export async function rollbackRecordWithProgress(recordId: number, payload: { op
 
 /** 执行撤销回滚 */
 export async function undoRollbackRecordWithProgress(recordId: number, payload: { operator?: string }, options: DeployProgressOptions = {}) {
-  const response = await fetch(`/deploy-api/records/${recordId}/undo-rollback?stream=1`, {
+  const response = await fetch(getApiBase(`/deploy-api/records/${recordId}/undo-rollback?stream=1`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
     body: JSON.stringify(payload),

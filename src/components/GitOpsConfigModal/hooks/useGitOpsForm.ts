@@ -3,6 +3,7 @@
  */
 import { ref, computed, type Ref } from 'vue';
 import message from 'ant-design-vue/es/message';
+import { openExternal } from '@/utils/open';
 import type { FileItem, OperationMode } from '../constant';
 import { YAML_FILE_NAME, generateBranchName as genBranchName } from '../constant';
 import {
@@ -317,7 +318,7 @@ export const useGitOpsForm = (params: {
 
         message.success(`MR 已创建：${mr.web_url}`);
         try {
-          window.open(mr.web_url, '_blank');
+          await openExternal(mr.web_url);
         } catch {}
         onSuccess();
       } else {

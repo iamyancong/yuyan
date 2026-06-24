@@ -14,6 +14,15 @@ const { themeConfig } = useTheme();
 <style scoped></style>
 
 <style lang="less">
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
 /* 全局覆盖：dropdown / YTable 操作列「更多」Popover 内的链接按钮走主题色（弹出层 teleport 到 body） */
 .ant-dropdown {
   .ant-dropdown-menu {

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { FolderOutlined, FileTextOutlined, PlusOutlined, MinusOutlined, CopyOutlined } from '@ant-design/icons-vue';
 import { copyToClipboard } from '@yss-ui/utils';
+import { openExternal } from '@/utils/open';
 import message from 'ant-design-vue/es/message';
 import type { GitLabProject, GroupTreeNode } from '@/api/gitlab';
 
@@ -106,7 +107,7 @@ const copyProjectName = async () => {
     </span>
     <span class="project-name-main">
       <a-tooltip :title="getProjectPath(record)">
-        <a :href="record.web_url" target="_blank" rel="noopener noreferrer" class="project-name-link">{{ record.name }}</a>
+        <a :href="record.web_url" class="project-name-link" @click.prevent.stop="openExternal(record.web_url)">{{ record.name }}</a>
       </a-tooltip>
       <a-tooltip :title="getProjectDescription(record)">
         <span class="project-name-desc">{{ getProjectDescription(record) }}</span>

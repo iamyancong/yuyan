@@ -2,6 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue';
 import { SearchOutlined } from '@ant-design/icons-vue';
 import { YButton, YCard, YTable } from '@yss-ui/components/lite';
+import { openExternal } from '@/utils/open';
 import { useTableHeight } from '@yss-ui/hooks';
 import type { YTableActionConfig } from '@yss-ui/components/lite';
 import type { RuntimeAwareDeployTarget, TargetFilterForm } from '../../types';
@@ -143,7 +144,7 @@ watch([() => props.loading, () => props.targets.length], recalculateAfterRender,
           <DeployTargetRuntimeCell :record="row" />
         </template>
         <template #visitUrl="{ row }">
-          <a v-if="row.visitUrl" :href="row.visitUrl" target="_blank" class="visit-link" @click.stop>
+          <a v-if="row.visitUrl" :href="row.visitUrl" class="visit-link" @click.prevent.stop="openExternal(row.visitUrl)">
             {{ row.visitUrl }}
           </a>
           <span v-else>-</span>

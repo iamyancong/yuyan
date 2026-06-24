@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { FileTextOutlined } from '@ant-design/icons-vue';
 import type { DeployTarget } from '@/api/deploy';
+import { openExternal } from '@/utils/open';
 import { getProjectDescription } from './constant';
 
 defineOptions({ name: 'NginxProjectNameCell' });
@@ -21,8 +22,7 @@ const props = defineProps<{
           v-if="props.record.repositoryUrl"
           class="nginx-project-name-cell__link"
           :href="props.record.repositoryUrl"
-          target="_blank"
-          @click.stop
+          @click.prevent.stop="openExternal(props.record.repositoryUrl)"
         >
           <span class="nginx-project-name-cell__name">{{ props.record.projectName }}</span>
         </a>

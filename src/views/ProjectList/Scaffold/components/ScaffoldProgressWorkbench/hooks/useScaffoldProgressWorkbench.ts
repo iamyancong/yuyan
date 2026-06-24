@@ -1,5 +1,6 @@
 import { computed, ref, watch } from 'vue';
 import { message } from 'ant-design-vue';
+import { openExternal } from '@/utils/open';
 import type { CreateMicroAppResponse } from '@/api/scaffold';
 
 export type ProgressStatus = 'idle' | 'running' | 'success' | 'error';
@@ -233,9 +234,9 @@ export const useScaffoldProgressWorkbench = (
     }
   };
 
-  const openGitlab = () => {
+  const openGitlab = async () => {
     if (!snapshot.value.gitlabWebUrl) return;
-    window.open(snapshot.value.gitlabWebUrl, '_blank', 'noopener,noreferrer');
+    await openExternal(snapshot.value.gitlabWebUrl);
   };
 
   const handleClose = () => {

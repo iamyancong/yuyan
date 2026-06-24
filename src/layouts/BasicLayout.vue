@@ -1,5 +1,5 @@
 <template>
-  <a-layout style="min-height: 100vh">
+  <a-layout style="height: 100vh; overflow: hidden">
     <a-layout-sider :theme="menuTheme" collapsible v-model:collapsed="collapsed">
       <div class="brand" @click="goHome">
         <div class="brand-logo"><LogoSwift :size="24" /></div>
@@ -296,6 +296,9 @@ const goHome = () => {
 .yuyan-layout-content {
   position: relative;
   margin: 14px;
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .route-loading-mask {

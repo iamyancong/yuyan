@@ -10,9 +10,64 @@ struct ServerState {
     child: Arc<Mutex<Option<Child>>>,
 }
 
+// 获取 Node.js 可执行文件的路径
+fn get_node_path(app_handle: &tauri::AppHandle) -> std::path::PathBuf {
+    let binary_name = if cfg!(target_os = "windows") { "node.exe" } else { "node" };
+
+    // 1. 尝试查找打包后（或开发模式）的标准资源目录
+    if let Ok(resource_dir) = app_handle.path().resource_dir() {
+        // 打包后在 app bundle 内的路径：Contents/Resources/resources/bin/node
+        let embedded_node = resource_dir.join("resources").join("bin").join(binary_name);
+        if embedded_node.exists() {
+            println!("🔍 找到打包后内嵌 Node 二进制文件: {:?}", embedded_node);
+            return embedded_node;
+        }
+
+        // 开发环境：项目根目录/src-tauri/resources/bin/node
+        let dev_node = resource_dir.join("src-tauri").join("resources").join("bin").join(binary_name);
+        if dev_node.exists() {
+            println!("🔍 找到开发环境内嵌 Node 二进制文件: {:?}", dev_node);
+            return dev_node;
+        }
+    }
+
+    // 2. 尝试从当前可执行文件所在路径向上追溯寻找资源（适用于双击运行 target/debug 或 release 中的二进制）
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(parent) = current_exe.parent() {
+            if let Some(grandparent) = parent.parent() {
+                // 例如：src-tauri/target/debug/yuyan-app -> 向上两级为 src-tauri
+                let path1 = grandparent.join("resources").join("bin").join(binary_name);
+                if path1.exists() {
+                    println!("🔍 追溯找到内嵌 Node 二进制文件: {:?}", path1);
+                    return path1;
+                }
+            }
+        }
+    }
+
+    // 3. 在 macOS 上，若是 GUI 双击启动，PATH 环境可能丢失，在此做常见路径补丁
+    #[cfg(target_os = "macos")]
+    {
+        let common_paths = [
+            "/opt/homebrew/bin/node",
+            "/usr/local/bin/node",
+        ];
+        for path in common_paths {
+            let path_buf = std::path::PathBuf::from(path);
+            if path_buf.exists() {
+                println!("🔍 找到 macOS 常见全局 Node 路径: {:?}", path_buf);
+                return path_buf;
+            }
+        }
+    }
+    
+    // 4. 找不到内嵌的，则回退到系统环境变量中的 "node"
+    std::path::PathBuf::from("node")
+}
+
 // 检查系统中是否安装了 Node.js
-fn check_node_installed() -> bool {
-    Command::new("node")
+fn check_node_installed(node_path: &std::path::Path) -> bool {
+    Command::new(node_path)
         .arg("--version")
         .output()
         .map(|o| o.status.success())
@@ -32,7 +87,7 @@ fn pipe_output<R: std::io::Read + Send + 'static>(reader: R, prefix: &'static st
 }
 
 // 启动 Express Node 服务
-fn start_node_server(app: &tauri::App) -> Result<Child, String> {
+fn start_node_server(app: &tauri::App, node_path: &std::path::Path) -> Result<Child, String> {
     let resource_path = if cfg!(dev) {
         let cwd = std::env::current_dir().unwrap();
         let path1 = cwd.join("server/index.mjs");
@@ -73,7 +128,7 @@ fn start_node_server(app: &tauri::App) -> Result<Child, String> {
     println!("📂 模板缓存目录 (TEMPLATE_REPO_PATH): {:?}", template_repo_path);
     println!("==================================================");
     
-    let mut child = Command::new("node")
+    let mut child = Command::new(node_path)
         .arg(resource_path)
         .env("DEPLOY_DATA_DIR", deploy_data_dir.to_str().unwrap_or(""))
         .env("TEMPLATE_REPO_PATH", template_repo_path.to_str().unwrap_or(""))
@@ -103,9 +158,22 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                #[cfg(target_os = "macos")]
+                {
+                    // 在 macOS 下，点击叉号不退出，仅隐藏窗口
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .setup(move |app| {
+            let app_handle = app.handle();
+            let node_path = get_node_path(app_handle);
+
             // 1. 检查 Node.js 环境
-            if !check_node_installed() {
+            if !check_node_installed(&node_path) {
                 let handle = app.handle().clone();
                 // 弹出警告弹窗
                 handle.dialog()
@@ -118,7 +186,7 @@ pub fn run() {
             }
 
             // 2. 启动 Express 数据库与服务
-            match start_node_server(app) {
+            match start_node_server(app, &node_path) {
                 Ok(child) => {
                     let mut lock = child_state.lock().unwrap();
                     *lock = Some(child);
@@ -145,14 +213,27 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(move |_app_handle, event| {
-            // 3. 应用退出时杀死 Node.js 子进程
-            if let tauri::RunEvent::Exit = event {
-                let mut lock = child_state_clone.lock().unwrap();
-                if let Some(mut child) = lock.take() {
-                    println!("🛑 正在停止 Node 本地服务进程 (PID: {})...", child.id());
-                    let _ = child.kill();
+        .run(move |app_handle, event| {
+            match event {
+                // 3. 应用退出时杀死 Node.js 子进程
+                tauri::RunEvent::Exit => {
+                    let mut lock = child_state_clone.lock().unwrap();
+                    if let Some(mut child) = lock.take() {
+                        println!("🛑 正在停止 Node 本地服务进程 (PID: {})...", child.id());
+                        let _ = child.kill();
+                    }
                 }
+                // macOS 下点击 Dock 图标时重新显示主窗口
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen { has_visible_windows, .. } => {
+                    if !has_visible_windows {
+                        if let Some(window) = app_handle.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                }
+                _ => {}
             }
         });
 }

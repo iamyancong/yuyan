@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { YMonaco } from '@yss-ui/components/lite';
+import { openExternal } from '@/utils/open';
 import type { DeployRecord } from '@/api/deploy';
 import { useRecordLog } from './hooks/useRecordLog';
 
@@ -44,7 +45,7 @@ const drawerOpen = computed({
           <div v-for="item in recordSummaries" :key="item.label" class="record-log-summary__item">
             <span>{{ item.label }}</span>
             <strong v-if="item.link">
-              <a :href="item.link" target="_blank" class="commit-link">{{ item.value }}</a>
+              <a :href="item.link" class="commit-link" @click.prevent.stop="openExternal(item.link)">{{ item.value }}</a>
             </strong>
             <strong v-else>{{ item.value }}</strong>
           </div>

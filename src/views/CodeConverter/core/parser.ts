@@ -88,7 +88,7 @@ export class VueParser {
     try {
       ast = parseBabel(code, {
         sourceType: 'module',
-        plugins: ['typescript', 'classProperties'],
+        plugins: ['typescript'],
       });
     } catch (e) {
       console.warn('Babel 转换 TS 失败，降级回正则替换:', e);
@@ -335,7 +335,7 @@ export class VueParser {
     const { descriptor } = parseSfc(source, { filename: 'Component.vue' });
     const template = descriptor.template?.content || '';
     const script = (descriptor.scriptSetup && descriptor.scriptSetup.content) || (descriptor.script && descriptor.script.content) || '';
-    const styles = (descriptor.styles || []).map((s) => s.content || '').join('\n');
+    const styles = (descriptor.styles || []).map((s: any) => s.content || '').join('\n');
     return { template, script, styles };
   }
 

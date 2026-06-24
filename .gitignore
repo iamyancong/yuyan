@@ -29,3 +29,6 @@ dist-ssr
 src-tauri/target
 src-tauri/gen
 .codegraph/
+
+# Embedded binaries
+src-tauri/resources/bin/

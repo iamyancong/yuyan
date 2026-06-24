@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue';
 import { YCard, YTable } from '@yss-ui/components/lite';
+import { openExternal } from '@/utils/open';
 import { useTableHeight } from '@yss-ui/hooks';
 import type { YTableActionConfig } from '@yss-ui/components/lite';
 import type { DeployRecord } from '@/api/deploy';
@@ -186,7 +187,7 @@ const getCommitUrl = (record: DeployRecord): string => {
         </template>
         <template #effectiveCommit="{ row }">
           <a-space :size="6">
-            <a v-if="getCommitUrl(row)" :href="getCommitUrl(row)" target="_blank" class="commit-link">
+            <a v-if="getCommitUrl(row)" :href="getCommitUrl(row)" class="commit-link" @click.prevent.stop="openExternal(getCommitUrl(row))">
               {{ getDeployRecordShortCommit(row) }}
             </a>
             <span v-else>{{ getDeployRecordShortCommit(row) }}</span>
@@ -194,7 +195,7 @@ const getCommitUrl = (record: DeployRecord): string => {
           </a-space>
         </template>
         <template #commitMessage="{ row }">
-          <a v-if="getCommitUrl(row)" :href="getCommitUrl(row)" target="_blank" class="commit-link">
+          <a v-if="getCommitUrl(row)" :href="getCommitUrl(row)" class="commit-link" @click.prevent.stop="openExternal(getCommitUrl(row))">
             {{ getDeployRecordCommitMessage(row) }}
           </a>
           <span v-else>{{ getDeployRecordCommitMessage(row) || '-' }}</span>
