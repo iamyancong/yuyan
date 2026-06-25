@@ -71,7 +71,7 @@
 <script setup lang="ts">
 import { ref, watch, computed, onMounted, onUnmounted } from 'vue';
 import { message } from 'ant-design-vue';
-import { YMonaco } from '@yss-ui/components/lite';
+import { YMonaco } from '@ycwang-dev/components/lite';
 import { getRepoTree, getFileContent, type RepoTreeItem } from '@/api/gitlab';
 
 const props = defineProps<{

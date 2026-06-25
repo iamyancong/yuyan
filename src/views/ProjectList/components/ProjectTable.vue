@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { YTable } from '@yss-ui/components/lite';
-import type { YTableColumn } from '@yss-ui/components/lite';
+import { YTable } from '@ycwang-dev/components/lite';
+import type { YTableColumn } from '@ycwang-dev/components/lite';
 import type { GitLabProject, GroupTreeNode } from '@/api/gitlab';
 import MiddleEllipsisText from '@/components/MiddleEllipsisText.vue';
 import ProjectNameCell from './ProjectNameCell.vue';

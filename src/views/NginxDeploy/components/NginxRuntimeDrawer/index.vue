@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { YButton, YMonaco, YssFormily } from '@yss-ui/components/lite';
+import { YButton, YMonaco, YssFormily } from '@ycwang-dev/components/lite';
 import type {
   DeployProgressEvent,
   DeployServer,

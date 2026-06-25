@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { reactive, watch } from 'vue';
-import { YButton } from '@yss-ui/components/lite';
+import { YButton } from '@ycwang-dev/components/lite';
 import { ReloadOutlined, SearchOutlined } from '@ant-design/icons-vue';
 import type { ProjectSearchParams } from '@/api/gitlab';
 

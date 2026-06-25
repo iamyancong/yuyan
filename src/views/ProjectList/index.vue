@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
-import { YCard } from '@yss-ui/components/lite';
-import '@yss-ui/components/dist/style.css';
+import { YCard } from '@ycwang-dev/components/lite';
+import '@ycwang-dev/components/dist/style.css';
 import ProjectSearchForm from './components/SearchForm.vue';
 import ProjectTable from './components/ProjectTable.vue';
 import type { GitLabProject } from '@/api/gitlab';

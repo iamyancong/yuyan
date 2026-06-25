@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { CloudServerOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/icons-vue';
 import message from 'ant-design-vue/es/message';
-import { YButton } from '@yss-ui/components/lite';
-import type { YTableActionConfig } from '@yss-ui/components/lite';
+import { YButton } from '@ycwang-dev/components/lite';
+import type { YTableActionConfig } from '@ycwang-dev/components/lite';
 import type { DeployProjectContext, TargetFilterForm } from '../../types';
 import DeployTargetTab from '../DeployTargetTab/index.vue';
 import DeployServerTab from '../DeployServerTab/index.vue';

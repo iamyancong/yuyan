@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
 import { SearchOutlined } from '@ant-design/icons-vue';
-import { YButton, YCard, YTable } from '@yss-ui/components/lite';
+import { YButton, YCard, YTable } from '@ycwang-dev/components/lite';
 import { openExternal } from '@/utils/open';
-import { useTableHeight } from '@yss-ui/hooks';
-import type { YTableActionConfig } from '@yss-ui/components/lite';
+import { useTableHeight } from '@ycwang-dev/hooks';
+import type { YTableActionConfig } from '@ycwang-dev/components/lite';
 import type { RuntimeAwareDeployTarget, TargetFilterForm } from '../../types';
 import { targetColumns } from '../../constant';
 import NginxProjectNameCell from '../NginxProjectNameCell/index.vue';

@@ -20,7 +20,7 @@ const resolveManualChunk = (id: string) => {
   }
   if (normalizedId.includes('/node_modules/@ant-design/icons-vue/')) return 'vendor-antdv-icons';
   if (normalizedId.includes('/node_modules/ant-design-vue/')) return 'vendor-antdv';
-  if (normalizedId.includes('/node_modules/@yss-ui/components/')) return 'vendor-yss-ui';
+  if (normalizedId.includes('/node_modules/@ycwang-dev/components/')) return 'vendor-yss-ui';
   if (normalizedId.includes('/node_modules/monaco-editor/') || normalizedId.includes('/node_modules/monaco-editor-nls/')) return 'vendor-monaco';
   if (
     normalizedId.includes('/node_modules/vxe-table/') ||

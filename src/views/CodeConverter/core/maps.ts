@@ -6,7 +6,7 @@ export const LIBRARY_MAP: Record<string, string> = {
   'vxe-table': 'VXETable',
   'vxe-pc-ui': 'VxeUI', // 或者是 VXETable，视具体版本而定，这里先假设 separation
   'xe-utils': 'XEUtils',
-  '@yss-ui/components': 'YssUI',
+  '@ycwang-dev/components': 'YssUI',
   'yss-ui': 'YssUI',
   'echarts': 'echarts',
   'dayjs': 'dayjs',
