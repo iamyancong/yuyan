@@ -22,7 +22,12 @@ defineProps<GitLabConfigCardProps>();
 </script>
 
 <template>
-  <a-card class="section-card" title="GitLab">
+  <a-card
+    class="section-card"
+    title="GitLab"
+    :head-style="{ background: 'transparent' }"
+    :body-style="{ background: 'transparent' }"
+  >
     <template #extra>
       <div class="gitlab-extra">
         <span class="extra-label">创建并推送到 GitLab</span>

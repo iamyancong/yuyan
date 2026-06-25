@@ -33,6 +33,27 @@ function loadFromStorage(): ThemeState {
 const themeState = reactive<ThemeState>(loadFromStorage());
 
 /**
+ * 动态同步应用图标（暗夜霓虹玻璃 / 晨曦微光白玉）
+ * @param isDark 是否为暗黑模式
+ */
+function syncAppIcon(isDark: boolean) {
+  try {
+    // 动态引入 tauri api，兼容浏览器开发环境
+    import('@tauri-apps/api/core')
+      .then(({ invoke }) => {
+        invoke('change_app_icon', { isDark }).catch((err) => {
+          console.error('Failed to change app icon via Tauri:', err);
+        });
+      })
+      .catch(() => {
+        // 非 Tauri 环境下忽略
+      });
+  } catch {
+    // 忽略
+  }
+}
+
+/**
  * 将关键主题语义同步为全局 CSS 变量，供自定义样式使用
  * 这样可以避免暗色模式下出现白底/浅色边框的问题
  */
@@ -116,6 +137,9 @@ function syncCssVariables() {
   root.style.setProperty('--warning-color', warningColor);
   root.style.setProperty('--error-color', errorColor);
   root.style.setProperty('--info-color', infoColor);
+
+  // 联动同步应用图标
+  syncAppIcon(isDark);
 }
 
 // 颜色工具函数

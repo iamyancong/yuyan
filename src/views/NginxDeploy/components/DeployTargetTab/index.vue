@@ -73,50 +73,61 @@ watch([() => props.loading, () => props.targets.length], recalculateAfterRender,
 <template>
   <YCard class="nginx-deploy-tab-card" :padding="12">
     <div class="target-filter-bar">
-      <a-form layout="inline" @submit.prevent="emit('search')">
-        <div class="target-filter-bar__fields">
-          <a-form-item label="项目">
-            <a-input
-              v-model:value="projectKeyword"
-              class="target-filter-bar__project"
-              placeholder="搜索项目名称、路径或备注"
-              allow-clear
-            />
-          </a-form-item>
-          <a-form-item label="分支">
-            <a-select
-              v-model:value="branch"
-              class="target-filter-bar__branch"
-              :options="branchOptions"
-              placeholder="全部分支"
-              allow-clear
-              show-search
-              option-filter-prop="label"
-              @change="emit('search')"
-            />
-          </a-form-item>
-          <a-form-item label="服务器">
-            <a-select
-              v-model:value="serverId"
-              class="target-filter-bar__server"
-              :options="serverOptions"
-              placeholder="请选择服务器"
-              show-search
-              option-filter-prop="label"
-              @change="emit('search')"
-            />
-          </a-form-item>
-        </div>
-        <a-form-item class="target-filter-bar__actions">
-          <a-space>
-            <YButton type="primary" html-type="submit" :loading="loading">
-              <template #icon><SearchOutlined /></template>
-              查询
-            </YButton>
-            <YButton @click="emit('reset')">重置</YButton>
-            <YButton :loading="repairLoading" @click="emit('repairNginxBindings')">修复 Nginx 关联</YButton>
-          </a-space>
-        </a-form-item>
+      <a-form
+        layout="horizontal"
+        :label-col="{ style: { width: '60px' } }"
+        :wrapper-col="{ style: { flex: 1 } }"
+        @submit.prevent="emit('search')"
+      >
+        <a-row :gutter="[16, 12]">
+          <a-col :xs="24" :sm="24" :md="12" :xl="6">
+            <a-form-item label="项目" class="target-filter-item">
+              <a-input
+                v-model:value="projectKeyword"
+                class="target-filter-bar__project"
+                placeholder="搜索项目名称、路径或备注"
+                allow-clear
+              />
+            </a-form-item>
+          </a-col>
+          <a-col :xs="24" :sm="24" :md="12" :xl="5">
+            <a-form-item label="分支" class="target-filter-item">
+              <a-select
+                v-model:value="branch"
+                class="target-filter-bar__branch"
+                :options="branchOptions"
+                placeholder="全部分支"
+                allow-clear
+                show-search
+                option-filter-prop="label"
+                @change="emit('search')"
+              />
+            </a-form-item>
+          </a-col>
+          <a-col :xs="24" :sm="24" :md="12" :xl="5">
+            <a-form-item label="服务器" class="target-filter-item">
+              <a-select
+                v-model:value="serverId"
+                class="target-filter-bar__server"
+                :options="serverOptions"
+                placeholder="请选择服务器"
+                show-search
+                option-filter-prop="label"
+                @change="emit('search')"
+              />
+            </a-form-item>
+          </a-col>
+          <a-col :xs="24" :sm="24" :md="12" :xl="8" class="target-filter-bar__actions">
+            <a-space>
+              <YButton type="primary" html-type="submit" :loading="loading">
+                <template #icon><SearchOutlined /></template>
+                查询
+              </YButton>
+              <YButton @click="emit('reset')">重置</YButton>
+              <YButton :loading="repairLoading" @click="emit('repairNginxBindings')">修复 Nginx 关联</YButton>
+            </a-space>
+          </a-col>
+        </a-row>
       </a-form>
     </div>
     <div ref="tableAreaRef" class="nginx-deploy-table-area">

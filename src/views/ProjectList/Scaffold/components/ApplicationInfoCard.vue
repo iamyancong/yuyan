@@ -19,7 +19,12 @@ defineProps<ApplicationInfoCardProps>();
 </script>
 
 <template>
-  <a-card class="section-card" title="应用信息">
+  <a-card
+    class="section-card"
+    title="应用信息"
+    :head-style="{ background: 'transparent' }"
+    :body-style="{ background: 'transparent' }"
+  >
     <a-row :gutter="[16, 16]">
       <a-col :xs="24" :sm="24" :md="12" :lg="12" :xl="12" :xxl="12">
         <a-form-item name="framework" label="框架" :tooltip="SCAFFOLD_TIPS.framework">

@@ -4,14 +4,26 @@ use std::io::{BufRead, BufReader};
 use std::thread;
 use tauri::Manager;
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+use tauri::image::Image;
+
+const DARK_ICON: &[u8] = include_bytes!("../resources/yuyan_dark_clean.png");
+const LIGHT_ICON: &[u8] = include_bytes!("../resources/yuyan_light_clean.png");
+
 
 // 存储 Node 服务进程的全局状态
+#[allow(dead_code)]
 struct ServerState {
     child: Arc<Mutex<Option<Child>>>,
 }
 
 // 获取 Node.js 可执行文件的路径
 fn get_node_path(app_handle: &tauri::AppHandle) -> std::path::PathBuf {
+    // 0. 开发环境：直接返回系统全局 Node 命令，避免本地代码签名导致的 137 挂起问题
+    if cfg!(dev) {
+        println!("🔧 开发模式：使用系统全局 Node 路径");
+        return std::path::PathBuf::from("node");
+    }
+
     let binary_name = if cfg!(target_os = "windows") { "node.exe" } else { "node" };
 
     // 1. 尝试查找打包后（或开发模式）的标准资源目录
@@ -150,6 +162,45 @@ fn start_node_server(app: &tauri::App, node_path: &std::path::Path) -> Result<Ch
     Ok(child)
 }
 
+#[cfg(target_os = "macos")]
+fn set_macos_dock_icon(png_bytes: &[u8]) {
+    use cocoa::base::{id, nil};
+    use objc::{msg_send, sel, sel_impl};
+    
+    unsafe {
+        // 1. 创建 NSData
+        let ns_data: id = msg_send![objc::class!(NSData), dataWithBytes: png_bytes.as_ptr() length: png_bytes.len()];
+        
+        // 2. 从 NSData 创建 NSImage
+        let ns_image_alloc: id = msg_send![objc::class!(NSImage), alloc];
+        let ns_image: id = msg_send![ns_image_alloc, initWithData: ns_data];
+        
+        // 3. 获取 [NSApplication sharedApplication]
+        let shared_app: id = msg_send![objc::class!(NSApplication), sharedApplication];
+        
+        // 4. 设置 Dock 图标
+        let _: () = msg_send![shared_app, setApplicationIconImage: ns_image];
+    }
+}
+
+#[tauri::command]
+fn change_app_icon(app_handle: tauri::AppHandle, is_dark: bool) -> Result<(), String> {
+    let icon_bytes = if is_dark { DARK_ICON } else { LIGHT_ICON };
+    
+    #[cfg(target_os = "macos")]
+    {
+        set_macos_dock_icon(icon_bytes);
+    }
+
+    let img = Image::from_bytes(icon_bytes).map_err(|e| e.to_string())?;
+    for window in app_handle.webview_windows().values() {
+        let _ = window.set_icon(img.clone());
+    }
+
+    Ok(())
+}
+
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let child_state = Arc::new(Mutex::new(None));
@@ -158,6 +209,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![change_app_icon])
+
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 #[cfg(target_os = "macos")]
@@ -171,6 +224,9 @@ pub fn run() {
         .setup(move |app| {
             let app_handle = app.handle();
             let node_path = get_node_path(app_handle);
+
+
+
 
             // 1. 检查 Node.js 环境
             if !check_node_installed(&node_path) {

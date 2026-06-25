@@ -1,9 +1,11 @@
 <template>
-  <a-layout style="height: 100vh; overflow: hidden">
+  <a-layout :class="{ 'is-tauri-client': isTauriClient }" style="height: 100vh; overflow: hidden">
     <a-layout-sider :theme="menuTheme" collapsible v-model:collapsed="collapsed">
-      <div class="brand" @click="goHome">
-        <div class="brand-logo"><LogoSwift :size="24" /></div>
-        <div class="brand-name" v-show="!collapsed">雨燕平台</div>
+      <div class="brand" data-tauri-drag-region>
+        <div class="brand-content" @click="goHome">
+          <div class="brand-logo"><LogoSwift :size="24" /></div>
+          <div class="brand-name" v-show="!collapsed">雨燕平台</div>
+        </div>
       </div>
       <a-menu :theme="menuTheme" mode="inline" :selectedKeys="selectedKeys" @click="onMenuClick">
         <a-menu-item v-for="item in menuItems" :key="item.key">
@@ -19,6 +21,7 @@
         <div class="yuyan-layout-header-left">
           <!-- 左侧区域 -->
         </div>
+        <div class="yuyan-layout-header-drag" data-tauri-drag-region></div>
         <div class="yuyan-layout-header-right">
           <!-- 用户头像和登录按钮 -->
           <div class="user-section">
@@ -327,19 +330,44 @@ const goHome = () => {
   --theme-primary-shadow-light: v-bind('themeColors.primaryShadowLight');
 }
 
+.yuyan-layout-header-drag {
+  flex: 1;
+  height: 100%;
+  cursor: default;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 :deep(.ant-layout-header) {
   height: 56px;
 }
+
 .brand {
   height: 56px;
   display: flex;
   align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  padding: 0 12px;
+  padding: 0 16px;
   border-bottom: 1px solid var(--border-color-split);
   margin-bottom: 4px;
+  transition: all 0.2s ease;
+
+  .brand-content {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    width: 100%;
+    height: 100%;
+  }
 }
+
+.is-tauri-client {
+  .brand {
+    padding-top: 28px;
+    height: 84px;
+  }
+}
+
 .brand-logo {
   width: 32px;
   height: 32px;
@@ -351,23 +379,10 @@ const goHome = () => {
   background: rgba(255, 255, 255, 0.18);
   color: #0f172a;
 }
+
 .brand-name {
   font-weight: 700;
   letter-spacing: 0.5px;
-  color: var(--text-color);
-}
-.ant-layout-sider-dark .brand-logo {
-  background: rgba(255, 255, 255, 0.22);
-  color: #0b1220;
-}
-.ant-layout-sider-dark .brand-name {
-  color: rgba(255, 255, 255, 0.95);
-}
-.ant-layout-sider-light .brand-logo {
-  background: rgba(0, 0, 0, 0.06);
-  color: #111827;
-}
-.ant-layout-sider-light .brand-name {
   color: var(--text-color);
 }
 .toolbar {
@@ -593,6 +608,166 @@ const goHome = () => {
       :deep(.ant-skeleton-input) {
         width: 80px !important;
       }
+    }
+  }
+}
+
+/* ==========================================
+ * 桌面端侧边栏高级定制（Light / Dark）
+ * ========================================== */
+
+// 1. 亮色（Light）侧边栏进化
+:deep(.ant-layout-sider-light) {
+  background: linear-gradient(180deg, #fbfcfd 0%, #f3f5f8 100%) !important;
+  border-right: 1px solid #e2e8f0;
+
+  .brand {
+    border-bottom: 1px solid #e8edf3;
+  }
+
+  .brand-logo {
+    background: rgba(0, 0, 0, 0.05);
+    color: var(--primary-color);
+  }
+
+  .brand-name {
+    color: #1e293b;
+  }
+
+  .ant-menu-light {
+    background: transparent !important;
+    border-inline-end: none !important;
+  }
+
+  // 菜单项卡片悬浮化
+  .ant-menu-item {
+    margin: 4px 10px !important;
+    width: calc(100% - 20px) !important;
+    border-radius: 8px !important;
+    height: 40px !important;
+    line-height: 40px !important;
+    color: #475569 !important;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+
+    &:hover {
+      background: rgba(15, 23, 42, 0.04) !important;
+      color: var(--primary-color) !important;
+    }
+
+    &.ant-menu-item-selected {
+      background: var(--primary-color-light) !important;
+      color: var(--primary-color) !important;
+      font-weight: 600 !important;
+
+      &::after {
+        display: none !important;
+      }
+    }
+  }
+
+  // 折叠触发器
+  .ant-layout-sider-trigger {
+    background: #f1f5f9 !important;
+    border-top: 1px solid #e2e8f0;
+    border-right: 1px solid #e2e8f0;
+    color: #64748b !important;
+    &:hover {
+      background: #e2e8f0 !important;
+      color: var(--primary-color) !important;
+    }
+  }
+}
+
+// 2. 暗色（Dark）侧边栏重构
+:deep(.ant-layout-sider-dark) {
+  background: #0f172a !important; /* 经典深蓝色 */
+  border-right: 1px solid #1e293b;
+
+  .brand {
+    border-bottom: 1px solid #1e293b;
+  }
+
+  .brand-logo {
+    background: rgba(255, 255, 255, 0.15);
+    color: #ffffff;
+  }
+
+  .brand-name {
+    color: rgba(255, 255, 255, 0.95);
+  }
+
+  .ant-menu-dark {
+    background: transparent !important;
+  }
+
+  // 菜单项卡片悬浮化
+  .ant-menu-item {
+    margin: 4px 10px !important;
+    width: calc(100% - 20px) !important;
+    border-radius: 8px !important;
+    height: 40px !important;
+    line-height: 40px !important;
+    color: #94a3b8 !important;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.06) !important;
+      color: #ffffff !important;
+    }
+
+    &.ant-menu-item-selected {
+      background: var(--primary-color) !important;
+      color: #ffffff !important;
+      font-weight: 600 !important;
+      box-shadow: 0 4px 12px var(--theme-primary-shadow);
+
+      &::after {
+        display: none !important;
+      }
+    }
+  }
+
+  // 折叠触发器
+  .ant-layout-sider-trigger {
+    background: #0f172a !important;
+    border-top: 1px solid #1e293b;
+    color: #94a3b8 !important;
+    &:hover {
+      background: #1e293b !important;
+      color: #ffffff !important;
+    }
+  }
+}
+
+// 侧边栏折叠时的水平居中适配
+:deep(.ant-layout-sider-collapsed) {
+  .brand {
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+  }
+  .brand-content {
+    justify-content: center !important;
+  }
+
+  .ant-menu-item {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    padding: 0 !important;
+    text-align: center !important;
+    line-height: normal !important;
+
+    .ant-menu-item-icon {
+      margin: 0 !important;
+      line-height: 1 !important;
+    }
+
+    .ant-menu-title-content {
+      opacity: 0 !important;
+      width: 0 !important;
+      display: inline-block !important;
+      margin: 0 !important;
+      overflow: hidden !important;
     }
   }
 }

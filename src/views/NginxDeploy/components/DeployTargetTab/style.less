@@ -24,16 +24,22 @@
   border-bottom: 1px solid #f0f0f0;
 
   :deep(.ant-form) {
-    display: flex;
     width: 100%;
-    gap: 8px 12px;
-    align-items: flex-end;
-    justify-content: space-between;
+  }
+
+  :deep(.ant-row) {
+    margin-left: -8px !important;
+    margin-right: -8px !important;
   }
 
   :deep(.ant-form-item) {
     margin-right: 0;
     margin-bottom: 0;
+
+    .ant-form-item-row {
+      align-items: center;
+      width: 100%;
+    }
   }
 
   :deep(.ant-form-item-label > label) {
@@ -41,33 +47,26 @@
     font-weight: 600;
   }
 
-  &__fields {
-    display: flex;
-    min-width: 0;
-    flex: 1;
-    flex-wrap: wrap;
-    gap: 8px 16px;
-  }
-
   &__actions {
-    margin-left: auto;
-
-    :deep(.ant-form-item-control-input-content) {
-      display: flex;
-      justify-content: flex-end;
-    }
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    min-height: 32px;
   }
 
-  &__project {
-    width: 260px;
-  }
-
-  &__branch {
-    width: 220px;
-  }
-
+  &__project,
+  &__branch,
   &__server {
-    width: 320px;
+    width: 100%;
+  }
+}
+
+@media (max-width: 768px) {
+  .target-filter-bar {
+    &__actions {
+      justify-content: flex-start;
+      margin-top: 8px;
+    }
   }
 }
 
