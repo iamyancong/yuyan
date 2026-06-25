@@ -39,12 +39,12 @@ jobs:
         run: |
           pnpm install --no-frozen-lockfile
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # 注入拉取 @ycwang-dev 私有依赖所需的 token
+          GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }} # 注入拉取私有包所需的 PAT Token
 
       - name: Build Tauri App
         run: pnpm run build
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 
       - name: Upload Windows Artifact
         if: matrix.platform == 'windows-latest'
