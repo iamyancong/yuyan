@@ -38,13 +38,13 @@ importers:
       '@vue/compiler-sfc':
         specifier: ^3.5.38
         version: 3.5.38
-      '@yss-ui/components':
+      '@ycwang-dev/components':
         specifier: ^1.4.0
         version: 1.4.1(typescript@5.8.3)(vue@3.5.38(typescript@5.8.3))
-      '@yss-ui/hooks':
+      '@ycwang-dev/hooks':
         specifier: ^1.1.1
         version: 1.1.1(typescript@5.8.3)
-      '@yss-ui/utils':
+      '@ycwang-dev/utils':
         specifier: ^1.0.5
         version: 1.0.6
       ant-design-vue:
@@ -1680,18 +1680,18 @@ packages:
       react:
         optional: true
 
-  '@yss-ui/components@1.4.1':
+  '@ycwang-dev/components@1.4.1':
     resolution: {integrity: sha512-v9yhQ3eqwW7XA5GLoSS26ywZ/OKZyAzs9nPT0tpWgi1PoJyJ+JKISqMXvZHJAfJmX6H5GMWq1D0/erV7ti+C5w==}
     peerDependencies:
       vue: '>=3.0.0'
 
-  '@yss-ui/hooks@1.1.1':
+  '@ycwang-dev/hooks@1.1.1':
     resolution: {integrity: sha512-EhakbC/TpYqxK881RJlso0K5pyhR4pZhjzwqMQLBfZc9/TIWs9YtFQks0lQjeSp05BNUtsUqXSMtviSsenLjEQ==}
 
-  '@yss-ui/theme@1.0.3':
+  '@ycwang-dev/theme@1.0.3':
     resolution: {integrity: sha512-Ls0W5gz0VGg3RlRZni7LEYzJyAp3hECbgjGcvBOxylQF+pKqRG4jjzek+hjpp2cnwjDd7NoxitprCrwjhy4CIA==}
 
-  '@yss-ui/utils@1.0.6':
+  '@ycwang-dev/utils@1.0.6':
     resolution: {integrity: sha512-kx4bM8atj4bbZJCt1A0PG1h7Pv0AtrLbqg4iUjF8UIOHcOdGxa0lBQFO01/EJgHohIWTJIEp0oZfvV5k+fZpVA==}
 
   accepts@2.0.0:
@@ -5053,7 +5053,7 @@ snapshots:
     optionalDependencies:
       react: 18.3.1
 
-  '@yss-ui/components@1.4.1(typescript@5.8.3)(vue@3.5.38(typescript@5.8.3))':
+  '@ycwang-dev/components@1.4.1(typescript@5.8.3)(vue@3.5.38(typescript@5.8.3))':
     dependencies:
       '@ant-design/icons-vue': 7.0.1(vue@3.5.38(typescript@5.8.3))
       '@formily/antdv': 2.0.1-beta.3(typescript@5.8.3)(vue@3.5.38(typescript@5.8.3))
@@ -5066,9 +5066,9 @@ snapshots:
       '@univerjs/preset-sheets-drawing': 0.25.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(rxjs@7.8.2)
       '@univerjs/preset-sheets-filter': 0.25.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(rxjs@7.8.2)
       '@univerjs/presets': 0.25.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(rxjs@7.8.2)
-      '@yss-ui/hooks': 1.1.1(typescript@5.8.3)
-      '@yss-ui/theme': 1.0.3
-      '@yss-ui/utils': 1.0.6
+      '@ycwang-dev/hooks': 1.1.1(typescript@5.8.3)
+      '@ycwang-dev/theme': 1.0.3
+      '@ycwang-dev/utils': 1.0.6
       ant-design-vue: 4.2.6(vue@3.5.38(typescript@5.8.3))
       diff: 8.0.4
       echarts: 6.1.0
@@ -5091,7 +5091,7 @@ snapshots:
       - '@vue/composition-api'
       - typescript
 
-  '@yss-ui/hooks@1.1.1(typescript@5.8.3)':
+  '@ycwang-dev/hooks@1.1.1(typescript@5.8.3)':
     dependencies:
       '@vueuse/core': 10.11.1(vue@3.5.38(typescript@5.8.3))
       screenfull: 6.0.2
@@ -5101,9 +5101,9 @@ snapshots:
       - '@vue/composition-api'
       - typescript
 
-  '@yss-ui/theme@1.0.3': {}
+  '@ycwang-dev/theme@1.0.3': {}
 
-  '@yss-ui/utils@1.0.6': {}
+  '@ycwang-dev/utils@1.0.6': {}
 
   accepts@2.0.0:
     dependencies:
