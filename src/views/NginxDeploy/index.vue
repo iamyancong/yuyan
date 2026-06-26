@@ -155,6 +155,7 @@ onMounted(() => {
       :server-state="serverState"
       :target-state="targetState"
       :record-state="recordState"
+      :progress-state="progressState"
       :server-action-config="serverActionConfig"
       :target-action-config="targetActionConfig"
       :record-action-config="recordActionConfig"

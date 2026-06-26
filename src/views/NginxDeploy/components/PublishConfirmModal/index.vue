@@ -12,6 +12,7 @@ const props = defineProps<PublishConfirmModalProps>();
 const emit = defineEmits<{
   (e: 'update:open', value: boolean): void;
   (e: 'start', value: PublishStartOptions): void;
+  (e: 'republish', value: PublishStartOptions): void;
   (e: 'stop'): void;
 }>();
 
@@ -42,6 +43,11 @@ const visible = computed({
 /** 开始发布 */
 const handleStart = () => {
   emit('start', { forceInstallDependencies: forceInstallDependencies.value });
+};
+
+/** 重新发布 */
+const handleRepublish = () => {
+  emit('republish', { forceInstallDependencies: forceInstallDependencies.value });
 };
 
 watch(
@@ -137,7 +143,7 @@ watch(
 
     <template #footer>
       <footer class="publish-workbench__footer">
-        <div v-if="!started" class="publish-cache-option">
+        <div v-if="!running" class="publish-cache-option">
           <a-checkbox v-model:checked="forceInstallDependencies">本次重新安装依赖</a-checkbox>
           <span>依赖缓存异常时使用，会清理旧 node_modules 后重新安装。</span>
         </div>
@@ -150,6 +156,10 @@ watch(
           <YButton v-if="!started" type="primary" :disabled="!target" @click="handleStart">
             <template #icon><RocketOutlined /></template>
             开始发布
+          </YButton>
+          <YButton v-if="started && !running" type="primary" :disabled="!target" @click="handleRepublish">
+            <template #icon><SyncOutlined /></template>
+            重新发布
           </YButton>
         </div>
       </footer>

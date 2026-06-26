@@ -49,7 +49,7 @@ const onRefresh = () => emit('refresh');
       </a-form-item> -->
 
       <a-form-item label="可见性">
-        <a-select v-model:value="localForm.visibility" placeholder="选择可见性" class="visibility-select" allow-clear>
+        <a-select v-model:value="localForm.visibility" placeholder="选择可见性" class="visibility-select" allow-clear popup-class-name="project-select-dropdown">
           <a-select-option value="public">公开</a-select-option>
           <a-select-option value="internal">内部</a-select-option>
           <a-select-option value="private">私有</a-select-option>

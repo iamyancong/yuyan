@@ -28,7 +28,7 @@ defineProps<ApplicationInfoCardProps>();
     <a-row :gutter="[16, 16]">
       <a-col :xs="24" :sm="24" :md="12" :lg="12" :xl="12" :xxl="12">
         <a-form-item name="framework" label="框架" :tooltip="SCAFFOLD_TIPS.framework">
-          <a-select v-model:value="form.framework" :options="frameworkOptions" />
+          <a-select v-model:value="form.framework" :options="frameworkOptions" popup-class-name="project-select-dropdown" />
         </a-form-item>
       </a-col>
       <a-col :xs="24" :sm="24" :md="12" :lg="12" :xl="12" :xxl="12">

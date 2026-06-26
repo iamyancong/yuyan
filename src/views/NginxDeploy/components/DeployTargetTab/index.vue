@@ -35,6 +35,7 @@ const emit = defineEmits<{
   (e: 'search'): void;
   (e: 'reset'): void;
   (e: 'repairNginxBindings'): void;
+  (e: 'openProgress', target: RuntimeAwareDeployTarget): void;
 }>();
 
 const tableAreaRef = ref<HTMLElement>();
@@ -94,12 +95,15 @@ watch([() => props.loading, () => props.targets.length], recalculateAfterRender,
             <a-form-item label="分支" class="target-filter-item">
               <a-select
                 v-model:value="branch"
-                class="target-filter-bar__branch"
+                class="target-filter-bar__branch project-select"
                 :options="branchOptions"
                 placeholder="全部分支"
                 allow-clear
                 show-search
-                option-filter-prop="label"
+                :dropdown-match-select-width="300"
+                option-filter-prop="searchKey"
+                option-label-prop="title"
+                popup-class-name="project-select-dropdown"
                 @change="emit('search')"
               />
             </a-form-item>
@@ -108,11 +112,14 @@ watch([() => props.loading, () => props.targets.length], recalculateAfterRender,
             <a-form-item label="服务器" class="target-filter-item">
               <a-select
                 v-model:value="serverId"
-                class="target-filter-bar__server"
+                class="target-filter-bar__server project-select"
                 :options="serverOptions"
                 placeholder="请选择服务器"
                 show-search
-                option-filter-prop="label"
+                option-filter-prop="searchKey"
+                option-label-prop="title"
+                :dropdown-match-select-width="300"
+                popup-class-name="project-select-dropdown"
                 @change="emit('search')"
               />
             </a-form-item>
@@ -152,7 +159,7 @@ watch([() => props.loading, () => props.targets.length], recalculateAfterRender,
           </a-tooltip>
         </template>
         <template #runtimeStatus="{ row }">
-          <DeployTargetRuntimeCell :record="row" />
+          <DeployTargetRuntimeCell :record="row" @click="emit('openProgress', row)" />
         </template>
         <template #visitUrl="{ row }">
           <a v-if="row.visitUrl" :href="row.visitUrl" class="visit-link" @click.prevent.stop="openExternal(row.visitUrl)">

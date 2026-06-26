@@ -29,6 +29,7 @@ import {
   PROJECT_SELECT_DROPDOWN_CLASS,
   normalizeProjectSource,
   useDeployProjectOptions,
+  renderTwoLineSelectOption,
 } from './useDeployProjectOptions';
 import type { DeployProjectContext, DeployTargetProjectDraft, FormilyRef, RefreshActiveTabOptions, RuntimeAwareDeployTarget, TargetFilterForm } from '../types';
 import {
@@ -200,7 +201,9 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
   const targetServerFilterOptions = computed(() => {
     if (servers?.value?.length) {
       return servers.value.map((server) => ({
-        label: formatServerLabel(server.name, server.host),
+        label: renderTwoLineSelectOption({ title: server.name, description: server.host }),
+        title: server.name,
+        searchKey: `${server.name} ${server.host}`,
         value: server.id,
       }));
     }
@@ -212,15 +215,29 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     const filteredTargets = serverId
       ? allTargets.value.filter((t) => Number(t.serverId || 0) === serverId)
       : allTargets.value;
-    return createBranchOptions(filteredTargets);
+    return createBranchOptions(filteredTargets).map((opt) => {
+      const name = String(opt.value);
+      return {
+        label: renderTwoLineSelectOption({ title: name, description: '代码分支' }),
+        title: name,
+        searchKey: `${name} 代码分支`,
+        value: name,
+      };
+    });
   });
 
   const targetNginxInstanceOptions = computed(() => {
     const server = servers.value.find((item) => item.id === Number(targetForm.serverId));
-    return getVisibleNginxInstances(server).map((instance) => ({
-      label: `${instance.name}（${instance.instanceType === 'managed' ? '托管' : '已有'}）`,
-      value: instance.id,
-    }));
+    return getVisibleNginxInstances(server).map((instance) => {
+      const typeLabel = instance.instanceType === 'managed' ? '系统托管' : '外部已有';
+      const desc = `${typeLabel} · 绑定 ${instance.targetCount || 0} 个项目`;
+      return {
+        label: renderTwoLineSelectOption({ title: instance.name, description: desc }),
+        title: instance.name,
+        searchKey: `${instance.name} ${desc}`,
+        value: instance.id,
+      };
+    });
   });
 
   /** 当前项目是否有效 */
@@ -261,13 +278,23 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       disabled: !targetForm.projectId,
       showSearch: true,
       optionFilterProp: 'searchKey',
+      optionLabelProp: 'title',
+      class: 'project-select',
+      popupClassName: PROJECT_SELECT_DROPDOWN_CLASS,
       placeholder: targetForm.projectId ? '请选择分支' : '请先选择项目',
     });
   };
 
   /** 同步部署目标弹窗服务器下拉状态 */
   const syncTargetServerFieldState = () => {
-    syncSelectFieldState(targetFormRef.value, 'serverId', targetServerFilterOptions.value, {});
+    syncSelectFieldState(targetFormRef.value, 'serverId', targetServerFilterOptions.value, {
+      showSearch: true,
+      optionFilterProp: 'searchKey',
+      optionLabelProp: 'title',
+      class: 'project-select',
+      popupClassName: PROJECT_SELECT_DROPDOWN_CLASS,
+      placeholder: '请选择部署服务器',
+    });
   };
 
   /** 同步部署目标弹窗 Nginx 实例下拉状态 */
@@ -275,6 +302,11 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     const hasOptions = targetNginxInstanceOptions.value.length > 0;
     syncSelectFieldState(targetFormRef.value, 'nginxInstanceId', targetNginxInstanceOptions.value, {
       disabled: !targetForm.serverId || !hasOptions,
+      showSearch: true,
+      optionFilterProp: 'searchKey',
+      optionLabelProp: 'title',
+      class: 'project-select',
+      popupClassName: PROJECT_SELECT_DROPDOWN_CLASS,
       placeholder: !targetForm.serverId ? '请先选择部署服务器' : hasOptions ? '请选择 Nginx 实例' : '请先在 Nginx 管理新增托管实例',
     });
   };

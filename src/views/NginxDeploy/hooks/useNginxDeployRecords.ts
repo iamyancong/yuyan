@@ -12,6 +12,7 @@ import type { DeployProjectContext, RecordProjectOption, RefreshActiveTabOptions
 import { createBranchOptions, createRecordServerOptions, createRecordTargetOptions, getErrorMessage } from '../utils';
 
 import { useNginxDeployContext } from './useNginxDeployContext';
+import { renderTwoLineSelectOption } from './useDeployProjectOptions';
 
 /** 发布历史 Hook 参数 */
 interface UseNginxDeployRecordsParams {
@@ -80,7 +81,15 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
     const selected = recordTargetOptions.value.find((option) => option.value === recordTargetFilter.value);
     const selectedTargetId = Number(selected?.targetId || 0);
     if (!selectedTargetId) return [];
-    return createBranchOptions(allTargets.value.filter((target) => Number(target.id || 0) === selectedTargetId));
+    return createBranchOptions(allTargets.value.filter((target) => Number(target.id || 0) === selectedTargetId)).map((opt) => {
+      const name = String(opt.value);
+      return {
+        label: renderTwoLineSelectOption({ title: name, description: '代码分支' }),
+        title: name,
+        searchKey: `${name} 代码分支`,
+        value: name,
+      };
+    });
   });
 
   /**

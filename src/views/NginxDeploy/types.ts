@@ -56,7 +56,9 @@ export interface RecordProjectOption {
 
 /** 发布历史服务器筛选项 */
 export interface RecordServerOption {
-  label: string;
+  label: unknown;
+  title?: string;
+  searchKey?: string;
   value: number;
 }
 

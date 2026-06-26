@@ -69,7 +69,7 @@ defineProps<GitLabConfigCardProps>();
         </a-col>
         <a-col :xs="24">
           <a-form-item label="可见性" :tooltip="SCAFFOLD_TIPS.visibility">
-            <a-select v-model:value="form.visibility" :options="visibilityOptions" :disabled="!form.createRepo" />
+            <a-select v-model:value="form.visibility" :options="visibilityOptions" :disabled="!form.createRepo" popup-class-name="project-select-dropdown" />
           </a-form-item>
         </a-col>
       </a-row>

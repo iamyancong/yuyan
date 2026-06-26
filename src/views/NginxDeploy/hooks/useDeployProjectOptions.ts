@@ -66,6 +66,19 @@ export const renderProjectSelectOptionLabel = (meta: ProjectSelectMeta): VNodeCh
 };
 
 /**
+ * 生成通用的双行下拉选项内容。
+ * @param meta 选项展示信息
+ * @returns 选项节点
+ */
+export const renderTwoLineSelectOption = (meta: { title: string; description?: string }): VNodeChild => {
+  const description = String(meta.description || '').trim();
+  return h('div', { class: 'project-select-option' }, [
+    h('div', { class: 'project-select-option__title' }, meta.title),
+    description ? h('div', { class: 'project-select-option__description' }, description) : null,
+  ]);
+};
+
+/**
  * 生成项目下拉搜索文本。
  * @param meta 项目展示信息
  * @returns 搜索关键字
@@ -122,12 +135,13 @@ export function useDeployProjectOptions() {
 
   const branchOptions = computed<SelectOption[]>(() =>
     branches.value.map((branch) => {
-      const label = getBranchOptionLabel(branch);
+      const name = branch.name;
+      const desc = branch.default ? '默认分支' : '代码分支';
       return {
-        label,
-        title: label,
-        searchKey: label,
-        value: branch.name,
+        label: renderTwoLineSelectOption({ title: name, description: desc }),
+        title: name,
+        searchKey: `${name} ${desc}`,
+        value: name,
       };
     })
   );

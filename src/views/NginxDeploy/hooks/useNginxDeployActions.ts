@@ -183,7 +183,7 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
   }));
 
   const recordActionConfig = computed<YTableActionConfig>(() => ({
-    width: 150,
+    width: 120,
     fixed: 'right',
     buttons: [
       { key: 'logs', text: '日志', type: 'link', clickFn: ({ row }) => openRecordLogs?.(row) },
