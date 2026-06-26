@@ -15,9 +15,6 @@ jobs:
         platform: [windows-latest, macos-latest]
 
     runs-on: ${{ matrix.platform }}
-    permissions:
-      contents: read
-      packages: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -41,7 +38,7 @@ jobs:
       - name: Install Frontend Dependencies
         run: pnpm install --no-frozen-lockfile
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 
       - name: Build Tauri App
         run: pnpm run build
