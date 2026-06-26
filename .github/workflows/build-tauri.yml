@@ -44,6 +44,7 @@ jobs:
         run: pnpm run build
         env:
           GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          NODE_OPTIONS: '--max-old-space-size=4096'
 
       - name: Upload Windows Artifact
         if: matrix.platform == 'windows-latest'
