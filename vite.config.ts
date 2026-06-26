@@ -61,6 +61,9 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'src'),
+      '@yss-ui/components': path.resolve(__dirname, 'node_modules/@ycwang-dev/components'),
+      '@yss-ui/hooks': path.resolve(__dirname, 'node_modules/@ycwang-dev/hooks'),
+      '@yss-ui/utils': path.resolve(__dirname, 'node_modules/@ycwang-dev/utils'),
     },
   },
   build: {

@@ -165,19 +165,19 @@ async function fetchLatestPackageVersion(packageName, cwd) {
 async function syncGeneratedProjectDependencyVersions(projectDir, emit) {
   const packageJsonPath = path.join(projectDir, 'packages', 'package.json');
   if (!(await pathExists(packageJsonPath))) {
-    emit?.log('warn', '未找到 packages/package.json，跳过 @yss-ui 版本校正', 'generate');
+    emit?.log('warn', '未找到 packages/package.json，跳过 @ycwang-dev 版本校正', 'generate');
     return;
   }
 
   const packageJson = await readJson(packageJsonPath);
   const packagesDir = path.dirname(packageJsonPath);
   const packagesToSync = [
-    '@yss-ui/components',
-    '@yss-ui/hooks',
-    '@yss-ui/utils',
+    '@ycwang-dev/components',
+    '@ycwang-dev/hooks',
+    '@ycwang-dev/utils',
   ];
 
-  emit?.log('info', '开始校正生成项目中的 @yss-ui 依赖版本', 'generate');
+  emit?.log('info', '开始校正生成项目中的 @ycwang-dev 依赖版本', 'generate');
 
   let changed = false;
   for (const packageName of packagesToSync) {
