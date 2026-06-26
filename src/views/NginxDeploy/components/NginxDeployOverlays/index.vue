@@ -143,6 +143,7 @@ const updateTargetForm = (values: Partial<DeployTargetPayload>) => {
     :stoppable="progressState.publishStoppable.value"
     :stopping="progressState.publishStopping.value"
     @start="progressState.startPublishFromConfirm"
+    @republish="progressState.republishFromConfirm"
     @stop="progressState.stopCurrentPublish"
   />
 

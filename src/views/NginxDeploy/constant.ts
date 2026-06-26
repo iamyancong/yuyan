@@ -313,16 +313,16 @@ export const targetColumns: YTableColumn[] = [
 /** 发布记录表格列 */
 export const recordColumns: YTableColumn[] = [
   { field: 'projectName', title: '项目名称', minWidth: 220, fixed: 'left' },
-  { field: 'operator', title: '发布人', width: 100, formatter: ({ row }) => getDeployRecordOperator(row) },
+  { field: 'operator', title: '发布人', minWidth: 100, formatter: ({ row }) => getDeployRecordOperator(row) },
   { field: 'branch', title: '分支', width: 140 },
-  { field: 'status', title: '状态', width: 80, align: 'center' },
-  { field: 'action', title: '操作类型', width: 100, align: 'center', formatter: ({ row }) => getDeployRecordActionLabel(row) },
-  { field: 'commitSha', title: '当前生效Commit', minWidth: 160, slots: { default: 'effectiveCommit' } },
   { field: 'commitMessage', title: '当前生效提交信息', minWidth: 260, slots: { default: 'commitMessage' } },
+  { field: 'commitSha', title: '当前生效Commit', minWidth: 160, slots: { default: 'effectiveCommit' } },
   { field: 'commitAuthor', title: '提交人', width: 80, formatter: ({ row }) => getDeployRecordCommitAuthor(row) },
-  { field: 'releasePath', title: '发布目录', minWidth: 260 },
-  { field: 'startedAt', title: '开始时间', formatter: ({ cellValue }) => formatDeployDateTime(cellValue) },
+  { field: 'releasePath', title: '发布目录', minWidth: 200 },
+  { field: 'startedAt', minWidth: 160, title: '开始时间', formatter: ({ cellValue }) => formatDeployDateTime(cellValue) },
+  { field: 'action', title: '操作类型', width: 100, align: 'center', formatter: ({ row }) => getDeployRecordActionLabel(row) },
   { field: 'sourceRecordId', title: '回滚来源', width: 80, align: 'center', formatter: ({ row }) => getDeployRecordSourceText(row) },
+  { field: 'status', title: '状态', minWidth: 80, align: 'center', fixed: 'right' },
   // { field: 'envName', title: '环境', width: 90, align: 'center' },
 ];
 

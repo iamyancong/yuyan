@@ -17,6 +17,7 @@ interface NginxDeployWorkspaceProps {
   serverState: Record<string, any>;
   targetState: Record<string, any>;
   recordState: Record<string, any>;
+  progressState: Record<string, any>;
   serverActionConfig: YTableActionConfig;
   targetActionConfig: YTableActionConfig;
   recordActionConfig: YTableActionConfig;
@@ -82,6 +83,7 @@ const handleOpenNginxRuntime = async () => {
           @search="targetState.handleTargetFilterSearch"
           @reset="targetState.handleTargetFilterReset"
           @repair-nginx-bindings="targetState.repairManagedNginxBindings"
+          @open-progress="progressState.openTargetProgress"
         />
       </a-tab-pane>
       <a-tab-pane key="servers" tab="服务器管理">
@@ -107,6 +109,7 @@ const handleOpenNginxRuntime = async () => {
           @project-change="recordState.handleRecordProjectChange"
           @branch-change="recordState.handleRecordBranchChange"
           @page-change="recordState.handleRecordPageChange"
+          @refresh="lifecycleState.refreshActiveTab"
         />
       </a-tab-pane>
     </a-tabs>

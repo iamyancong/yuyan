@@ -42,11 +42,19 @@ const tooltipTitle = computed(() => {
   const operator = String(snapshot.value?.operator || '').trim() || '未知操作人';
   return `${operator}发起${actionLabel.value}，当前阶段：${stageLabel.value}，开始于 ${formatDeployDateTime(snapshot.value?.startedAt)}`;
 });
+const emit = defineEmits<{
+  (e: 'click'): void;
+}>();
 </script>
 
 <template>
   <a-tooltip :title="tooltipTitle" placement="top">
-    <span class="target-runtime-cell" :class="{ 'is-running': running }" :style="progressStyle">
+    <span
+      class="target-runtime-cell"
+      :class="{ 'is-running': running, 'is-clickable': running }"
+      :style="progressStyle"
+      @click="running && emit('click')"
+    >
       <span class="target-runtime-cell__indicator">
         <span v-if="running" class="target-runtime-cell__spinner">
           <LoadingOutlined />

@@ -531,6 +531,22 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     await runDeploy(target, options);
   };
 
+  /**
+   * 从确认弹窗重新发布
+   * @param options 发布启动选项
+   */
+  const republishFromConfirm = async (options: StartPublishOptions = {}) => {
+    if (!ensureLoggedIn()) return;
+    const target = activePublishTarget.value;
+    if (!target) {
+      message.warning('发布目标不存在，请刷新后重试');
+      return;
+    }
+    publishStarted.value = true;
+    resetPublishProgress();
+    await runDeploy(target, options);
+  };
+
   /** 清空发布进度和临时态 */
   const clearProgressData = () => {
     detachPublishProgressStream();
@@ -561,6 +577,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     openTargetProgress,
     openPublishConfirm,
     startPublishFromConfirm,
+    republishFromConfirm,
     stopCurrentPublish,
     runRollback,
     runUndoRollback,

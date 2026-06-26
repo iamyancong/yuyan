@@ -20,6 +20,7 @@ import {
   nginxRuntimeFormSchema,
 } from './constant';
 import { formatServerLabel } from '../../utils';
+import { renderTwoLineSelectOption } from '../../hooks/useDeployProjectOptions';
 
 defineOptions({ name: 'NginxRuntimeDrawer' });
 
@@ -134,15 +135,23 @@ const hasServer = computed(() => Boolean(props.server));
 const hasManagedInstance = computed(() => props.instances.some((instance) => instance.instanceType === 'managed'));
 const serverOptions = computed(() =>
   props.servers.map((s) => ({
-    label: formatServerLabel(s.name, s.host),
+    label: renderTwoLineSelectOption({ title: s.name, description: s.host }),
+    title: s.name,
+    searchKey: `${s.name} ${s.host}`,
     value: s.id,
   }))
 );
 const instanceOptions = computed(() =>
-  props.instances.map((instance) => ({
-    label: `${instance.name}（${instance.instanceType === 'managed' ? '托管' : '已有'}）`,
-    value: instance.id,
-  }))
+  props.instances.map((instance) => {
+    const typeLabel = instance.instanceType === 'managed' ? '系统托管' : '外部已有';
+    const desc = `${typeLabel} · 绑定 ${instance.targetCount || 0} 个项目`;
+    return {
+      label: renderTwoLineSelectOption({ title: instance.name, description: desc }),
+      title: instance.name,
+      searchKey: `${instance.name} ${desc}`,
+      value: instance.id,
+    };
+  })
 );
 
 /** 进度日志转为 YMonaco 纯文本 */
@@ -202,6 +211,11 @@ const computedInstanceFormSchema = computed(() => {
               :options="serverOptions"
               style="min-width: 270px"
               placeholder="请选择服务器"
+              class="project-select"
+              show-search
+              option-filter-prop="searchKey"
+              option-label-prop="title"
+              popup-class-name="project-select-dropdown"
               @change="(value: unknown) => emit('changeServer', Number(value))"
             />
           </div>
@@ -213,6 +227,11 @@ const computedInstanceFormSchema = computed(() => {
                 :options="instanceOptions"
                 style="min-width: 220px"
                 placeholder="请选择 Nginx 实例"
+                class="project-select"
+                show-search
+                option-filter-prop="searchKey"
+                option-label-prop="title"
+                popup-class-name="project-select-dropdown"
                 @change="(value: unknown) => emit('selectInstance', Number(value))"
               />
             </div>

@@ -3,6 +3,7 @@ import type { DeployProjectSource, DeployServer, DeployServerPayload, DeployTarg
 import {
   createProjectSelectSearchKey,
   renderProjectSelectOptionLabel,
+  renderTwoLineSelectOption,
 } from './hooks/useDeployProjectOptions';
 import type {
   DeployProjectContext,
@@ -148,8 +149,12 @@ export function createRecordServerOptions(targetList: DeployTarget[]): RecordSer
   targetList.forEach((target) => {
     const serverId = Number(target.serverId || 0);
     if (!serverId || optionMap.has(serverId)) return;
+    const name = target.serverName || `服务器 ${serverId}`;
+    const host = target.serverHost || '';
     optionMap.set(serverId, {
-      label: formatServerLabel(target.serverName || `服务器 ${serverId}`, target.serverHost),
+      label: renderTwoLineSelectOption({ title: name, description: host }),
+      title: name,
+      searchKey: `${name} ${host}`,
       value: serverId,
     });
   });
@@ -243,12 +248,16 @@ export function createBranchOptions(targetList: DeployTarget[]) {
  * @returns 服务器筛选项
  */
 export function createServerOptionsFromTargets(targetList: DeployTarget[]) {
-  const optionMap = new Map<number, { label: string; value: number }>();
+  const optionMap = new Map<number, any>();
   targetList.forEach((target) => {
     const serverId = Number(target.serverId || 0);
     if (!serverId || optionMap.has(serverId)) return;
+    const name = target.serverName || `服务器 ${serverId}`;
+    const host = target.serverHost || '';
     optionMap.set(serverId, {
-      label: formatServerLabel(target.serverName || `服务器 ${serverId}`, target.serverHost),
+      label: renderTwoLineSelectOption({ title: name, description: host }),
+      title: name,
+      searchKey: `${name} ${host}`,
       value: serverId,
     });
   });
