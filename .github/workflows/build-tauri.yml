@@ -35,11 +35,11 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
 
+      - name: Configure GitHub Packages Token
+        run: pnpm config set //npm.pkg.github.com/:_authToken "${{ secrets.PERSONAL_ACCESS_TOKEN }}"
+
       - name: Install Frontend Dependencies
-        run: |
-          pnpm install --no-frozen-lockfile
-        env:
-          GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }} # 注入拉取私有包所需的 PAT Token
+        run: pnpm install --no-frozen-lockfile
 
       - name: Build Tauri App
         run: pnpm run build
