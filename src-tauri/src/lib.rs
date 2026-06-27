@@ -202,6 +202,13 @@ fn change_app_icon(app_handle: tauri::AppHandle, is_dark: bool) -> Result<(), St
     Ok(())
 }
 
+/** 安全退出整个应用并清理 Node 子进程的命令。 */
+#[tauri::command]
+fn exit_app(app: tauri::AppHandle) {
+    println!("🛑 收到强制退出指令，正在安全退出应用并清理子进程...");
+    app.exit(0);
+}
+
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -219,7 +226,8 @@ pub fn run() {
             app_update::cancel_app_update_download,
             app_update::get_app_update_status,
             app_update::get_app_update_target,
-            app_update::install_app_update
+            app_update::install_app_update,
+            exit_app
         ])
 
         .on_window_event(|window, event| {
