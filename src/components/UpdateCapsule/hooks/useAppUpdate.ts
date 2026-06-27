@@ -93,7 +93,7 @@ const isNewerVersion = (local: string, remote: string): boolean => {
     if (lNum > rNum) return false;
   }
 
-  if (rPre && !lPre) return true;
+  if (rPre && !lPre) return false;
   if (!rPre && lPre) return true;
   if (rPre && lPre && rPre !== lPre) return true;
   return false;
@@ -128,11 +128,11 @@ const autoInstallAndClose = async () => {
     setTimeout(async () => {
       try {
         if (isTauri()) {
-          const { getCurrentWindow } = await import('@tauri-apps/api/window');
-          await getCurrentWindow().close();
+          const { invoke } = await import('@tauri-apps/api/core');
+          await invoke('exit_app');
         }
       } catch (closeErr) {
-        console.warn('[Update] 自动关闭窗口失败（可能用户已手动关闭）:', closeErr);
+        console.warn('[Update] 自动关闭窗口并退出应用失败:', closeErr);
       }
     }, CLOSE_APP_DELAY_MS);
   } catch (e: any) {
