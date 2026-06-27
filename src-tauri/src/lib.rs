@@ -2,7 +2,7 @@ use std::process::{Command, Stdio, Child};
 use std::sync::{Arc, Mutex};
 use std::io::{BufRead, BufReader};
 use std::thread;
-use tauri::Manager;
+use tauri::{Manager, Emitter};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri::image::Image;
 
@@ -221,7 +221,33 @@ pub fn run() {
                 }
             }
         })
+        .on_menu_event(|app_handle, event| {
+            if event.id().as_ref() == "check-update" {
+                let _ = app_handle.emit("menu-check-update", ());
+            }
+        })
         .setup(move |app| {
+            #[cfg(target_os = "macos")]
+            {
+                use tauri::menu::{Menu, MenuItemBuilder};
+                let app_handle = app.handle();
+                if let Ok(menu) = Menu::default(app_handle) {
+                    if let Ok(items) = menu.items() {
+                        if let Some(first_item) = items.first() {
+                            if let Some(app_submenu) = first_item.as_submenu() {
+                                if let Ok(check_update_item) = MenuItemBuilder::new("检查更新")
+                                    .id("check-update")
+                                    .build(app_handle)
+                                {
+                                    let _ = app_submenu.insert(&check_update_item, 1);
+                                }
+                            }
+                        }
+                    }
+                    let _ = app.set_menu(menu);
+                }
+            }
+
             let app_handle = app.handle();
             let node_path = get_node_path(app_handle);
 
