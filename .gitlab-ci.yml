@@ -64,6 +64,7 @@ deploy:dev-local:
       docker rm yuyan-ops || true
       ENV_ARGS=""
       if [ -n "$GITLAB_TOKEN" ]; then ENV_ARGS="$ENV_ARGS -e GITLAB_TOKEN"; fi
+      if [ -n "$GITHUB_TOKEN" ]; then ENV_ARGS="$ENV_ARGS -e GITHUB_TOKEN"; fi
       if [ -n "$NPMRC_CONTENT" ]; then ENV_ARGS="$ENV_ARGS -e NPMRC_CONTENT"; fi
       if [ -n "$NPM_REGISTRY" ]; then ENV_ARGS="$ENV_ARGS -e NPM_REGISTRY"; fi
       if [ -n "$NPM_AUTH_TOKEN" ]; then ENV_ARGS="$ENV_ARGS -e NPM_AUTH_TOKEN"; fi
