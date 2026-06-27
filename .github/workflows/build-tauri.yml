@@ -43,7 +43,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [windows-latest, macos-latest]
+        include:
+          - platform: windows-latest
+            artifact: yuyan-windows-x86_64
+            update_target: windows-x86_64
+            bundle_path: src-tauri/target/release/bundle/nsis/*.exe
+          - platform: macos-15
+            artifact: yuyan-macos-aarch64
+            update_target: darwin-aarch64
+            bundle_path: src-tauri/target/release/bundle/dmg/*.dmg
+          - platform: macos-13
+            artifact: yuyan-macos-x86_64
+            update_target: darwin-x86_64
+            bundle_path: src-tauri/target/release/bundle/dmg/*.dmg
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -80,21 +92,17 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
           NODE_OPTIONS: '--max-old-space-size=4096'
 
-      - name: Upload Windows Artifact
-        if: matrix.platform == 'windows-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: yuyan-windows-build
-          path: |
-            src-tauri/target/release/bundle/nsis/*.exe
+      - name: Prepare Update Artifact
+        shell: bash
+        run: |
+          mkdir -p "update-artifact/${{ matrix.update_target }}"
+          cp ${{ matrix.bundle_path }} "update-artifact/${{ matrix.update_target }}/"
 
-      - name: Upload macOS Artifact
-        if: matrix.platform == 'macos-latest'
+      - name: Upload Update Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: yuyan-macos-build
-          path: |
-            src-tauri/target/release/bundle/dmg/*.dmg
+          name: ${{ matrix.artifact }}
+          path: update-artifact
 
   release:
     needs: [prep-version, build]
@@ -106,14 +114,23 @@ jobs:
       - name: Download Windows Artifact
         uses: actions/download-artifact@v4
         with:
-          name: yuyan-windows-build
+          name: yuyan-windows-x86_64
           path: ./dist-release
 
-      - name: Download macOS Artifact
+      - name: Download macOS ARM Artifact
         uses: actions/download-artifact@v4
         with:
-          name: yuyan-macos-build
+          name: yuyan-macos-aarch64
           path: ./dist-release
+
+      - name: Download macOS Intel Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: yuyan-macos-x86_64
+          path: ./dist-release
+
+      - name: Prepare Static Update Release
+        run: node scripts/prepare-app-update-release.mjs "${{ needs.prep-version.outputs.version }}" ./dist-release ./app-update-release
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -127,3 +144,24 @@ jobs:
             ./dist-release/**/*.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish Installers to Internal Static Server
+        env:
+          APP_UPDATE_SSH_HOST: ${{ secrets.APP_UPDATE_SSH_HOST }}
+          APP_UPDATE_SSH_PORT: ${{ secrets.APP_UPDATE_SSH_PORT }}
+          APP_UPDATE_SSH_USER: ${{ secrets.APP_UPDATE_SSH_USER }}
+          APP_UPDATE_SSH_KEY: ${{ secrets.APP_UPDATE_SSH_KEY }}
+          APP_UPDATE_SSH_PATH: ${{ secrets.APP_UPDATE_SSH_PATH }}
+        run: |
+          if [ -z "$APP_UPDATE_SSH_HOST" ] || [ -z "$APP_UPDATE_SSH_USER" ] || [ -z "$APP_UPDATE_SSH_KEY" ] || [ -z "$APP_UPDATE_SSH_PATH" ]; then
+            echo "Internal update server secrets are not configured; skipping static publication."
+            exit 0
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$APP_UPDATE_SSH_KEY" > ~/.ssh/app-update
+          chmod 600 ~/.ssh/app-update
+          SSH_PORT="${APP_UPDATE_SSH_PORT:-22}"
+          SSH_COMMAND="ssh -i ~/.ssh/app-update -p ${SSH_PORT} -o StrictHostKeyChecking=accept-new"
+          rsync -az --exclude='manifest.json.next' -e "$SSH_COMMAND" ./app-update-release/ "${APP_UPDATE_SSH_USER}@${APP_UPDATE_SSH_HOST}:${APP_UPDATE_SSH_PATH}/"
+          scp -i ~/.ssh/app-update -P "$SSH_PORT" -o StrictHostKeyChecking=accept-new ./app-update-release/stable/manifest.json.next "${APP_UPDATE_SSH_USER}@${APP_UPDATE_SSH_HOST}:${APP_UPDATE_SSH_PATH}/stable/manifest.json.next"
+          $SSH_COMMAND "${APP_UPDATE_SSH_USER}@${APP_UPDATE_SSH_HOST}" "mv '${APP_UPDATE_SSH_PATH}/stable/manifest.json.next' '${APP_UPDATE_SSH_PATH}/stable/manifest.json'"

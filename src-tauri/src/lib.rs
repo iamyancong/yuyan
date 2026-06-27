@@ -212,10 +212,14 @@ pub fn run() {
         .manage(app_update::AppUpdateManager::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             change_app_icon,
             app_update::start_app_update_download,
+            app_update::cancel_app_update_download,
             app_update::get_app_update_status,
+            app_update::get_app_update_target,
             app_update::install_app_update
         ])
 

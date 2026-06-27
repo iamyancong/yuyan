@@ -105,6 +105,21 @@
     transition: color 0.3s ease;
   }
 
+  .pause-download {
+    position: relative;
+    z-index: 5;
+    display: inline-flex;
+    margin-left: 8px;
+    color: #0f766e;
+    cursor: pointer;
+    transition: transform 0.2s ease, color 0.2s ease;
+
+    &:hover {
+      color: #dc2626;
+      transform: scale(1.12);
+    }
+  }
+
   /* ---------- Hover & Active 3D 浮动反馈 ---------- */
   &:hover {
     transform: translateY(-2px);

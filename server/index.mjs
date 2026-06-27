@@ -5,10 +5,19 @@
  */
 
 import express from 'express';
+import fs from 'node:fs';
 import cors from 'cors';
 import history from 'connect-history-api-fallback';
 import compression from 'compression';
-import { PORT, CLIENT_DIST, TEMPLATE_REPO_PATH, TEMPLATE_REPO_URL, TEMPLATE_BRANCH, DEPLOY_DB_PATH } from './config/constants.mjs';
+import {
+  PORT,
+  CLIENT_DIST,
+  TEMPLATE_REPO_PATH,
+  TEMPLATE_REPO_URL,
+  TEMPLATE_BRANCH,
+  DEPLOY_DB_PATH,
+  APP_UPDATE_DIR,
+} from './config/constants.mjs';
 import { pullLatestTemplate, validateTemplate } from './services/template-service.mjs';
 import { startCleanupScheduler } from './utils/cleanup-scheduler.mjs';
 import scaffoldRoutes from './routes/scaffold.mjs';
@@ -26,6 +35,29 @@ app.use(express.json({ limit: '2mb' }));
 // 健康检查路由
 app.use('/health', healthRoutes);
 
+/** 桌面端安装包静态分发，原生支持 Range、ETag 和断点续传。 */
+app.use(
+  '/app-updates',
+  express.static(APP_UPDATE_DIR, {
+    acceptRanges: true,
+    etag: false,
+    fallthrough: false,
+    immutable: true,
+    lastModified: true,
+    maxAge: '1y',
+    setHeaders: (res, filePath) => {
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      try {
+        const sha256 = fs.readFileSync(`${filePath}.sha256`, 'utf8').trim();
+        if (/^[a-f0-9]{64}$/i.test(sha256)) {
+          res.setHeader('ETag', `"sha256-${sha256.toLowerCase()}"`);
+        }
+      } catch {}
+    },
+  })
+);
+
 // 脚手架 API 路由
 app.use('/scaffold-api', scaffoldRoutes);
 
@@ -38,13 +70,13 @@ try {
     history({
       htmlAcceptHeaders: ['text/html', 'application/xhtml+xml'],
       disableDotRule: true,
-      rewrites: [{ from: /^\/(scaffold-api|deploy-api|health)(?:\/|$)/, to: (ctx) => ctx.parsedUrl.pathname }],
+      rewrites: [{ from: /^\/(scaffold-api|deploy-api|app-updates|health)(?:\/|$)/, to: (ctx) => ctx.parsedUrl.pathname }],
     })
   );
 } catch {}
 
 /** 不参与静态资源压缩的路由前缀，避免接口流式响应被缓冲 */
-const noStaticCompressionRoutePattern = /^\/(?:scaffold-api|deploy-api|health)(?:\/|$)/;
+const noStaticCompressionRoutePattern = /^\/(?:scaffold-api|deploy-api|app-updates|health)(?:\/|$)/;
 
 /**
  * 判断当前响应是否允许静态资源压缩。

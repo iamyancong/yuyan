@@ -8,6 +8,8 @@
     "core:default",
     "opener:default",
     "dialog:default",
+    "process:allow-restart",
+    "updater:default",
     "core:window:allow-start-dragging",
     "core:app:allow-version"
   ]

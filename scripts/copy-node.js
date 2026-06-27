@@ -32,9 +32,20 @@ console.log(`📂 源 Node.js 路径: ${sourceNode}`);
 console.log(`📂 目标路径: ${targetNode}`);
 
 try {
-  // 复制文件
-  fs.copyFileSync(sourceNode, targetNode);
-  console.log(`✅ Node.js 二进制文件复制成功！`);
+  let needCopy = true;
+  if (fs.existsSync(targetNode)) {
+    const sourceStats = fs.statSync(sourceNode);
+    const targetStats = fs.statSync(targetNode);
+    if (sourceStats.size === targetStats.size) {
+      console.log(`ℹ️  目标 Node.js 二进制文件已存在且大小一致，跳过拷贝以防止文件锁定。`);
+      needCopy = false;
+    }
+  }
+
+  if (needCopy) {
+    fs.copyFileSync(sourceNode, targetNode);
+    console.log(`✅ Node.js 二进制文件复制成功！`);
+  }
 
   // 在 macOS/Linux 上，确保有执行权限
   if (process.platform !== 'win32') {
