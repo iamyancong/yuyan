@@ -1042,7 +1042,7 @@ export async function handleGetAppUpdateStatus(req, res) {
 }
 
 /**
- * 触发后台静默下载并拉起更新程序
+ * 触发后台静默下载并拉起更新程序（已加入防挂起超时保护）
  */
 export async function handleDownloadAppUpdate(req, res) {
   const { url, filename } = req.body;
@@ -1095,6 +1095,23 @@ export async function handleDownloadAppUpdate(req, res) {
     let downloadedLength = 0;
 
     const writer = createWriteStream(destPath);
+
+    // 防挂起超时保护：20 秒内未收到新数据则判定为连接中断
+    let stallTimer = null;
+    const STALL_TIMEOUT_MS = 20000;
+
+    const resetStallTimer = () => {
+      if (stallTimer) clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => {
+        console.error(`[bootstrap-update] 下载超时中断：${STALL_TIMEOUT_MS / 1000} 秒内未收到新数据`);
+        response.data.destroy();
+        writer.destroy();
+        appUpdateStatus.status = 'error';
+        appUpdateStatus.error = `下载超时中断：${STALL_TIMEOUT_MS / 1000} 秒内未收到新数据，请检查网络连接后重试`;
+      }, STALL_TIMEOUT_MS);
+    };
+
+    resetStallTimer();
     response.data.pipe(writer);
 
     response.data.on('data', (chunk) => {
@@ -1102,9 +1119,11 @@ export async function handleDownloadAppUpdate(req, res) {
       if (totalLength > 0) {
         appUpdateStatus.progress = Math.round((downloadedLength / totalLength) * 100);
       }
+      resetStallTimer();
     });
 
     writer.on('finish', () => {
+      if (stallTimer) clearTimeout(stallTimer);
       console.log(`[bootstrap-update] 下载成功！更新包已暂存为: ${destPath}`);
       appUpdateStatus.status = 'completed';
       appUpdateStatus.progress = 100;
@@ -1112,9 +1131,18 @@ export async function handleDownloadAppUpdate(req, res) {
     });
 
     writer.on('error', (err) => {
+      if (stallTimer) clearTimeout(stallTimer);
       console.error('[bootstrap-update] 文件写入失败:', err);
       appUpdateStatus.status = 'error';
       appUpdateStatus.error = `保存安装包时发生错误: ${err.message}`;
+    });
+
+    response.data.on('error', (err) => {
+      if (stallTimer) clearTimeout(stallTimer);
+      console.error('[bootstrap-update] 数据流接收异常:', err);
+      writer.destroy();
+      appUpdateStatus.status = 'error';
+      appUpdateStatus.error = `下载数据流中断: ${err.message}`;
     });
 
   } catch (err) {
@@ -1429,27 +1457,63 @@ export async function handleDownloadAppUpdateAsset(req, res) {
 
     // 尝试在本地保存一份缓存
     let cacheWriter = null;
+    const tempCachePath = `${cachePath}.tmp`;
     try {
       if (!fsSync.existsSync(cacheDir)) {
         fsSync.mkdirSync(cacheDir, { recursive: true });
       }
-      cacheWriter = fsSync.createWriteStream(cachePath);
+      cacheWriter = fsSync.createWriteStream(tempCachePath);
     } catch (e) {
       console.error('[Update Cache] 创建缓存写入流失败，仅执行实时中转:', e.message);
     }
 
-    // 管道中转输出给前端客户端
-    response.data.pipe(res);
+    // 手动分流：避免对同一 Readable 流执行两次 pipe() 导致背压死锁
+    // 使用 data/end/error 事件手动将数据分发到 res 和 cacheWriter
+    const source = response.data;
 
-    // 如果写入流创建成功，也同步写入缓存文件
+    source.on('data', (chunk) => {
+      // 1. 写入 HTTP 响应流（优先保证客户端接收）
+      const resOk = res.write(chunk);
+      // 2. 写入本地缓存文件（非阻塞，忽略背压以避免影响主流程）
+      if (cacheWriter && !cacheWriter.destroyed) {
+        cacheWriter.write(chunk);
+      }
+      // 仅在 res 需要背压控制时暂停源流
+      if (!resOk) {
+        source.pause();
+        res.once('drain', () => source.resume());
+      }
+    });
+
+    source.on('end', () => {
+      res.end();
+      if (cacheWriter && !cacheWriter.destroyed) {
+        cacheWriter.end(() => {
+          // 下载完整后将临时文件重命名为正式缓存
+          try {
+            fsSync.renameSync(tempCachePath, cachePath);
+            console.log(`[Update Cache] 代理下载的同时成功将文件写入缓存: ${cachePath}`);
+          } catch (renameErr) {
+            console.error('[Update Cache] 重命名缓存文件失败:', renameErr);
+          }
+        });
+      }
+    });
+
+    source.on('error', (err) => {
+      console.error('[Update Proxy] 源数据流错误:', err);
+      res.destroy(err);
+      if (cacheWriter && !cacheWriter.destroyed) {
+        cacheWriter.destroy();
+        try { fsSync.unlinkSync(tempCachePath); } catch (e) {}
+      }
+    });
+
     if (cacheWriter) {
-      response.data.pipe(cacheWriter);
-      cacheWriter.on('finish', () => {
-        console.log(`[Update Cache] 代理下载的同时成功将文件写入缓存: ${cachePath}`);
-      });
       cacheWriter.on('error', (err) => {
-        console.error(`[Update Cache] 代理写入缓存文件出错:`, err);
-        try { fsSync.unlinkSync(cachePath); } catch (e) {}
+        console.error('[Update Cache] 代理写入缓存文件出错:', err);
+        cacheWriter.destroy();
+        try { fsSync.unlinkSync(tempCachePath); } catch (e) {}
       });
     }
   } catch (error) {

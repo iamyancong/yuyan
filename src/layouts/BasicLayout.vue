@@ -19,22 +19,8 @@
     <a-layout>
       <a-layout-header class="yuyan-layout-header">
         <div class="yuyan-layout-header-left">
-          <!-- 发现新版本更新提示胶囊 (Codex 风格) -->
-          <div 
-            v-if="hasUpdate && isTauriClient && (updateState.status === 'completed' || updateState.status === 'error')"
-            class="update-capsule"
-            :class="`status-${updateState.status}`"
-            @click="handleCapsuleClick"
-          >
-            <template v-if="updateState.status === 'completed'">
-              <CloudDownloadOutlined class="capsule-icon" />
-              <span>✨ 新版本已就绪，点击安装</span>
-            </template>
-            <template v-else-if="updateState.status === 'error'">
-              <span style="margin-right: 4px;">⚠️</span>
-              <span>更新下载失败，点击重试</span>
-            </template>
-          </div>
+          <!-- 赛博玻璃拟态更新胶囊 -->
+          <UpdateCapsule v-if="isTauriClient" />
         </div>
         <div class="yuyan-layout-header-drag" data-tauri-drag-region></div>
         <div class="yuyan-layout-header-right">
@@ -135,21 +121,21 @@ import { useAuth } from '@/composables/useAuth';
 import SettingsDrawer from '@/components/SettingsDrawer.vue';
 import LoginModal from '@/components/LoginModal.vue';
 import LogoSwift from '@/components/LogoSwift.vue';
-import { 
-  BgColorsOutlined, 
-  AppstoreOutlined, 
-  CloudServerOutlined, 
-  ProjectOutlined, 
-  UserOutlined, 
-  LogoutOutlined, 
+import UpdateCapsule from '@/components/UpdateCapsule/index.vue';
+import { useAppUpdate } from '@/components/UpdateCapsule/hooks/useAppUpdate';
+import {
+  BgColorsOutlined,
+  AppstoreOutlined,
+  CloudServerOutlined,
+  ProjectOutlined,
+  UserOutlined,
+  LogoutOutlined,
   LoginOutlined,
   SyncOutlined,
-  CloudDownloadOutlined,
-  InfoCircleOutlined,
-  LoadingOutlined
+  CloudDownloadOutlined
 } from '@ant-design/icons-vue';
 import { isTauri } from '@/utils/env';
-import { backupDbFromServer, restoreDbToLocal, downloadAndInstallAppUpdate, getAppUpdateStatus, checkAppUpdateFromServer, installAppUpdate } from '@/api/deploy';
+import { backupDbFromServer, restoreDbToLocal } from '@/api/deploy';
 import { message, Modal } from 'ant-design-vue';
 
 const collapsed = ref(false);
@@ -164,220 +150,8 @@ const isTauriClient = computed(() => isTauri());
 // 同步状态
 const syncing = ref(false);
 
-// ============ 自动更新检测相关逻辑 (Codex 风格) ============
-const hasUpdate = ref(false);
-const checkingUpdate = ref(false);
-const currentAppVersion = ref('1.0.0');
-const latestVersion = ref('');
-const updateLogs = ref('');
-const downloadUrl = ref('');
-const isMacUser = computed(() => /macintosh|mac os x/i.test(navigator.userAgent));
-
-// 下载进度与状态
-const updateState = ref({
-  status: 'idle', // 'idle' | 'downloading' | 'completed' | 'error'
-  progress: 0,
-  error: null as string | null
-});
-const updatePercent = computed(() => updateState.value.progress);
-
-/**
- * 初始化本地应用版本号
- */
-const initLocalVersion = async () => {
-  // 本地开发模拟测试保护：如果在 currentAppVersion 处写死了非 '1.0.0' 的低版本，则保留当前设定的模拟版本
-  if (currentAppVersion.value !== '1.0.0') {
-    return;
-  }
-  if (isTauriClient.value) {
-    try {
-      const { getVersion } = await import('@tauri-apps/api/app');
-      currentAppVersion.value = await getVersion();
-    } catch (e) {
-      console.warn('获取本地版本号失败，使用默认配置:', e);
-    }
-  }
-};
-
-/**
- * 语义化版本号对比 (Semantic Versioning)
- * 判断 remote 是否比 local 版本新
- */
-const isNewerVersion = (local: string, remote: string) => {
-  const l = local.replace(/^v/, '');
-  const r = remote.replace(/^v/, '');
-  
-  if (l === r) return false;
-  
-  const [lMain, lPre] = l.split('-');
-  const [rMain, rPre] = r.split('-');
-  
-  const lParts = lMain.split('.').map(Number);
-  const rParts = rMain.split('.').map(Number);
-  
-  for (let i = 0; i < Math.max(lParts.length, rParts.length); i++) {
-    const lNum = lParts[i] || 0;
-    const rNum = rParts[i] || 0;
-    if (rNum > lNum) return true;
-    if (lNum > rNum) return false;
-  }
-  
-  // 预发布版本 (Prerelease) 判定逻辑
-  if (rPre && !lPre) {
-    // 在开发测试阶段，如果主版本号相同但远程是带有预发布后缀的分支构建包（如 1.0.0-hash），允许更新
-    return true;
-  }
-  if (!rPre && lPre) return true;
-  if (rPre && lPre && rPre !== lPre) return true;
-  
-  return false;
-};
-
-/**
- * 执行 GitHub Releases 更新检测
- * @param manual 是否为手动点击检测
- */
-/**
- * 自动在后台静默发起下载更新包
- */
-const autoTriggerSilentDownload = async () => {
-  if (!downloadUrl.value) return;
-  const filename = isMacUser.value ? `yuyan-${latestVersion.value}.dmg` : `yuyan-${latestVersion.value}.exe`;
-  try {
-    updateState.value.status = 'downloading';
-    updateState.value.progress = 0;
-    updateState.value.error = null;
-    
-    // downloadUrl 已经是免密的内网中转直链，Token 由服务端统一管理
-    const res = await downloadAndInstallAppUpdate(downloadUrl.value, filename);
-    if (res && res.success) {
-      startProgressPolling();
-    } else {
-      throw new Error(res?.message || '启动下载失败');
-    }
-  } catch (e: any) {
-    updateState.value.status = 'error';
-    const isNetworkError = e.message?.toLowerCase().includes('network error') || !e.response;
-    const errorMsg = isNetworkError 
-      ? '无法发起更新下载，客户端本地辅助服务(localhost:3101)未启动或已崩溃' 
-      : (e.message || '连接本地后端异常');
-    updateState.value.error = errorMsg;
-    console.error('[Update] 启动静默下载失败:', e);
-  }
-};
-
-const checkAppUpdate = async (manual = false) => {
-  if (checkingUpdate.value) return;
-  checkingUpdate.value = true;
-  
-  try {
-    await initLocalVersion();
-    
-    // 调用内网部署服务器进行代理更新检测（Token 由服务端环境变量 GITHUB_TOKEN 统一管理）
-    const platform = isMacUser.value ? 'darwin' : 'win32';
-    const res = await checkAppUpdateFromServer(currentAppVersion.value, platform);
-    
-    if (res && res.hasUpdate && res.downloadUrl) {
-      hasUpdate.value = true;
-      latestVersion.value = res.latestVersion || '';
-      updateLogs.value = res.updateLogs || '无更新内容描述。';
-      downloadUrl.value = res.downloadUrl; // 内网服务器中转代理绝对下载直链
-      
-      // 检测并接管当前本地下载状态
-      try {
-        const statusRes = await getAppUpdateStatus();
-        updateState.value.status = statusRes.status;
-        updateState.value.progress = statusRes.progress;
-        updateState.value.error = statusRes.error;
-
-        if (statusRes.status === 'downloading') {
-          startProgressPolling();
-        } else if (statusRes.status === 'idle') {
-          // 如果检测到新版本且本地服务处于空闲，立即在后台自动发起静默下载！
-          console.log('[Update] 检测到有新版本，已启动后台静默下载...');
-          void autoTriggerSilentDownload();
-        } else if (statusRes.status === 'completed') {
-          console.log('[Update] 检查到前一次更新包已下载完成，等待用户点击安装');
-        }
-      } catch (localErr) {
-        console.warn('获取本地下载状态失败，本地 Node 服务可能未就绪:', localErr);
-      }
-    } else {
-      hasUpdate.value = false;
-      if (manual) {
-        message.success(res?.message || '当前已是最新版本！');
-      }
-    }
-  } catch (error: any) {
-    console.error('内网代理更新检测失败:', error);
-    if (manual) {
-      const errMsg = error.response?.data?.error || error.message || '连接内网服务器异常';
-      message.error(`检查更新失败: ${errMsg}`);
-    }
-  } finally {
-    checkingUpdate.value = false;
-  }
-};
-
-let progressInterval: any = null;
-
-const startProgressPolling = () => {
-  if (progressInterval) clearInterval(progressInterval);
-  progressInterval = setInterval(async () => {
-    try {
-      const res = await getAppUpdateStatus();
-      updateState.value.status = res.status;
-      updateState.value.progress = res.progress;
-      updateState.value.error = res.error;
-      
-      if (res.status === 'completed') {
-        console.log('[Update] 后台静默下载完成！新版本已就绪');
-        if (progressInterval) {
-          clearInterval(progressInterval);
-          progressInterval = null;
-        }
-      } else if (res.status === 'error') {
-        console.error('[Update] 下载过程中发生错误:', res.error);
-        if (progressInterval) {
-          clearInterval(progressInterval);
-          progressInterval = null;
-        }
-      }
-    } catch (e) {
-      console.error('[Update] 轮询下载进度失败:', e);
-    }
-  }, 1000);
-};
-
-const handleCheckUpdateClick = () => {
-  if (hasUpdate.value && updateState.value.status === 'completed') {
-    message.success('新版本安装包已下载就绪，请点击左上角的“新版本已就绪”进行安装！');
-    return;
-  }
-  if (hasUpdate.value && updateState.value.status === 'downloading') {
-    message.info('新版本正在后台加速下载中，请稍后...');
-    return;
-  }
-  void checkAppUpdate(true);
-};
-
-const handleCapsuleClick = async () => {
-  if (updateState.value.status === 'completed') {
-    try {
-      message.loading({ content: '正在为您拉起安装程序，请按系统引导完成覆盖升级...', duration: 5 });
-      const res = await installAppUpdate();
-      if (!res || !res.success) {
-        throw new Error(res?.message || '拉起安装失败');
-      }
-    } catch (e: any) {
-      message.error(`执行安装失败: ${e.message || e}`);
-    }
-  } else if (updateState.value.status === 'error') {
-    // 错误时点击重新静默下载
-    void autoTriggerSilentDownload();
-  }
-};
-// ============================================
+// 自动更新逻辑委托给单例 Hook（与 UpdateCapsule 共享同一份状态）
+const { handleCheckUpdateClick } = useAppUpdate();
 
 /**
  * 弹出同步确认弹窗，若用户确认则从测试环境拉取 SQLite 数据库并覆盖写入本地
@@ -491,29 +265,12 @@ const onMenuClick = ({ key }: { key: string }) => {
   void navigateToPath(key).catch(handleNavigationError);
 };
 
-let autoUpdateInterval: any = null;
-
 onMounted(() => {
   window.addEventListener('show-login-modal', handleShowLoginModal);
-  
-  // 开启桌面端后台静默更新检测
-  if (isTauriClient.value) {
-    setTimeout(() => {
-      void checkAppUpdate(false);
-    }, 2000);
-
-    // 每 15 分钟后台静默检测一次新版本
-    autoUpdateInterval = setInterval(() => {
-      void checkAppUpdate(false);
-    }, 15 * 60 * 1000);
-  }
 });
 
 onUnmounted(() => {
   window.removeEventListener('show-login-modal', handleShowLoginModal);
-  if (autoUpdateInterval) {
-    clearInterval(autoUpdateInterval);
-  }
 });
 
 // 自定义菜单图标映射
@@ -1033,124 +790,5 @@ const goHome = () => {
   }
 }
 
-// 发现新版本动态状态胶囊 (Codex 风格)
-.update-capsule {
-  display: inline-flex;
-  align-items: center;
-  position: relative;
-  height: 28px;
-  padding: 0 12px;
-  border-radius: 14px;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  overflow: hidden;
-  user-select: none;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: 0 2px 6px rgba(24, 144, 255, 0.15);
-
-  .capsule-icon {
-    margin-right: 6px;
-    font-size: 13px;
-    position: relative;
-    z-index: 2;
-  }
-
-  span {
-    position: relative;
-    z-index: 2;
-  }
-
-  /* 默认发现更新状态（蓝色胶囊） */
-  &.status-idle {
-    background: #1890ff;
-    color: #ffffff;
-    animation: capsule-pulse 2s infinite;
-
-    &:hover {
-      background: #40a9ff;
-      box-shadow: 0 4px 12px rgba(24, 144, 255, 0.4);
-      transform: translateY(-1px);
-      animation: none;
-    }
-    &:active {
-      transform: translateY(0);
-    }
-  }
-
-  /* 正在下载状态（展示进度条） */
-  &.status-downloading {
-    background: rgba(24, 144, 255, 0.08);
-    border: 1px solid rgba(24, 144, 255, 0.24);
-    color: #1890ff;
-    cursor: default;
-
-    .progress-bar-bg {
-      position: absolute;
-      left: 0;
-      top: 0;
-      bottom: 0;
-      background: rgba(24, 144, 255, 0.2);
-      z-index: 1;
-      transition: width 0.1s linear;
-    }
-    .progress-text {
-      font-weight: bold;
-    }
-  }
-
-  /* 下载已就绪状态 (绿色胶囊+呼吸灯) */
-  &.status-completed {
-    background: #52c41a;
-    color: #ffffff;
-    cursor: pointer;
-    box-shadow: 0 2px 6px rgba(82, 196, 26, 0.15);
-    animation: capsule-pulse-green 2s infinite;
-
-    &:hover {
-      background: #73d13d;
-      box-shadow: 0 4px 12px rgba(82, 196, 26, 0.4);
-      transform: translateY(-1px);
-      animation: none;
-    }
-    &:active {
-      transform: translateY(0);
-    }
-  }
-
-  /* 错误状态 */
-  &.status-error {
-    background: #ff4d4f;
-    color: #ffffff;
-    box-shadow: 0 2px 6px rgba(255, 77, 79, 0.15);
-    &:hover {
-      background: #ff7875;
-      transform: translateY(-1px);
-    }
-  }
-}
-
-@keyframes capsule-pulse {
-  0% {
-    box-shadow: 0 2px 6px rgba(24, 144, 255, 0.2), 0 0 0 0 rgba(24, 144, 255, 0.4);
-  }
-  70% {
-    box-shadow: 0 2px 6px rgba(24, 144, 255, 0.2), 0 0 0 6px rgba(24, 144, 255, 0);
-  }
-  100% {
-    box-shadow: 0 2px 6px rgba(24, 144, 255, 0.2), 0 0 0 0 rgba(24, 144, 255, 0);
-  }
-}
-
-@keyframes capsule-pulse-green {
-  0% {
-    box-shadow: 0 2px 6px rgba(82, 196, 26, 0.2), 0 0 0 0 rgba(82, 196, 26, 0.4);
-  }
-  70% {
-    box-shadow: 0 2px 6px rgba(82, 196, 26, 0.2), 0 0 0 6px rgba(82, 196, 26, 0);
-  }
-  100% {
-    box-shadow: 0 2px 6px rgba(82, 196, 26, 0.2), 0 0 0 0 rgba(82, 196, 26, 0);
-  }
-}
+/* 更新胶囊样式已迁移至 @/components/UpdateCapsule/style.less */
 </style>
