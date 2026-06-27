@@ -21,28 +21,18 @@
         <div class="yuyan-layout-header-left">
           <!-- 发现新版本更新提示胶囊 (Codex 风格) -->
           <div 
-            v-if="hasUpdate && isTauriClient"
+            v-if="hasUpdate && isTauriClient && (updateState.status === 'completed' || updateState.status === 'error')"
             class="update-capsule"
             :class="`status-${updateState.status}`"
             @click="handleCapsuleClick"
           >
-            <template v-if="updateState.status === 'idle'">
+            <template v-if="updateState.status === 'completed'">
               <CloudDownloadOutlined class="capsule-icon" />
-              <span>更新</span>
-            </template>
-            <template v-else-if="updateState.status === 'downloading'">
-              <LoadingOutlined class="capsule-icon" v-if="updatePercent === 100" />
-              <SyncOutlined spin class="capsule-icon" v-else />
-              <span class="progress-bar-bg" :style="{ width: updatePercent + '%' }"></span>
-              <span class="progress-text">正在下载 {{ updatePercent }}%</span>
-            </template>
-            <template v-else-if="updateState.status === 'completed'">
-              <LoadingOutlined class="capsule-icon" />
-              <span>正在安装...</span>
+              <span>✨ 新版本已就绪，点击安装</span>
             </template>
             <template v-else-if="updateState.status === 'error'">
               <span style="margin-right: 4px;">⚠️</span>
-              <span>下载失败，点击重试</span>
+              <span>更新下载失败，点击重试</span>
             </template>
           </div>
         </div>
@@ -159,7 +149,7 @@ import {
   LoadingOutlined
 } from '@ant-design/icons-vue';
 import { isTauri } from '@/utils/env';
-import { backupDbFromServer, restoreDbToLocal, downloadAndInstallAppUpdate, getAppUpdateStatus, checkAppUpdateFromServer } from '@/api/deploy';
+import { backupDbFromServer, restoreDbToLocal, downloadAndInstallAppUpdate, getAppUpdateStatus, checkAppUpdateFromServer, installAppUpdate } from '@/api/deploy';
 import { message, Modal } from 'ant-design-vue';
 
 const collapsed = ref(false);
@@ -247,6 +237,35 @@ const isNewerVersion = (local: string, remote: string) => {
  * 执行 GitHub Releases 更新检测
  * @param manual 是否为手动点击检测
  */
+/**
+ * 自动在后台静默发起下载更新包
+ */
+const autoTriggerSilentDownload = async () => {
+  if (!downloadUrl.value) return;
+  const filename = isMacUser.value ? `yuyan-${latestVersion.value}.dmg` : `yuyan-${latestVersion.value}.exe`;
+  try {
+    updateState.value.status = 'downloading';
+    updateState.value.progress = 0;
+    updateState.value.error = null;
+    
+    // downloadUrl 已经是免密的内网中转直链，Token 由服务端统一管理
+    const res = await downloadAndInstallAppUpdate(downloadUrl.value, filename);
+    if (res && res.success) {
+      startProgressPolling();
+    } else {
+      throw new Error(res?.message || '启动下载失败');
+    }
+  } catch (e: any) {
+    updateState.value.status = 'error';
+    const isNetworkError = e.message?.toLowerCase().includes('network error') || !e.response;
+    const errorMsg = isNetworkError 
+      ? '无法发起更新下载，客户端本地辅助服务(localhost:3101)未启动或已崩溃' 
+      : (e.message || '连接本地后端异常');
+    updateState.value.error = errorMsg;
+    console.error('[Update] 启动静默下载失败:', e);
+  }
+};
+
 const checkAppUpdate = async (manual = false) => {
   if (checkingUpdate.value) return;
   checkingUpdate.value = true;
@@ -264,13 +283,21 @@ const checkAppUpdate = async (manual = false) => {
       updateLogs.value = res.updateLogs || '无更新内容描述。';
       downloadUrl.value = res.downloadUrl; // 内网服务器中转代理绝对下载直链
       
-      // 容错处理：获取本地下载进度状态。即使本地 Node 服务暂时断连，也不影响更新提示的展示
+      // 检测并接管当前本地下载状态
       try {
         const statusRes = await getAppUpdateStatus();
-        if (statusRes && statusRes.status === 'downloading') {
-          updateState.value.status = statusRes.status;
-          updateState.value.progress = statusRes.progress;
+        updateState.value.status = statusRes.status;
+        updateState.value.progress = statusRes.progress;
+        updateState.value.error = statusRes.error;
+
+        if (statusRes.status === 'downloading') {
           startProgressPolling();
+        } else if (statusRes.status === 'idle') {
+          // 如果检测到新版本且本地服务处于空闲，立即在后台自动发起静默下载！
+          console.log('[Update] 检测到有新版本，已启动后台静默下载...');
+          void autoTriggerSilentDownload();
+        } else if (statusRes.status === 'completed') {
+          console.log('[Update] 检查到前一次更新包已下载完成，等待用户点击安装');
         }
       } catch (localErr) {
         console.warn('获取本地下载状态失败，本地 Node 服务可能未就绪:', localErr);
@@ -304,13 +331,13 @@ const startProgressPolling = () => {
       updateState.value.error = res.error;
       
       if (res.status === 'completed') {
-        message.success('新版本下载成功，正在拉起安装包进行覆盖安装...');
+        console.log('[Update] 后台静默下载完成！新版本已就绪');
         if (progressInterval) {
           clearInterval(progressInterval);
           progressInterval = null;
         }
       } else if (res.status === 'error') {
-        message.error(res.error || '更新下载失败');
+        console.error('[Update] 下载过程中发生错误:', res.error);
         if (progressInterval) {
           clearInterval(progressInterval);
           progressInterval = null;
@@ -319,40 +346,35 @@ const startProgressPolling = () => {
     } catch (e) {
       console.error('[Update] 轮询下载进度失败:', e);
     }
-  }, 500);
+  }, 1000);
 };
 
 const handleCheckUpdateClick = () => {
+  if (hasUpdate.value && updateState.value.status === 'completed') {
+    message.success('新版本安装包已下载就绪，请点击左上角的“新版本已就绪”进行安装！');
+    return;
+  }
+  if (hasUpdate.value && updateState.value.status === 'downloading') {
+    message.info('新版本正在后台加速下载中，请稍后...');
+    return;
+  }
   void checkAppUpdate(true);
 };
 
 const handleCapsuleClick = async () => {
-  if (updateState.value.status === 'downloading' || updateState.value.status === 'completed') {
-    return;
-  }
-  
-  const filename = isMacUser.value ? `yuyan-${latestVersion.value}.dmg` : `yuyan-${latestVersion.value}.exe`;
-  
-  try {
-    updateState.value.status = 'downloading';
-    updateState.value.progress = 0;
-    updateState.value.error = null;
-    
-    // downloadUrl 已经是免密的内网中转直链，Token 由服务端统一管理
-    const res = await downloadAndInstallAppUpdate(downloadUrl.value, filename);
-    if (res && res.success) {
-      startProgressPolling();
-    } else {
-      throw new Error(res?.message || '无法发起下载请求');
+  if (updateState.value.status === 'completed') {
+    try {
+      message.loading({ content: '正在为您拉起安装程序，请按系统引导完成覆盖升级...', duration: 5 });
+      const res = await installAppUpdate();
+      if (!res || !res.success) {
+        throw new Error(res?.message || '拉起安装失败');
+      }
+    } catch (e: any) {
+      message.error(`执行安装失败: ${e.message || e}`);
     }
-  } catch (e: any) {
-    updateState.value.status = 'error';
-    const isNetworkError = e.message?.toLowerCase().includes('network error') || !e.response;
-    const errorMsg = isNetworkError 
-      ? '无法发起更新下载，客户端本地辅助服务(localhost:3101)未启动或已崩溃' 
-      : (e.message || '连接本地后端异常');
-    updateState.value.error = errorMsg;
-    message.error(`发起更新失败: ${errorMsg}`);
+  } else if (updateState.value.status === 'error') {
+    // 错误时点击重新静默下载
+    void autoTriggerSilentDownload();
   }
 };
 // ============================================
@@ -1077,12 +1099,23 @@ const goHome = () => {
     }
   }
 
-  /* 正在安装状态 */
+  /* 下载已就绪状态 (绿色胶囊+呼吸灯) */
   &.status-completed {
     background: #52c41a;
     color: #ffffff;
-    cursor: default;
+    cursor: pointer;
     box-shadow: 0 2px 6px rgba(82, 196, 26, 0.15);
+    animation: capsule-pulse-green 2s infinite;
+
+    &:hover {
+      background: #73d13d;
+      box-shadow: 0 4px 12px rgba(82, 196, 26, 0.4);
+      transform: translateY(-1px);
+      animation: none;
+    }
+    &:active {
+      transform: translateY(0);
+    }
   }
 
   /* 错误状态 */
@@ -1106,6 +1139,18 @@ const goHome = () => {
   }
   100% {
     box-shadow: 0 2px 6px rgba(24, 144, 255, 0.2), 0 0 0 0 rgba(24, 144, 255, 0);
+  }
+}
+
+@keyframes capsule-pulse-green {
+  0% {
+    box-shadow: 0 2px 6px rgba(82, 196, 26, 0.2), 0 0 0 0 rgba(82, 196, 26, 0.4);
+  }
+  70% {
+    box-shadow: 0 2px 6px rgba(82, 196, 26, 0.2), 0 0 0 6px rgba(82, 196, 26, 0);
+  }
+  100% {
+    box-shadow: 0 2px 6px rgba(82, 196, 26, 0.2), 0 0 0 0 rgba(82, 196, 26, 0);
   }
 }
 </style>
