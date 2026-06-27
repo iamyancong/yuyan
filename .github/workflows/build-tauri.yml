@@ -17,7 +17,29 @@ permissions:
   contents: write
 
 jobs:
+  prep-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.calc.outputs.version }}
+      tag: ${{ steps.calc.outputs.tag }}
+      prerelease: ${{ steps.calc.outputs.prerelease }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Calculate Version
+        id: calc
+        run: node scripts/bump-version.js
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   build:
+    needs: prep-version
     strategy:
       fail-fast: false
       matrix:
@@ -43,6 +65,9 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
+
+      - name: Apply Bumped Version
+        run: node scripts/apply-version.js ${{ needs.prep-version.outputs.version }}
 
       - name: Install Frontend Dependencies
         run: pnpm install --no-frozen-lockfile
@@ -72,7 +97,7 @@ jobs:
             src-tauri/target/release/bundle/dmg/*.dmg
 
   release:
-    needs: build
+    needs: [prep-version, build]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -90,37 +115,13 @@ jobs:
           name: yuyan-macos-build
           path: ./dist-release
 
-      - name: Display structure of downloaded files
-        run: ls -R ./dist-release
-
-      - name: Generate Tag & Release Name
-        id: prep
-        run: |
-          VERSION=$(jq -r '.version' src-tauri/tauri.conf.json)
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            TAG_NAME="${{ github.ref_name }}"
-            RELEASE_NAME="yuyan ${TAG_NAME}"
-            DRAFT="false"
-            PRERELEASE="false"
-          else
-            SHORT_SHA=$(git rev-parse --short HEAD)
-            TAG_NAME="v${VERSION}-${SHORT_SHA}"
-            RELEASE_NAME="yuyan v${VERSION} (${SHORT_SHA})"
-            DRAFT="false"
-            PRERELEASE="true"
-          fi
-          echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
-          echo "release_name=${RELEASE_NAME}" >> $GITHUB_OUTPUT
-          echo "draft=${DRAFT}" >> $GITHUB_OUTPUT
-          echo "prerelease=${PRERELEASE}" >> $GITHUB_OUTPUT
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.prep.outputs.tag_name }}
-          name: ${{ steps.prep.outputs.release_name }}
-          draft: ${{ steps.prep.outputs.draft == 'true' }}
-          prerelease: ${{ steps.prep.outputs.prerelease == 'true' }}
+          tag_name: ${{ needs.prep-version.outputs.tag }}
+          name: yuyan ${{ needs.prep-version.outputs.tag }}
+          draft: false
+          prerelease: ${{ needs.prep-version.outputs.prerelease == 'true' }}
           files: |
             ./dist-release/**/*.exe
             ./dist-release/**/*.dmg
