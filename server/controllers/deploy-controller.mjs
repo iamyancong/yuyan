@@ -51,6 +51,15 @@ import {
   streamNginxInstanceArchive,
   syncTargetNginxSite,
 } from '../services/nginx-runtime-service.mjs';
+import {
+  buildPublishedAssetUrl,
+  getManifestAsset,
+  normalizeUpdateArch,
+  normalizeUpdateChannel,
+  normalizeUpdatePlatform,
+  readPublishedUpdateManifest,
+  validateManifestAsset,
+} from '../services/app-update-service.mjs';
 
 /** 发布任务停止错误 */
 class DeployStoppedError extends Error {
@@ -1345,12 +1354,65 @@ async function preloadAndCacheAsset(assetId, filename) {
  * 自动更新版本检测（统一通过服务端环境变量 GITHUB_TOKEN 代理访问 GitHub API）
  */
 export async function handleCheckAppUpdate(req, res) {
-  const { currentVersion, platform } = req.query;
+  const { currentVersion, platform, arch = 'x86_64', channel = 'stable' } = req.query;
   if (!currentVersion) {
     return sendError(res, new Error('缺少必要参数 currentVersion'), 400);
   }
 
   try {
+    const normalizedPlatform = normalizeUpdatePlatform(platform);
+    const normalizedArch = normalizeUpdateArch(arch);
+    const normalizedChannel = normalizeUpdateChannel(channel);
+    const target = `${normalizedPlatform}-${normalizedArch}`;
+    if (!normalizedPlatform || !normalizedArch) {
+      return sendError(res, new Error('不支持的客户端平台或架构'), 400);
+    }
+
+    const manifest = await readPublishedUpdateManifest(normalizedChannel);
+    const manifestAsset = getManifestAsset(manifest, normalizedPlatform, normalizedArch);
+    if (manifest && isNewerVersion(currentVersion, manifest.version) && manifestAsset) {
+      const validAsset = await validateManifestAsset(
+        normalizedChannel,
+        manifest.version,
+        target,
+        manifestAsset
+      );
+      if (!validAsset) {
+        return sendError(res, new Error('更新清单已发布，但对应安装包校验失败'), 503);
+      }
+
+      return res.json({
+        hasUpdate: true,
+        version: String(manifest.version).replace(/^v/, ''),
+        latestVersion: String(manifest.version).replace(/^v/, ''),
+        notes: manifest.notes || '无更新说明。',
+        updateLogs: manifest.notes || '无更新说明。',
+        url: buildPublishedAssetUrl(
+          normalizedChannel,
+          manifest.version,
+          target,
+          manifestAsset.filename
+        ),
+        downloadUrl: buildPublishedAssetUrl(
+          normalizedChannel,
+          manifest.version,
+          target,
+          manifestAsset.filename
+        ),
+        filename: manifestAsset.filename,
+        size: Number(manifestAsset.size),
+        sha256: manifestAsset.sha256,
+        signature: manifestAsset.signature || '',
+        etag: manifestAsset.etag || `"sha256-${manifestAsset.sha256}"`,
+        channel: normalizedChannel,
+        target,
+      });
+    }
+
+    if (manifest && !isNewerVersion(currentVersion, manifest.version)) {
+      return res.json({ hasUpdate: false, message: '已是最新版本' });
+    }
+
     // Token 统一从服务端环境变量获取
     const token = process.env.GITHUB_TOKEN || '';
     const headers = {
@@ -1378,7 +1440,7 @@ export async function handleCheckAppUpdate(req, res) {
       const assets = latestRelease.assets || [];
       let targetAsset = null;
 
-      const isMac = platform === 'darwin' || platform === 'mac';
+      const isMac = normalizedPlatform === 'darwin';
       if (isMac) {
         targetAsset = assets.find(a => a.name.endsWith('.dmg'));
       } else {
@@ -1400,9 +1462,19 @@ export async function handleCheckAppUpdate(req, res) {
 
       res.json({
         hasUpdate: true,
+        version: remoteVersion.replace(/^v/, ''),
         latestVersion: remoteVersion.replace(/^v/, ''),
+        notes: latestRelease.body || '无更新说明。',
         updateLogs: latestRelease.body || '无更新说明。',
-        downloadUrl: downloadUrl
+        url: downloadUrl,
+        downloadUrl,
+        filename,
+        size: Number(targetAsset.size || 0),
+        sha256: String(targetAsset.digest || '').replace(/^sha256:/, ''),
+        signature: '',
+        etag: '',
+        channel: normalizedChannel,
+        target,
       });
     } else {
       res.json({ hasUpdate: false, message: '已是最新版本' });
@@ -1431,6 +1503,36 @@ export async function handleCheckAppUpdate(req, res) {
   }
 }
 
+/** 返回 Tauri 2 官方 Updater 所需的动态更新清单。 */
+export async function handleCheckTauriAppUpdate(req, res) {
+  const { target, arch, currentVersion } = req.params;
+  const channel = normalizeUpdateChannel(req.query.channel);
+  const platform = normalizeUpdatePlatform(target);
+  const normalizedArch = normalizeUpdateArch(arch);
+  const manifest = await readPublishedUpdateManifest(channel);
+  if (!manifest || !isNewerVersion(currentVersion, manifest.version)) {
+    return res.status(204).end();
+  }
+
+  const asset = getManifestAsset(manifest, platform, normalizedArch)?.updater;
+  if (!asset?.filename || !asset?.signature) {
+    return sendError(res, new Error('当前版本尚未发布已签名的 Tauri Updater 资源'), 503);
+  }
+  const normalizedTarget = `${platform}-${normalizedArch}`;
+  return res.json({
+    version: String(manifest.version).replace(/^v/, ''),
+    pub_date: manifest.pubDate,
+    notes: manifest.notes || '无更新说明。',
+    url: buildPublishedAssetUrl(
+      channel,
+      manifest.version,
+      normalizedTarget,
+      asset.filename
+    ),
+    signature: asset.signature,
+  });
+}
+
 /**
  * 代理下载 GitHub Release Asset 资源，并将二进制流通过 pipe 实时中转给本地客户端（Token 由服务端环境变量统一管理）
  */
@@ -1452,13 +1554,19 @@ export async function handleDownloadAppUpdateAsset(req, res) {
 
         res.setHeader('Content-Length', stats.size);
         res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('Accept-Ranges', 'bytes');
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
         if (filename) {
           res.setHeader('Content-Disposition', `attachment; filename=${encodeURIComponent(filename)}`);
         }
 
-        const fileStream = fsSync.createReadStream(cachePath);
-        fileStream.pipe(res);
-        return;
+        return res.sendFile(cachePath, {
+          acceptRanges: true,
+          cacheControl: true,
+          immutable: true,
+          lastModified: true,
+          maxAge: '1y',
+        });
       }
       console.warn(`[Update Cache] 命中损坏缓存，删除后回源下载: ${cachePath}`);
       try { fsSync.unlinkSync(cachePath); } catch (e) {}
@@ -1474,6 +1582,12 @@ export async function handleDownloadAppUpdateAsset(req, res) {
     if (token && token.trim() !== '') {
       headers['Authorization'] = `Bearer ${token.trim()}`;
     }
+    if (req.headers.range) {
+      headers.Range = req.headers.range;
+    }
+    if (req.headers['if-range']) {
+      headers['If-Range'] = req.headers['if-range'];
+    }
 
     const url = `https://api.github.com/repos/ycwang-dev/yuyan/releases/assets/${assetId}`;
     console.log(`[Update Proxy] 缓存未命中，内网服务器代理下载私有资源: ${assetId} (文件名: ${filename})`);
@@ -1482,11 +1596,18 @@ export async function handleDownloadAppUpdateAsset(req, res) {
       method: 'get',
       url: url,
       responseType: 'stream',
-      headers: headers
+      headers,
+      validateStatus: (status) => status === 200 || status === 206,
     });
 
+    res.status(response.status);
     res.setHeader('Content-Length', response.headers['content-length']);
     res.setHeader('Content-Type', response.headers['content-type'] || 'application/octet-stream');
+    ['accept-ranges', 'content-range', 'etag', 'last-modified'].forEach((headerName) => {
+      if (response.headers[headerName]) {
+        res.setHeader(headerName, response.headers[headerName]);
+      }
+    });
     if (filename) {
       res.setHeader('Content-Disposition', `attachment; filename=${encodeURIComponent(filename)}`);
     }
@@ -1495,10 +1616,13 @@ export async function handleDownloadAppUpdateAsset(req, res) {
     let cacheWriter = null;
     const tempCachePath = `${cachePath}.proxy-${process.pid}-${Date.now()}.tmp`;
     try {
-      if (!fsSync.existsSync(cacheDir)) {
+      const isFullDownload = response.status === 200 && !req.headers.range;
+      if (isFullDownload && !fsSync.existsSync(cacheDir)) {
         fsSync.mkdirSync(cacheDir, { recursive: true });
       }
-      cacheWriter = fsSync.createWriteStream(tempCachePath);
+      if (isFullDownload) {
+        cacheWriter = fsSync.createWriteStream(tempCachePath);
+      }
     } catch (e) {
       console.error('[Update Cache] 创建缓存写入流失败，仅执行实时中转:', e.message);
     }

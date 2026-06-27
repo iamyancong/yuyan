@@ -768,22 +768,44 @@ export const restoreDbToLocal = async (data: ArrayBuffer): Promise<{ success: bo
  * 向内网发布服务器代理接口查询新版本信息
  * @description Token 由内网服务器环境变量 GITHUB_TOKEN 统一管理，前端无需传递
  * @param {string} currentVersion - 当前软件版本号
- * @param {string} platform - 客户端系统类型 (win32 | darwin)
+ * @param {string} platform - 客户端系统类型
+ * @param {string} arch - 客户端 CPU 架构
+ * @param {string} channel - 更新通道
  */
-export const checkAppUpdateFromServer = (currentVersion: string, platform: string): Promise<{
+export interface AppUpdateCheckResult {
   hasUpdate: boolean;
+  version?: string;
   latestVersion?: string;
+  notes?: string;
   updateLogs?: string;
+  url?: string;
   downloadUrl?: string;
+  filename?: string;
+  size?: number;
+  sha256?: string;
+  signature?: string;
+  etag?: string;
+  channel?: string;
+  target?: string;
   message?: string;
-}> => {
+}
+
+/** 查询桌面端更新信息。 */
+export const checkAppUpdateFromServer = (
+  currentVersion: string,
+  platform: string,
+  arch: string,
+  channel = 'stable'
+): Promise<AppUpdateCheckResult> => {
   return axios.get(getApiBase('/deploy-api/app-update/check'), {
-    params: { currentVersion, platform }
+    params: { currentVersion, platform, arch, channel }
   }).then((res) => {
-    const data = res.data;
+    const data = res.data as AppUpdateCheckResult;
     if (data && data.downloadUrl && !data.downloadUrl.startsWith('http')) {
-      // 自动拼接为内网发布服务器的绝对 API 基准路径
       data.downloadUrl = getApiBase(data.downloadUrl);
+    }
+    if (data && data.url && !data.url.startsWith('http')) {
+      data.url = getApiBase(data.url);
     }
     return data;
   });

@@ -1,6 +1,6 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { isTauri } from '@/utils/env';
-import { checkAppUpdateFromServer } from '@/api/deploy';
+import { checkAppUpdateFromServer, type AppUpdateCheckResult } from '@/api/deploy';
 import { message } from 'ant-design-vue';
 import type { UpdateState } from '../constant';
 import { useNativeAppUpdate } from './useNativeAppUpdate';
@@ -20,12 +20,18 @@ const currentAppVersion = ref('1.0.0');
 const latestVersion = ref('');
 const updateLogs = ref('');
 const downloadUrl = ref('');
-const isMacUser = computed(() => /macintosh|mac os x/i.test(navigator.userAgent));
+const updateAsset = ref<Pick<AppUpdateCheckResult, 'filename' | 'size' | 'sha256' | 'etag'>>({});
 
 const updateState = ref<UpdateState>({
   status: 'idle',
   progress: 0,
   error: null,
+  downloadedBytes: 0,
+  totalBytes: null,
+  bytesPerSecond: 0,
+  remainingSeconds: null,
+  resumable: false,
+  retryCount: 0,
 });
 
 const updatePercent = computed(() => updateState.value.progress);
@@ -34,6 +40,21 @@ let progressInterval: ReturnType<typeof setInterval> | null = null;
 let autoUpdateInterval: ReturnType<typeof setInterval> | null = null;
 let unlistenMenuCheckUpdate: (() => void) | null = null;
 let instanceCount = 0;
+
+/** 将原生下载状态同步到 Vue 响应式状态。 */
+const applyNativeUpdateStatus = (status: Awaited<ReturnType<typeof nativeAppUpdate.getStatus>>) => {
+  updateState.value = {
+    status: status.status,
+    progress: status.progress,
+    error: status.error,
+    downloadedBytes: status.downloadedBytes,
+    totalBytes: status.totalBytes,
+    bytesPerSecond: status.bytesPerSecond,
+    remainingSeconds: status.remainingSeconds,
+    resumable: status.resumable,
+    retryCount: status.retryCount,
+  };
+};
 
 /**
  * 初始化本地应用版本号
@@ -129,9 +150,7 @@ const startProgressPolling = () => {
   progressInterval = setInterval(async () => {
     try {
       const res = await nativeAppUpdate.getStatus();
-      updateState.value.status = res.status;
-      updateState.value.progress = res.progress;
-      updateState.value.error = res.error;
+      applyNativeUpdateStatus(res);
 
       if (res.status === 'completed') {
         console.log('[Update] 后台下载完成！自动拉起安装...');
@@ -140,6 +159,8 @@ const startProgressPolling = () => {
         void autoInstallAndClose();
       } else if (res.status === 'error') {
         console.error('[Update] 下载过程中发生错误:', res.error);
+        clearProgressPolling();
+      } else if (res.status === 'paused') {
         clearProgressPolling();
       }
     } catch (e) {
@@ -153,13 +174,19 @@ const startProgressPolling = () => {
  */
 const triggerUpdateDownload = async () => {
   if (!downloadUrl.value) return;
-  const filename = isMacUser.value
-    ? `yuyan-${latestVersion.value}.dmg`
-    : `yuyan-${latestVersion.value}.exe`;
+  const target = await nativeAppUpdate.getTarget();
+  const filename =
+    updateAsset.value.filename ||
+    `yuyan-${latestVersion.value}.${target.platform === 'macos' ? 'dmg' : 'exe'}`;
 
   try {
-    updateState.value = { status: 'downloading', progress: 0, error: null };
-    const res = await nativeAppUpdate.startDownload(downloadUrl.value, filename);
+    updateState.value.status = 'downloading';
+    updateState.value.error = null;
+    const res = await nativeAppUpdate.startDownload(downloadUrl.value, filename, {
+      expectedSize: updateAsset.value.size,
+      sha256: updateAsset.value.sha256,
+      etag: updateAsset.value.etag,
+    });
     if (res?.success) {
       startProgressPolling();
     } else {
@@ -167,7 +194,8 @@ const triggerUpdateDownload = async () => {
     }
   } catch (e: any) {
     const errorMsg = e instanceof Error ? e.message : String(e || '启动原生更新下载失败');
-    updateState.value = { status: 'error', progress: 0, error: errorMsg };
+    updateState.value.status = 'error';
+    updateState.value.error = errorMsg;
     console.error('[Update] 启动 Tauri 原生下载失败:', e);
   }
 };
@@ -182,21 +210,25 @@ const checkAppUpdate = async (manual = false) => {
 
   try {
     await initLocalVersion();
-    const platform = isMacUser.value ? 'darwin' : 'win32';
-    const res = await checkAppUpdateFromServer(currentAppVersion.value, platform);
+    const target = await nativeAppUpdate.getTarget();
+    const res = await checkAppUpdateFromServer(currentAppVersion.value, target.platform, target.arch);
 
     if (res?.hasUpdate && res.downloadUrl) {
       hasUpdate.value = true;
       latestVersion.value = res.latestVersion || '';
       updateLogs.value = res.updateLogs || '无更新内容描述。';
       downloadUrl.value = res.downloadUrl;
+      updateAsset.value = {
+        filename: res.filename,
+        size: res.size,
+        sha256: res.sha256,
+        etag: res.etag,
+      };
 
       // 检测并接管当前 Tauri 原生下载状态
       try {
         const statusRes = await nativeAppUpdate.getStatus();
-        updateState.value.status = statusRes.status;
-        updateState.value.progress = statusRes.progress;
-        updateState.value.error = statusRes.error;
+        applyNativeUpdateStatus(statusRes);
 
         if (statusRes.status === 'downloading') {
           startProgressPolling();
@@ -207,11 +239,9 @@ const checkAppUpdate = async (manual = false) => {
         }
       } catch (nativeError) {
         console.warn('获取 Tauri 原生下载状态失败:', nativeError);
-        updateState.value = {
-          status: 'error',
-          progress: 0,
-          error: nativeError instanceof Error ? nativeError.message : String(nativeError),
-        };
+        updateState.value.status = 'error';
+        updateState.value.error =
+          nativeError instanceof Error ? nativeError.message : String(nativeError);
       }
     } else {
       hasUpdate.value = false;
@@ -234,7 +264,7 @@ const checkAppUpdate = async (manual = false) => {
  * 胶囊点击事件处理器
  */
 const handleCapsuleClick = async () => {
-  if (updateState.value.status === 'idle') {
+  if (updateState.value.status === 'idle' || updateState.value.status === 'paused') {
     // 用户主动点击"更新"按钮后才开始后台下载
     void triggerUpdateDownload();
   } else if (updateState.value.status === 'completed') {
@@ -242,6 +272,12 @@ const handleCapsuleClick = async () => {
   } else if (updateState.value.status === 'error') {
     void triggerUpdateDownload();
   }
+};
+
+/** 暂停当前下载并保留断点文件。 */
+const pauseUpdateDownload = async () => {
+  if (updateState.value.status !== 'downloading') return;
+  await nativeAppUpdate.cancelDownload();
 };
 
 /**
@@ -329,6 +365,8 @@ export const useAppUpdate = () => {
     checkAppUpdate,
     /** 胶囊点击事件 */
     handleCapsuleClick,
+    /** 暂停更新下载 */
+    pauseUpdateDownload,
     /** 菜单"检查更新"点击 */
     handleCheckUpdateClick,
   };

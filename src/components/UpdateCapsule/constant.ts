@@ -7,7 +7,7 @@ import {
 } from '@ant-design/icons-vue';
 
 /** 更新状态枚举 */
-export type UpdateStatus = 'idle' | 'downloading' | 'completed' | 'installing' | 'error';
+export type UpdateStatus = 'idle' | 'downloading' | 'paused' | 'completed' | 'installing' | 'error';
 
 /** 更新状态详情 */
 export interface UpdateState {
@@ -17,6 +17,18 @@ export interface UpdateState {
   progress: number;
   /** 错误信息 */
   error: string | null;
+  /** 已下载字节数 */
+  downloadedBytes: number;
+  /** 文件总字节数 */
+  totalBytes: number | null;
+  /** 当前平均下载速度 */
+  bytesPerSecond: number;
+  /** 预计剩余秒数 */
+  remainingSeconds: number | null;
+  /** 当前服务是否支持断点续传 */
+  resumable: boolean;
+  /** 已自动重试次数 */
+  retryCount: number;
 }
 
 /** 各状态下的胶囊展示配置 */
@@ -44,6 +56,12 @@ export const STATUS_CONFIG_MAP: Record<UpdateStatus, CapsuleConfig> = {
     label: '正在下载...',
     clickable: false,
     className: 'status-downloading',
+  },
+  paused: {
+    icon: CloudDownloadOutlined,
+    label: '继续更新',
+    clickable: true,
+    className: 'status-idle',
   },
   completed: {
     icon: ThunderboltOutlined,

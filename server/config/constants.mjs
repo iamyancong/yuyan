@@ -70,6 +70,9 @@ export const DEPLOY_DB_PATH = process.env.DEPLOY_DB_PATH || path.join(DEPLOY_DAT
 /** 独立服务器部署日志目录 */
 export const DEPLOY_LOG_DIR = process.env.DEPLOY_LOG_DIR || path.join(DEPLOY_DATA_DIR, 'logs');
 
+/** 桌面端更新静态资源根目录。 */
+export const APP_UPDATE_DIR = process.env.APP_UPDATE_DIR || path.join(DEPLOY_DATA_DIR, 'app-updates');
+
 /** 部署凭据加密密钥，生产环境必须显式配置 */
 export const DEPLOY_SECRET_KEY = process.env.DEPLOY_SECRET_KEY || 'yuyan-ops-local-deploy-secret';
 
