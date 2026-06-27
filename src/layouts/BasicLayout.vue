@@ -277,7 +277,8 @@ const checkAppUpdate = async (manual = false) => {
   } catch (error: any) {
     console.error('内网代理更新检测失败:', error);
     if (manual) {
-      message.error(`检查更新失败: ${error.message || '连接内网服务器异常'}`);
+      const errMsg = error.response?.data?.error || error.message || '连接内网服务器异常';
+      message.error(`检查更新失败: ${errMsg}`);
     }
   } finally {
     checkingUpdate.value = false;
