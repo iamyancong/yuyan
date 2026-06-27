@@ -19,7 +19,32 @@
     <a-layout>
       <a-layout-header class="yuyan-layout-header">
         <div class="yuyan-layout-header-left">
-          <!-- 左侧区域 -->
+          <!-- 发现新版本更新提示胶囊 (Codex 风格) -->
+          <div 
+            v-if="hasUpdate && isTauriClient"
+            class="update-capsule"
+            :class="`status-${updateState.status}`"
+            @click="handleCapsuleClick"
+          >
+            <template v-if="updateState.status === 'idle'">
+              <CloudDownloadOutlined class="capsule-icon" />
+              <span>发现新版本 v{{ latestVersion }}</span>
+            </template>
+            <template v-else-if="updateState.status === 'downloading'">
+              <LoadingOutlined class="capsule-icon" v-if="updatePercent === 100" />
+              <SyncOutlined spin class="capsule-icon" v-else />
+              <span class="progress-bar-bg" :style="{ width: updatePercent + '%' }"></span>
+              <span class="progress-text">正在下载 {{ updatePercent }}%</span>
+            </template>
+            <template v-else-if="updateState.status === 'completed'">
+              <LoadingOutlined class="capsule-icon" />
+              <span>正在安装...</span>
+            </template>
+            <template v-else-if="updateState.status === 'error'">
+              <span style="margin-right: 4px;">⚠️</span>
+              <span>下载失败，点击重试</span>
+            </template>
+          </div>
         </div>
         <div class="yuyan-layout-header-drag" data-tauri-drag-region></div>
         <div class="yuyan-layout-header-right">
@@ -41,6 +66,13 @@
                 </div>
                 <template #overlay>
                   <a-menu>
+                    <a-menu-item key="check-update" @click="handleCheckUpdateClick" v-if="isTauriClient">
+                      <template #icon>
+                        <CloudDownloadOutlined />
+                      </template>
+                      检查更新
+                    </a-menu-item>
+                    <a-menu-divider v-if="isTauriClient" />
                     <a-menu-item key="profile" disabled>
                       <template #icon>
                         <UserOutlined />
@@ -77,6 +109,8 @@
             </a-button>
           </a-tooltip>
 
+
+
           <!-- 平台设置 -->
           <a-tooltip title="平台设置">
             <a-button type="text" @click="openDrawer = true">
@@ -98,6 +132,8 @@
 
   <SettingsDrawer v-model:open="openDrawer" />
   <LoginModal v-model:visible="showLoginModal" @login-success="handleLoginSuccess" />
+
+
 </template>
 
 <script setup lang="ts">
@@ -117,10 +153,13 @@ import {
   UserOutlined, 
   LogoutOutlined, 
   LoginOutlined,
-  SyncOutlined
+  SyncOutlined,
+  CloudDownloadOutlined,
+  InfoCircleOutlined,
+  LoadingOutlined
 } from '@ant-design/icons-vue';
 import { isTauri } from '@/utils/env';
-import { backupDbFromServer, restoreDbToLocal } from '@/api/deploy';
+import { backupDbFromServer, restoreDbToLocal, downloadAndInstallAppUpdate, getAppUpdateStatus, checkAppUpdateFromServer } from '@/api/deploy';
 import { message, Modal } from 'ant-design-vue';
 
 const collapsed = ref(false);
@@ -134,6 +173,185 @@ const { isLoggedIn, currentUser, userName, userAvatar, logout, authLoading, chec
 const isTauriClient = computed(() => isTauri());
 // 同步状态
 const syncing = ref(false);
+
+// ============ 自动更新检测相关逻辑 (Codex 风格) ============
+const hasUpdate = ref(false);
+const checkingUpdate = ref(false);
+const currentAppVersion = ref('1.0.0');
+const latestVersion = ref('');
+const updateLogs = ref('');
+const downloadUrl = ref('');
+const isMacUser = computed(() => /macintosh|mac os x/i.test(navigator.userAgent));
+
+// 下载进度与状态
+const updateState = ref({
+  status: 'idle', // 'idle' | 'downloading' | 'completed' | 'error'
+  progress: 0,
+  error: null as string | null
+});
+const updatePercent = computed(() => updateState.value.progress);
+
+/**
+ * 初始化本地应用版本号
+ */
+const initLocalVersion = async () => {
+  // 本地开发模拟测试保护：如果在 currentAppVersion 处写死了非 '1.0.0' 的低版本，则保留当前设定的模拟版本
+  if (currentAppVersion.value !== '1.0.0') {
+    return;
+  }
+  if (isTauriClient.value) {
+    try {
+      const { getVersion } = await import('@tauri-apps/api/app');
+      currentAppVersion.value = await getVersion();
+    } catch (e) {
+      console.warn('获取本地版本号失败，使用默认配置:', e);
+    }
+  }
+};
+
+/**
+ * 语义化版本号对比 (Semantic Versioning)
+ * 判断 remote 是否比 local 版本新
+ */
+const isNewerVersion = (local: string, remote: string) => {
+  const l = local.replace(/^v/, '');
+  const r = remote.replace(/^v/, '');
+  
+  if (l === r) return false;
+  
+  const [lMain, lPre] = l.split('-');
+  const [rMain, rPre] = r.split('-');
+  
+  const lParts = lMain.split('.').map(Number);
+  const rParts = rMain.split('.').map(Number);
+  
+  for (let i = 0; i < Math.max(lParts.length, rParts.length); i++) {
+    const lNum = lParts[i] || 0;
+    const rNum = rParts[i] || 0;
+    if (rNum > lNum) return true;
+    if (lNum > rNum) return false;
+  }
+  
+  // 预发布版本 (Prerelease) 判定逻辑
+  if (rPre && !lPre) return false;
+  if (!rPre && lPre) return true;
+  if (rPre && lPre && rPre !== lPre) return true;
+  
+  return false;
+};
+
+/**
+ * 执行 GitHub Releases 更新检测
+ * @param manual 是否为手动点击检测
+ */
+const checkAppUpdate = async (manual = false) => {
+  if (checkingUpdate.value) return;
+  checkingUpdate.value = true;
+  
+  try {
+    await initLocalVersion();
+    
+    // 调用内网部署服务器进行代理更新检测（Token 由服务端环境变量 GITHUB_TOKEN 统一管理）
+    const platform = isMacUser.value ? 'darwin' : 'win32';
+    const res = await checkAppUpdateFromServer(currentAppVersion.value, platform);
+    
+    if (res && res.hasUpdate && res.downloadUrl) {
+      hasUpdate.value = true;
+      latestVersion.value = res.latestVersion || '';
+      updateLogs.value = res.updateLogs || '无更新内容描述。';
+      downloadUrl.value = res.downloadUrl; // 内网服务器中转代理绝对下载直链
+      
+      // 如果本地客户端 Node 已经有下载任务在跑，直接激活进度轮询
+      const statusRes = await getAppUpdateStatus();
+      if (statusRes && statusRes.status === 'downloading') {
+        updateState.value.status = statusRes.status;
+        updateState.value.progress = statusRes.progress;
+        startProgressPolling();
+      }
+    } else {
+      hasUpdate.value = false;
+      if (manual) {
+        message.success(res?.message || '当前已是最新版本！');
+      }
+    }
+  } catch (error: any) {
+    console.error('内网代理更新检测失败:', error);
+    if (manual) {
+      message.error(`检查更新失败: ${error.message || '连接内网服务器异常'}`);
+    }
+  } finally {
+    checkingUpdate.value = false;
+  }
+};
+
+let progressInterval: any = null;
+
+const startProgressPolling = () => {
+  if (progressInterval) clearInterval(progressInterval);
+  progressInterval = setInterval(async () => {
+    try {
+      const res = await getAppUpdateStatus();
+      updateState.value.status = res.status;
+      updateState.value.progress = res.progress;
+      updateState.value.error = res.error;
+      
+      if (res.status === 'completed') {
+        message.success('新版本下载成功，正在拉起安装包进行覆盖安装...');
+        if (progressInterval) {
+          clearInterval(progressInterval);
+          progressInterval = null;
+        }
+      } else if (res.status === 'error') {
+        message.error(res.error || '更新下载失败');
+        if (progressInterval) {
+          clearInterval(progressInterval);
+          progressInterval = null;
+        }
+      }
+    } catch (e) {
+      console.error('[Update] 轮询下载进度失败:', e);
+    }
+  }, 500);
+};
+
+const handleCheckUpdateClick = () => {
+  void checkAppUpdate(true);
+};
+
+const handleCapsuleClick = () => {
+  if (updateState.value.status === 'downloading' || updateState.value.status === 'completed') {
+    return;
+  }
+  
+  Modal.confirm({
+    title: `发现新版本 v${latestVersion.value}，确认开始下载？`,
+    content: `点击确认后，程序将通过本地后端在后台进行安装包下载。您可以在 Header 左侧看到下载进度。下载完成后，将自动拉起安装包，届时请按照安装向导覆盖安装。`,
+    okText: '确认更新',
+    cancelText: '稍后提醒',
+    onOk: async () => {
+      const filename = isMacUser.value ? `yuyan-${latestVersion.value}.dmg` : `yuyan-${latestVersion.value}.exe`;
+      
+      try {
+        updateState.value.status = 'downloading';
+        updateState.value.progress = 0;
+        updateState.value.error = null;
+        
+        // downloadUrl 已经是免密的内网中转直链，Token 由服务端统一管理
+        const res = await downloadAndInstallAppUpdate(downloadUrl.value, filename);
+        if (res && res.success) {
+          startProgressPolling();
+        } else {
+          throw new Error(res?.message || '无法发起下载请求');
+        }
+      } catch (e: any) {
+        updateState.value.status = 'error';
+        updateState.value.error = e.message || '网络连接失败';
+        message.error(`无法发起更新下载: ${e.message || '连接本地后端异常'}`);
+      }
+    }
+  });
+};
+// ============================================
 
 /**
  * 弹出同步确认弹窗，若用户确认则从测试环境拉取 SQLite 数据库并覆盖写入本地
@@ -249,6 +467,13 @@ const onMenuClick = ({ key }: { key: string }) => {
 
 onMounted(() => {
   window.addEventListener('show-login-modal', handleShowLoginModal);
+  
+  // 开启桌面端后台静默更新检测
+  if (isTauriClient.value) {
+    setTimeout(() => {
+      void checkAppUpdate(false);
+    }, 2000);
+  }
 });
 
 onUnmounted(() => {
@@ -768,6 +993,89 @@ const goHome = () => {
       display: inline-block !important;
       margin: 0 !important;
       overflow: hidden !important;
+    }
+  }
+}
+
+// 发现新版本动态状态胶囊 (Codex 风格)
+.update-capsule {
+  display: inline-flex;
+  align-items: center;
+  position: relative;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 14px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  overflow: hidden;
+  user-select: none;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 6px rgba(24, 144, 255, 0.15);
+
+  .capsule-icon {
+    margin-right: 6px;
+    font-size: 13px;
+    position: relative;
+    z-index: 2;
+  }
+
+  span {
+    position: relative;
+    z-index: 2;
+  }
+
+  /* 默认发现更新状态（蓝色胶囊） */
+  &.status-idle {
+    background: #1890ff;
+    color: #ffffff;
+    &:hover {
+      background: #40a9ff;
+      box-shadow: 0 4px 10px rgba(24, 144, 255, 0.3);
+      transform: translateY(-1px);
+    }
+    &:active {
+      transform: translateY(0);
+    }
+  }
+
+  /* 正在下载状态（展示进度条） */
+  &.status-downloading {
+    background: rgba(24, 144, 255, 0.08);
+    border: 1px solid rgba(24, 144, 255, 0.24);
+    color: #1890ff;
+    cursor: default;
+
+    .progress-bar-bg {
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      background: rgba(24, 144, 255, 0.2);
+      z-index: 1;
+      transition: width 0.1s linear;
+    }
+    .progress-text {
+      font-weight: bold;
+    }
+  }
+
+  /* 正在安装状态 */
+  &.status-completed {
+    background: #52c41a;
+    color: #ffffff;
+    cursor: default;
+    box-shadow: 0 2px 6px rgba(82, 196, 26, 0.15);
+  }
+
+  /* 错误状态 */
+  &.status-error {
+    background: #ff4d4f;
+    color: #ffffff;
+    box-shadow: 0 2px 6px rgba(255, 77, 79, 0.15);
+    &:hover {
+      background: #ff7875;
+      transform: translateY(-1px);
     }
   }
 }

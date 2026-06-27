@@ -731,3 +731,52 @@ export const restoreDbToLocal = (data: ArrayBuffer): Promise<{ success: boolean;
   }).then((res) => res.data);
 };
 
+/**
+ * 触发本地后端下载并自动执行覆盖安装应用更新包
+ * @param {string} url - 内网中转下载地址
+ * @param {string} filename - 保存的本地安装包名
+ * @returns {Promise<{ success: boolean; message: string }>} 操作结果
+ */
+export const downloadAndInstallAppUpdate = (url: string, filename: string): Promise<{ success: boolean; message: string }> => {
+  return axios.post('http://localhost:3100/deploy-api/app-update/download', {
+    url,
+    filename
+  }).then((res) => res.data);
+};
+
+/**
+ * 获取本地后端关于当前自动更新包的下载进度及状态
+ */
+export const getAppUpdateStatus = (): Promise<{
+  status: 'idle' | 'downloading' | 'completed' | 'error';
+  progress: number;
+  error: string | null;
+}> => {
+  return axios.get('http://localhost:3100/deploy-api/app-update/status').then((res) => res.data);
+};
+
+/**
+ * 向内网发布服务器代理接口查询新版本信息
+ * @description Token 由内网服务器环境变量 GITHUB_TOKEN 统一管理，前端无需传递
+ * @param {string} currentVersion - 当前软件版本号
+ * @param {string} platform - 客户端系统类型 (win32 | darwin)
+ */
+export const checkAppUpdateFromServer = (currentVersion: string, platform: string): Promise<{
+  hasUpdate: boolean;
+  latestVersion?: string;
+  updateLogs?: string;
+  downloadUrl?: string;
+  message?: string;
+}> => {
+  return axios.get(getApiBase('/deploy-api/app-update/check'), {
+    params: { currentVersion, platform }
+  }).then((res) => {
+    const data = res.data;
+    if (data && data.downloadUrl && !data.downloadUrl.startsWith('http')) {
+      // 自动拼接为内网发布服务器的绝对 API 基准路径
+      data.downloadUrl = getApiBase(data.downloadUrl);
+    }
+    return data;
+  });
+};
+

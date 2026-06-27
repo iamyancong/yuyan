@@ -40,6 +40,10 @@ import {
   handleUpdateNginxInstance,
   handleBackupDb,
   handleRestoreDb,
+  handleDownloadAppUpdate,
+  handleGetAppUpdateStatus,
+  handleCheckAppUpdate,
+  handleDownloadAppUpdateAsset,
 } from '../controllers/deploy-controller.mjs';
 
 const router = express.Router();
@@ -83,6 +87,12 @@ router.post('/records/:id/undo-rollback', handleUndoRollbackRecord);
 // 数据库备份与恢复同步接口
 router.get('/db/backup', handleBackupDb);
 router.post('/db/restore', express.raw({ type: 'application/octet-stream', limit: '50mb' }), handleRestoreDb);
+
+// 自动更新检测与后台静默下载安装接口
+router.post('/app-update/download', handleDownloadAppUpdate);
+router.get('/app-update/status', handleGetAppUpdateStatus);
+router.get('/app-update/check', handleCheckAppUpdate);
+router.get('/app-update/download-asset', handleDownloadAppUpdateAsset);
 
 export default router;
 

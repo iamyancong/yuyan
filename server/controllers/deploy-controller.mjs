@@ -23,6 +23,11 @@ import {
   getDeployDb,
 } from '../services/deploy-store.mjs';
 import fs from 'node:fs/promises';
+import { createWriteStream } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { exec } from 'node:child_process';
+import axios from 'axios';
 import { DEPLOY_DB_PATH } from '../config/constants.mjs';
 
 import {
@@ -1018,6 +1023,283 @@ export async function handleRestoreDb(req, res) {
   } catch (error) {
     console.error('[restore] 还原数据库时出错:', error);
     sendError(res, error, 500);
+  }
+}
+
+// 自动更新后台任务状态与进度
+let appUpdateStatus = {
+  status: 'idle', // 'idle' | 'downloading' | 'completed' | 'error'
+  progress: 0,
+  error: null
+};
+
+/**
+ * 获取自动更新当前下载状态和进度
+ */
+export async function handleGetAppUpdateStatus(req, res) {
+  res.json(appUpdateStatus);
+}
+
+/**
+ * 触发后台静默下载并拉起更新程序
+ */
+export async function handleDownloadAppUpdate(req, res) {
+  const { url, filename } = req.body;
+  if (!url || !filename) {
+    return sendError(res, new Error('缺少必要参数 url 或 filename'), 400);
+  }
+
+  if (appUpdateStatus.status === 'downloading') {
+    return res.json({ success: true, message: '下载正在进行中' });
+  }
+
+  appUpdateStatus = {
+    status: 'downloading',
+    progress: 0,
+    error: null
+  };
+
+  // 异步下载，立即返回
+  res.json({ success: true, message: '开始后台下载更新包...' });
+
+  try {
+    const tempDir = os.tmpdir();
+    const destPath = path.join(tempDir, filename);
+
+    // Token 统一从服务端环境变量获取
+    const token = process.env.GITHUB_TOKEN || '';
+    const headers = {
+      'User-Agent': 'yuyan-app'
+    };
+
+    if (token && token.trim() !== '') {
+      headers['Authorization'] = `Bearer ${token.trim()}`;
+    }
+
+    // 自适应判断如果是 GitHub Release 资源下载
+    if (url.includes('api.github.com') && url.includes('/assets/')) {
+      headers['Accept'] = 'application/octet-stream';
+    }
+
+    console.log(`[bootstrap-update] 后台下载启动: ${url} -> ${destPath}`);
+
+    const response = await axios({
+      method: 'get',
+      url: url,
+      responseType: 'stream',
+      headers: headers
+    });
+
+    const totalLength = parseInt(response.headers['content-length'], 10) || 0;
+    let downloadedLength = 0;
+
+    const writer = createWriteStream(destPath);
+    response.data.pipe(writer);
+
+    response.data.on('data', (chunk) => {
+      downloadedLength += chunk.length;
+      if (totalLength > 0) {
+        appUpdateStatus.progress = Math.round((downloadedLength / totalLength) * 100);
+      }
+    });
+
+    writer.on('finish', () => {
+      console.log(`[bootstrap-update] 下载成功！正在为您执行安装包: ${destPath}`);
+      appUpdateStatus.status = 'completed';
+      appUpdateStatus.progress = 100;
+
+      setTimeout(() => {
+        let command = '';
+        if (process.platform === 'win32') {
+          command = `start "" "${destPath}"`;
+        } else if (process.platform === 'darwin') {
+          command = `open "${destPath}"`;
+        } else {
+          command = `xdg-open "${destPath}"`;
+        }
+
+        exec(command, (err) => {
+          if (err) {
+            console.error('[bootstrap-update] 运行安装程序失败:', err);
+            appUpdateStatus.status = 'error';
+            appUpdateStatus.error = `拉起安装程序失败: ${err.message}`;
+          }
+        });
+      }, 1000);
+    });
+
+    writer.on('error', (err) => {
+      console.error('[bootstrap-update] 文件写入失败:', err);
+      appUpdateStatus.status = 'error';
+      appUpdateStatus.error = `保存安装包时发生错误: ${err.message}`;
+    });
+
+  } catch (err) {
+    console.error('[bootstrap-update] 下载时捕获到异常:', err);
+    appUpdateStatus.status = 'error';
+    appUpdateStatus.error = `下载异常: ${err.message}`;
+  }
+}
+
+/**
+ * 语义化版本号比对，判断 remote 是否比 local 新
+ */
+function isNewerVersion(local, remote) {
+  const l = local.replace(/^v/, '');
+  const r = remote.replace(/^v/, '');
+  
+  if (l === r) return false;
+  
+  const [lMain, lPre] = l.split('-');
+  const [rMain, rPre] = r.split('-');
+  
+  const lParts = lMain.split('.').map(Number);
+  const rParts = rMain.split('.').map(Number);
+  
+  for (let i = 0; i < Math.max(lParts.length, rParts.length); i++) {
+    const lNum = lParts[i] || 0;
+    const rNum = rParts[i] || 0;
+    if (rNum > lNum) return true;
+    if (lNum > rNum) return false;
+  }
+  
+  if (rPre && !lPre) return false;
+  if (!rPre && lPre) return true;
+  if (rPre && lPre && rPre !== lPre) return true;
+  
+  return false;
+}
+
+/**
+ * 自动更新版本检测（统一通过服务端环境变量 GITHUB_TOKEN 代理访问 GitHub API）
+ */
+export async function handleCheckAppUpdate(req, res) {
+  const { currentVersion, platform } = req.query;
+  if (!currentVersion) {
+    return sendError(res, new Error('缺少必要参数 currentVersion'), 400);
+  }
+
+  try {
+    // Token 统一从服务端环境变量获取
+    const token = process.env.GITHUB_TOKEN || '';
+    const headers = {
+      'Accept': 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': 'yuyan-app'
+    };
+
+    if (token && token.trim() !== '') {
+      headers['Authorization'] = `Bearer ${token.trim()}`;
+    }
+
+    // 从 GitHub 获取 Releases 列表
+    const response = await axios.get('https://api.github.com/repos/ycwang-dev/yuyan/releases', { headers });
+    const data = response.data;
+
+    if (!Array.isArray(data) || data.length === 0) {
+      return res.json({ hasUpdate: false, message: '暂无版本发布信息' });
+    }
+
+    const latestRelease = data[0];
+    const remoteVersion = latestRelease.tag_name;
+
+    if (isNewerVersion(currentVersion, remoteVersion)) {
+      const assets = latestRelease.assets || [];
+      let targetAsset = null;
+
+      const isMac = platform === 'darwin' || platform === 'mac';
+      if (isMac) {
+        targetAsset = assets.find(a => a.name.endsWith('.dmg'));
+      } else {
+        targetAsset = assets.find(a => a.name.endsWith('.exe'));
+      }
+
+      if (!targetAsset) {
+        return res.json({ hasUpdate: false, message: '当前有新版本，但未找到匹配您系统的安装包资源' });
+      }
+
+      // 重写下载链接为内网服务器的免密中转链接（Token 由服务端环境变量管理，无需拼入 URL）
+      const filename = targetAsset.name;
+      const downloadUrl = `/deploy-api/app-update/download-asset?assetId=${targetAsset.id}&filename=${filename}`;
+
+      res.json({
+        hasUpdate: true,
+        latestVersion: remoteVersion.replace(/^v/, ''),
+        updateLogs: latestRelease.body || '无更新说明。',
+        downloadUrl: downloadUrl
+      });
+    } else {
+      res.json({ hasUpdate: false, message: '已是最新版本' });
+    }
+  } catch (error) {
+    console.error('[Update Proxy] 检查更新代理接口异常:', error);
+    let status = 500;
+    let errMsg = error.message;
+    if (error.response) {
+      status = error.response.status;
+      errMsg = `GitHub 响应错误: ${error.response.statusText || status} (${status})`;
+      if (status === 401) errMsg = '鉴权失败(401)，您输入的 GitHub Token 无效或已过期';
+      if (status === 404) errMsg = '未找到仓库或无权限访问(404)，私有项目请检查您的 GitHub Token 设定';
+    } else if (error.request) {
+      errMsg = '连接 GitHub 失败，网络超时，请检查您的代理或网络连接';
+    }
+    sendError(res, new Error(errMsg), status);
+  }
+}
+
+/**
+ * 代理下载 GitHub Release Asset 资源，并将二进制流通过 pipe 实时中转给本地客户端（Token 由服务端环境变量统一管理）
+ */
+export async function handleDownloadAppUpdateAsset(req, res) {
+  const { assetId, filename } = req.query;
+  if (!assetId) {
+    return sendError(res, new Error('缺少必要参数 assetId'), 400);
+  }
+
+  try {
+    // Token 统一从服务端环境变量获取
+    const token = process.env.GITHUB_TOKEN || '';
+    const headers = {
+      'User-Agent': 'yuyan-app',
+      'Accept': 'application/octet-stream'
+    };
+
+    if (token && token.trim() !== '') {
+      headers['Authorization'] = `Bearer ${token.trim()}`;
+    }
+
+    const url = `https://api.github.com/repos/ycwang-dev/yuyan/releases/assets/${assetId}`;
+    console.log(`[Update Proxy] 内网服务器代理下载私有资源: ${assetId} (文件名: ${filename})`);
+
+    const response = await axios({
+      method: 'get',
+      url: url,
+      responseType: 'stream',
+      headers: headers
+    });
+
+    // 复制原响应流的文件信息与大小头
+    res.setHeader('Content-Length', response.headers['content-length']);
+    res.setHeader('Content-Type', response.headers['content-type'] || 'application/octet-stream');
+    if (filename) {
+      res.setHeader('Content-Disposition', `attachment; filename=${encodeURIComponent(filename)}`);
+    }
+
+    // 管道中转输出
+    response.data.pipe(res);
+  } catch (error) {
+    console.error('[Update Proxy] 代理资源流失败:', error);
+    let status = 500;
+    let errMsg = error.message;
+    if (error.response) {
+      status = error.response.status;
+      errMsg = `GitHub 响应错误: ${error.response.statusText || status} (${status})`;
+      if (status === 401) errMsg = '下载时鉴权失败(401)，GitHub Token 无效';
+      if (status === 404) errMsg = '未找到该安装包资源(404)，请检查发布版本是否正确';
+    } else if (error.request) {
+      errMsg = '中转下载失败，连接 GitHub 网络超时';
+    }
+    sendError(res, new Error(errMsg), status);
   }
 }
 
