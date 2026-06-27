@@ -236,7 +236,10 @@ const checkAppUpdate = async (manual = false) => {
  * 胶囊点击事件处理器
  */
 const handleCapsuleClick = async () => {
-  if (updateState.value.status === 'completed') {
+  if (updateState.value.status === 'idle') {
+    // 用户主动点击"更新"按钮 → 立即发起静默下载
+    void autoTriggerSilentDownload();
+  } else if (updateState.value.status === 'completed') {
     void autoInstallAndClose();
   } else if (updateState.value.status === 'error') {
     void autoTriggerSilentDownload();
