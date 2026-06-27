@@ -19,6 +19,12 @@ const config = computed(() => STATUS_CONFIG_MAP[updateState.value.status]);
     :class="config.className"
     @click="handleCapsuleClick"
   >
+    <!-- 🔮 3D 玻璃反射光泽层 -->
+    <div class="glass-glare"></div>
+
+    <!-- 🔮 3D LED 物理状态指示灯 -->
+    <span class="capsule-led"></span>
+
     <!-- 左侧图标 -->
     <component :is="config.icon" class="capsule-icon" />
 
