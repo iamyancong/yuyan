@@ -233,7 +233,10 @@ const isNewerVersion = (local: string, remote: string) => {
   }
   
   // 预发布版本 (Prerelease) 判定逻辑
-  if (rPre && !lPre) return false;
+  if (rPre && !lPre) {
+    // 在开发测试阶段，如果主版本号相同但远程是带有预发布后缀的分支构建包（如 1.0.0-hash），允许更新
+    return true;
+  }
   if (!rPre && lPre) return true;
   if (rPre && lPre && rPre !== lPre) return true;
   

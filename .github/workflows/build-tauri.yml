@@ -101,15 +101,18 @@ jobs:
             TAG_NAME="${{ github.ref_name }}"
             RELEASE_NAME="yuyan ${TAG_NAME}"
             DRAFT="false"
+            PRERELEASE="false"
           else
             SHORT_SHA=$(git rev-parse --short HEAD)
             TAG_NAME="v${VERSION}-${SHORT_SHA}"
             RELEASE_NAME="yuyan v${VERSION} (${SHORT_SHA})"
-            DRAFT="true"
+            DRAFT="false"
+            PRERELEASE="true"
           fi
           echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
           echo "release_name=${RELEASE_NAME}" >> $GITHUB_OUTPUT
           echo "draft=${DRAFT}" >> $GITHUB_OUTPUT
+          echo "prerelease=${PRERELEASE}" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -117,7 +120,7 @@ jobs:
           tag_name: ${{ steps.prep.outputs.tag_name }}
           name: ${{ steps.prep.outputs.release_name }}
           draft: ${{ steps.prep.outputs.draft == 'true' }}
-          prerelease: false
+          prerelease: ${{ steps.prep.outputs.prerelease == 'true' }}
           files: |
             ./dist-release/**/*.exe
             ./dist-release/**/*.dmg
