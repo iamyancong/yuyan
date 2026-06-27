@@ -466,6 +466,8 @@ const onMenuClick = ({ key }: { key: string }) => {
   void navigateToPath(key).catch(handleNavigationError);
 };
 
+let autoUpdateInterval: any = null;
+
 onMounted(() => {
   window.addEventListener('show-login-modal', handleShowLoginModal);
   
@@ -474,11 +476,19 @@ onMounted(() => {
     setTimeout(() => {
       void checkAppUpdate(false);
     }, 2000);
+
+    // 每 15 分钟后台静默检测一次新版本
+    autoUpdateInterval = setInterval(() => {
+      void checkAppUpdate(false);
+    }, 15 * 60 * 1000);
   }
 });
 
 onUnmounted(() => {
   window.removeEventListener('show-login-modal', handleShowLoginModal);
+  if (autoUpdateInterval) {
+    clearInterval(autoUpdateInterval);
+  }
 });
 
 // 自定义菜单图标映射
@@ -1030,10 +1040,13 @@ const goHome = () => {
   &.status-idle {
     background: #1890ff;
     color: #ffffff;
+    animation: capsule-pulse 2s infinite;
+
     &:hover {
       background: #40a9ff;
-      box-shadow: 0 4px 10px rgba(24, 144, 255, 0.3);
+      box-shadow: 0 4px 12px rgba(24, 144, 255, 0.4);
       transform: translateY(-1px);
+      animation: none;
     }
     &:active {
       transform: translateY(0);
@@ -1078,6 +1091,18 @@ const goHome = () => {
       background: #ff7875;
       transform: translateY(-1px);
     }
+  }
+}
+
+@keyframes capsule-pulse {
+  0% {
+    box-shadow: 0 2px 6px rgba(24, 144, 255, 0.2), 0 0 0 0 rgba(24, 144, 255, 0.4);
+  }
+  70% {
+    box-shadow: 0 2px 6px rgba(24, 144, 255, 0.2), 0 0 0 6px rgba(24, 144, 255, 0);
+  }
+  100% {
+    box-shadow: 0 2px 6px rgba(24, 144, 255, 0.2), 0 0 0 0 rgba(24, 144, 255, 0);
   }
 }
 </style>

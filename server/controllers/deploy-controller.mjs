@@ -23,7 +23,7 @@ import {
   getDeployDb,
 } from '../services/deploy-store.mjs';
 import fs from 'node:fs/promises';
-import { createWriteStream } from 'node:fs';
+import fsSync, { createWriteStream } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { exec } from 'node:child_process';
@@ -1170,6 +1170,89 @@ function isNewerVersion(local, remote) {
   return false;
 }
 
+// 预下载和缓存管理器，防止并发重复下载
+const activePreloads = new Set();
+
+/**
+ * 在后台预下载 GitHub Release 安装包并缓存到本地目录
+ */
+async function preloadAndCacheAsset(assetId, filename) {
+  const token = process.env.GITHUB_TOKEN || '';
+  if (!token) return;
+
+  const cacheDir = path.join(process.env.DEPLOY_DATA_DIR || '/data/yuyan-ops/deploy-data', 'app-update-cache');
+  const cachePath = path.join(cacheDir, `${assetId}-${filename}`);
+
+  // 1. 确保缓存目录存在
+  if (!fsSync.existsSync(cacheDir)) {
+    try {
+      fsSync.mkdirSync(cacheDir, { recursive: true });
+    } catch (err) {
+      console.error('[Update Cache] 创建缓存目录失败:', err);
+      return;
+    }
+  }
+
+  // 2. 如果已经存在该缓存文件，且文件不为空（大于 1MB 认为是有效包），则跳过
+  if (fsSync.existsSync(cachePath)) {
+    try {
+      const stats = fsSync.statSync(cachePath);
+      if (stats.size > 1024 * 1024) {
+        console.log(`[Update Cache] 缓存包已存在且大小正常: ${cachePath} (${(stats.size/1024/1024).toFixed(2)}MB)，无需预下载`);
+        return;
+      }
+    } catch (e) {}
+  }
+
+  // 3. 避免并发重复下载
+  if (activePreloads.has(assetId)) {
+    return;
+  }
+  activePreloads.add(assetId);
+
+  console.log(`[Update Cache] 开始静默预下载 GitHub Release 资源: ${assetId} -> ${cachePath}`);
+
+  try {
+    const url = `https://api.github.com/repos/ycwang-dev/yuyan/releases/assets/${assetId}`;
+    const headers = {
+      'User-Agent': 'yuyan-app',
+      'Accept': 'application/octet-stream',
+      'Authorization': `Bearer ${token.trim()}`
+    };
+
+    const response = await axios({
+      method: 'get',
+      url: url,
+      responseType: 'stream',
+      headers: headers,
+      timeout: 300000 // 5分钟超时
+    });
+
+    const tempCachePath = `${cachePath}.tmp`;
+    const writer = fsSync.createWriteStream(tempCachePath);
+
+    response.data.pipe(writer);
+
+    await new Promise((resolve, reject) => {
+      writer.on('finish', resolve);
+      writer.on('error', reject);
+      response.data.on('error', reject);
+    });
+
+    // 下载成功后重命名为正式缓存文件
+    fsSync.renameSync(tempCachePath, cachePath);
+    console.log(`[Update Cache] 资源预下载并缓存成功: ${cachePath}`);
+  } catch (err) {
+    console.error(`[Update Cache] 资源预下载失败:`, err.message);
+    const tempCachePath = `${cachePath}.tmp`;
+    if (fsSync.existsSync(tempCachePath)) {
+      try { fsSync.unlinkSync(tempCachePath); } catch (e) {}
+    }
+  } finally {
+    activePreloads.delete(assetId);
+  }
+}
+
 /**
  * 自动更新版本检测（统一通过服务端环境变量 GITHUB_TOKEN 代理访问 GitHub API）
  */
@@ -1222,6 +1305,11 @@ export async function handleCheckAppUpdate(req, res) {
       const filename = targetAsset.name;
       const downloadUrl = `/deploy-api/app-update/download-asset?assetId=${targetAsset.id}&filename=${filename}`;
 
+      // 触发后台预下载（静默执行，不阻塞 check 接口的响应）
+      preloadAndCacheAsset(targetAsset.id, filename).catch(err => {
+        console.error('[Update Cache] 预下载启动异常:', err);
+      });
+
       res.json({
         hasUpdate: true,
         latestVersion: remoteVersion.replace(/^v/, ''),
@@ -1265,7 +1353,32 @@ export async function handleDownloadAppUpdateAsset(req, res) {
   }
 
   try {
-    // Token 统一从服务端环境变量获取
+    const cacheDir = path.join(process.env.DEPLOY_DATA_DIR || '/data/yuyan-ops/deploy-data', 'app-update-cache');
+    const cachePath = path.join(cacheDir, `${assetId}-${filename || 'update'}`);
+
+    // 1. 如果命中缓存则直接返回本地缓存包
+    if (fsSync.existsSync(cachePath)) {
+      try {
+        const stats = fsSync.statSync(cachePath);
+        if (stats.size > 1024 * 1024) {
+          console.log(`[Update Cache] 命中缓存，直接返回本地缓存包: ${cachePath} (${(stats.size/1024/1024).toFixed(2)}MB)`);
+          
+          res.setHeader('Content-Length', stats.size);
+          res.setHeader('Content-Type', 'application/octet-stream');
+          if (filename) {
+            res.setHeader('Content-Disposition', `attachment; filename=${encodeURIComponent(filename)}`);
+          }
+          
+          const fileStream = fsSync.createReadStream(cachePath);
+          fileStream.pipe(res);
+          return;
+        }
+      } catch (e) {
+        console.warn('[Update Cache] 读取本地缓存包失败，将回退到实时中转:', e.message);
+      }
+    }
+
+    // 2. 缓存未命中，实时从中转下载，并且同步写入缓存
     const token = process.env.GITHUB_TOKEN || '';
     const headers = {
       'User-Agent': 'yuyan-app',
@@ -1277,7 +1390,7 @@ export async function handleDownloadAppUpdateAsset(req, res) {
     }
 
     const url = `https://api.github.com/repos/ycwang-dev/yuyan/releases/assets/${assetId}`;
-    console.log(`[Update Proxy] 内网服务器代理下载私有资源: ${assetId} (文件名: ${filename})`);
+    console.log(`[Update Proxy] 缓存未命中，内网服务器代理下载私有资源: ${assetId} (文件名: ${filename})`);
 
     const response = await axios({
       method: 'get',
@@ -1286,15 +1399,37 @@ export async function handleDownloadAppUpdateAsset(req, res) {
       headers: headers
     });
 
-    // 复制原响应流的文件信息与大小头
     res.setHeader('Content-Length', response.headers['content-length']);
     res.setHeader('Content-Type', response.headers['content-type'] || 'application/octet-stream');
     if (filename) {
       res.setHeader('Content-Disposition', `attachment; filename=${encodeURIComponent(filename)}`);
     }
 
-    // 管道中转输出
+    // 尝试在本地保存一份缓存
+    let cacheWriter = null;
+    try {
+      if (!fsSync.existsSync(cacheDir)) {
+        fsSync.mkdirSync(cacheDir, { recursive: true });
+      }
+      cacheWriter = fsSync.createWriteStream(cachePath);
+    } catch (e) {
+      console.error('[Update Cache] 创建缓存写入流失败，仅执行实时中转:', e.message);
+    }
+
+    // 管道中转输出给前端客户端
     response.data.pipe(res);
+
+    // 如果写入流创建成功，也同步写入缓存文件
+    if (cacheWriter) {
+      response.data.pipe(cacheWriter);
+      cacheWriter.on('finish', () => {
+        console.log(`[Update Cache] 代理下载的同时成功将文件写入缓存: ${cachePath}`);
+      });
+      cacheWriter.on('error', (err) => {
+        console.error(`[Update Cache] 代理写入缓存文件出错:`, err);
+        try { fsSync.unlinkSync(cachePath); } catch (e) {}
+      });
+    }
   } catch (error) {
     console.error('[Update Proxy] 代理资源流失败:', error);
     let status = 500;
