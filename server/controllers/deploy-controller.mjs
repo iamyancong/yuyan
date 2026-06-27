@@ -1030,7 +1030,8 @@ export async function handleRestoreDb(req, res) {
 let appUpdateStatus = {
   status: 'idle', // 'idle' | 'downloading' | 'completed' | 'error'
   progress: 0,
-  error: null
+  error: null,
+  localPath: null
 };
 
 /**
@@ -1104,28 +1105,10 @@ export async function handleDownloadAppUpdate(req, res) {
     });
 
     writer.on('finish', () => {
-      console.log(`[bootstrap-update] 下载成功！正在为您执行安装包: ${destPath}`);
+      console.log(`[bootstrap-update] 下载成功！更新包已暂存为: ${destPath}`);
       appUpdateStatus.status = 'completed';
       appUpdateStatus.progress = 100;
-
-      setTimeout(() => {
-        let command = '';
-        if (process.platform === 'win32') {
-          command = `start "" "${destPath}"`;
-        } else if (process.platform === 'darwin') {
-          command = `open "${destPath}"`;
-        } else {
-          command = `xdg-open "${destPath}"`;
-        }
-
-        exec(command, (err) => {
-          if (err) {
-            console.error('[bootstrap-update] 运行安装程序失败:', err);
-            appUpdateStatus.status = 'error';
-            appUpdateStatus.error = `拉起安装程序失败: ${err.message}`;
-          }
-        });
-      }, 1000);
+      appUpdateStatus.localPath = destPath;
     });
 
     writer.on('error', (err) => {
@@ -1138,6 +1121,41 @@ export async function handleDownloadAppUpdate(req, res) {
     console.error('[bootstrap-update] 下载时捕获到异常:', err);
     appUpdateStatus.status = 'error';
     appUpdateStatus.error = `下载异常: ${err.message}`;
+  }
+}
+
+/**
+ * 触发执行已下载的更新包进行安装
+ */
+export async function handleInstallAppUpdate(req, res) {
+  if (appUpdateStatus.status !== 'completed' || !appUpdateStatus.localPath) {
+    return sendError(res, new Error('更新包尚未下载完成，无法执行安装'), 400);
+  }
+
+  const destPath = appUpdateStatus.localPath;
+
+  try {
+    let command = '';
+    if (process.platform === 'win32') {
+      command = `start "" "${destPath}"`;
+    } else if (process.platform === 'darwin') {
+      command = `open "${destPath}"`;
+    } else {
+      command = `xdg-open "${destPath}"`;
+    }
+
+    console.log(`[bootstrap-update] 用户触发安装：拉起更新包 ${destPath}`);
+    exec(command, (err) => {
+      if (err) {
+        console.error('[bootstrap-update] 运行安装程序失败:', err);
+        return sendError(res, new Error(`拉起安装程序失败: ${err.message}`), 500);
+      }
+    });
+
+    res.json({ success: true, message: '已拉起安装程序，正在覆盖升级' });
+  } catch (err) {
+    console.error('[bootstrap-update] 拉起安装程序捕获到异常:', err);
+    sendError(res, err, 500);
   }
 }
 

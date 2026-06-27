@@ -44,6 +44,7 @@ import {
   handleGetAppUpdateStatus,
   handleCheckAppUpdate,
   handleDownloadAppUpdateAsset,
+  handleInstallAppUpdate,
 } from '../controllers/deploy-controller.mjs';
 
 const router = express.Router();
@@ -93,6 +94,7 @@ router.post('/app-update/download', handleDownloadAppUpdate);
 router.get('/app-update/status', handleGetAppUpdateStatus);
 router.get('/app-update/check', handleCheckAppUpdate);
 router.get('/app-update/download-asset', handleDownloadAppUpdateAsset);
+router.post('/app-update/install', handleInstallAppUpdate);
 
 export default router;
 

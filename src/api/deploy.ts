@@ -791,6 +791,15 @@ export const getAppUpdateStatus = async (): Promise<{
 };
 
 /**
+ * 触发本地后端立即执行已下载的更新包安装
+ * @returns {Promise<{ success: boolean; message: string }>} 操作结果
+ */
+export const installAppUpdate = async (): Promise<{ success: boolean; message: string }> => {
+  const port = await getActiveLocalPort();
+  return axios.post(`http://localhost:${port}/deploy-api/app-update/install`).then((res) => res.data);
+};
+
+/**
  * 向内网发布服务器代理接口查询新版本信息
  * @description Token 由内网服务器环境变量 GITHUB_TOKEN 统一管理，前端无需传递
  * @param {string} currentVersion - 当前软件版本号
