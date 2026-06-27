@@ -718,13 +718,46 @@ export const backupDbFromServer = (serverUrl: string): Promise<ArrayBuffer> => {
   return axios.get(normalizedUrl, { responseType: 'arraybuffer' }).then((res) => res.data);
 };
 
+let activeLocalPort: number | null = null;
+
+/**
+ * 动态检测并嗅探当前客户端本地服务监听的端口 (3101 或 3100)
+ * @description 兼容新版 (3101) 和旧版 (3100) 客户端外壳，避免由于版本不一致导致更新和同步功能失效
+ */
+const getActiveLocalPort = async (): Promise<number> => {
+  if (activeLocalPort !== null) {
+    return activeLocalPort;
+  }
+  
+  // 1. 优先尝试请求 3101（新端口）
+  try {
+    await axios.get('http://localhost:3101/deploy-api/app-update/status', { timeout: 1000 });
+    activeLocalPort = 3101;
+    console.log('[Port Detector] 探测到本地辅助服务运行在 3101 端口');
+    return 3101;
+  } catch (e) {
+    // 2. 3101 不通，尝试 3100（旧端口）
+    try {
+      await axios.get('http://localhost:3100/deploy-api/app-update/status', { timeout: 1000 });
+      activeLocalPort = 3100;
+      console.log('[Port Detector] 探测到本地辅助服务运行在 3100 端口 (旧版本客户端)');
+      return 3100;
+    } catch (e2) {
+      // 3. 两个都不通，默认为 3101，后续发起具体请求时会触发错误
+      console.warn('[Port Detector] 未探测到本地辅助服务端口，默认使用 3101');
+      return 3101;
+    }
+  }
+};
+
 /**
  * 还原二进制数据库数据到本地服务
  * @param {ArrayBuffer} data - 数据库二进制数据
  * @returns {Promise<{ success: boolean; message: string }>} 操作结果
  */
-export const restoreDbToLocal = (data: ArrayBuffer): Promise<{ success: boolean; message: string }> => {
-  return axios.post('http://localhost:3101/deploy-api/db/restore', data, {
+export const restoreDbToLocal = async (data: ArrayBuffer): Promise<{ success: boolean; message: string }> => {
+  const port = await getActiveLocalPort();
+  return axios.post(`http://localhost:${port}/deploy-api/db/restore`, data, {
     headers: {
       'Content-Type': 'application/octet-stream',
     },
@@ -737,8 +770,9 @@ export const restoreDbToLocal = (data: ArrayBuffer): Promise<{ success: boolean;
  * @param {string} filename - 保存的本地安装包名
  * @returns {Promise<{ success: boolean; message: string }>} 操作结果
  */
-export const downloadAndInstallAppUpdate = (url: string, filename: string): Promise<{ success: boolean; message: string }> => {
-  return axios.post('http://localhost:3101/deploy-api/app-update/download', {
+export const downloadAndInstallAppUpdate = async (url: string, filename: string): Promise<{ success: boolean; message: string }> => {
+  const port = await getActiveLocalPort();
+  return axios.post(`http://localhost:${port}/deploy-api/app-update/download`, {
     url,
     filename
   }).then((res) => res.data);
@@ -747,12 +781,13 @@ export const downloadAndInstallAppUpdate = (url: string, filename: string): Prom
 /**
  * 获取本地后端关于当前自动更新包的下载进度及状态
  */
-export const getAppUpdateStatus = (): Promise<{
+export const getAppUpdateStatus = async (): Promise<{
   status: 'idle' | 'downloading' | 'completed' | 'error';
   progress: number;
   error: string | null;
 }> => {
-  return axios.get('http://localhost:3101/deploy-api/app-update/status').then((res) => res.data);
+  const port = await getActiveLocalPort();
+  return axios.get(`http://localhost:${port}/deploy-api/app-update/status`).then((res) => res.data);
 };
 
 /**
