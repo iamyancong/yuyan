@@ -1224,6 +1224,41 @@ function isNewerVersion(local, remote) {
 const activePreloads = new Set();
 
 /**
+ * 校验缓存文件是否为有效的系统安装包
+ * @param {string} filePath 缓存文件路径
+ * @param {string} filename 安装包文件名
+ * @returns {boolean} 文件大小和格式签名是否有效
+ */
+function isValidUpdateAssetFile(filePath, filename = '') {
+  try {
+    const stats = fsSync.statSync(filePath);
+    if (!stats.isFile() || stats.size <= 1024 * 1024) return false;
+
+    const extension = path.extname(filename).toLowerCase();
+    const descriptor = fsSync.openSync(filePath, 'r');
+    try {
+      if (extension === '.exe') {
+        const header = Buffer.alloc(2);
+        fsSync.readSync(descriptor, header, 0, header.length, 0);
+        return header.equals(Buffer.from('MZ'));
+      }
+      if (extension === '.dmg') {
+        if (stats.size < 512) return false;
+        const trailer = Buffer.alloc(4);
+        fsSync.readSync(descriptor, trailer, 0, trailer.length, stats.size - 512);
+        return trailer.equals(Buffer.from('koly'));
+      }
+      return false;
+    } finally {
+      fsSync.closeSync(descriptor);
+    }
+  } catch (error) {
+    console.warn(`[Update Cache] 校验安装包失败: ${filePath}`, error.message);
+    return false;
+  }
+}
+
+/**
  * 在后台预下载 GitHub Release 安装包并缓存到本地目录
  */
 async function preloadAndCacheAsset(assetId, filename) {
@@ -1243,15 +1278,15 @@ async function preloadAndCacheAsset(assetId, filename) {
     }
   }
 
-  // 2. 如果已经存在该缓存文件，且文件不为空（大于 1MB 认为是有效包），则跳过
+  // 2. 如果已经存在且格式有效，则跳过；损坏缓存立即清理
   if (fsSync.existsSync(cachePath)) {
-    try {
+    if (isValidUpdateAssetFile(cachePath, filename)) {
       const stats = fsSync.statSync(cachePath);
-      if (stats.size > 1024 * 1024) {
-        console.log(`[Update Cache] 缓存包已存在且大小正常: ${cachePath} (${(stats.size/1024/1024).toFixed(2)}MB)，无需预下载`);
-        return;
-      }
-    } catch (e) {}
+      console.log(`[Update Cache] 缓存包已存在且格式有效: ${cachePath} (${(stats.size/1024/1024).toFixed(2)}MB)，无需预下载`);
+      return;
+    }
+    console.warn(`[Update Cache] 检测到损坏缓存，立即清理: ${cachePath}`);
+    try { fsSync.unlinkSync(cachePath); } catch (e) {}
   }
 
   // 3. 避免并发重复下载
@@ -1262,6 +1297,7 @@ async function preloadAndCacheAsset(assetId, filename) {
 
   console.log(`[Update Cache] 开始静默预下载 GitHub Release 资源: ${assetId} -> ${cachePath}`);
 
+  const tempCachePath = `${cachePath}.preload-${process.pid}-${Date.now()}.tmp`;
   try {
     const url = `https://api.github.com/repos/ycwang-dev/yuyan/releases/assets/${assetId}`;
     const headers = {
@@ -1278,7 +1314,6 @@ async function preloadAndCacheAsset(assetId, filename) {
       timeout: 300000 // 5分钟超时
     });
 
-    const tempCachePath = `${cachePath}.tmp`;
     const writer = fsSync.createWriteStream(tempCachePath);
 
     response.data.pipe(writer);
@@ -1289,12 +1324,15 @@ async function preloadAndCacheAsset(assetId, filename) {
       response.data.on('error', reject);
     });
 
-    // 下载成功后重命名为正式缓存文件
+    if (!isValidUpdateAssetFile(tempCachePath, filename)) {
+      throw new Error('预下载文件格式校验失败，不是有效安装包');
+    }
+
+    // 下载成功并校验后重命名为正式缓存文件
     fsSync.renameSync(tempCachePath, cachePath);
     console.log(`[Update Cache] 资源预下载并缓存成功: ${cachePath}`);
   } catch (err) {
     console.error(`[Update Cache] 资源预下载失败:`, err.message);
-    const tempCachePath = `${cachePath}.tmp`;
     if (fsSync.existsSync(tempCachePath)) {
       try { fsSync.unlinkSync(tempCachePath); } catch (e) {}
     }
@@ -1406,26 +1444,24 @@ export async function handleDownloadAppUpdateAsset(req, res) {
     const cacheDir = path.join(process.env.DEPLOY_DATA_DIR || '/data/yuyan-ops/deploy-data', 'app-update-cache');
     const cachePath = path.join(cacheDir, `${assetId}-${filename || 'update'}`);
 
-    // 1. 如果命中缓存则直接返回本地缓存包
+    // 1. 如果命中有效缓存则直接返回；损坏缓存先清理再回源
     if (fsSync.existsSync(cachePath)) {
-      try {
+      if (isValidUpdateAssetFile(cachePath, filename)) {
         const stats = fsSync.statSync(cachePath);
-        if (stats.size > 1024 * 1024) {
-          console.log(`[Update Cache] 命中缓存，直接返回本地缓存包: ${cachePath} (${(stats.size/1024/1024).toFixed(2)}MB)`);
-          
-          res.setHeader('Content-Length', stats.size);
-          res.setHeader('Content-Type', 'application/octet-stream');
-          if (filename) {
-            res.setHeader('Content-Disposition', `attachment; filename=${encodeURIComponent(filename)}`);
-          }
-          
-          const fileStream = fsSync.createReadStream(cachePath);
-          fileStream.pipe(res);
-          return;
+        console.log(`[Update Cache] 命中缓存，直接返回本地缓存包: ${cachePath} (${(stats.size/1024/1024).toFixed(2)}MB)`);
+
+        res.setHeader('Content-Length', stats.size);
+        res.setHeader('Content-Type', 'application/octet-stream');
+        if (filename) {
+          res.setHeader('Content-Disposition', `attachment; filename=${encodeURIComponent(filename)}`);
         }
-      } catch (e) {
-        console.warn('[Update Cache] 读取本地缓存包失败，将回退到实时中转:', e.message);
+
+        const fileStream = fsSync.createReadStream(cachePath);
+        fileStream.pipe(res);
+        return;
       }
+      console.warn(`[Update Cache] 命中损坏缓存，删除后回源下载: ${cachePath}`);
+      try { fsSync.unlinkSync(cachePath); } catch (e) {}
     }
 
     // 2. 缓存未命中，实时从中转下载，并且同步写入缓存
@@ -1457,7 +1493,7 @@ export async function handleDownloadAppUpdateAsset(req, res) {
 
     // 尝试在本地保存一份缓存
     let cacheWriter = null;
-    const tempCachePath = `${cachePath}.tmp`;
+    const tempCachePath = `${cachePath}.proxy-${process.pid}-${Date.now()}.tmp`;
     try {
       if (!fsSync.existsSync(cacheDir)) {
         fsSync.mkdirSync(cacheDir, { recursive: true });
@@ -1489,12 +1525,16 @@ export async function handleDownloadAppUpdateAsset(req, res) {
       res.end();
       if (cacheWriter && !cacheWriter.destroyed) {
         cacheWriter.end(() => {
-          // 下载完整后将临时文件重命名为正式缓存
+          // 下载完整并通过格式校验后，将独立临时文件重命名为正式缓存
           try {
+            if (!isValidUpdateAssetFile(tempCachePath, filename)) {
+              throw new Error('代理下载文件格式校验失败，不写入缓存');
+            }
             fsSync.renameSync(tempCachePath, cachePath);
             console.log(`[Update Cache] 代理下载的同时成功将文件写入缓存: ${cachePath}`);
           } catch (renameErr) {
             console.error('[Update Cache] 重命名缓存文件失败:', renameErr);
+            try { fsSync.unlinkSync(tempCachePath); } catch (e) {}
           }
         });
       }
@@ -1531,4 +1571,3 @@ export async function handleDownloadAppUpdateAsset(req, res) {
     sendError(res, new Error(errMsg), status);
   }
 }
-
