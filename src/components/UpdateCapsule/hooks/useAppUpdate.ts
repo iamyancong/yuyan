@@ -149,9 +149,9 @@ const startProgressPolling = () => {
 };
 
 /**
- * 在后台静默发起下载更新包
+ * 用户确认后发起后台更新包下载
  */
-const autoTriggerSilentDownload = async () => {
+const triggerUpdateDownload = async () => {
   if (!downloadUrl.value) return;
   const filename = isMacUser.value
     ? `yuyan-${latestVersion.value}.dmg`
@@ -201,11 +201,9 @@ const checkAppUpdate = async (manual = false) => {
         if (statusRes.status === 'downloading') {
           startProgressPolling();
         } else if (statusRes.status === 'idle') {
-          console.log('[Update] 检测到有新版本，已启动后台静默下载...');
-          void autoTriggerSilentDownload();
+          console.log('[Update] 检测到有新版本，等待用户手动点击更新按钮');
         } else if (statusRes.status === 'completed') {
-          console.log('[Update] 检查到前一次更新包已下载完成，自动安装...');
-          void autoInstallAndClose();
+          console.log('[Update] 更新包已下载完成，等待用户手动点击安装');
         }
       } catch (nativeError) {
         console.warn('获取 Tauri 原生下载状态失败:', nativeError);
@@ -237,12 +235,12 @@ const checkAppUpdate = async (manual = false) => {
  */
 const handleCapsuleClick = async () => {
   if (updateState.value.status === 'idle') {
-    // 用户主动点击"更新"按钮 → 立即发起静默下载
-    void autoTriggerSilentDownload();
+    // 用户主动点击"更新"按钮后才开始后台下载
+    void triggerUpdateDownload();
   } else if (updateState.value.status === 'completed') {
     void autoInstallAndClose();
   } else if (updateState.value.status === 'error') {
-    void autoTriggerSilentDownload();
+    void triggerUpdateDownload();
   }
 };
 

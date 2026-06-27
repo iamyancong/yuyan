@@ -47,7 +47,7 @@ export const STATUS_CONFIG_MAP: Record<UpdateStatus, CapsuleConfig> = {
   },
   completed: {
     icon: ThunderboltOutlined,
-    label: '✨ 新版本已就绪，正在安装...',
+    label: '✨ 新版本已就绪，点击安装',
     clickable: true,
     className: 'status-completed',
   },

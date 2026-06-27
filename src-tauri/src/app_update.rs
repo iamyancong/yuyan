@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
 const UPDATE_SERVER_HOST: &str = "192.168.164.27";
 const UPDATE_SERVER_PORT: u16 = 3100;
@@ -170,6 +170,59 @@ fn validate_downloaded_length(
     Ok(())
 }
 
+/** 根据系统安装包格式校验关键文件签名。 */
+fn validate_package_signature(
+    filename: &str,
+    first_bytes: &[u8],
+    dmg_trailer: Option<&[u8]>,
+) -> Result<(), String> {
+    if filename.to_ascii_lowercase().ends_with(".exe") {
+        if first_bytes.starts_with(b"MZ") {
+            return Ok(());
+        }
+        return Err("下载文件不是有效的 Windows EXE 安装包".to_string());
+    }
+    if filename.to_ascii_lowercase().ends_with(".dmg") {
+        if dmg_trailer.is_some_and(|trailer| trailer.starts_with(b"koly")) {
+            return Ok(());
+        }
+        return Err("下载文件不是有效的 macOS DMG 磁盘映像，请重试".to_string());
+    }
+    Err("无法识别更新安装包格式".to_string())
+}
+
+/** 从磁盘读取安装包头部和 DMG 尾部签名并执行格式校验。 */
+async fn validate_package_file(path: &Path, filename: &str) -> Result<(), String> {
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(|error| format!("读取更新安装包失败: {error}"))?;
+    let file_length = file
+        .metadata()
+        .await
+        .map_err(|error| format!("读取更新安装包大小失败: {error}"))?
+        .len();
+    let mut first_bytes = [0_u8; 2];
+    file.read_exact(&mut first_bytes)
+        .await
+        .map_err(|error| format!("读取更新安装包头部失败: {error}"))?;
+
+    if filename.to_ascii_lowercase().ends_with(".dmg") {
+        if file_length < 512 {
+            return Err("下载的 macOS DMG 磁盘映像大小无效".to_string());
+        }
+        file.seek(std::io::SeekFrom::End(-512))
+            .await
+            .map_err(|error| format!("定位 DMG 尾部签名失败: {error}"))?;
+        let mut trailer = [0_u8; 4];
+        file.read_exact(&mut trailer)
+            .await
+            .map_err(|error| format!("读取 DMG 尾部签名失败: {error}"))?;
+        return validate_package_signature(filename, &first_bytes, Some(&trailer));
+    }
+
+    validate_package_signature(filename, &first_bytes, None)
+}
+
 /** 将内网安装包下载到临时文件，并在校验完成后原子替换正式文件。 */
 async fn download_update(
     app: AppHandle,
@@ -193,6 +246,10 @@ async fn download_update(
 
     let result = download_to_partial(&manager, url, &partial_path).await;
     if let Err(error) = result {
+        let _ = tokio::fs::remove_file(&partial_path).await;
+        return Err(error);
+    }
+    if let Err(error) = validate_package_file(&partial_path, &filename).await {
         let _ = tokio::fs::remove_file(&partial_path).await;
         return Err(error);
     }
@@ -297,7 +354,7 @@ pub fn get_app_update_status(manager: State<'_, AppUpdateManager>) -> AppUpdateS
 
 /** 使用系统默认程序打开已下载的更新安装包。 */
 #[tauri::command]
-pub fn install_app_update(
+pub async fn install_app_update(
     app: AppHandle,
     manager: State<'_, AppUpdateManager>,
 ) -> Result<AppUpdateCommandResult, String> {
@@ -311,6 +368,11 @@ pub fn install_app_update(
     if !Path::new(&local_path).is_file() {
         return Err("更新安装包文件不存在，请重新下载".to_string());
     }
+    let filename = Path::new(&local_path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "更新安装包文件名无效".to_string())?;
+    validate_package_file(Path::new(&local_path), filename).await?;
 
     app.opener()
         .open_path(local_path, None::<&str>)
@@ -324,7 +386,8 @@ pub fn install_app_update(
 #[cfg(test)]
 mod tests {
     use super::{
-        validate_download_url, validate_downloaded_length, validate_filename, AppUpdateManager,
+        validate_download_url, validate_downloaded_length, validate_filename,
+        validate_package_signature, AppUpdateManager,
     };
 
     /** 验证仅允许指定内网更新代理。 */
@@ -377,5 +440,14 @@ mod tests {
         let failed = manager.snapshot();
         assert_eq!(failed.status, "error");
         assert_eq!(failed.error.as_deref(), Some("网络中断"));
+    }
+
+    /** 验证 DMG 和 EXE 关键格式签名。 */
+    #[test]
+    fn validates_package_signatures() {
+        assert!(validate_package_signature("yuyan.exe", b"MZ", None).is_ok());
+        assert!(validate_package_signature("yuyan.exe", b"PK", None).is_err());
+        assert!(validate_package_signature("yuyan.dmg", b"\0\0", Some(b"koly")).is_ok());
+        assert!(validate_package_signature("yuyan.dmg", b"\0\0", Some(b"bad!")).is_err());
     }
 }
