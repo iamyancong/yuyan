@@ -349,7 +349,7 @@ const handleCapsuleClick = async () => {
     updateState.value.status = 'error';
     const isNetworkError = e.message?.toLowerCase().includes('network error') || !e.response;
     const errorMsg = isNetworkError 
-      ? '无法发起更新下载，本地后端服务(localhost:3100)未启动或已崩溃' 
+      ? '无法发起更新下载，客户端本地辅助服务(localhost:3101)未启动或已崩溃' 
       : (e.message || '连接本地后端异常');
     updateState.value.error = errorMsg;
     message.error(`发起更新失败: ${errorMsg}`);

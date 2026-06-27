@@ -724,7 +724,7 @@ export const backupDbFromServer = (serverUrl: string): Promise<ArrayBuffer> => {
  * @returns {Promise<{ success: boolean; message: string }>} 操作结果
  */
 export const restoreDbToLocal = (data: ArrayBuffer): Promise<{ success: boolean; message: string }> => {
-  return axios.post('http://localhost:3100/deploy-api/db/restore', data, {
+  return axios.post('http://localhost:3101/deploy-api/db/restore', data, {
     headers: {
       'Content-Type': 'application/octet-stream',
     },
@@ -738,7 +738,7 @@ export const restoreDbToLocal = (data: ArrayBuffer): Promise<{ success: boolean;
  * @returns {Promise<{ success: boolean; message: string }>} 操作结果
  */
 export const downloadAndInstallAppUpdate = (url: string, filename: string): Promise<{ success: boolean; message: string }> => {
-  return axios.post('http://localhost:3100/deploy-api/app-update/download', {
+  return axios.post('http://localhost:3101/deploy-api/app-update/download', {
     url,
     filename
   }).then((res) => res.data);
@@ -752,7 +752,7 @@ export const getAppUpdateStatus = (): Promise<{
   progress: number;
   error: string | null;
 }> => {
-  return axios.get('http://localhost:3100/deploy-api/app-update/status').then((res) => res.data);
+  return axios.get('http://localhost:3101/deploy-api/app-update/status').then((res) => res.data);
 };
 
 /**
