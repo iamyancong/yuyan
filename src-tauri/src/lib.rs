@@ -145,7 +145,7 @@ fn start_node_server(app: &tauri::App, node_path: &std::path::Path) -> Result<Ch
         .env("DEPLOY_DATA_DIR", deploy_data_dir.to_str().unwrap_or(""))
         .env("TEMPLATE_REPO_PATH", template_repo_path.to_str().unwrap_or(""))
         .env("DEPLOY_SECRET_KEY", "15170bd388b349e5f3f40cb8080ba6d1e82c66f8d097ef7b18e6243ddbb655b6")
-        .env("PORT", "3100")
+        .env("PORT", "3101")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
