@@ -1237,9 +1237,17 @@ export async function handleCheckAppUpdate(req, res) {
     let errMsg = error.message;
     if (error.response) {
       status = error.response.status;
+      const token = process.env.GITHUB_TOKEN || '';
+      let tokenStatus = '未配置（检测到空值）';
+      if (token.trim() !== '') {
+        const masked = token.length > 8 
+          ? `${token.slice(0, 4)}...${token.slice(-4)}` 
+          : '长度过短';
+        tokenStatus = `已配置 (长度: ${token.length}, 脱敏值: ${masked})`;
+      }
       errMsg = `GitHub 响应错误: ${error.response.statusText || status} (${status})`;
-      if (status === 401) errMsg = '鉴权失败(401)，您输入的 GitHub Token 无效或已过期';
-      if (status === 404) errMsg = '未找到仓库或无权限访问(404)，私有项目请检查您的 GitHub Token 设定';
+      if (status === 401) errMsg = `鉴权失败(401)，您输入的 GitHub Token 无效或已过期。当前容器内 Token 状态: ${tokenStatus}`;
+      if (status === 404) errMsg = `未找到仓库或无权限访问(404)，私有项目请检查您的 GitHub Token 设定。当前容器内 Token 状态: ${tokenStatus}`;
     } else if (error.request) {
       errMsg = '连接 GitHub 失败，网络超时，请检查您的代理或网络连接';
     }
