@@ -28,7 +28,7 @@
           >
             <template v-if="updateState.status === 'idle'">
               <CloudDownloadOutlined class="capsule-icon" />
-              <span>发现新版本 v{{ latestVersion }}</span>
+              <span>更新</span>
             </template>
             <template v-else-if="updateState.status === 'downloading'">
               <LoadingOutlined class="capsule-icon" v-if="updatePercent === 100" />
@@ -264,12 +264,16 @@ const checkAppUpdate = async (manual = false) => {
       updateLogs.value = res.updateLogs || '无更新内容描述。';
       downloadUrl.value = res.downloadUrl; // 内网服务器中转代理绝对下载直链
       
-      // 如果本地客户端 Node 已经有下载任务在跑，直接激活进度轮询
-      const statusRes = await getAppUpdateStatus();
-      if (statusRes && statusRes.status === 'downloading') {
-        updateState.value.status = statusRes.status;
-        updateState.value.progress = statusRes.progress;
-        startProgressPolling();
+      // 容错处理：获取本地下载进度状态。即使本地 Node 服务暂时断连，也不影响更新提示的展示
+      try {
+        const statusRes = await getAppUpdateStatus();
+        if (statusRes && statusRes.status === 'downloading') {
+          updateState.value.status = statusRes.status;
+          updateState.value.progress = statusRes.progress;
+          startProgressPolling();
+        }
+      } catch (localErr) {
+        console.warn('获取本地下载状态失败，本地 Node 服务可能未就绪:', localErr);
       }
     } else {
       hasUpdate.value = false;
@@ -322,38 +326,34 @@ const handleCheckUpdateClick = () => {
   void checkAppUpdate(true);
 };
 
-const handleCapsuleClick = () => {
+const handleCapsuleClick = async () => {
   if (updateState.value.status === 'downloading' || updateState.value.status === 'completed') {
     return;
   }
   
-  Modal.confirm({
-    title: `发现新版本 v${latestVersion.value}，确认开始下载？`,
-    content: `点击确认后，程序将通过本地后端在后台进行安装包下载。您可以在 Header 左侧看到下载进度。下载完成后，将自动拉起安装包，届时请按照安装向导覆盖安装。`,
-    okText: '确认更新',
-    cancelText: '稍后提醒',
-    onOk: async () => {
-      const filename = isMacUser.value ? `yuyan-${latestVersion.value}.dmg` : `yuyan-${latestVersion.value}.exe`;
-      
-      try {
-        updateState.value.status = 'downloading';
-        updateState.value.progress = 0;
-        updateState.value.error = null;
-        
-        // downloadUrl 已经是免密的内网中转直链，Token 由服务端统一管理
-        const res = await downloadAndInstallAppUpdate(downloadUrl.value, filename);
-        if (res && res.success) {
-          startProgressPolling();
-        } else {
-          throw new Error(res?.message || '无法发起下载请求');
-        }
-      } catch (e: any) {
-        updateState.value.status = 'error';
-        updateState.value.error = e.message || '网络连接失败';
-        message.error(`无法发起更新下载: ${e.message || '连接本地后端异常'}`);
-      }
+  const filename = isMacUser.value ? `yuyan-${latestVersion.value}.dmg` : `yuyan-${latestVersion.value}.exe`;
+  
+  try {
+    updateState.value.status = 'downloading';
+    updateState.value.progress = 0;
+    updateState.value.error = null;
+    
+    // downloadUrl 已经是免密的内网中转直链，Token 由服务端统一管理
+    const res = await downloadAndInstallAppUpdate(downloadUrl.value, filename);
+    if (res && res.success) {
+      startProgressPolling();
+    } else {
+      throw new Error(res?.message || '无法发起下载请求');
     }
-  });
+  } catch (e: any) {
+    updateState.value.status = 'error';
+    const isNetworkError = e.message?.toLowerCase().includes('network error') || !e.response;
+    const errorMsg = isNetworkError 
+      ? '无法发起更新下载，本地后端服务(localhost:3100)未启动或已崩溃' 
+      : (e.message || '连接本地后端异常');
+    updateState.value.error = errorMsg;
+    message.error(`发起更新失败: ${errorMsg}`);
+  }
 };
 // ============================================
 
