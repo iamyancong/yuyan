@@ -1,19 +1,17 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { isTauri } from '@/utils/env';
-import {
-  downloadAndInstallAppUpdate,
-  getAppUpdateStatus,
-  checkAppUpdateFromServer,
-  installAppUpdate,
-} from '@/api/deploy';
+import { checkAppUpdateFromServer } from '@/api/deploy';
 import { message } from 'ant-design-vue';
 import type { UpdateState } from '../constant';
+import { useNativeAppUpdate } from './useNativeAppUpdate';
 import {
   PROGRESS_POLL_INTERVAL_MS,
   CLOSE_APP_DELAY_MS,
   AUTO_CHECK_INTERVAL_MS,
   INITIAL_CHECK_DELAY_MS,
 } from '../constant';
+
+const nativeAppUpdate = useNativeAppUpdate();
 
 // ============ 单例模式：全局共享状态 ============
 const hasUpdate = ref(false);
@@ -98,7 +96,7 @@ const autoInstallAndClose = async () => {
     updateState.value.status = 'installing';
     message.loading({ content: '⚡ 正在为您拉起安装程序...', duration: 5, key: 'auto-install' });
 
-    const res = await installAppUpdate();
+    const res = await nativeAppUpdate.install();
     if (!res?.success) {
       throw new Error(res?.message || '拉起安装失败');
     }
@@ -130,7 +128,7 @@ const startProgressPolling = () => {
   clearProgressPolling();
   progressInterval = setInterval(async () => {
     try {
-      const res = await getAppUpdateStatus();
+      const res = await nativeAppUpdate.getStatus();
       updateState.value.status = res.status;
       updateState.value.progress = res.progress;
       updateState.value.error = res.error;
@@ -161,19 +159,16 @@ const autoTriggerSilentDownload = async () => {
 
   try {
     updateState.value = { status: 'downloading', progress: 0, error: null };
-    const res = await downloadAndInstallAppUpdate(downloadUrl.value, filename);
+    const res = await nativeAppUpdate.startDownload(downloadUrl.value, filename);
     if (res?.success) {
       startProgressPolling();
     } else {
       throw new Error(res?.message || '启动下载失败');
     }
   } catch (e: any) {
-    const isNetworkError = e.message?.toLowerCase().includes('network error') || !e.response;
-    const errorMsg = isNetworkError
-      ? '无法发起更新下载，客户端本地辅助服务(localhost:3101)未启动或已崩溃'
-      : (e.message || '连接本地后端异常');
+    const errorMsg = e instanceof Error ? e.message : String(e || '启动原生更新下载失败');
     updateState.value = { status: 'error', progress: 0, error: errorMsg };
-    console.error('[Update] 启动静默下载失败:', e);
+    console.error('[Update] 启动 Tauri 原生下载失败:', e);
   }
 };
 
@@ -196,9 +191,9 @@ const checkAppUpdate = async (manual = false) => {
       updateLogs.value = res.updateLogs || '无更新内容描述。';
       downloadUrl.value = res.downloadUrl;
 
-      // 检测并接管当前本地下载状态
+      // 检测并接管当前 Tauri 原生下载状态
       try {
-        const statusRes = await getAppUpdateStatus();
+        const statusRes = await nativeAppUpdate.getStatus();
         updateState.value.status = statusRes.status;
         updateState.value.progress = statusRes.progress;
         updateState.value.error = statusRes.error;
@@ -212,8 +207,13 @@ const checkAppUpdate = async (manual = false) => {
           console.log('[Update] 检查到前一次更新包已下载完成，自动安装...');
           void autoInstallAndClose();
         }
-      } catch (localErr) {
-        console.warn('获取本地下载状态失败，本地 Node 服务可能未就绪:', localErr);
+      } catch (nativeError) {
+        console.warn('获取 Tauri 原生下载状态失败:', nativeError);
+        updateState.value = {
+          status: 'error',
+          progress: 0,
+          error: nativeError instanceof Error ? nativeError.message : String(nativeError),
+        };
       }
     } else {
       hasUpdate.value = false;
