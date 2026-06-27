@@ -6,6 +6,8 @@ use tauri::{Manager, Emitter};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri::image::Image;
 
+mod app_update;
+
 const DARK_ICON: &[u8] = include_bytes!("../resources/yuyan_dark_clean.png");
 const LIGHT_ICON: &[u8] = include_bytes!("../resources/yuyan_light_clean.png");
 
@@ -207,9 +209,15 @@ pub fn run() {
     let child_state_clone = Arc::clone(&child_state);
 
     tauri::Builder::default()
+        .manage(app_update::AppUpdateManager::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![change_app_icon])
+        .invoke_handler(tauri::generate_handler![
+            change_app_icon,
+            app_update::start_app_update_download,
+            app_update::get_app_update_status,
+            app_update::install_app_update
+        ])
 
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
