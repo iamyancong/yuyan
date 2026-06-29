@@ -1,0 +1,4 @@
+interface:
+  display_name: "雨燕自动更新代理"
+  short_description: "规范桌面端更新检测、内网代理下载与服务端缓存实现规则"
+  default_prompt: "Use $yuyan-app-update-proxy to implement or review the Yuyan desktop app update flow."
