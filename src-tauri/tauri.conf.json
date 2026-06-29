@@ -42,7 +42,7 @@
       "nsis": {
         "languages": ["SimpChinese"],
         "displayLanguageSelector": false,
-        "installMode": "allUsers"
+        "installMode": "perMachine"
       }
     }
   }
