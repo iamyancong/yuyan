@@ -52,10 +52,6 @@ jobs:
             artifact: yuyan-macos-aarch64
             update_target: darwin-aarch64
             bundle_path: src-tauri/target/release/bundle/dmg/*.dmg
-          - platform: macos-13
-            artifact: yuyan-macos-x86_64
-            update_target: darwin-x86_64
-            bundle_path: src-tauri/target/release/bundle/dmg/*.dmg
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -121,12 +117,6 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: yuyan-macos-aarch64
-          path: ./dist-release
-
-      - name: Download macOS Intel Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: yuyan-macos-x86_64
           path: ./dist-release
 
       - name: Prepare Static Update Release
