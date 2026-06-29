@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - feat/github-actions-build
-      - yuyan-3.0
     tags:
       - 'v*'
   workflow_dispatch:
@@ -119,9 +118,6 @@ jobs:
           name: yuyan-macos-aarch64
           path: ./dist-release
 
-      - name: Prepare Static Update Release
-        run: node scripts/prepare-app-update-release.mjs "${{ needs.prep-version.outputs.version }}" ./dist-release ./app-update-release
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -134,24 +130,3 @@ jobs:
             ./dist-release/**/*.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Publish Installers to Internal Static Server
-        env:
-          APP_UPDATE_SSH_HOST: ${{ secrets.APP_UPDATE_SSH_HOST }}
-          APP_UPDATE_SSH_PORT: ${{ secrets.APP_UPDATE_SSH_PORT }}
-          APP_UPDATE_SSH_USER: ${{ secrets.APP_UPDATE_SSH_USER }}
-          APP_UPDATE_SSH_KEY: ${{ secrets.APP_UPDATE_SSH_KEY }}
-          APP_UPDATE_SSH_PATH: ${{ secrets.APP_UPDATE_SSH_PATH }}
-        run: |
-          if [ -z "$APP_UPDATE_SSH_HOST" ] || [ -z "$APP_UPDATE_SSH_USER" ] || [ -z "$APP_UPDATE_SSH_KEY" ] || [ -z "$APP_UPDATE_SSH_PATH" ]; then
-            echo "Internal update server secrets are not configured; skipping static publication."
-            exit 0
-          fi
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$APP_UPDATE_SSH_KEY" > ~/.ssh/app-update
-          chmod 600 ~/.ssh/app-update
-          SSH_PORT="${APP_UPDATE_SSH_PORT:-22}"
-          SSH_COMMAND="ssh -i ~/.ssh/app-update -p ${SSH_PORT} -o StrictHostKeyChecking=accept-new"
-          rsync -az --exclude='manifest.json.next' -e "$SSH_COMMAND" ./app-update-release/ "${APP_UPDATE_SSH_USER}@${APP_UPDATE_SSH_HOST}:${APP_UPDATE_SSH_PATH}/"
-          scp -i ~/.ssh/app-update -P "$SSH_PORT" -o StrictHostKeyChecking=accept-new ./app-update-release/stable/manifest.json.next "${APP_UPDATE_SSH_USER}@${APP_UPDATE_SSH_HOST}:${APP_UPDATE_SSH_PATH}/stable/manifest.json.next"
-          $SSH_COMMAND "${APP_UPDATE_SSH_USER}@${APP_UPDATE_SSH_HOST}" "mv '${APP_UPDATE_SSH_PATH}/stable/manifest.json.next' '${APP_UPDATE_SSH_PATH}/stable/manifest.json'"

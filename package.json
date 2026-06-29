@@ -1,6 +1,6 @@
 {
   "name": "yuyan-app",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "private": true,
   "type": "module",
   "description": "雨燕平台桌面端 - 运维及部署工具",
@@ -11,6 +11,7 @@
     "frontend:build": "node --input-type=commonjs -e \"if(!process.env.CI){require('child_process').execSync('npx vue-tsc --noEmit',{stdio:'inherit'})}\" && vite build",
     "frontend:build:ci": "vite build",
     "typecheck": "vue-tsc --noEmit",
+    "test:server": "node --test server/services/*.test.mjs",
     "tauri": "tauri"
   },
   "dependencies": {
