@@ -787,6 +787,7 @@ export interface AppUpdateCheckResult {
   etag?: string;
   channel?: string;
   target?: string;
+  source?: 'manifest' | 'github-release';
   message?: string;
 }
 

@@ -54,10 +54,12 @@ import {
 import {
   buildPublishedAssetUrl,
   getManifestAsset,
+  isNewerAppVersion,
   normalizeUpdateArch,
   normalizeUpdateChannel,
   normalizeUpdatePlatform,
   readPublishedUpdateManifest,
+  selectLatestCompatibleRelease,
   validateManifestAsset,
 } from '../services/app-update-service.mjs';
 
@@ -1196,39 +1198,6 @@ export async function handleInstallAppUpdate(req, res) {
   }
 }
 
-/**
- * 语义化版本号比对，判断 remote 是否比 local 新
- */
-function isNewerVersion(local, remote) {
-  const l = local.replace(/^v/, '');
-  const r = remote.replace(/^v/, '');
-  
-  if (l === r) return false;
-  
-  const [lMain, lPre] = l.split('-');
-  const [rMain, rPre] = r.split('-');
-  
-  const lParts = lMain.split('.').map(Number);
-  const rParts = rMain.split('.').map(Number);
-  
-  for (let i = 0; i < Math.max(lParts.length, rParts.length); i++) {
-    const lNum = lParts[i] || 0;
-    const rNum = rParts[i] || 0;
-    if (rNum > lNum) return true;
-    if (lNum > rNum) return false;
-  }
-  
-  // 预发布版本 (Prerelease) 判定逻辑
-  if (rPre && !lPre) {
-    // 远程是开发测试分支构建包（如 1.0.0-hash），而本地是干净的正式版本号，不允许回退更新
-    return false;
-  }
-  if (!rPre && lPre) return true;
-  if (rPre && lPre && rPre !== lPre) return true;
-  
-  return false;
-}
-
 // 预下载和缓存管理器，防止并发重复下载
 const activePreloads = new Set();
 
@@ -1370,7 +1339,7 @@ export async function handleCheckAppUpdate(req, res) {
 
     const manifest = await readPublishedUpdateManifest(normalizedChannel);
     const manifestAsset = getManifestAsset(manifest, normalizedPlatform, normalizedArch);
-    if (manifest && isNewerVersion(currentVersion, manifest.version) && manifestAsset) {
+    if (manifest && isNewerAppVersion(currentVersion, manifest.version) && manifestAsset) {
       const validAsset = await validateManifestAsset(
         normalizedChannel,
         manifest.version,
@@ -1406,10 +1375,11 @@ export async function handleCheckAppUpdate(req, res) {
         etag: manifestAsset.etag || `"sha256-${manifestAsset.sha256}"`,
         channel: normalizedChannel,
         target,
+        source: 'manifest',
       });
     }
 
-    if (manifest && !isNewerVersion(currentVersion, manifest.version)) {
+    if (manifest && !isNewerAppVersion(currentVersion, manifest.version)) {
       return res.json({ hasUpdate: false, message: '已是最新版本' });
     }
 
@@ -1418,7 +1388,9 @@ export async function handleCheckAppUpdate(req, res) {
     const headers = {
       'Accept': 'application/vnd.github+json',
       'X-GitHub-Api-Version': '2022-11-28',
-      'User-Agent': 'yuyan-app'
+      'User-Agent': 'yuyan-app',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
     };
 
     if (token && token.trim() !== '') {
@@ -1426,31 +1398,31 @@ export async function handleCheckAppUpdate(req, res) {
     }
 
     // 从 GitHub 获取 Releases 列表
-    const response = await axios.get('https://api.github.com/repos/ycwang-dev/yuyan/releases', { headers });
+    const response = await axios.get('https://api.github.com/repos/ycwang-dev/yuyan/releases', {
+      headers,
+      params: {
+        per_page: 100,
+        cacheBust: Date.now(),
+      },
+    });
     const data = response.data;
 
     if (!Array.isArray(data) || data.length === 0) {
       return res.json({ hasUpdate: false, message: '暂无版本发布信息' });
     }
 
-    const latestRelease = data[0];
+    const compatibleRelease = selectLatestCompatibleRelease(data, normalizedPlatform);
+    if (!compatibleRelease) {
+      return res.json({
+        hasUpdate: false,
+        message: '暂无包含当前系统安装包的有效版本',
+      });
+    }
+
+    const { release: latestRelease, asset: targetAsset } = compatibleRelease;
     const remoteVersion = latestRelease.tag_name;
 
-    if (isNewerVersion(currentVersion, remoteVersion)) {
-      const assets = latestRelease.assets || [];
-      let targetAsset = null;
-
-      const isMac = normalizedPlatform === 'darwin';
-      if (isMac) {
-        targetAsset = assets.find(a => a.name.endsWith('.dmg'));
-      } else {
-        targetAsset = assets.find(a => a.name.endsWith('.exe'));
-      }
-
-      if (!targetAsset) {
-        return res.json({ hasUpdate: false, message: '当前有新版本，但未找到匹配您系统的安装包资源' });
-      }
-
+    if (isNewerAppVersion(currentVersion, remoteVersion)) {
       // 重写下载链接为内网服务器的免密中转链接（Token 由服务端环境变量管理，无需拼入 URL）
       const filename = targetAsset.name;
       const downloadUrl = `/deploy-api/app-update/download-asset?assetId=${targetAsset.id}&filename=${filename}`;
@@ -1475,6 +1447,7 @@ export async function handleCheckAppUpdate(req, res) {
         etag: '',
         channel: normalizedChannel,
         target,
+        source: 'github-release',
       });
     } else {
       res.json({ hasUpdate: false, message: '已是最新版本' });
@@ -1510,7 +1483,7 @@ export async function handleCheckTauriAppUpdate(req, res) {
   const platform = normalizeUpdatePlatform(target);
   const normalizedArch = normalizeUpdateArch(arch);
   const manifest = await readPublishedUpdateManifest(channel);
-  if (!manifest || !isNewerVersion(currentVersion, manifest.version)) {
+  if (!manifest || !isNewerAppVersion(currentVersion, manifest.version)) {
     return res.status(204).end();
   }
 

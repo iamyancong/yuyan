@@ -7,6 +7,111 @@ import { APP_UPDATE_DIR } from '../config/constants.mjs';
 /** 支持的桌面端更新通道。 */
 export const APP_UPDATE_CHANNELS = new Set(['stable', 'beta']);
 
+/**
+ * 解析应用语义版本号。
+ * @param {string} version - 待解析版本号
+ * @returns {{ main: number[], prerelease: string[] } | null} 解析结果
+ */
+function parseAppVersion(version = '') {
+  const match = String(version)
+    .trim()
+    .match(/^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/);
+  if (!match) return null;
+  return {
+    main: [Number(match[1]), Number(match[2]), Number(match[3])],
+    prerelease: match[4] ? match[4].split('.') : [],
+  };
+}
+
+/**
+ * 比较两个应用语义版本号。
+ * @param {string} left - 左侧版本号
+ * @param {string} right - 右侧版本号
+ * @returns {number} 左侧较新返回正数，右侧较新返回负数，相同返回 0
+ */
+export function compareAppVersions(left, right) {
+  const leftVersion = parseAppVersion(left);
+  const rightVersion = parseAppVersion(right);
+  if (!leftVersion || !rightVersion) return 0;
+
+  for (let index = 0; index < leftVersion.main.length; index += 1) {
+    const difference = leftVersion.main[index] - rightVersion.main[index];
+    if (difference !== 0) return difference;
+  }
+
+  const leftPrerelease = leftVersion.prerelease;
+  const rightPrerelease = rightVersion.prerelease;
+  if (leftPrerelease.length === 0 && rightPrerelease.length > 0) return 1;
+  if (leftPrerelease.length > 0 && rightPrerelease.length === 0) return -1;
+
+  for (let index = 0; index < Math.max(leftPrerelease.length, rightPrerelease.length); index += 1) {
+    const leftPart = leftPrerelease[index];
+    const rightPart = rightPrerelease[index];
+    if (leftPart === undefined) return -1;
+    if (rightPart === undefined) return 1;
+    if (leftPart === rightPart) continue;
+
+    const leftNumber = /^\d+$/.test(leftPart) ? Number(leftPart) : null;
+    const rightNumber = /^\d+$/.test(rightPart) ? Number(rightPart) : null;
+    if (leftNumber !== null && rightNumber !== null) return leftNumber - rightNumber;
+    if (leftNumber !== null) return -1;
+    if (rightNumber !== null) return 1;
+    return leftPart.localeCompare(rightPart);
+  }
+
+  return 0;
+}
+
+/**
+ * 判断远程版本是否比本地版本新。
+ * @param {string} local - 本地版本号
+ * @param {string} remote - 远程版本号
+ * @returns {boolean} 是否存在更新
+ */
+export function isNewerAppVersion(local, remote) {
+  return compareAppVersions(remote, local) > 0;
+}
+
+/**
+ * 获取 Release 中与客户端平台匹配的安装包。
+ * @param {object} release - GitHub Release
+ * @param {string} platform - 标准化平台名称
+ * @returns {object | null} 匹配的 Release Asset
+ */
+function getCompatibleReleaseAsset(release, platform) {
+  const expectedExtension = platform === 'darwin' ? '.dmg' : '.exe';
+  return (
+    release?.assets?.find((asset) =>
+      String(asset?.name || '')
+        .toLowerCase()
+        .endsWith(expectedExtension)
+    ) || null
+  );
+}
+
+/**
+ * 从 GitHub Releases 中选择版本最高且包含当前平台安装包的发布。
+ * @param {object[]} releases - GitHub Releases
+ * @param {string} platform - 标准化平台名称
+ * @returns {{ release: object, asset: object } | null} 发布及安装包
+ */
+export function selectLatestCompatibleRelease(releases, platform) {
+  if (!Array.isArray(releases)) return null;
+
+  const candidates = releases
+    .filter((release) => !release?.draft && parseAppVersion(release?.tag_name))
+    .map((release) => ({
+      release,
+      asset: getCompatibleReleaseAsset(release, platform),
+    }))
+    .filter(({ asset }) => Boolean(asset))
+    .sort((left, right) =>
+      compareAppVersions(right.release.tag_name, left.release.tag_name)
+    );
+
+  return candidates[0] || null;
+}
+
 /** 将客户端平台名称转换为更新清单平台名称。 */
 export function normalizeUpdatePlatform(platform = '') {
   if (platform === 'darwin' || platform === 'mac' || platform === 'macos') return 'darwin';
