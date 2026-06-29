@@ -87,7 +87,7 @@ jobs:
       - name: Install Frontend Dependencies
         run: pnpm install --no-frozen-lockfile
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 
       - name: Build Tauri App
         run: |
@@ -107,7 +107,7 @@ jobs:
             pnpm run build
           fi
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
           NODE_OPTIONS: '--max-old-space-size=4096'
 
       - name: Prepare Update Artifact
