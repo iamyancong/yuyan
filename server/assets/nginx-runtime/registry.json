@@ -1,0 +1,21 @@
+{
+  "defaultVariant": "linux-x64-static",
+  "variants": [
+    {
+      "id": "linux-x64",
+      "label": "动态链接 (glibc ≥ 2.28)",
+      "dir": "linux-x64",
+      "minGlibc": "2.28",
+      "requireXcrypt": true,
+      "priority": 10
+    },
+    {
+      "id": "linux-x64-static",
+      "label": "静态链接 (通用)",
+      "dir": "linux-x64-static",
+      "minGlibc": "0",
+      "requireXcrypt": false,
+      "priority": 1
+    }
+  ]
+}

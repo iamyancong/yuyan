@@ -1,0 +1,9 @@
+node_modules
+.pnpm-store
+.git
+.gitignore
+.vscode
+.DS_Store
+coverage
+*.log
+/tmp

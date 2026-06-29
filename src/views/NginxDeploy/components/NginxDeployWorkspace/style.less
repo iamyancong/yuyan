@@ -1,0 +1,210 @@
+.nginx-deploy-page {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.deploy-tabs-wrapper {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+// 玻璃分段导航（a-tabs-nav）及全局过渡
+:deep(.ant-tabs) {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+:deep(.ant-tabs-nav) {
+  flex: none;
+  margin-bottom: 16px;
+  background: rgba(255, 255, 255, 0.65);
+  border: 1px solid rgba(99, 102, 241, 0.08);
+  border-radius: 12px;
+  padding: 5px 8px;
+  backdrop-filter: blur(10px);
+  box-shadow: 
+    0 8px 24px rgba(99, 102, 241, 0.03),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.8);
+  
+  &::before {
+    border-bottom: none !important;
+  }
+
+  .ant-tabs-nav-wrap {
+    padding-left: 4px;
+  }
+
+  .ant-tabs-tab {
+    margin: 2px 4px;
+    padding: 6px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 550;
+    color: #4b5563;
+    transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+    
+    &:hover {
+      color: #4f46e5;
+      background: rgba(99, 102, 241, 0.04);
+    }
+  }
+  
+  .ant-tabs-tab-active {
+    background: rgba(99, 102, 241, 0.07);
+    .ant-tabs-tab-btn {
+      color: #4f46e5 !important;
+      font-weight: 700;
+    }
+  }
+  
+  .ant-tabs-ink-bar {
+    background: linear-gradient(90deg, #4f46e5, #3b82f6) !important;
+    height: 3px !important;
+    border-radius: 99px;
+  }
+}
+
+:deep(.ant-tabs-content-holder) {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+:deep(.ant-tabs-content) {
+  height: 100%;
+  min-height: 0;
+}
+
+:deep(.ant-tabs-tabpane) {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+// 全局玻璃拟态内容卡片定制
+:deep(.nginx-deploy-tab-card) {
+  background: rgba(255, 255, 255, 0.72) !important;
+  border: 1px solid rgba(99, 102, 241, 0.12) !important;
+  border-radius: 14px !important;
+  box-shadow: 
+    0 12px 32px rgba(99, 102, 241, 0.03),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.9) !important;
+  backdrop-filter: blur(12px);
+  overflow: hidden;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  
+  &:hover {
+    border-color: rgba(99, 102, 241, 0.18) !important;
+    box-shadow: 
+      0 16px 36px rgba(99, 102, 241, 0.06),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.95) !important;
+  }
+}
+
+// 统一 YTable 表格高可读视觉设计
+:deep(.vxe-table--render-wrapper) {
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(99, 102, 241, 0.08);
+}
+
+:deep(.vxe-table) {
+  // 表头淡蓝紫色渐变
+  .vxe-table--header-wrapper {
+    background: linear-gradient(180deg, #f4f7ff 0%, #ebf0ff 100%) !important;
+  }
+
+  .vxe-header--column {
+    background: transparent !important;
+    color: #1e1b4b !important;
+    font-weight: 700 !important;
+    border-bottom: 1px solid rgba(99, 102, 241, 0.1) !important;
+  }
+
+  // 表行悬浮背景高亮
+  .vxe-body--row {
+    transition: background-color 0.2s ease;
+    
+    &.row--hover {
+      background-color: rgba(99, 102, 241, 0.04) !important;
+    }
+  }
+
+  // 表格内部单元格边框弱化
+  .vxe-body--column {
+    border-bottom: 1px solid rgba(99, 102, 241, 0.04) !important;
+  }
+
+  // 链接文字设计
+  a {
+    color: #4f46e5;
+    font-weight: 600;
+    transition: color 0.18s ease;
+
+    &:hover {
+      color: #3b82f6;
+      text-decoration: underline;
+    }
+  }
+
+  // 状态胶囊精致度优化
+  .ant-tag {
+    border-radius: 6px;
+    font-weight: 600;
+    border: 1px solid transparent;
+
+    &.ant-tag-processing {
+      background-color: rgba(79, 70, 229, 0.06);
+      border-color: rgba(79, 70, 229, 0.18);
+      color: #4f46e5;
+    }
+
+    &.ant-tag-success {
+      background-color: rgba(16, 185, 129, 0.06);
+      border-color: rgba(16, 185, 129, 0.18);
+      color: #10b981;
+    }
+
+    &.ant-tag-error {
+      background-color: rgba(239, 68, 68, 0.06);
+      border-color: rgba(239, 68, 68, 0.18);
+      color: #ef4444;
+    }
+  }
+  
+  // 分支胶囊样式
+  .branch-tag {
+    background-color: rgba(99, 102, 241, 0.06);
+    border-color: rgba(99, 102, 241, 0.15);
+    color: #4f46e5;
+    padding: 1px 8px;
+    border-radius: 999px;
+  }
+}
+
+// 动画降级：当用户开启“减少动画”模式时，自动停用所有过渡与缩放效果
+@media (prefers-reduced-motion: reduce) {
+  :deep(.ant-tabs-tab) {
+    transition: none !important;
+  }
+
+  :deep(.nginx-deploy-tab-card) {
+    transition: none !important;
+    &:hover {
+      box-shadow: none !important;
+    }
+  }
+
+  :deep(.vxe-body--row) {
+    transition: none !important;
+  }
+}

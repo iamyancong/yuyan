@@ -1,0 +1,114 @@
+<script setup lang="ts">
+import { nextTick, ref, watch } from 'vue';
+import { YCard, YTable } from '@ycwang-dev/components/lite';
+import { openExternal } from '@/utils/open';
+import { useTableHeight } from '@ycwang-dev/hooks';
+import type { YTableActionConfig } from '@ycwang-dev/components/lite';
+import type { RuntimeAwareDeployTarget, TargetFilterForm } from '../../types';
+import { targetColumns } from '../../constant';
+import NginxProjectNameCell from '../NginxProjectNameCell/index.vue';
+import DeployTargetRuntimeCell from '../DeployTargetRuntimeCell/index.vue';
+import DeployTargetFilterBar from './components/DeployTargetFilterBar.vue';
+
+defineOptions({ name: 'DeployTargetTab' });
+
+/** 下拉选项 */
+interface SelectOption {
+  label: string;
+  value: string | number;
+}
+
+/** 部署目标 Tab 属性 */
+interface DeployTargetTabProps {
+  loading: boolean;
+  repairLoading: boolean;
+  targets: RuntimeAwareDeployTarget[];
+  filterForm: TargetFilterForm;
+  branchOptions: SelectOption[];
+  serverOptions: SelectOption[];
+  actionConfig: YTableActionConfig;
+}
+
+const props = defineProps<DeployTargetTabProps>();
+const emit = defineEmits<{
+  (e: 'update:filterForm', value: TargetFilterForm): void;
+  (e: 'search'): void;
+  (e: 'reset'): void;
+  (e: 'repairNginxBindings'): void;
+  (e: 'openProgress', target: RuntimeAwareDeployTarget): void;
+}>();
+
+const tableAreaRef = ref<HTMLElement>();
+const { tableHeight, recalculateHeight } = useTableHeight(tableAreaRef, {
+  minHeight: 240,
+  defaultHeight: 420,
+});
+
+/** 等待视图更新后重新计算表格高度 */
+const recalculateAfterRender = async () => {
+  await nextTick();
+  recalculateHeight();
+};
+
+watch([() => props.loading, () => props.targets.length], recalculateAfterRender, { flush: 'post' });
+
+/**
+ * 传递最新的筛选表单数据。
+ * @param val 筛选表单最新值
+ */
+const handleFilterFormUpdate = (val: TargetFilterForm) => {
+  emit('update:filterForm', val);
+};
+</script>
+
+<template>
+  <YCard class="nginx-deploy-tab-card" :padding="12">
+    <DeployTargetFilterBar
+      :loading="loading"
+      :repair-loading="repairLoading"
+      :filter-form="filterForm"
+      :branch-options="branchOptions"
+      :server-options="serverOptions"
+      @update:filter-form="handleFilterFormUpdate"
+      @search="emit('search')"
+      @reset="emit('reset')"
+      @repair-nginx-bindings="emit('repairNginxBindings')"
+    />
+    <div ref="tableAreaRef" class="nginx-deploy-table-area">
+      <YTable
+        :data="targets"
+        :columns="targetColumns"
+        :loading="loading"
+        :action-config="actionConfig"
+        :max-height="tableHeight"
+        :cell-config="{ height: 58 }"
+        :header-height="42"
+        :pageable="false"
+        size="small"
+        id="nginx-deploy-targets"
+      >
+        <template #projectName="{ row }">
+          <NginxProjectNameCell :record="row" />
+        </template>
+        <template #defaultBranch="{ row }">
+          <a-tooltip :title="row.defaultBranch || '-'">
+            <a-tag class="branch-tag">{{ row.defaultBranch || '-' }}</a-tag>
+          </a-tooltip>
+        </template>
+        <template #runtimeStatus="{ row }">
+          <DeployTargetRuntimeCell :record="row" @click="emit('openProgress', row)" />
+        </template>
+        <template #visitUrl="{ row }">
+          <a v-if="row.visitUrl" :href="row.visitUrl" class="visit-link" @click.prevent.stop="openExternal(row.visitUrl)">
+            {{ row.visitUrl }}
+          </a>
+          <span v-else>-</span>
+        </template>
+      </YTable>
+    </div>
+  </YCard>
+</template>
+
+<style scoped lang="less">
+@import './style.less';
+</style>

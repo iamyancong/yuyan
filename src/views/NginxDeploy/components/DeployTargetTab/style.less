@@ -1,0 +1,148 @@
+.nginx-deploy-tab-card {
+  height: 100%;
+  overflow: hidden;
+
+  :deep(.ant-card-body) {
+    display: flex;
+    height: 100%;
+    min-height: 0;
+    flex-direction: column;
+    overflow: hidden;
+  }
+}
+
+.nginx-deploy-table-area {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+// 部署目标高密度筛选栏样式
+.target-filter-bar {
+  flex: none;
+  margin-bottom: 12px;
+  padding: 14px 16px;
+  background: rgba(255, 255, 255, 0.4);
+  border: 1px solid rgba(99, 102, 241, 0.06);
+  border-radius: 10px;
+
+  :deep(.ant-form) {
+    width: 100%;
+  }
+
+  :deep(.ant-row) {
+    margin-left: -8px !important;
+    margin-right: -8px !important;
+    align-items: center;
+  }
+
+  :deep(.ant-form-item) {
+    margin-right: 0;
+    margin-bottom: 0;
+
+    .ant-form-item-row {
+      align-items: center;
+      width: 100%;
+    }
+  }
+
+  :deep(.ant-form-item-label > label) {
+    color: #374151;
+    font-weight: 600;
+    font-size: 13px;
+  }
+
+  &__actions {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    min-height: 32px;
+    
+    .action-space {
+      display: flex;
+      width: 100%;
+      justify-content: flex-end;
+    }
+  }
+
+  &__project,
+  &__branch,
+  &__server {
+    width: 100%;
+  }
+}
+
+// 响应式：宽屏同排展示，窄屏（小于1200px，即xl以下）自动换行且操作按钮独占下一行右对齐
+@media (max-width: 1200px) {
+  .target-filter-bar {
+    &__actions {
+      flex: 0 0 100% !important;
+      max-width: 100% !important;
+      justify-content: flex-end !important;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px dashed rgba(99, 102, 241, 0.1);
+    }
+  }
+}
+
+@media (max-width: 768px) {
+  .target-filter-bar {
+    padding: 10px 12px;
+  }
+}
+
+.branch-tag {
+  display: inline-block;
+  max-width: 100%;
+  margin-right: 0;
+  border-radius: 999px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.visit-link {
+  color: #4f46e5;
+  font-weight: 650;
+  text-decoration: none;
+  transition: opacity 0.2s;
+
+  &:hover {
+    opacity: 0.8;
+    text-decoration: underline;
+  }
+}
+
+:deep(.ant-btn-link),
+:deep(.ant-btn-text) {
+  color: #4f46e5;
+
+  &:hover {
+    color: #3b82f6;
+    opacity: 0.8;
+  }
+}
+
+// 覆盖 AntDV Select/Input 样式以符合玻璃态渐变风格
+:deep(.ant-input),
+:deep(.project-select .ant-select-selector) {
+  background: rgba(255, 255, 255, 0.8) !important;
+  border-color: rgba(99, 102, 241, 0.15) !important;
+  border-radius: 8px !important;
+  transition: all 0.2s;
+
+  &:hover {
+    border-color: rgba(79, 70, 229, 0.4) !important;
+    background: #ffffff !important;
+  }
+}
+
+:deep(.project-select.ant-select-focused .ant-select-selector),
+:deep(.ant-input:focus) {
+  border-color: #4f46e5 !important;
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15) !important;
+  background: #ffffff !important;
+}

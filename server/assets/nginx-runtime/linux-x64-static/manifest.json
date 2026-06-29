@@ -1,0 +1,11 @@
+{
+  "name": "yuyan-nginx-runtime",
+  "version": "1.24.0",
+  "platform": "linux",
+  "arch": "x64",
+  "variant": "static",
+  "minGlibc": "0",
+  "requireXcrypt": false,
+  "packageFile": "nginx-runtime.tar.gz",
+  "sha256": "04d19dffdbcd4687999ed4379ba3e899012e30691f9a8d6ccd8aa69cbe697649"
+}

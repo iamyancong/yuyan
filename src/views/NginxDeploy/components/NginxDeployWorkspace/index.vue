@@ -1,0 +1,109 @@
+<script setup lang="ts">
+import message from 'ant-design-vue/es/message';
+import type { YTableActionConfig } from '@ycwang-dev/components/lite';
+import type { DeployProjectContext, TargetFilterForm } from '../../types';
+import DeployHero from '../DeployHero/index.vue';
+import DeployTargetTab from '../DeployTargetTab/index.vue';
+import DeployServerTab from '../DeployServerTab/index.vue';
+import DeployRecordTab from '../DeployRecordTab/index.vue';
+
+defineOptions({ name: 'NginxDeployWorkspace' });
+
+/** 部署中心主工作区属性 */
+interface NginxDeployWorkspaceProps {
+  project: DeployProjectContext;
+  lifecycleState: Record<string, any>;
+  serverState: Record<string, any>;
+  targetState: Record<string, any>;
+  recordState: Record<string, any>;
+  progressState: Record<string, any>;
+  serverActionConfig: YTableActionConfig;
+  targetActionConfig: YTableActionConfig;
+  recordActionConfig: YTableActionConfig;
+}
+
+const props = defineProps<NginxDeployWorkspaceProps>();
+
+/**
+ * 更新部署目标筛选条件。
+ * @param values 最新筛选值
+ */
+const updateTargetFilterForm = (values: TargetFilterForm) => {
+  Object.assign(props.targetState.targetFilterForm, values);
+};
+
+/** 打开 Nginx 管理抽屉，内部可切换服务器 */
+const handleOpenNginxRuntime = async () => {
+  await props.serverState.refreshServerList();
+  const servers = props.serverState.servers.value || [];
+  if (!servers.length) {
+    message.warning('请先新增服务器，再管理 Nginx');
+    return;
+  }
+  void props.serverState.openNginxRuntimeDrawer(servers);
+};
+</script>
+
+<template>
+  <div class="nginx-deploy-page">
+    <DeployHero
+      :has-project-context="targetState.hasProjectContext.value"
+      :project-name="project.projectName"
+      :default-branch="project.defaultBranch"
+      @create-server="serverState.openCreateServer"
+      @nginx-manage="handleOpenNginxRuntime"
+      @create-target="targetState.openCreateTarget"
+    />
+
+    <div class="deploy-tabs-wrapper">
+      <a-tabs v-model:activeKey="lifecycleState.activeTabKey.value" @change="lifecycleState.handleTabChange">
+        <a-tab-pane key="targets" tab="部署目标">
+          <DeployTargetTab
+            :loading="lifecycleState.loading.value"
+            :repair-loading="targetState.targetBindingRepairing.value"
+            :targets="targetState.runtimeTargets.value"
+            :filter-form="targetState.targetFilterForm"
+            :branch-options="targetState.targetBranchFilterOptions.value"
+            :server-options="targetState.targetServerFilterOptions.value"
+            :action-config="targetActionConfig"
+            @update:filter-form="updateTargetFilterForm"
+            @search="targetState.handleTargetFilterSearch"
+            @reset="targetState.handleTargetFilterReset"
+            @repair-nginx-bindings="targetState.repairManagedNginxBindings"
+            @open-progress="progressState.openTargetProgress"
+          />
+        </a-tab-pane>
+        <a-tab-pane key="servers" tab="服务器管理">
+          <DeployServerTab
+            :loading="lifecycleState.loading.value"
+            :servers="serverState.servers.value"
+            :action-config="serverActionConfig"
+          />
+        </a-tab-pane>
+        <a-tab-pane key="records" tab="发布历史">
+          <DeployRecordTab
+            :loading="lifecycleState.loading.value"
+            :records="recordState.records.value"
+            :action-config="recordActionConfig"
+            :server-filter="recordState.recordServerFilter.value"
+            :project-filter="recordState.recordProjectFilter.value"
+            :branch-filter="recordState.recordBranchFilter.value"
+            :server-options="recordState.recordServerOptions.value"
+            :project-options="recordState.recordProjectOptions.value"
+            :branch-options="recordState.recordBranchOptions.value"
+            :pagination="recordState.recordPagination"
+            @server-change="recordState.handleRecordServerChange"
+            @project-change="recordState.handleRecordProjectChange"
+            @branch-change="recordState.handleRecordBranchChange"
+            @page-change="recordState.handleRecordPageChange"
+            @refresh="lifecycleState.refreshActiveTab"
+          />
+        </a-tab-pane>
+      </a-tabs>
+    </div>
+  </div>
+</template>
+
+<style scoped lang="less">
+@import './style.less';
+</style>

@@ -1,0 +1,9 @@
+---
+description: 雨燕 GitHub/GitLab 双分支提交、推送、cherry-pick 和 CI 职责规范
+globs:
+alwaysApply: false
+---
+
+处理分支、提交、推送、cherry-pick 或 CI 职责时，必须读取并遵循：
+
+@.claude/skills/yuyan-dual-branch-workflow/SKILL.md

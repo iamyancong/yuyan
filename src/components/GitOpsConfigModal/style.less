@@ -1,0 +1,102 @@
+/**
+ * GitOps 配置模态框样式 - 简洁实用版
+ */
+
+// ========== 紧凑表单样式 ==========
+.compact-form {
+  :deep(.ant-form-item) {
+    margin-bottom: 8px; // 极致压缩
+  }
+
+  :deep(.ant-form-item-label) {
+    padding-bottom: 0;
+
+    > label {
+      height: auto;
+      font-size: 12px; // 稍微减小字体
+      font-weight: 500;
+      color: #6b7280;
+    }
+  }
+
+  :deep(.ant-select-selector),
+  :deep(.ant-input),
+  :deep(.ant-textarea) {
+    font-size: 13px;
+    height: 24px !important; // 强制降低高度
+    padding-top: 0;
+    padding-bottom: 0;
+    min-height: 24px !important;
+  }
+
+  :deep(.ant-select-selection-item),
+  :deep(.ant-select-selection-placeholder) {
+    line-height: 22px !important;
+  }
+}
+
+// ========== 智能建议提示 - 紧凑版 ==========
+.smart-suggestion-badge {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: #e6f7ff;
+  border: 1px solid #91d5ff;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 12px;
+  color: #1890ff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.3s;
+  z-index: 1;
+
+  &:hover {
+    background: #bae7ff;
+    border-color: #40a9ff;
+  }
+
+  .anticon {
+    font-size: 12px;
+  }
+}
+
+.dir-input-wrapper {
+  position: relative;
+}
+
+// ========== 抽屉底部按钮组 ==========
+.drawer-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+
+  &-left,
+  &-right {
+    display: flex;
+    gap: 8px;
+  }
+}
+
+// ========== 错误提示 ==========
+.error-empty {
+  padding: 40px 0;
+
+  :deep(.ant-result) {
+    padding: 24px 0;
+  }
+
+  &-solutions {
+    text-align: left;
+    display: inline-block;
+    list-style: disc;
+    padding-left: 20px;
+
+    li {
+      margin-bottom: 8px;
+    }
+  }
+}

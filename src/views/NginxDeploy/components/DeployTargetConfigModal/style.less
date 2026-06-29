@@ -1,0 +1,76 @@
+:deep(.target-config-modal .ant-modal-body) {
+  padding-top: 10px;
+}
+
+.target-config-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.target-config-tip {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding: 10px 12px;
+  color: #1d4ed8;
+  line-height: 20px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #eff6ff;
+}
+
+.target-config-form {
+  min-width: 0;
+  border-radius: 8px;
+  background: #fff;
+
+  :deep(.ant-formily-item) {
+    margin-bottom: 14px;
+  }
+
+  :deep([class*='formily-form-grid']) {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    column-gap: 18px !important;
+  }
+
+  :deep([class*='formily-form-grid'] > [data-grid-span='2']) {
+    grid-column: span 2 / auto !important;
+  }
+}
+
+.target-form-section {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 4px 0 16px;
+  padding: 10px 12px;
+  border-left: 4px solid #2563eb;
+  border-radius: 6px;
+  background: linear-gradient(90deg, #f2f7ff 0%, #ffffff 78%);
+
+  strong {
+    color: #111827;
+    font-size: 16px;
+    font-weight: 800;
+    line-height: 24px;
+  }
+
+  span {
+    color: #6b7280;
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 900px) {
+  .target-config-form {
+    :deep([class*='formily-form-grid']) {
+      grid-template-columns: minmax(0, 1fr) !important;
+    }
+
+    :deep([class*='formily-form-grid'] > [data-grid-span='2']) {
+      grid-column: span 1 / auto !important;
+    }
+  }
+}

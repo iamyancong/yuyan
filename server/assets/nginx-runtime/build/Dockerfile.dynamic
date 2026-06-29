@@ -1,0 +1,80 @@
+# =============================================================================
+# Dockerfile.dynamic — RockyLinux 8 动态编译 Nginx 1.24.0
+# =============================================================================
+# 描述：基于 rockylinux:8 的多阶段构建，使用系统提供的 OpenSSL、PCRE、zlib
+#       动态链接库编译 Nginx。运行时需要 glibc ≥ 2.28 和 libxcrypt。
+#
+# 产物路径：/output/
+#   ├── sbin/nginx          # 动态链接的 Nginx 可执行文件
+#   ├── conf/mime.types     # MIME 类型映射
+#   ├── html/index.html     # 默认欢迎页
+#   └── html/50x.html       # 默认错误页
+#
+# 构建命令：
+#   docker build -f Dockerfile.dynamic -t yuyan-nginx-build-dynamic .
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 阶段 1：编译环境准备 + 源码编译
+# -----------------------------------------------------------------------------
+FROM rockylinux:8 AS builder
+
+# Nginx 版本常量
+ARG NGINX_VERSION=1.24.0
+
+WORKDIR /src
+
+# 安装编译工具链和依赖库（使用系统包管理器）
+# 注意：RockyLinux 8 的 AppStream 仓库已进入 EOL，需要切换到 vault 源
+RUN sed -i \
+        -e 's|^mirrorlist=|#mirrorlist=|g' \
+        -e 's|^#baseurl=http://dl.rockylinux.org/$contentdir|baseurl=https://dl.rockylinux.org/vault/rocky|g' \
+        /etc/yum.repos.d/Rocky-*.repo && \
+    dnf install -y \
+        gcc \
+        make \
+        pcre-devel \
+        openssl-devel \
+        zlib-devel \
+        wget && \
+    dnf clean all
+
+# 下载 Nginx 源码
+RUN echo ">>> 下载 Nginx ${NGINX_VERSION}" && \
+    wget -q "https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz" && \
+    tar xzf "nginx-${NGINX_VERSION}.tar.gz"
+
+# 编译 Nginx（动态链接系统库）
+RUN cd "nginx-${NGINX_VERSION}" && \
+    ./configure \
+        --prefix=/opt/yuyan/nginx \
+        --with-http_ssl_module \
+        --with-http_gzip_static_module \
+        --with-http_realip_module \
+        --with-pcre-jit \
+        --without-http_fastcgi_module \
+        --without-http_uwsgi_module \
+        --without-http_scgi_module \
+        --without-mail_pop3_module \
+        --without-mail_imap_module \
+        --without-mail_smtp_module && \
+    make -j"$(nproc)" && \
+    make install
+
+# 剥离调试符号，缩小二进制体积
+RUN strip /opt/yuyan/nginx/sbin/nginx
+
+# 验证动态链接的依赖库
+RUN echo ">>> 检查动态链接依赖：" && \
+    ldd /opt/yuyan/nginx/sbin/nginx
+
+# -----------------------------------------------------------------------------
+# 阶段 2：提取最小化产物
+# -----------------------------------------------------------------------------
+FROM scratch AS output
+
+# 仅复制必要文件到 /output 目录
+COPY --from=builder /opt/yuyan/nginx/sbin/nginx      /output/sbin/nginx
+COPY --from=builder /opt/yuyan/nginx/conf/mime.types  /output/conf/mime.types
+COPY --from=builder /opt/yuyan/nginx/html/index.html  /output/html/index.html
+COPY --from=builder /opt/yuyan/nginx/html/50x.html    /output/html/50x.html

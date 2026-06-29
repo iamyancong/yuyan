@@ -1,0 +1,51 @@
+.record-log-content {
+  height: calc(100vh - 108px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.record-log-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border-color-split);
+  border-radius: 6px;
+  background: var(--bg-color-container);
+}
+
+.record-log-summary__item {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+
+  span {
+    color: var(--text-color-secondary);
+    font-size: 12px;
+  }
+
+  strong {
+    color: var(--text-color);
+    font-size: 13px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    .commit-link {
+      color: var(--primary-color, #7c3acd);
+      text-decoration: none;
+      cursor: pointer;
+      transition: all 0.3s;
+
+      &:hover {
+        color: var(--primary-color);
+        opacity: 0.8;
+        text-decoration: underline;
+      }
+    }
+  }
+}

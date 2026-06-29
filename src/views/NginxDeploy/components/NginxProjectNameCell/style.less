@@ -1,0 +1,56 @@
+.nginx-project-name-cell {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  padding: 2px 0;
+}
+
+.nginx-project-name-cell__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  color: #1677ff;
+  border-radius: 8px;
+  background: #edf5ff;
+}
+
+.nginx-project-name-cell__main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nginx-project-name-cell__name {
+  overflow: hidden;
+  color: var(--primary-color);
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nginx-project-name-cell__link {
+  text-decoration: none;
+  cursor: pointer;
+  transition: opacity 0.2s;
+
+  &:hover {
+    opacity: 0.8;
+    text-decoration: none;
+  }
+}
+
+.nginx-project-name-cell__description {
+  overflow: hidden;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

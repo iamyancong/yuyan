@@ -1,0 +1,4 @@
+interface:
+  display_name: "雨燕双分支协作"
+  short_description: "规范 GitHub 客户端发布与 GitLab API 部署协作"
+  default_prompt: "Use $yuyan-dual-branch-workflow to commit and synchronize changes across the Yuyan GitHub and GitLab branches."

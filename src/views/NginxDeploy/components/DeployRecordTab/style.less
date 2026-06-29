@@ -1,0 +1,118 @@
+.nginx-deploy-tab-card {
+  height: 100%;
+  overflow: hidden;
+
+  :deep(.ant-card-body) {
+    display: flex;
+    height: 100%;
+    min-height: 0;
+    flex-direction: column;
+    overflow: hidden;
+  }
+}
+
+.nginx-deploy-table-area {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.record-filter-bar {
+  flex: none;
+  margin-bottom: 12px;
+  padding: 12px 16px;
+  background: rgba(255, 255, 255, 0.45);
+  border: 1px solid rgba(99, 102, 241, 0.06);
+  border-radius: 10px;
+
+  &__form {
+    width: 100%;
+  }
+
+  &__actions {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    height: 100%;
+  }
+
+  :deep(.ant-form) {
+    gap: 8px 12px;
+  }
+
+  :deep(.ant-form-item) {
+    margin-right: 0;
+    margin-bottom: 0;
+  }
+
+  :deep(.ant-form-item-label > label) {
+    color: #374151;
+    font-weight: 600;
+  }
+
+  &__select {
+    width: min(450px, 100%);
+  }
+
+  &__server-select {
+    width: 220px;
+  }
+
+  &__branch-select {
+    width: 180px;
+  }
+}
+
+// 覆盖 AntDV Select 样式以符合玻璃态风格
+:deep(.project-select .ant-select-selector) {
+  background: rgba(255, 255, 255, 0.8) !important;
+  border-color: rgba(99, 102, 241, 0.15) !important;
+  border-radius: 8px !important;
+  transition: all 0.2s;
+
+  &:hover {
+    border-color: rgba(79, 70, 229, 0.4) !important;
+    background: #ffffff !important;
+  }
+}
+
+:deep(.project-select.ant-select-focused .ant-select-selector) {
+  border-color: #4f46e5 !important;
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15) !important;
+  background: #ffffff !important;
+}
+
+:deep(.ant-btn-link),
+:deep(.ant-btn-text) {
+  color: #4f46e5;
+
+  &:hover {
+    color: #3b82f6;
+    opacity: 0.8;
+  }
+}
+
+.commit-link {
+  color: #4f46e5;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.2s;
+
+  &:hover {
+    color: #3b82f6;
+    opacity: 0.85;
+    text-decoration: underline;
+  }
+}
+
+@media (max-width: 1200px) {
+  .record-filter-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+
+    &__right {
+      justify-content: flex-end;
+    }
+  }
+}
