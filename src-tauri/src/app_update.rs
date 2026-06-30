@@ -692,9 +692,23 @@ pub async fn install_app_update(
         .ok_or_else(|| "更新安装包文件名无效".to_string())?;
     validate_package_file(Path::new(&local_path), filename).await?;
 
-    app.opener()
-        .open_path(local_path, None::<&str>)
-        .map_err(|error| format!("拉起更新安装程序失败: {error}"))?;
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new(&local_path)
+            .arg("/S")
+            .spawn()
+            .map_err(|error| format!("拉起静默更新安装程序失败: {error}"))?;
+        // 启动安装程序后，当前应用应该立即退出，以防文件被占用导致更新覆盖失败
+        app.exit(0);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        app.opener()
+            .open_path(local_path, None::<&str>)
+            .map_err(|error| format!("拉起更新安装程序失败: {error}"))?;
+    }
+
     Ok(AppUpdateCommandResult {
         success: true,
         message: "更新安装程序已启动".to_string(),
