@@ -1,5 +1,9 @@
 <template>
-  <a-layout :class="{ 'is-tauri-client': isTauriClient }" style="height: 100vh; overflow: hidden">
+  <a-layout :class="{ 
+    'is-tauri-client': isTauriClient,
+    'is-tauri-mac': isTauriClient && isMac,
+    'is-tauri-win': isTauriClient && isWin
+  }" style="height: 100vh; overflow: hidden">
     <a-layout-sider :theme="menuTheme" collapsible v-model:collapsed="collapsed">
       <div class="brand" data-tauri-drag-region>
         <div class="brand-content" @click="goHome">
@@ -138,6 +142,7 @@ import {
   CloudDownloadOutlined
 } from '@ant-design/icons-vue';
 import { isTauri } from '@/utils/env';
+import { detectPlatform } from '@/utils/platformDetect';
 import { backupDbFromServer, restoreDbToLocal } from '@/api/deploy';
 import { message, Modal } from 'ant-design-vue';
 
@@ -147,6 +152,11 @@ const router = useRouter();
 
 const { menuTheme, primaryColor } = useTheme();
 const { isLoggedIn, currentUser, userName, userAvatar, logout, authLoading, checkAuth } = useAuth();
+
+// 平台检测
+const platformInfo = detectPlatform();
+const isMac = computed(() => platformInfo.platform === 'darwin');
+const isWin = computed(() => platformInfo.platform === 'windows');
 
 // 桌面端标识
 const isTauriClient = computed(() => isTauri());
@@ -392,10 +402,16 @@ const goHome = () => {
   }
 }
 
-.is-tauri-client {
+.is-tauri-mac {
   .brand {
     padding-top: 28px;
     height: 84px;
+  }
+}
+
+.is-tauri-win {
+  .yuyan-layout-header {
+    padding-right: 150px;
   }
 }
 
