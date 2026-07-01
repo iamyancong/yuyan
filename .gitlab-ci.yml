@@ -33,7 +33,7 @@ before_script:
 docker:build-push:
   stage: docker
   script:
-    - docker build --build-arg NODE_IMAGE="$NODE_IMAGE" -t "$IMAGE_TAG" .
+    - docker build --network host --build-arg NODE_IMAGE="$NODE_IMAGE" -t "$IMAGE_TAG" .
     - docker push "$IMAGE_TAG"
   after_script:
     - docker image prune -f || true
