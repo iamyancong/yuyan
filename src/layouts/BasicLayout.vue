@@ -409,12 +409,6 @@ const goHome = () => {
   }
 }
 
-.is-tauri-win {
-  .yuyan-layout-header {
-    padding-right: 120px;
-  }
-}
-
 .brand-logo {
   width: 32px;
   height: 32px;
