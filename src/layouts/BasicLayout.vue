@@ -411,7 +411,7 @@ const goHome = () => {
 
 .is-tauri-win {
   .yuyan-layout-header {
-    padding-right: 150px;
+    padding-right: 120px;
   }
 }
 
