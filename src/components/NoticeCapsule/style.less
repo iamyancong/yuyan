@@ -1,0 +1,290 @@
+/* =====================================================
+ * 🔮 C4D风格高级 3D 玻璃拟态 (Glassmorphism) 通知与下载胶囊
+ * 设计语言: 极光渐变、三维微立体、晶莹毛玻璃、温润动效
+ * ===================================================== */
+
+// 定义绚丽的 C4D 调色板
+@notice-purple: #7c3aed;
+@notice-pink: #ec4899;
+@notice-blue: #3b82f6;
+
+.notice-capsule {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  width: 100%;
+  max-width: 900px;
+  min-width: 220px;
+  padding: 0 6px 0 12px;
+  border-radius: 16px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  cursor: pointer;
+  user-select: none;
+  overflow: hidden;
+  transition: all 0.5s cubic-bezier(0.19, 1, 0.22, 1);
+  box-sizing: border-box;
+
+  // 🔮 3D 水晶玻璃拟态双层背景（流光渐变外边框与毛玻璃本体）
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.88) 0%, rgba(248, 250, 252, 0.65) 100%) padding-box,
+    linear-gradient(135deg, rgba(124, 58, 237, 0.45) 0%, rgba(236, 72, 153, 0.25) 50%, rgba(59, 130, 246, 0.4) 100%) border-box;
+  border: 1.5px solid transparent;
+
+  // 极致毛玻璃感
+  backdrop-filter: blur(14px) saturate(1.9);
+  -webkit-backdrop-filter: blur(14px) saturate(1.9);
+
+  // 3D 景深多重阴影塑造
+  box-shadow:
+    0 4px 12px rgba(124, 58, 237, 0.06),
+    0 1px 2px rgba(0, 0, 0, 0.03),
+    inset 0 1px 1px rgba(255, 255, 255, 0.95),
+    inset 0 -2px 3px rgba(124, 58, 237, 0.05);
+
+  // 🔮 3D 玻璃表面高光层
+  .glass-glare {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 50%;
+    background: linear-gradient(to bottom, rgba(255, 255, 255, 0.5) 0%, rgba(255, 255, 255, 0) 100%);
+    border-radius: 16px 16px 0 0;
+    pointer-events: none;
+    z-index: 3;
+  }
+
+  // 🔮 Hover 扫光亮效
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 50%;
+    height: 100%;
+    background: linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0) 0%,
+      rgba(255, 255, 255, 0.6) 50%,
+      rgba(255, 255, 255, 0) 100%
+    );
+    transform: skewX(-25deg);
+    z-index: 4;
+    pointer-events: none;
+  }
+
+  // 1. 物理 LED 状态呼吸灯
+  .capsule-led {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    margin-right: 8px;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 4;
+    transition: all 0.4s ease;
+
+    // 默认呼吸效果
+    animation: led-glow 2s ease-in-out infinite;
+
+    &.type-success {
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+      box-shadow: 0 0 6px rgba(16, 185, 129, 0.6);
+    }
+    &.type-info {
+      background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+      box-shadow: 0 0 6px rgba(59, 130, 246, 0.6);
+    }
+    &.type-warn {
+      background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+      box-shadow: 0 0 6px rgba(245, 158, 11, 0.6);
+    }
+  }
+
+  // 2. 左侧修饰图标
+  .capsule-icon {
+    margin-right: 6px;
+    font-size: 13px;
+    color: #4b5563;
+    position: relative;
+    z-index: 4;
+    flex-shrink: 0;
+    transition: transform 0.3s ease;
+  }
+
+  // 3. 消息文本视口容器
+  .notice-viewport {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    margin-right: 4px;
+
+    // 固定 16px 像素渐隐边缘（不使用百分比，避免大屏拉宽时首字被吞）
+    mask-image: linear-gradient(to right, transparent 0px, #000 16px, #000 calc(100% - 16px), transparent 100%);
+    -webkit-mask-image: linear-gradient(to right, transparent 0px, #000 16px, #000 calc(100% - 16px), transparent 100%);
+
+    // 淡入淡出时两层 DOM 需绝对定位叠放
+    .notice-slider-wrapper {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      padding: 0 16px; // 与视口 padding 保持一致，确保文字起始位置对齐
+      box-sizing: border-box;
+    }
+
+    .notice-marquee-content {
+      display: flex;
+      align-items: center;
+      white-space: nowrap;
+
+      &.is-marquee {
+        animation: text-marquee-scroll var(--marquee-duration, 16s) linear infinite;
+
+        .notice-text {
+          padding-right: 32px;
+        }
+      }
+    }
+
+    .notice-text {
+      white-space: nowrap;
+      color: #374151;
+      font-size: 12px;
+      font-weight: 550;
+      position: relative;
+      z-index: 4;
+      display: inline-block;
+      flex-shrink: 0; // 阻止在 flex 容器中被压缩宽度，保证 scrollWidth 始终反映真实文字长度
+    }
+  }
+
+  // 4. 下载动作按钮 (C4D 果冻质感微纽)
+  .capsule-btn {
+    position: relative;
+    z-index: 5;
+    height: 20px;
+    padding: 0 10px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%);
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    border: none;
+    outline: none;
+    box-shadow:
+      0 2px 4px rgba(236, 72, 153, 0.25),
+      inset 0 1px 1px rgba(255, 255, 255, 0.3);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+
+    &:hover {
+      transform: scale(1.05) translateY(-0.5px);
+      box-shadow:
+        0 4px 10px rgba(236, 72, 153, 0.4),
+        inset 0 1px 1px rgba(255, 255, 255, 0.4);
+      background: linear-gradient(135deg, #9065f7 0%, #ee59a3 100%);
+    }
+
+    &:active {
+      transform: scale(0.95) translateY(0.5px);
+      box-shadow: 0 1px 2px rgba(236, 72, 153, 0.2);
+    }
+  }
+
+  /* ========== 悬浮和点击三维浮动反馈 ========== */
+  &:hover {
+    transform: translateY(-1.5px);
+    background:
+      linear-gradient(135deg, rgba(255, 255, 255, 0.94) 0%, rgba(248, 250, 252, 0.72) 100%) padding-box,
+      linear-gradient(135deg, rgba(124, 58, 237, 0.6) 0%, rgba(236, 72, 153, 0.4) 50%, rgba(59, 130, 246, 0.5) 100%) border-box;
+    box-shadow:
+      0 6px 18px rgba(124, 58, 237, 0.12),
+      0 2px 4px rgba(0, 0, 0, 0.04),
+      inset 0 1px 1px rgba(255, 255, 255, 0.98),
+      inset 0 -3px 4px rgba(124, 58, 237, 0.08);
+
+    &::before {
+      animation: glass-glow-sweep 1.2s cubic-bezier(0.19, 1, 0.22, 1) forwards;
+    }
+
+    .capsule-icon {
+      transform: translateY(-0.5px) scale(1.05);
+      color: @notice-purple;
+    }
+
+    .notice-marquee-content {
+      animation-play-state: paused;
+    }
+  }
+
+  &:active {
+    transform: translateY(0.5px);
+    box-shadow:
+      0 2px 6px rgba(124, 58, 237, 0.06),
+      inset 0 1px 1px rgba(255, 255, 255, 0.8),
+      inset 0 -1px 2px rgba(124, 58, 237, 0.04);
+  }
+}
+
+/* ===================== 动画 Keyframes ===================== */
+
+// LED 呼吸动画
+@keyframes led-glow {
+  0%, 100% {
+    opacity: 0.6;
+    transform: scale(0.95);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.1);
+  }
+}
+
+// 玻璃亮光扫过效果
+@keyframes glass-glow-sweep {
+  0% { left: -100%; }
+  100% { left: 220%; }
+}
+
+// 首尾相接无缝循环跑马灯：向左滚动完一整轮（文本+间隙）后瞬间回到起点
+@keyframes text-marquee-scroll {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+/* ========== 消息轮播：淡入淡出交叉叠化 (Crossfade) ========== */
+.notice-fade-enter-active {
+  transition: opacity 1s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.notice-fade-leave-active {
+  transition: opacity 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.notice-fade-enter-from {
+  opacity: 0;
+}
+
+.notice-fade-leave-to {
+  opacity: 0;
+}

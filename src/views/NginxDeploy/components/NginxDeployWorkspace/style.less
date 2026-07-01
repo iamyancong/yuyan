@@ -14,7 +14,31 @@
   overflow: hidden;
 }
 
-// 玻璃分段导航（a-tabs-nav）及全局过渡
+.nginx-deploy-main-card {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.78) !important;
+  border: 1px solid rgba(99, 102, 241, 0.12) !important;
+  border-radius: 14px !important;
+  box-shadow:
+    0 12px 32px rgba(99, 102, 241, 0.03),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.9) !important;
+  contain: layout style;
+
+  :deep(.ant-card-body) {
+    display: flex;
+    height: 100%;
+    min-height: 0;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 0 !important;
+  }
+}
+
+// Tab 导航与内容区合并为单卡片
 :deep(.ant-tabs) {
   display: flex;
   flex: 1;
@@ -25,16 +49,15 @@
 
 :deep(.ant-tabs-nav) {
   flex: none;
-  margin-bottom: 16px;
-  background: rgba(255, 255, 255, 0.65);
-  border: 1px solid rgba(99, 102, 241, 0.08);
-  border-radius: 12px;
-  padding: 5px 8px;
-  backdrop-filter: blur(10px);
-  box-shadow: 
-    0 8px 24px rgba(99, 102, 241, 0.03),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.8);
-  
+  margin: 0;
+  padding: 8px 12px 0;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid rgba(99, 102, 241, 0.08);
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+
   &::before {
     border-bottom: none !important;
   }
@@ -44,28 +67,29 @@
   }
 
   .ant-tabs-tab {
-    margin: 2px 4px;
-    padding: 6px 14px;
-    border-radius: 8px;
+    margin: 0 4px;
+    padding: 8px 14px 10px;
+    border-radius: 8px 8px 0 0;
     font-size: 13px;
     font-weight: 550;
     color: #4b5563;
-    transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
-    
+    transition: color 0.18s ease, background-color 0.18s ease;
+
     &:hover {
       color: #4f46e5;
       background: rgba(99, 102, 241, 0.04);
     }
   }
-  
+
   .ant-tabs-tab-active {
-    background: rgba(99, 102, 241, 0.07);
+    background: rgba(99, 102, 241, 0.06);
+
     .ant-tabs-tab-btn {
       color: #4f46e5 !important;
       font-weight: 700;
     }
   }
-  
+
   .ant-tabs-ink-bar {
     background: linear-gradient(90deg, #4f46e5, #3b82f6) !important;
     height: 3px !important;
@@ -90,24 +114,14 @@
   overflow: hidden;
 }
 
-// 全局玻璃拟态内容卡片定制
-:deep(.nginx-deploy-tab-card) {
-  background: rgba(255, 255, 255, 0.72) !important;
-  border: 1px solid rgba(99, 102, 241, 0.12) !important;
-  border-radius: 14px !important;
-  box-shadow: 
-    0 12px 32px rgba(99, 102, 241, 0.03),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.9) !important;
-  backdrop-filter: blur(12px);
+:deep(.nginx-deploy-tab-pane) {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
   overflow: hidden;
-  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-  
-  &:hover {
-    border-color: rgba(99, 102, 241, 0.18) !important;
-    box-shadow: 
-      0 16px 36px rgba(99, 102, 241, 0.06),
-      inset 0 0 0 1px rgba(255, 255, 255, 0.95) !important;
-  }
+  padding: 12px;
+  padding-top: 0;
 }
 
 // 统一 YTable 表格高可读视觉设计
@@ -195,13 +209,6 @@
 @media (prefers-reduced-motion: reduce) {
   :deep(.ant-tabs-tab) {
     transition: none !important;
-  }
-
-  :deep(.nginx-deploy-tab-card) {
-    transition: none !important;
-    &:hover {
-      box-shadow: none !important;
-    }
   }
 
   :deep(.vxe-body--row) {

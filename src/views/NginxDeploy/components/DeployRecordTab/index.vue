@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue';
-import { YCard, YTable } from '@ycwang-dev/components/lite';
+import { computed, nextTick, ref, watch } from 'vue';
+import { YTable } from '@ycwang-dev/components/lite';
 import { openExternal } from '@/utils/open';
 import { useTableHeight } from '@ycwang-dev/hooks';
 import type { YTableActionConfig } from '@ycwang-dev/components/lite';
@@ -44,6 +44,7 @@ interface RecordPagination {
 
 /** 发布历史 Tab 属性 */
 interface DeployRecordTabProps {
+  active: boolean;
   loading: boolean;
   records: DeployRecord[];
   actionConfig: YTableActionConfig;
@@ -83,12 +84,22 @@ watch([() => props.loading, () => props.records.length, () => props.pagination.p
   flush: 'post',
 });
 
+watch(
+  () => props.active,
+  (isActive) => {
+    if (isActive) {
+      void recalculateAfterRender();
+    }
+  },
+  { flush: 'post' }
+);
+
 /**
- * 获取 GitLab 提交记录页面链接。
+ * 构建 GitLab 提交记录页面链接。
  * @param record 发布记录
  * @returns 提交记录页面链接，无法获取时返回空字符串
  */
-const getCommitUrl = (record: DeployRecord): string => {
+const buildCommitUrl = (record: DeployRecord): string => {
   const commitSha = record.commitSha;
   if (!commitSha) return '';
 
@@ -105,7 +116,8 @@ const getCommitUrl = (record: DeployRecord): string => {
     if (repoUrl.startsWith('http://') || repoUrl.startsWith('https://')) {
       const baseUrl = repoUrl.replace(/\.git$/i, '');
       return `${baseUrl}/-/commit/${commitSha}`;
-    } else if (repoUrl.includes('@')) {
+    }
+    if (repoUrl.includes('@')) {
       const match = repoUrl.match(/@([^:/]+)(?::\d+)?[:/](.+)$/i);
       if (match) {
         const hostName = match[1];
@@ -122,10 +134,24 @@ const getCommitUrl = (record: DeployRecord): string => {
 
   return '';
 };
+
+const commitUrlMap = computed(() => {
+  const map = new Map<number, string>();
+  props.records.forEach((record) => {
+    map.set(record.id, buildCommitUrl(record));
+  });
+  return map;
+});
+
+/**
+ * 获取当前行的 GitLab 提交链接。
+ * @param record 发布记录
+ */
+const getCommitUrl = (record: DeployRecord) => commitUrlMap.value.get(record.id) || '';
 </script>
 
 <template>
-  <YCard class="nginx-deploy-tab-card" :padding="12">
+  <div class="nginx-deploy-tab-pane">
     <DeployRecordFilterBar
       :loading="loading"
       :server-filter="serverFilter"
@@ -174,7 +200,7 @@ const getCommitUrl = (record: DeployRecord): string => {
         </template>
       </YTable>
     </div>
-  </YCard>
+  </div>
 </template>
 
 <style scoped lang="less">

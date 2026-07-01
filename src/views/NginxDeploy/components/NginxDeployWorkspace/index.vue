@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import message from 'ant-design-vue/es/message';
+import { YCard } from '@ycwang-dev/components/lite';
 import type { YTableActionConfig } from '@ycwang-dev/components/lite';
 import type { DeployProjectContext, TargetFilterForm } from '../../types';
 import DeployHero from '../DeployHero/index.vue';
@@ -56,7 +57,13 @@ const handleOpenNginxRuntime = async () => {
     />
 
     <div class="deploy-tabs-wrapper">
-      <a-tabs v-model:activeKey="lifecycleState.activeTabKey.value" @change="lifecycleState.handleTabChange">
+      <YCard class="nginx-deploy-main-card" :padding="0">
+        <a-tabs
+          v-model:activeKey="lifecycleState.activeTabKey.value"
+          :animated="{ inkBar: true, tabPane: false }"
+          :destroy-inactive-tab-pane="false"
+          @change="lifecycleState.handleTabChange"
+        >
         <a-tab-pane key="targets" tab="部署目标">
           <DeployTargetTab
             :loading="lifecycleState.loading.value"
@@ -82,6 +89,7 @@ const handleOpenNginxRuntime = async () => {
         </a-tab-pane>
         <a-tab-pane key="records" tab="发布历史">
           <DeployRecordTab
+            :active="lifecycleState.activeTabKey.value === 'records'"
             :loading="lifecycleState.loading.value"
             :records="recordState.records.value"
             :action-config="recordActionConfig"
@@ -96,10 +104,11 @@ const handleOpenNginxRuntime = async () => {
             @project-change="recordState.handleRecordProjectChange"
             @branch-change="recordState.handleRecordBranchChange"
             @page-change="recordState.handleRecordPageChange"
-            @refresh="lifecycleState.refreshActiveTab"
+            @refresh="() => lifecycleState.refreshActiveTab({ force: true, reloadRecordTargets: true })"
           />
         </a-tab-pane>
-      </a-tabs>
+        </a-tabs>
+      </YCard>
     </div>
   </div>
 </template>

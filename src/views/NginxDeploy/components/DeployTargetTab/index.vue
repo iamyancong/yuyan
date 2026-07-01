@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue';
-import { YCard, YTable } from '@ycwang-dev/components/lite';
+import { YTable } from '@ycwang-dev/components/lite';
 import { openExternal } from '@/utils/open';
 import { useTableHeight } from '@ycwang-dev/hooks';
 import type { YTableActionConfig } from '@ycwang-dev/components/lite';
@@ -62,7 +62,7 @@ const handleFilterFormUpdate = (val: TargetFilterForm) => {
 </script>
 
 <template>
-  <YCard class="nginx-deploy-tab-card" :padding="12">
+  <div class="nginx-deploy-tab-pane">
     <DeployTargetFilterBar
       :loading="loading"
       :repair-loading="repairLoading"
@@ -106,7 +106,7 @@ const handleFilterFormUpdate = (val: TargetFilterForm) => {
         </template>
       </YTable>
     </div>
-  </YCard>
+  </div>
 </template>
 
 <style scoped lang="less">

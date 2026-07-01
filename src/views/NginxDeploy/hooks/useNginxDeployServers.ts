@@ -115,7 +115,7 @@ export function useNginxDeployServers(params?: UseNginxDeployServersParams) {
         message.success('服务器配置已新增');
       }
       serverModalOpen.value = false;
-      await refreshActiveTab();
+      await refreshActiveTab({ force: true });
     } catch (error: any) {
       message.error(getErrorMessage(error));
     } finally {
@@ -131,7 +131,7 @@ export function useNginxDeployServers(params?: UseNginxDeployServersParams) {
     if (!ensureLoggedIn()) return;
     await deleteDeployServer(server.id);
     message.success('服务器配置已删除');
-    await refreshActiveTab();
+    await refreshActiveTab({ force: true });
   };
 
   /**

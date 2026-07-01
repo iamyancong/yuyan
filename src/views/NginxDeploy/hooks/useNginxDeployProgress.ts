@@ -263,11 +263,11 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
         progressState.stopped = true;
         progressState.title = '已停止';
         progressState.detail = '发布任务已停止，未进入上传产物阶段。';
-        await refreshActiveTab({ resetRecordsPage: true });
+        await refreshActiveTab({ resetRecordsPage: true, force: true });
         return;
       }
       message.success('发布完成');
-      await refreshActiveTab({ resetRecordsPage: true });
+      await refreshActiveTab({ resetRecordsPage: true, force: true });
     } catch (error: any) {
       if (isAbortError(error) || abortController.signal.aborted) {
         if (sessionId === progressSessionId && publishStopping.value) {
@@ -279,7 +279,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
           });
           message.warning('发布任务已停止');
           await new Promise((resolve) => window.setTimeout(resolve, 500));
-          await refreshActiveTab({ resetRecordsPage: true });
+          await refreshActiveTab({ resetRecordsPage: true, force: true });
         }
         return;
       }
@@ -345,18 +345,18 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
         progressState.stopped = true;
         progressState.title = '已停止';
         progressState.detail = '发布任务已停止，未进入上传产物阶段。';
-        await refreshActiveTab({ resetRecordsPage: true });
+        await refreshActiveTab({ resetRecordsPage: true, force: true });
         return;
       }
       shouldClearRuntime = true;
       message.success(`${getDeployProgressActionLabel(snapshot.action)}完成`);
-      await refreshActiveTab({ resetRecordsPage: true });
+      await refreshActiveTab({ resetRecordsPage: true, force: true });
     } catch (error: any) {
       if (isAbortError(error) || abortController.signal.aborted || sessionId !== progressSessionId) return;
       if (isNotFoundError(error)) {
         clearTargetRuntimeSnapshot?.(target.id);
         message.info('当前任务已结束，请查看发布历史');
-        await refreshActiveTab({ resetRecordsPage: true });
+        await refreshActiveTab({ resetRecordsPage: true, force: true });
         resetPublishWorkbench();
         publishConfirmOpen.value = false;
         rollbackProgressOpen.value = false;
@@ -414,7 +414,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     try {
       await rollbackRecordWithProgress(record.id, { operator: userName.value || '' }, { onEvent: handleProgressEvent });
       message.success('回滚完成');
-      await refreshActiveTab({ resetRecordsPage: true });
+      await refreshActiveTab({ resetRecordsPage: true, force: true });
     } catch (error: any) {
       const errorMessage = getErrorMessage(error);
       if (isDeployConflictError(error)) {
@@ -445,7 +445,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     try {
       await undoRollbackRecordWithProgress(record.id, { operator: userName.value || '' }, { onEvent: handleProgressEvent });
       message.success('撤销回滚完成');
-      await refreshActiveTab({ resetRecordsPage: true });
+      await refreshActiveTab({ resetRecordsPage: true, force: true });
     } catch (error: any) {
       const errorMessage = getErrorMessage(error);
       if (isDeployConflictError(error)) {
@@ -474,7 +474,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       if (!runningTask.running) {
         clearTargetRuntimeSnapshot?.(target.id);
         message.info('当前任务已结束，请查看发布历史');
-        await refreshActiveTab({ resetRecordsPage: true });
+        await refreshActiveTab({ resetRecordsPage: true, force: true });
         return;
       }
       detachPublishProgressStream();
@@ -483,7 +483,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       clearTargetRuntimeSnapshot?.(target.id);
       if (isNotFoundError(error)) {
         message.info('当前任务已结束，请查看发布历史');
-        await refreshActiveTab({ resetRecordsPage: true });
+        await refreshActiveTab({ resetRecordsPage: true, force: true });
         return;
       }
       message.error(getErrorMessage(error));

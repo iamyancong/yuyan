@@ -399,7 +399,7 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
       applyRuntimeStatus(result);
       message.success(result.running ? 'Nginx 已初始化并运行' : 'Nginx 已初始化');
       await params.refreshServerList();
-      await params.refreshActiveTab();
+      await params.refreshActiveTab({ force: true });
     } catch (error: any) {
       message.error(getErrorMessage(error));
     } finally {
@@ -422,7 +422,7 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
       applyRuntimeStatus(result.status);
       message.success(result.output || '操作成功');
       await params.refreshServerList();
-      await params.refreshActiveTab();
+      await params.refreshActiveTab({ force: true });
     } catch (error: any) {
       message.error(getErrorMessage(error));
     } finally {
@@ -497,7 +497,7 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
       message.success('Nginx 实例已新增');
       await refreshRuntimeStatus(instance.id);
       await params.refreshServerList();
-      await params.refreshActiveTab();
+      await params.refreshActiveTab({ force: true });
     } catch (error: any) {
       message.error(getErrorMessage(error));
     }
@@ -542,7 +542,7 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
       message.success('Nginx 实例已更新');
       await refreshRuntimeStatus(updated.id);
       await params.refreshServerList();
-      await params.refreshActiveTab();
+      await params.refreshActiveTab({ force: true });
     } catch (error: any) {
       message.error(getErrorMessage(error));
     } finally {
@@ -564,7 +564,7 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
       syncRuntimeInstances(runtimeServer.value);
       runtimeStatus.value = null;
       await refreshRuntimeStatus();
-      await params.refreshActiveTab();
+      await params.refreshActiveTab({ force: true });
     } catch (error: any) {
       message.error(getErrorMessage(error));
     }

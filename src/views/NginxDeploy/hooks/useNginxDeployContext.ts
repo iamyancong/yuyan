@@ -50,7 +50,7 @@ export interface NginxDeployContext {
   /** 刷新部署目标列表 */
   refreshTargetList: () => Promise<void>;
   /** 刷新发布记录列表 */
-  refreshRecordList: () => Promise<void>;
+  refreshRecordList: (options?: RefreshActiveTabOptions) => Promise<void>;
   /** 重置发布历史列表的分页参数 */
   resetRecordPage: () => void;
 

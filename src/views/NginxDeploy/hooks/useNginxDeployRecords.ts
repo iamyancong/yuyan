@@ -159,17 +159,24 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
   };
 
   /** 刷新发布历史项目选项 */
-  const refreshRecordProjectOptions = async () => {
-    const targetList = await listDeployTargets();
-    allTargets.value = targetList;
-    ensureRecordServerFilter(targetList);
+  const refreshRecordProjectOptions = async (options: RefreshActiveTabOptions = {}) => {
+    const shouldReloadTargets = Boolean(options.reloadRecordTargets) || !allTargets.value.length;
+    if (shouldReloadTargets) {
+      const targetList = await listDeployTargets();
+      allTargets.value = targetList;
+      ensureRecordServerFilter(targetList);
+      ensureRecordTargetFilter();
+      ensureRecordBranchFilter();
+      return;
+    }
+    ensureRecordServerFilter(allTargets.value);
     ensureRecordTargetFilter();
     ensureRecordBranchFilter();
   };
 
   /** 刷新发布历史列表 */
-  const refreshRecordList = async () => {
-    await refreshRecordProjectOptions();
+  const refreshRecordList = async (options: RefreshActiveTabOptions = {}) => {
+    await refreshRecordProjectOptions(options);
     const recordProjectQuery = getRecordProjectQuery();
     if (!recordProjectQuery) {
       records.value = [];
@@ -216,7 +223,7 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
   const handleRecordPageChange = async (pageInfo: { current: number; pageSize: number }) => {
     recordPagination.current = pageInfo.current;
     recordPagination.pageSize = pageInfo.pageSize;
-    await refreshActiveTab();
+    await refreshActiveTab({ force: true });
   };
 
   /**
@@ -226,7 +233,7 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
   const handleRecordProjectChange = async (value: string) => {
     recordTargetFilter.value = value;
     ensureRecordBranchFilter();
-    await refreshActiveTab({ resetRecordsPage: true });
+    await refreshActiveTab({ resetRecordsPage: true, force: true });
   };
 
   /**
@@ -238,7 +245,7 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
     recordTargetFilter.value = '';
     recordBranchFilter.value = undefined;
     ensureRecordTargetFilter();
-    await refreshActiveTab({ resetRecordsPage: true });
+    await refreshActiveTab({ resetRecordsPage: true, force: true });
   };
 
   /**
@@ -247,7 +254,7 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
    */
   const handleRecordBranchChange = async (value?: string) => {
     recordBranchFilter.value = value;
-    await refreshActiveTab({ resetRecordsPage: true });
+    await refreshActiveTab({ resetRecordsPage: true, force: true });
   };
 
   /** 清空发布历史数据和临时态 */

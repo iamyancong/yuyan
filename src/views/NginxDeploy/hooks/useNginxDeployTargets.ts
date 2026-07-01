@@ -831,7 +831,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
         message.success('部署目标已新增');
       }
       targetModalOpen.value = false;
-      await refreshActiveTab();
+      await refreshActiveTab({ force: true });
     } catch (error: any) {
       message.error(getErrorMessage(error));
     } finally {
@@ -848,7 +848,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     if (!(await ensureTargetIdle(target, '删除'))) return;
     await deleteDeployTarget(target.id);
     message.success('部署目标已删除');
-    await refreshActiveTab();
+    await refreshActiveTab({ force: true });
   };
 
   /**
@@ -860,7 +860,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     if (!(await ensureTargetIdle(target, '同步站点'))) return;
     await syncNginxSite(target.id);
     message.success('同步托管 Nginx 站点配置成功');
-    await refreshActiveTab();
+    await refreshActiveTab({ force: true });
   };
 
   /**
@@ -929,7 +929,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       }
       message.success(`已修复 ${updatedCount} 个部署目标的 Nginx 关联`);
       await refreshServerList();
-      await refreshActiveTab();
+      await refreshActiveTab({ force: true });
     } catch (error: any) {
       message.error(getErrorMessage(error));
     } finally {
@@ -939,13 +939,13 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
 
   /** 按当前筛选条件查询部署目标 */
   const handleTargetFilterSearch = async () => {
-    await refreshActiveTab();
+    await refreshActiveTab({ force: true });
   };
 
   /** 重置部署目标筛选条件 */
   const handleTargetFilterReset = async () => {
     Object.assign(targetFilterForm, { projectKeyword: '', branch: undefined, serverId: getDefaultTargetServerFilter() });
-    await refreshActiveTab();
+    await refreshActiveTab({ force: true });
   };
 
   /** 清空部署目标数据和临时态 */

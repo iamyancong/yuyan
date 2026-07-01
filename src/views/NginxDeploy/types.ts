@@ -65,6 +65,10 @@ export interface RecordServerOption {
 /** 当前激活 Tab 刷新选项 */
 export interface RefreshActiveTabOptions {
   resetRecordsPage?: boolean;
+  /** 强制展示 loading 并刷新，忽略 Tab 缓存 */
+  force?: boolean;
+  /** 发布历史刷新时是否重新拉取部署目标列表 */
+  reloadRecordTargets?: boolean;
 }
 
 /** 发布进度模式 */

@@ -12,7 +12,7 @@ interface UseNginxDeployLifecycleParams {
   openLoginModal?: () => void;
   refreshTargetList?: () => Promise<void>;
   refreshServerList?: () => Promise<void>;
-  refreshRecordList?: () => Promise<void>;
+  refreshRecordList?: (options?: RefreshActiveTabOptions) => Promise<void>;
   resetRecordPage?: () => void;
   clearDataHandlers?: Array<() => void>;
 }
@@ -58,9 +58,19 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
 
   const loading = ref(false);
   const activeTabKey = ref<NginxDeployTabKey>('targets');
+  const tabLoadedFlags = ref<Record<NginxDeployTabKey, boolean>>({
+    targets: false,
+    servers: false,
+    records: false,
+  });
 
   /** 清空当前页面所有数据和临时态 */
   const clearData = () => {
+    tabLoadedFlags.value = {
+      targets: false,
+      servers: false,
+      records: false,
+    };
     clearDataHandlers.forEach((handler) => handler());
   };
 
@@ -70,31 +80,46 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
    */
   const refreshActiveTab = async (options: RefreshActiveTabOptions = {}) => {
     if (!ensureLoggedIn()) return;
-    if (options.resetRecordsPage) resetRecordPage();
-    loading.value = true;
+    const tabKey = activeTabKey.value;
+    if (options.resetRecordsPage) {
+      resetRecordPage();
+      tabLoadedFlags.value.records = false;
+    }
+    const hasCachedData = tabLoadedFlags.value[tabKey];
+    const shouldShowLoading = Boolean(options.force || !hasCachedData);
+
+    if (shouldShowLoading) {
+      loading.value = true;
+    }
     try {
-      if (activeTabKey.value === 'servers') {
+      if (tabKey === 'servers') {
         await refreshServerList();
-        return;
+      } else if (tabKey === 'records') {
+        await refreshRecordList(options);
+      } else {
+        await refreshTargetList();
       }
-      if (activeTabKey.value === 'records') {
-        await refreshRecordList();
-        return;
-      }
-      await refreshTargetList();
+      tabLoadedFlags.value[tabKey] = true;
     } finally {
-      loading.value = false;
+      if (shouldShowLoading) {
+        loading.value = false;
+      }
     }
   };
 
   /**
-   * 切换页面 Tab 后重新查询当前 Tab 数据。
+   * 切换页面 Tab：已缓存的 Tab 立即展示，首次进入再延迟拉数。
    * @param key Tab Key
    */
-  const handleTabChange = async (key: string | number) => {
+  const handleTabChange = (key: string | number) => {
     const nextKey = String(key) as NginxDeployTabKey;
     activeTabKey.value = ['targets', 'servers', 'records'].includes(nextKey) ? nextKey : 'targets';
-    await refreshActiveTab();
+    if (tabLoadedFlags.value[nextKey]) {
+      return;
+    }
+    requestAnimationFrame(() => {
+      void refreshActiveTab();
+    });
   };
 
   /**
