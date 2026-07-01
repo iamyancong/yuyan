@@ -95,19 +95,15 @@ const handleGitOpsUpdateOpen = (visible: boolean) => {
     </div>
 
     <a-form ref="formRef" :model="form" :rules="rules" layout="vertical" class="scaffold-form" @submit.prevent>
-      <a-row :gutter="[18, 18]" class="cards-row">
-        <a-col :xs="24" :lg="16" :xl="16" :xxl="14">
-          <ApplicationInfoCard :form="form" :framework-options="frameworkOptions" />
-        </a-col>
-        <a-col :xs="24" :lg="8" :xl="8" :xxl="10">
-          <GitLabConfigCard
-            :form="form"
-            :is-authenticated="isAuthenticated"
-            :visibility-options="visibilityOptions"
-            :namespace-cache-key="namespaceCacheKey"
-          />
-        </a-col>
-      </a-row>
+      <div class="cards-row">
+        <ApplicationInfoCard :form="form" :framework-options="frameworkOptions" />
+        <GitLabConfigCard
+          :form="form"
+          :is-authenticated="isAuthenticated"
+          :visibility-options="visibilityOptions"
+          :namespace-cache-key="namespaceCacheKey"
+        />
+      </div>
 
       <div class="sticky-actions">
         <div class="sticky-actions__hint">

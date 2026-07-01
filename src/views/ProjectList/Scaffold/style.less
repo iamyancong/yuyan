@@ -6,7 +6,7 @@
 .page-header {
   position: relative;
   overflow: hidden;
-  margin-bottom: 18px;
+  margin-bottom: 12px;
   padding: 16px 24px;
   background:
     radial-gradient(circle at 86% 18%, rgba(99, 102, 241, 0.16), transparent 30%),
@@ -14,7 +14,6 @@
     linear-gradient(135deg, #ffffff 0%, #f6f8ff 46%, #eef8f4 100%);
   border: 1px solid rgba(15, 23, 42, 0.06);
   border-radius: 14px;
-  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.06);
 }
 
 .page-header__main {
@@ -51,7 +50,6 @@
   background: rgba(255, 255, 255, 0.72);
   border: 1px solid rgba(15, 23, 42, 0.06);
   border-radius: 10px;
-  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.04);
 }
 
 .meta-label {
@@ -103,7 +101,18 @@
 }
 
 .cards-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
   align-items: stretch;
+
+  @media (min-width: 992px) {
+    grid-template-columns: minmax(0, 16fr) minmax(0, 8fr);
+  }
+
+  @media (min-width: 1600px) {
+    grid-template-columns: minmax(0, 14fr) minmax(0, 10fr);
+  }
 }
 
 .section-card {
@@ -112,7 +121,6 @@
   background: rgba(255, 255, 255, 0.96);
   border: 1px solid rgba(15, 23, 42, 0.07);
   border-radius: 14px;
-  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.07);
 }
 
 .section-card :deep(.ant-card-head) {
@@ -130,6 +138,11 @@
 
 .section-card :deep(.ant-card-body) {
   padding: 22px 20px 24px;
+
+  @media (min-width: 992px) {
+    // 底部内边距让出 18px，供 sticky-actions 的 margin-top 使用，总高度不变
+    padding-bottom: 6px;
+  }
 }
 
 .section-card :deep(.ant-form-item) {
@@ -292,12 +305,11 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-top: 18px;
+  margin-top: 12px;
   padding: 14px 18px;
   background: rgba(255, 255, 255, 0.92);
   border: 1px solid rgba(15, 23, 42, 0.06);
   border-radius: 12px;
-  box-shadow: 0 -10px 28px rgba(15, 23, 42, 0.06);
   backdrop-filter: blur(10px);
 }
 

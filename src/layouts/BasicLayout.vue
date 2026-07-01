@@ -21,8 +21,10 @@
         <div class="yuyan-layout-header-left">
           <!-- 赛博玻璃拟态更新胶囊 -->
           <UpdateCapsule v-if="isTauriClient" />
+          <!-- 网页端 C4D 玻璃拟态通知/客户端下载引导胶囊 -->
+          <NoticeCapsule v-else />
         </div>
-        <div class="yuyan-layout-header-drag" data-tauri-drag-region></div>
+        <div class="yuyan-layout-header-drag" v-if="isTauriClient" data-tauri-drag-region></div>
         <div class="yuyan-layout-header-right">
           <!-- 用户头像和登录按钮 -->
           <div class="user-section">
@@ -122,6 +124,7 @@ import SettingsDrawer from '@/components/SettingsDrawer.vue';
 import LoginModal from '@/components/LoginModal.vue';
 import LogoSwift from '@/components/LogoSwift.vue';
 import UpdateCapsule from '@/components/UpdateCapsule/index.vue';
+import NoticeCapsule from '@/components/NoticeCapsule/index.vue';
 import { useAppUpdate } from '@/components/UpdateCapsule/hooks/useAppUpdate';
 import {
   BgColorsOutlined,
@@ -346,6 +349,16 @@ const goHome = () => {
   --theme-primary-hover: v-bind('themeColors.primaryHover');
   --theme-primary-shadow: v-bind('themeColors.primaryShadow');
   --theme-primary-shadow-light: v-bind('themeColors.primaryShadowLight');
+}
+
+.yuyan-layout-header-left {
+  display: flex;
+  align-items: center;
+  
+  &:has(.notice-capsule) {
+    flex: 1;
+    margin-right: 24px;
+  }
 }
 
 .yuyan-layout-header-drag {
