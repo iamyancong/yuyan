@@ -26,7 +26,7 @@
           <!-- 赛博玻璃拟态更新胶囊 -->
           <UpdateCapsule v-if="isTauriClient" />
           <!-- 网页端 C4D 玻璃拟态通知/客户端下载引导胶囊 -->
-          <NoticeCapsule v-else />
+          <!-- <NoticeCapsule v-else /> -->
         </div>
         <div class="yuyan-layout-header-drag" v-if="isTauriClient" data-tauri-drag-region></div>
         <div class="yuyan-layout-header-right">
