@@ -44,7 +44,6 @@ const { tableHeight: rawTableHeight, recalculateHeight } = useTableHeight(tableA
   defaultHeight: 420,
 });
 
-<<<<<<< HEAD
 /** 项目关键字双向绑定 */
 const projectKeyword = computed({
   get: () => props.filterForm.projectKeyword,
@@ -61,11 +60,11 @@ const branch = computed({
 const serverId = computed({
   get: () => props.filterForm.serverId,
   set: (value?: number) => emit('update:filterForm', { ...props.filterForm, serverId: value, branch: undefined }),
-=======
+});
+
 /** 限制表格最小高度，避免 hook 内部 availableHeight <= minHeight 时 fallback 到 0 的 Bug */
 const tableHeight = computed(() => {
   return rawTableHeight.value > 240 ? rawTableHeight.value : 240;
->>>>>>> 1d34b52 (fix(deploy): 修复独立服务器部署和项目列表表格高度坍塌问题)
 });
 
 /** 等待视图更新后重新计算表格高度 */
