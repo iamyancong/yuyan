@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import { YCard, YTable } from '@yss-ui/components/lite';
 import { useTableHeight } from '@yss-ui/hooks';
 import type { YTableActionConfig } from '@yss-ui/components/lite';
@@ -24,9 +24,14 @@ interface DeployServerTabProps {
 const props = defineProps<DeployServerTabProps>();
 
 const tableAreaRef = ref<HTMLElement>();
-const { tableHeight, recalculateHeight } = useTableHeight(tableAreaRef, {
+const { tableHeight: rawTableHeight, recalculateHeight } = useTableHeight(tableAreaRef, {
   minHeight: TABLE_MIN_HEIGHT,
   defaultHeight: TABLE_DEFAULT_HEIGHT,
+});
+
+/** 限制表格最小高度，避免 hook 内部 availableHeight <= minHeight 时 fallback 到 0 的 Bug */
+const tableHeight = computed(() => {
+  return rawTableHeight.value > TABLE_MIN_HEIGHT ? rawTableHeight.value : TABLE_MIN_HEIGHT;
 });
 
 /** 等待视图更新后重新计算表格高度 */
