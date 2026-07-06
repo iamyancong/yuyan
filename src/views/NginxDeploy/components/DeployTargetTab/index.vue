@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import { YTable } from '@ycwang-dev/components/lite';
 import { openExternal } from '@/utils/open';
 import { useTableHeight } from '@ycwang-dev/hooks';
@@ -39,9 +39,14 @@ const emit = defineEmits<{
 }>();
 
 const tableAreaRef = ref<HTMLElement>();
-const { tableHeight, recalculateHeight } = useTableHeight(tableAreaRef, {
+const { tableHeight: rawTableHeight, recalculateHeight } = useTableHeight(tableAreaRef, {
   minHeight: 240,
   defaultHeight: 420,
+});
+
+/** 限制表格最小高度，避免 hook 内部 availableHeight <= minHeight 时 fallback 到 0 的 Bug */
+const tableHeight = computed(() => {
+  return rawTableHeight.value > 240 ? rawTableHeight.value : 240;
 });
 
 /** 等待视图更新后重新计算表格高度 */

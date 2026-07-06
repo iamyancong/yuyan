@@ -1,4 +1,4 @@
-import { nextTick, ref, watch, type Ref } from 'vue';
+import { computed, nextTick, ref, watch, type Ref } from 'vue';
 import { useTableHeight } from '@ycwang-dev/hooks';
 import type { NginxDeployTabKey } from '../types';
 
@@ -28,20 +28,29 @@ export const useNginxDeployTableHeight = (params: UseNginxDeployTableHeightParam
   const serverTableAreaRef = ref<HTMLElement>();
   const recordTableAreaRef = ref<HTMLElement>();
 
-  const { tableHeight: targetTableHeight, recalculateHeight: recalculateTargetTableHeight } = useTableHeight(targetTableAreaRef, {
+  const { tableHeight: rawTargetTableHeight, recalculateHeight: recalculateTargetTableHeight } = useTableHeight(targetTableAreaRef, {
     minHeight: NGINX_DEPLOY_TABLE_MIN_HEIGHT,
     defaultHeight: NGINX_DEPLOY_TABLE_DEFAULT_HEIGHT,
   });
+  const targetTableHeight = computed(() => {
+    return rawTargetTableHeight.value > NGINX_DEPLOY_TABLE_MIN_HEIGHT ? rawTargetTableHeight.value : NGINX_DEPLOY_TABLE_MIN_HEIGHT;
+  });
 
-  const { tableHeight: serverTableHeight, recalculateHeight: recalculateServerTableHeight } = useTableHeight(serverTableAreaRef, {
+  const { tableHeight: rawServerTableHeight, recalculateHeight: recalculateServerTableHeight } = useTableHeight(serverTableAreaRef, {
     minHeight: NGINX_DEPLOY_TABLE_MIN_HEIGHT,
     defaultHeight: NGINX_DEPLOY_TABLE_DEFAULT_HEIGHT,
   });
+  const serverTableHeight = computed(() => {
+    return rawServerTableHeight.value > NGINX_DEPLOY_TABLE_MIN_HEIGHT ? rawServerTableHeight.value : NGINX_DEPLOY_TABLE_MIN_HEIGHT;
+  });
 
-  const { tableHeight: recordTableHeight, recalculateHeight: recalculateRecordTableHeight } = useTableHeight(recordTableAreaRef, {
+  const { tableHeight: rawRecordTableHeight, recalculateHeight: recalculateRecordTableHeight } = useTableHeight(recordTableAreaRef, {
     minHeight: NGINX_DEPLOY_TABLE_MIN_HEIGHT,
     defaultHeight: NGINX_DEPLOY_TABLE_DEFAULT_HEIGHT,
     withPagination: true,
+  });
+  const recordTableHeight = computed(() => {
+    return rawRecordTableHeight.value > NGINX_DEPLOY_TABLE_MIN_HEIGHT ? rawRecordTableHeight.value : NGINX_DEPLOY_TABLE_MIN_HEIGHT;
   });
 
   /**

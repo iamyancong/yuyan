@@ -1,4 +1,4 @@
-import { nextTick, ref, watch, type Ref } from 'vue';
+import { computed, nextTick, ref, watch, type Ref } from 'vue';
 import { useTableHeight } from '@ycwang-dev/hooks';
 
 /** 项目列表表格外固定区域偏移：卡片头部、筛选区、卡片内边距与间距 */
@@ -14,11 +14,16 @@ const PROJECT_LIST_TABLE_OFFSET = 188;
 export const useProjectTableHeight = (loading: Ref<boolean>, dataLength: Ref<number>, pageSize: Ref<number>) => {
   const tableBoundaryRef = ref<HTMLElement>();
   const tableAreaRef = ref<HTMLElement>();
-  const { tableHeight, recalculateHeight } = useTableHeight(tableAreaRef, {
+  const { tableHeight: rawTableHeight, recalculateHeight } = useTableHeight(tableAreaRef, {
     boundaryRef: tableBoundaryRef,
     withPagination: true,
     minHeight: 260,
     extraOffset: PROJECT_LIST_TABLE_OFFSET,
+  });
+
+  /** 限制表格最小高度，避免 hook 内部 availableHeight <= minHeight 时 fallback 到 0 的 Bug */
+  const tableHeight = computed(() => {
+    return rawTableHeight.value > 260 ? rawTableHeight.value : 260;
   });
 
   /**
