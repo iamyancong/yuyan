@@ -6,35 +6,39 @@
   overflow: hidden;
 }
 
-.nginx-deploy-header {
+.deploy-tabs-wrapper {
   display: flex;
-  flex: none;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 12px;
-  padding: 14px 16px;
-  background: #fff;
-  border: 1px solid #f0f0f0;
-  border-radius: 6px;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
 
-  h2 {
-    margin: 0;
-    font-size: 18px;
-    line-height: 28px;
-  }
+.nginx-deploy-main-card {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.78) !important;
+  border: 1px solid var(--primary-color-light) !important;
+  border-radius: 14px !important;
+  box-shadow:
+    0 12px 32px var(--primary-color-lighter),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.9) !important;
+  contain: layout style;
 
-  p {
-    margin: 4px 0 0;
-    color: #666;
-  }
-
-  :deep(.ant-space) {
-    flex: none;
-    margin-left: auto;
+  :deep(.ant-card-body) {
+    display: flex;
+    height: 100%;
+    min-height: 0;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 0 !important;
   }
 }
 
+// Tab 导航与内容区合并为单卡片
 :deep(.ant-tabs) {
   display: flex;
   flex: 1;
@@ -45,7 +49,52 @@
 
 :deep(.ant-tabs-nav) {
   flex: none;
-  margin-bottom: 12px;
+  margin: 0;
+  padding: 8px 12px 0;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--primary-color-lighter);
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+
+  &::before {
+    border-bottom: none !important;
+  }
+
+  .ant-tabs-nav-wrap {
+    padding-left: 4px;
+  }
+
+  .ant-tabs-tab {
+    margin: 0 4px;
+    padding: 8px 14px 10px;
+    border-radius: 8px 8px 0 0;
+    font-size: 13px;
+    font-weight: 550;
+    color: #4b5563;
+    transition: color 0.18s ease, background-color 0.18s ease;
+
+    &:hover {
+      color: var(--primary-color);
+      background: var(--primary-color-lighter);
+    }
+  }
+
+  .ant-tabs-tab-active {
+    background: var(--primary-color-lighter);
+
+    .ant-tabs-tab-btn {
+      color: var(--primary-color) !important;
+      font-weight: 700;
+    }
+  }
+
+  .ant-tabs-ink-bar {
+    background: linear-gradient(90deg, var(--primary-color), var(--primary-color-hover)) !important;
+    height: 3px !important;
+    border-radius: 99px;
+  }
 }
 
 :deep(.ant-tabs-content-holder) {
@@ -63,4 +112,106 @@
   height: 100%;
   min-height: 0;
   overflow: hidden;
+}
+
+:deep(.nginx-deploy-tab-pane) {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 12px;
+  padding-top: 0;
+}
+
+// 统一 YTable 表格高可读视觉设计
+:deep(.vxe-table--render-wrapper) {
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--primary-color-lighter);
+}
+
+:deep(.vxe-table) {
+  // 表头淡蓝紫色渐变
+  .vxe-table--header-wrapper {
+    background: linear-gradient(180deg, var(--bg-color-elevated) 0%, var(--primary-color-lighter) 100%) !important;
+  }
+
+  .vxe-header--column {
+    background: transparent !important;
+    color: #1e1b4b !important;
+    font-weight: 700 !important;
+    border-bottom: 1px solid var(--primary-color-light) !important;
+  }
+
+  // 表行悬浮背景高亮
+  .vxe-body--row {
+    transition: background-color 0.2s ease;
+    
+    &.row--hover {
+      background-color: var(--primary-color-lighter) !important;
+    }
+  }
+
+  // 表格内部单元格边框弱化
+  .vxe-body--column {
+    border-bottom: 1px solid var(--primary-color-lighter) !important;
+  }
+
+  // 链接文字设计
+  a {
+    color: var(--primary-color);
+    font-weight: 600;
+    transition: color 0.18s ease;
+
+    &:hover {
+      color: var(--primary-color-hover);
+      text-decoration: underline;
+    }
+  }
+
+  // 状态胶囊精致度优化
+  .ant-tag {
+    border-radius: 6px;
+    font-weight: 600;
+    border: 1px solid transparent;
+
+    &.ant-tag-processing {
+      background-color: var(--primary-color-lighter);
+      border-color: var(--primary-color-light);
+      color: var(--primary-color);
+    }
+
+    &.ant-tag-success {
+      background-color: rgba(16, 185, 129, 0.06);
+      border-color: rgba(16, 185, 129, 0.18);
+      color: #10b981;
+    }
+
+    &.ant-tag-error {
+      background-color: rgba(239, 68, 68, 0.06);
+      border-color: rgba(239, 68, 68, 0.18);
+      color: #ef4444;
+    }
+  }
+  
+  // 分支胶囊样式
+  .branch-tag {
+    background-color: var(--primary-color-lighter);
+    border-color: var(--primary-color-light);
+    color: var(--primary-color);
+    padding: 1px 8px;
+    border-radius: 999px;
+  }
+}
+
+// 动画降级：当用户开启“减少动画”模式时，自动停用所有过渡与缩放效果
+@media (prefers-reduced-motion: reduce) {
+  :deep(.ant-tabs-tab) {
+    transition: none !important;
+  }
+
+  :deep(.vxe-body--row) {
+    transition: none !important;
+  }
 }

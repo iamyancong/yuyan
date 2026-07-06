@@ -3,11 +3,11 @@
  * 设计语言: C4D 三维质感、水晶玻璃、晶莹剔透、温润细腻
  * ===================================================== */
 
-// 定义调色板（完美融合紫色与白色整体视觉风格）
-@purple-primary: #7c3aed;     // 雨燕主色紫色
-@purple-light: #a78bfa;       // 亮紫
-@purple-dark: #6d28d9;        // 暗紫
-@purple-shadow: rgba(124, 58, 237, 0.15); // 主色阴影
+// 定义调色板，改为使用全局主题色 CSS 变量
+@purple-primary: var(--primary-color);
+@purple-light: var(--primary-color-hover);
+@purple-dark: var(--primary-color);
+@purple-shadow: var(--primary-color-light);
 
 /* ---------- 根容器 ---------- */
 .update-capsule {
@@ -29,7 +29,7 @@
   // 🔮 3D 玻璃拟态核心：双背景层实现渐变边框与毛玻璃本体
   background: 
     linear-gradient(135deg, rgba(255, 255, 255, 0.82) 0%, rgba(245, 243, 255, 0.5) 100%) padding-box,
-    linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(124, 58, 237, 0.2) 50%, rgba(124, 58, 237, 0.4) 100%) border-box;
+    linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, var(--primary-color-light) 50%, var(--primary-color-light) 100%) border-box;
   border: 1.5px solid transparent;
   
   // 毛玻璃模糊
@@ -38,10 +38,10 @@
 
   // 3D 阴影：多重阴影塑造立体厚度
   box-shadow:
-    0 4px 10px rgba(124, 58, 237, 0.08),      // 外层软投影
+    0 4px 10px var(--primary-color-lighter),      // 外层软投影
     0 1px 2px rgba(0, 0, 0, 0.04),             // 边缘硬投影
     inset 0 1px 1px rgba(255, 255, 255, 0.9),  // 顶部内高光（塑造玻璃厚度）
-    inset 0 -2px 3px rgba(124, 58, 237, 0.08); // 底部阴影
+    inset 0 -2px 3px var(--primary-color-lighter); // 底部阴影
 
   // 🔮 玻璃表面光泽层
   .glass-glare {
@@ -86,7 +86,7 @@
     transition: all 0.3s ease;
     box-shadow: 
       inset 0 1px 1px rgba(255, 255, 255, 0.6),
-      0 0 6px rgba(124, 58, 237, 0.4);
+      0 0 6px var(--primary-color-light);
   }
 
   .capsule-icon {
@@ -110,12 +110,14 @@
     z-index: 5;
     display: inline-flex;
     margin-left: 8px;
-    color: #0f766e;
+    color: inherit;
+    opacity: 0.85;
     cursor: pointer;
-    transition: transform 0.2s ease, color 0.2s ease;
+    transition: transform 0.2s ease, color 0.2s ease, opacity 0.2s ease;
 
     &:hover {
       color: #dc2626;
+      opacity: 1;
       transform: scale(1.12);
     }
   }
@@ -133,9 +135,9 @@
   &:active {
     transform: translateY(1px);
     box-shadow:
-      0 2px 5px rgba(124, 58, 237, 0.05),
+      0 2px 5px var(--primary-color-lighter),
       inset 0 1px 1px rgba(255, 255, 255, 0.7),
-      inset 0 -1px 2px rgba(124, 58, 237, 0.05);
+      inset 0 -1px 2px var(--primary-color-lighter);
   }
 
   /* ========== idle：有可用更新 / 就绪状态 ========== */
@@ -145,13 +147,13 @@
     // 3D 幻彩渐变边框 (紫-粉-蓝渐变)
     background: 
       linear-gradient(135deg, rgba(255, 255, 255, 0.85) 0%, rgba(245, 243, 255, 0.65) 100%) padding-box,
-      linear-gradient(135deg, rgba(139, 92, 246, 0.45) 0%, rgba(236, 72, 153, 0.25) 50%, rgba(59, 130, 246, 0.4) 100%) border-box;
+      linear-gradient(135deg, var(--primary-color-light) 0%, rgba(236, 72, 153, 0.25) 50%, var(--primary-color-light) 100%) border-box;
 
     .capsule-led {
       background: linear-gradient(135deg, #a78bfa 0%, #ec4899 100%);
       box-shadow: 
         inset 0 1px 1px rgba(255, 255, 255, 0.6),
-        0 0 6px rgba(167, 139, 250, 0.6);
+        0 0 6px var(--primary-color-light);
       animation: led-breath 2s ease-in-out infinite;
     }
 
@@ -159,42 +161,42 @@
       color: @purple-primary;
       background: 
         linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(245, 243, 255, 0.7) 100%) padding-box,
-        linear-gradient(135deg, rgba(139, 92, 246, 0.55) 0%, rgba(236, 72, 153, 0.35) 50%, rgba(59, 130, 246, 0.5) 100%) border-box;
+        linear-gradient(135deg, var(--primary-color-light) 0%, rgba(236, 72, 153, 0.35) 50%, var(--primary-color-light) 100%) border-box;
       
       box-shadow:
-        0 6px 16px rgba(124, 58, 237, 0.16),
+        0 6px 16px var(--primary-color-light),
         0 2px 4px rgba(0, 0, 0, 0.04),
         inset 0 1px 1px rgba(255, 255, 255, 0.95),
-        inset 0 -3px 4px rgba(124, 58, 237, 0.12);
+        inset 0 -3px 4px var(--primary-color-lighter);
 
       .capsule-icon {
         transform: translateY(-1px);
-        filter: drop-shadow(0 0 2px rgba(124, 58, 237, 0.4));
+        filter: drop-shadow(0 0 2px var(--primary-color-light));
       }
     }
   }
 
   /* ========== downloading：能量下载中 ========== */
   &.status-downloading {
-    color: #0d9488; // 翡翠绿文本
+    color: var(--primary-color);
     cursor: default;
     
     background: 
-      linear-gradient(135deg, rgba(255, 255, 255, 0.88) 0%, rgba(240, 253, 250, 0.65) 100%) padding-box,
-      linear-gradient(135deg, rgba(16, 185, 129, 0.3) 0%, rgba(6, 182, 212, 0.3) 100%) border-box;
+      linear-gradient(135deg, rgba(255, 255, 255, 0.88) 0%, rgba(255, 255, 255, 0.65) 100%) padding-box,
+      linear-gradient(135deg, var(--primary-color-light) 0%, var(--primary-color) 100%) border-box;
 
     .capsule-led {
-      background: linear-gradient(135deg, #34d399 0%, #06b6d4 100%);
+      background: linear-gradient(135deg, var(--primary-color-light) 0%, var(--primary-color) 100%);
       box-shadow: 
         inset 0 1px 1px rgba(255, 255, 255, 0.6),
-        0 0 6px rgba(52, 211, 153, 0.6);
+        0 0 6px var(--primary-color-light);
       animation: led-fast-flash 0.8s ease-in-out infinite;
     }
 
     .progress-text {
       font-weight: 700;
       font-variant-numeric: tabular-nums;
-      color: #0f766e;
+      color: var(--primary-color);
     }
 
     // 🔮 3D 水珠感进度背景（液态果冻填充）
@@ -207,10 +209,10 @@
       transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
       background: linear-gradient(
         to bottom,
-        rgba(16, 185, 129, 0.05) 0%,
-        rgba(6, 182, 212, 0.12) 50%,
-        rgba(6, 182, 212, 0.22) 100%
+        var(--primary-color-lighter) 0%,
+        var(--primary-color-light) 100%
       );
+      opacity: 0.22;
       
       // 进度条的右侧 3D 霓虹边缘
       &::after {
@@ -220,8 +222,8 @@
         top: 0;
         bottom: 0;
         width: 2px;
-        background: linear-gradient(to bottom, #34d399, #06b6d4);
-        box-shadow: 0 0 6px rgba(6, 182, 212, 0.6);
+        background: linear-gradient(to bottom, var(--primary-color-light), var(--primary-color));
+        box-shadow: 0 0 6px var(--primary-color-light);
       }
     }
   }
@@ -273,7 +275,7 @@
     
     background: 
       linear-gradient(135deg, rgba(255, 255, 255, 0.88) 0%, rgba(245, 243, 255, 0.65) 100%) padding-box,
-      linear-gradient(135deg, rgba(139, 92, 246, 0.35) 0%, rgba(217, 70, 239, 0.3) 100%) border-box;
+      linear-gradient(135deg, var(--primary-color-light) 0%, rgba(217, 70, 239, 0.3) 100%) border-box;
 
     animation: installing-pulse 1.8s ease-in-out infinite;
 
@@ -384,9 +386,9 @@
   }
   50% {
     box-shadow:
-      0 8px 16px rgba(124, 58, 237, 0.14),
+      0 8px 16px var(--primary-color-light),
       inset 0 1.2px 1.2px rgba(255, 255, 255, 0.9),
-      inset 0 -3px 4px rgba(124, 58, 237, 0.12);
+      inset 0 -3px 4px var(--primary-color-lighter);
   }
 }
 

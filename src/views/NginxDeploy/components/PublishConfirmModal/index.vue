@@ -95,7 +95,7 @@ watch(
       <section class="publish-flow-panel">
         <div class="publish-flow-panel__head">
           <h4>{{ started ? '实时发布节点' : '发布节点预览' }}</h4>
-          <a-tag :color="stopped ? 'default' : hasError ? 'error' : finished ? 'success' : started ? 'processing' : 'blue'">
+          <a-tag :color="stopped ? 'default' : hasError ? 'error' : finished ? 'success' : started ? 'processing' : 'blue'" class="auto-exec-tag">
             {{ stopped ? '已停止' : started ? title || '准备发布' : '开始后自动执行' }}
           </a-tag>
         </div>

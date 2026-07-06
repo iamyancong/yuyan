@@ -215,15 +215,15 @@
   margin-top: 6px;
   border: none;
   border-radius: 14px;
-  background: linear-gradient(135deg, #4b88ff, #66d7ff);
-  box-shadow: 0 10px 24px rgba(91, 151, 255, 0.28);
+  background: linear-gradient(135deg, var(--primary-color), var(--primary-color-hover));
+  box-shadow: 0 10px 24px var(--primary-color-light);
   color: #08111f;
   font-weight: 700;
 }
 
 .hero-gitlab-btn:hover,
 :deep(.hero-gitlab-btn:hover) {
-  background: linear-gradient(135deg, #5a95ff, #7ee3ff);
+  background: linear-gradient(135deg, var(--primary-color-hover), var(--primary-color));
   color: #08111f;
 }
 
@@ -327,8 +327,8 @@
 :deep(.node-progress .ant-progress-bg) {
   position: relative;
   overflow: hidden;
-  background: linear-gradient(90deg, #6ba6ff 0%, #7be0ff 52%, #a6ffd1 100%);
-  box-shadow: 0 0 22px rgba(115, 197, 255, 0.5);
+  background: linear-gradient(90deg, var(--primary-color) 0%, var(--primary-color-hover) 52%, var(--success-color) 100%);
+  box-shadow: 0 0 22px var(--primary-color-light);
 }
 
 :deep(.node-progress.running .ant-progress-bg::after) {
@@ -380,10 +380,10 @@
 }
 
 .stage-node.process {
-  background: linear-gradient(135deg, #6ba6ff, #7be0ff);
+  background: linear-gradient(135deg, var(--primary-color), var(--primary-color-hover));
   box-shadow:
-    0 0 0 6px rgba(107, 166, 255, 0.12),
-    0 0 30px rgba(107, 166, 255, 0.45);
+    0 0 0 6px var(--primary-color-lighter),
+    0 0 30px var(--primary-color-light);
   animation: nodePulse 1.35s ease-in-out infinite;
 }
 
@@ -874,13 +874,13 @@
 
   :deep(.ant-btn-primary) {
     border: none;
-    background: linear-gradient(135deg, #4b88ff, #66d7ff);
-    box-shadow: 0 8px 20px rgba(75, 136, 255, 0.24);
+    background: linear-gradient(135deg, var(--primary-color), var(--primary-color-hover));
+    box-shadow: 0 8px 20px var(--primary-color-light);
     color: #08111f;
 
     &:hover {
-      background: linear-gradient(135deg, #5a95ff, #7ee3ff);
-      box-shadow: 0 10px 24px rgba(75, 136, 255, 0.32);
+      background: linear-gradient(135deg, var(--primary-color-hover), var(--primary-color));
+      box-shadow: 0 10px 24px var(--primary-color-light);
       color: #08111f;
     }
   }

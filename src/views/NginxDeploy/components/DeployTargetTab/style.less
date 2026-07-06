@@ -1,27 +1,17 @@
-.nginx-deploy-tab-card {
-  height: 100%;
-  overflow: hidden;
-
-  :deep(.ant-card-body) {
-    display: flex;
-    height: 100%;
-    min-height: 0;
-    flex-direction: column;
-    overflow: hidden;
-  }
-}
-
 .nginx-deploy-table-area {
   flex: 1;
   min-height: 0;
   overflow: hidden;
 }
 
+// 部署目标高密度筛选栏样式
 .target-filter-bar {
   flex: none;
   margin-bottom: 12px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid #f0f0f0;
+  padding: 14px 16px;
+  background: rgba(255, 255, 255, 0.4);
+  border: 1px solid var(--primary-color-lighter);
+  border-radius: 10px;
 
   :deep(.ant-form) {
     width: 100%;
@@ -30,6 +20,7 @@
   :deep(.ant-row) {
     margin-left: -8px !important;
     margin-right: -8px !important;
+    align-items: center;
   }
 
   :deep(.ant-form-item) {
@@ -45,6 +36,7 @@
   :deep(.ant-form-item-label > label) {
     color: #374151;
     font-weight: 600;
+    font-size: 13px;
   }
 
   &__actions {
@@ -52,6 +44,12 @@
     justify-content: flex-end;
     align-items: center;
     min-height: 32px;
+    
+    .action-space {
+      display: flex;
+      width: 100%;
+      justify-content: flex-end;
+    }
   }
 
   &__project,
@@ -61,12 +59,23 @@
   }
 }
 
-@media (max-width: 768px) {
+// 响应式：宽屏同排展示，窄屏（小于1200px，即xl以下）自动换行且操作按钮独占下一行右对齐
+@media (max-width: 1200px) {
   .target-filter-bar {
     &__actions {
-      justify-content: flex-start;
-      margin-top: 8px;
+      flex: 0 0 100% !important;
+      max-width: 100% !important;
+      justify-content: flex-end !important;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px dashed var(--primary-color-light);
     }
+  }
+}
+
+@media (max-width: 768px) {
+  .target-filter-bar {
+    padding: 10px 12px;
   }
 }
 
@@ -90,7 +99,7 @@
 
   &:hover {
     opacity: 0.8;
-    text-decoration: none;
+    text-decoration: underline;
   }
 }
 
@@ -99,7 +108,28 @@
   color: var(--primary-color);
 
   &:hover {
-    color: var(--primary-color);
+    color: var(--primary-color-hover);
     opacity: 0.8;
   }
+}
+
+// 覆盖 AntDV Select/Input 样式以符合玻璃态渐变风格
+:deep(.ant-input),
+:deep(.project-select .ant-select-selector) {
+  background: rgba(255, 255, 255, 0.8) !important;
+  border-color: var(--primary-color-light) !important;
+  border-radius: 8px !important;
+  transition: all 0.2s;
+
+  &:hover {
+    border-color: var(--primary-color-light) !important;
+    background: #ffffff !important;
+  }
+}
+
+:deep(.project-select.ant-select-focused .ant-select-selector),
+:deep(.ant-input:focus) {
+  border-color: var(--primary-color) !important;
+  box-shadow: 0 0 0 3px var(--primary-color-light) !important;
+  background: #ffffff !important;
 }

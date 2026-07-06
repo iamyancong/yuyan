@@ -1,6 +1,6 @@
 import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-router';
 
-const loadBasicLayout = () => import('@/layouts/BasicLayout.vue');
+const loadBasicLayout = () => import('@/layouts/BasicLayout/index.vue');
 const loadScaffold = () => import('@/views/ProjectList/Scaffold/index.vue');
 const loadOpsProjects = () => import('@/views/OpsProjects/index.vue');
 const loadNginxDeploy = () => import('@/views/NginxDeploy/index.vue');
