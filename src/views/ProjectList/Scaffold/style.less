@@ -9,7 +9,7 @@
   margin-bottom: 12px;
   padding: 16px 24px;
   background:
-    radial-gradient(circle at 86% 18%, rgba(99, 102, 241, 0.16), transparent 30%),
+    radial-gradient(circle at 86% 18%, var(--primary-color-light), transparent 30%),
     radial-gradient(circle at 12% 0%, rgba(20, 184, 166, 0.14), transparent 26%),
     linear-gradient(135deg, #ffffff 0%, #f6f8ff 46%, #eef8f4 100%);
   border: 1px solid rgba(15, 23, 42, 0.06);
@@ -62,6 +62,9 @@
   margin-inline-end: 0;
   border-radius: 7px;
   font-weight: 600;
+  background-color: var(--primary-color-lighter) !important;
+  border-color: var(--primary-color-light) !important;
+  color: var(--primary-color) !important;
 }
 
 .page-subtitle {
@@ -221,7 +224,7 @@
 .section-card :deep(.ant-input-affix-wrapper:hover),
 .section-card :deep(.ant-select-selector:hover),
 .section-card :deep(.ant-tree-select-selector:hover) {
-  border-color: rgba(22, 119, 255, 0.48);
+  border-color: var(--primary-color-light);
 }
 
 .section-card :deep(.ant-input:focus),
@@ -231,7 +234,7 @@
 .section-card :deep(.ant-select-focused .ant-select-selector),
 .section-card :deep(.ant-tree-select-focused .ant-tree-select-selector) {
   border-color: var(--primary-color);
-  box-shadow: 0 0 0 3px rgba(22, 119, 255, 0.12);
+  box-shadow: 0 0 0 3px var(--primary-color-light);
 }
 
 .section-card :deep(textarea.ant-input) {
@@ -387,12 +390,12 @@
 }
 
 :global(.yuyan-namespace-dropdown .ant-select-tree-node-content-wrapper:hover) {
-  background: rgba(22, 119, 255, 0.08);
+  background: var(--primary-color-lighter);
 }
 
 :global(.yuyan-namespace-dropdown .ant-select-tree-node-selected) {
   color: var(--primary-color);
-  background: rgba(22, 119, 255, 0.1) !important;
+  background: var(--primary-color-light) !important;
   font-weight: 700;
 }
 

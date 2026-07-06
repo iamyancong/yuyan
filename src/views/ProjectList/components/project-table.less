@@ -16,7 +16,7 @@
 
   :deep(.vxe-body--row.row--hover),
   :deep(.vxe-body--row.row--current) {
-    background-color: #f7fbff;
+    background-color: var(--primary-color-lighter) !important;
   }
 
   :deep(.vxe-cell) {
@@ -40,9 +40,9 @@
   margin-right: 0;
   overflow: hidden;
   border-radius: 999px;
-  color: #2563eb;
-  border-color: #bfdbfe;
-  background: #eff6ff;
+  color: var(--primary-color);
+  border-color: var(--primary-color-light);
+  background: var(--primary-color-lighter);
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;

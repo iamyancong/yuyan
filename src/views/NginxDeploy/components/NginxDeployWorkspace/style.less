@@ -21,10 +21,10 @@
   flex-direction: column;
   overflow: hidden;
   background: rgba(255, 255, 255, 0.78) !important;
-  border: 1px solid rgba(99, 102, 241, 0.12) !important;
+  border: 1px solid var(--primary-color-light) !important;
   border-radius: 14px !important;
   box-shadow:
-    0 12px 32px rgba(99, 102, 241, 0.03),
+    0 12px 32px var(--primary-color-lighter),
     inset 0 0 0 1px rgba(255, 255, 255, 0.9) !important;
   contain: layout style;
 
@@ -53,7 +53,7 @@
   padding: 8px 12px 0;
   background: transparent;
   border: none;
-  border-bottom: 1px solid rgba(99, 102, 241, 0.08);
+  border-bottom: 1px solid var(--primary-color-lighter);
   border-radius: 0;
   box-shadow: none;
   backdrop-filter: none;
@@ -76,22 +76,22 @@
     transition: color 0.18s ease, background-color 0.18s ease;
 
     &:hover {
-      color: #4f46e5;
-      background: rgba(99, 102, 241, 0.04);
+      color: var(--primary-color);
+      background: var(--primary-color-lighter);
     }
   }
 
   .ant-tabs-tab-active {
-    background: rgba(99, 102, 241, 0.06);
+    background: var(--primary-color-lighter);
 
     .ant-tabs-tab-btn {
-      color: #4f46e5 !important;
+      color: var(--primary-color) !important;
       font-weight: 700;
     }
   }
 
   .ant-tabs-ink-bar {
-    background: linear-gradient(90deg, #4f46e5, #3b82f6) !important;
+    background: linear-gradient(90deg, var(--primary-color), var(--primary-color-hover)) !important;
     height: 3px !important;
     border-radius: 99px;
   }
@@ -128,20 +128,20 @@
 :deep(.vxe-table--render-wrapper) {
   border-radius: 10px;
   overflow: hidden;
-  border: 1px solid rgba(99, 102, 241, 0.08);
+  border: 1px solid var(--primary-color-lighter);
 }
 
 :deep(.vxe-table) {
   // 表头淡蓝紫色渐变
   .vxe-table--header-wrapper {
-    background: linear-gradient(180deg, #f4f7ff 0%, #ebf0ff 100%) !important;
+    background: linear-gradient(180deg, var(--bg-color-elevated) 0%, var(--primary-color-lighter) 100%) !important;
   }
 
   .vxe-header--column {
     background: transparent !important;
     color: #1e1b4b !important;
     font-weight: 700 !important;
-    border-bottom: 1px solid rgba(99, 102, 241, 0.1) !important;
+    border-bottom: 1px solid var(--primary-color-light) !important;
   }
 
   // 表行悬浮背景高亮
@@ -149,23 +149,23 @@
     transition: background-color 0.2s ease;
     
     &.row--hover {
-      background-color: rgba(99, 102, 241, 0.04) !important;
+      background-color: var(--primary-color-lighter) !important;
     }
   }
 
   // 表格内部单元格边框弱化
   .vxe-body--column {
-    border-bottom: 1px solid rgba(99, 102, 241, 0.04) !important;
+    border-bottom: 1px solid var(--primary-color-lighter) !important;
   }
 
   // 链接文字设计
   a {
-    color: #4f46e5;
+    color: var(--primary-color);
     font-weight: 600;
     transition: color 0.18s ease;
 
     &:hover {
-      color: #3b82f6;
+      color: var(--primary-color-hover);
       text-decoration: underline;
     }
   }
@@ -177,9 +177,9 @@
     border: 1px solid transparent;
 
     &.ant-tag-processing {
-      background-color: rgba(79, 70, 229, 0.06);
-      border-color: rgba(79, 70, 229, 0.18);
-      color: #4f46e5;
+      background-color: var(--primary-color-lighter);
+      border-color: var(--primary-color-light);
+      color: var(--primary-color);
     }
 
     &.ant-tag-success {
@@ -197,9 +197,9 @@
   
   // 分支胶囊样式
   .branch-tag {
-    background-color: rgba(99, 102, 241, 0.06);
-    border-color: rgba(99, 102, 241, 0.15);
-    color: #4f46e5;
+    background-color: var(--primary-color-lighter);
+    border-color: var(--primary-color-light);
+    color: var(--primary-color);
     padding: 1px 8px;
     border-radius: 999px;
   }

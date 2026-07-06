@@ -31,10 +31,10 @@
     cursor: pointer;
 
     &:hover {
-      border-color: #3b82f6;
+      border-color: var(--primary-color);
       box-shadow:
         inset 0 1px 0 rgba(255, 255, 255, 0.78),
-        0 4px 12px rgba(37, 99, 235, 0.22);
+        0 4px 12px var(--primary-color-light);
       transform: translateY(-0.5px);
     }
 
@@ -42,19 +42,19 @@
       transform: translateY(0.5px);
       box-shadow:
         inset 0 1px 0 rgba(255, 255, 255, 0.78),
-        0 2px 6px rgba(37, 99, 235, 0.15);
+        0 2px 6px var(--primary-color-lighter);
     }
   }
 
   &.is-running {
-    border-color: #8bbcff;
+    border-color: var(--primary-color-light);
     background:
-      linear-gradient(135deg, rgba(219, 234, 254, 0.92), rgba(239, 246, 255, 0.74) 54%, rgba(248, 250, 252, 0.92)),
-      #eff6ff;
-    color: #1d4ed8;
+      linear-gradient(135deg, var(--primary-color-lighter), rgba(255, 255, 255, 0.9)),
+      var(--primary-color-lighter);
+    color: var(--primary-color);
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.78),
-      0 8px 18px rgba(37, 99, 235, 0.12);
+      0 8px 18px var(--primary-color-lighter);
   }
 
   &__indicator {
@@ -73,11 +73,11 @@
     height: 24px;
     place-items: center;
     border-radius: 50%;
-    background: conic-gradient(from 35deg, #2563eb 0 72%, rgba(147, 197, 253, 0.24) 72% 100%);
-    color: #2563eb;
+    background: conic-gradient(from 35deg, var(--primary-color) 0 72%, var(--primary-color-light) 72% 100%);
+    color: var(--primary-color);
     box-shadow:
-      0 0 0 4px rgba(37, 99, 235, 0.09),
-      0 6px 12px rgba(37, 99, 235, 0.18);
+      0 0 0 4px var(--primary-color-lighter),
+      0 6px 12px var(--primary-color-lighter);
   }
 
   &__spinner::before {
@@ -137,11 +137,11 @@
   }
 
   &.is-running &__content strong {
-    color: #1d4ed8;
+    color: var(--primary-color);
   }
 
   &.is-running &__content small {
-    color: #3b82f6;
+    color: var(--primary-color-hover);
   }
 
   &__progress {
@@ -152,8 +152,8 @@
     width: var(--runtime-progress, 4%);
     height: 3px;
     border-radius: 0 999px 999px 0;
-    background: linear-gradient(90deg, #2563eb, #38bdf8);
-    box-shadow: 0 -2px 8px rgba(37, 99, 235, 0.24);
+    background: linear-gradient(90deg, var(--primary-color), var(--primary-color-hover));
+    box-shadow: 0 -2px 8px var(--primary-color-light);
     transition: width 0.25s ease;
   }
 }
