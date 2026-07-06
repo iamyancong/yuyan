@@ -32,3 +32,8 @@ src-tauri/gen
 
 # Embedded binaries
 src-tauri/resources/bin/
+
+# Server dependencies
+server/package.json
+server/package-lock.json
+server/node_modules/
