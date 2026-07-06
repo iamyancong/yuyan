@@ -118,9 +118,14 @@ fn start_node_server(app: &tauri::App, node_path: &std::path::Path) -> Result<Ch
             }
         }
     } else {
-        app.path().resource_dir()
-            .map_err(|e| format!("无法获取资源目录: {}", e))?
-            .join("server/index.mjs")
+        let res_dir = app.path().resource_dir()
+            .map_err(|e| format!("无法获取资源目录: {}", e))?;
+        let path1 = res_dir.join("server/index.mjs");
+        if path1.exists() {
+            path1
+        } else {
+            res_dir.join("_up_/server/index.mjs")
+        }
     };
         
     let app_data_dir = app.path().app_data_dir()

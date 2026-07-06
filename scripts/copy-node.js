@@ -61,7 +61,39 @@ try {
       }
     }
   }
+
+  // ----------------------------------------------------
+  // 新增：自动生成 server/package.json 并安装轻量生产依赖，解决打包遗漏 node_modules 的 Bug
+  // ----------------------------------------------------
+  const serverDir = path.resolve(__dirname, '../server');
+  const serverPkgPath = path.join(serverDir, 'package.json');
+  const serverPkgContent = {
+    name: "yuyan-server",
+    version: "1.0.0",
+    private: true,
+    type: "module",
+    dependencies: {
+      "axios": "^1.11.0",
+      "compression": "^1.8.1",
+      "connect-history-api-fallback": "^2.0.0",
+      "cors": "^2.8.5",
+      "express": "^5.1.0",
+      "ssh2": "^1.17.0"
+    }
+  };
+
+  console.log(`\n📦 正在为后端服务准备生产依赖...`);
+  fs.writeFileSync(serverPkgPath, JSON.stringify(serverPkgContent, null, 2), 'utf8');
+  console.log(`✅ 已生成 ${serverPkgPath}`);
+
+  console.log(`⏳ 正在 server 目录下执行 npm install --omit=dev...`);
+  execSync('npm install --omit=dev --no-audit --no-fund', {
+    cwd: serverDir,
+    stdio: 'inherit'
+  });
+  console.log(`✅ 后端生产依赖准备完成！`);
+
 } catch (error) {
-  console.error(`❌ 复制 Node.js 二进制文件失败:`, error);
+  console.error(`❌ 复制 Node.js 二进制文件或准备后端依赖失败:`, error);
   process.exit(1);
 }
