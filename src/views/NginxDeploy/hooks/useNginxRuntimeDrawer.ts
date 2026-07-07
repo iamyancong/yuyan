@@ -5,7 +5,6 @@ import Modal from 'ant-design-vue/es/modal';
 import {
   createNginxInstance,
   deleteNginxInstance,
-  downloadNginxInstanceArchive,
   saveNginxInstanceArchiveToLocal,
   getNginxInstanceStatus,
   initNginxInstanceWithProgress,
@@ -18,11 +17,12 @@ import {
   type NginxRuntimeAction,
   type NginxRuntimePayload,
   type NginxRuntimeStatus,
+  type NginxArchiveSaveEvent,
+  type NginxArchiveSaveStage,
 } from '@/api/deploy';
 import type { RefreshActiveTabOptions } from '../types';
 import { getErrorMessage, getPreferredNginxInstance, getVisibleNginxInstances } from '../utils';
 import { createDefaultNginxInstanceForm } from '../components/NginxRuntimeDrawer/constant';
-import { save } from '@tauri-apps/plugin-dialog';
 import { downloadDir } from '@tauri-apps/api/path';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -32,6 +32,46 @@ interface UseNginxRuntimeDrawerParams {
   refreshActiveTab: (options?: RefreshActiveTabOptions) => Promise<void>;
   refreshServerList: () => Promise<void>;
 }
+
+/** 运行包下载阶段文案 */
+const ARCHIVE_SAVE_STAGE_LABEL: Record<NginxArchiveSaveStage, string> = {
+  preparing: '准备下载',
+  prechecking: '远程预检',
+  packing: '远程打包',
+  writing: '写入磁盘',
+  finished: '下载完成',
+};
+
+/** 自动下载运行包的目录名 */
+const ARCHIVE_DOWNLOAD_DIR_NAME = 'yuyan-runtime-packages';
+
+/**
+ * 拼接系统原生路径。
+ * @param base 基础目录
+ * @param parts 路径片段
+ * @returns 拼接后的路径
+ */
+const joinNativePath = (base: string, ...parts: string[]) => {
+  const separator = base.includes('\\') ? '\\' : '/';
+  return [base.replace(/[\\/]+$/, ''), ...parts.map((part) => part.replace(/^[\\/]+|[\\/]+$/g, ''))].join(separator);
+};
+
+/**
+ * 格式化文件大小。
+ * @param bytes 字节数
+ * @returns 可读文件大小
+ */
+const formatBytes = (bytes: number) => {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(unitIndex === 0 ? 0 : 2)} ${units[unitIndex]}`;
+};
 
 /**
  * 管理服务器行独立 Nginx 初始化与运行时操作抽屉。
@@ -456,7 +496,6 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
     };
     const typeLabel = typeLabels[type] || '运行包';
 
-    // 1. 构造默认文件名
     const sanitizeName = (val: string) => val.trim().replace(/\s+/g, '-').replace(/[\\/:*?"<>|]/g, '-').replace(/-+/g, '-');
     const serverPart = sanitizeName(runtimeServer.value?.name || runtimeServer.value?.host || 'server');
     const instancePart = sanitizeName(instance.name || 'instance');
@@ -472,53 +511,44 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
       defaultFileName = `${serverPart}-${instancePart}${suffix}-${ts}.tar.gz`;
     }
 
-    // 2. 尝试获取默认下载目录，唤起系统的另存为 Dialog
-    let defaultPath = defaultFileName;
+    let filePath = '';
     try {
       const dlDir = await downloadDir();
-      defaultPath = `${dlDir}/${defaultFileName}`;
+      filePath = joinNativePath(dlDir, ARCHIVE_DOWNLOAD_DIR_NAME, defaultFileName);
     } catch (e) {
       console.warn('获取默认下载目录失败', e);
-    }
-
-    const filePath = await save({
-      title: `保存 ${typeLabel}`,
-      defaultPath,
-      filters: type === 'conf'
-        ? [{ name: 'Nginx Config', extensions: ['conf'] }]
-        : [{ name: 'Archive Package', extensions: ['tar.gz'] }]
-    });
-
-    if (!filePath) {
-      // 用户取消了另存为弹窗，静默返回
+      message.error('获取系统下载目录失败，无法自动保存运行包');
       return;
     }
 
     const controller = new AbortController();
     let isFinished = false;
     let currentLoaded = 0;
+    let currentStage: NginxArchiveSaveStage = 'preparing';
+    let currentStageMessage = '正在准备自动下载任务';
+    let savedFilePath = filePath;
+    let savedFileName = defaultFileName;
     let isUpdatingNotification = false;
 
     const expectedSizeMap = {
-      conf: 15 * 1024, // 15KB
-      html: 80 * 1024 * 1024, // 80MB
-      all: 360 * 1024 * 1024 // 360MB
+      conf: 15 * 1024,
+      html: 80 * 1024 * 1024,
+      all: 360 * 1024 * 1024,
     };
     const expectedSize = expectedSizeMap[type];
 
     const notificationKey = `download-${Date.now()}`;
 
-    let simulatedPercent = 0;
-    let timerId: any = null;
-
-    const clearTimer = () => {
-      if (timerId) {
-        clearInterval(timerId);
-        timerId = null;
-      }
+    /**
+     * 获取当前写入阶段的近似百分比。
+     * @returns 百分比或 null
+     */
+    const getWritingPercent = () => {
+      if (currentLoaded <= 0) return null;
+      return Math.max(1, Math.min(99, Math.floor((currentLoaded / expectedSize) * 100)));
     };
 
-    // 二次确认弹窗辅助函数
+    /** 展示关闭下载通知时的二次确认。 */
     const showConfirmModal = () => {
       if (isFinished) return;
 
@@ -540,34 +570,26 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
         ]),
         onOk() {
           isFinished = true;
-          clearTimer();
           controller.abort();
         },
         onCancel() {
-          // 用户取消/按Esc/点击遮罩层：重新拉起前台进度通知
           triggerNotification();
         }
       });
     };
 
-    // 获取当前计算/估算百分比
-    const getPercent = () => {
-      if (isFinished) return 100;
-      if (currentLoaded === 0) {
-        return simulatedPercent;
-      }
-      return 12 + Math.min(Math.floor((currentLoaded / expectedSize) * 87), 87);
-    };
-
-    // 统一通知触发与渲染函数
+    /** 统一渲染下载进度通知。 */
     const triggerNotification = () => {
       if (isFinished) return;
 
-      const percent = getPercent();
-      const sizeMb = (currentLoaded / 1024 / 1024).toFixed(2);
-      const isStarting = currentLoaded === 0;
+      const percent = getWritingPercent();
+      const stageLabel = ARCHIVE_SAVE_STAGE_LABEL[currentStage] || '下载中';
+      const percentText = percent === null ? '处理中' : `${percent}%`;
+      const description = currentLoaded > 0
+        ? `${currentStageMessage}，已写入 ${formatBytes(currentLoaded)}`
+        : currentStageMessage;
+      const progressStyle = percent === null ? undefined : `width: ${percent}%`;
 
-      // 标记为正在进行程序更新，用以过滤原地更新误触发的 onClose
       isUpdatingNotification = true;
 
       notification.info({
@@ -575,16 +597,14 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
         class: 'c4d-download-notification',
         icon: h('span', { class: 'c4d-status-led is-downloading' }),
         message: h('div', { style: 'display: flex; justify-content: space-between; align-items: center; width: 100%;' }, [
-          h('span', null, isStarting ? `开始下载 ${typeLabel}` : `正在传输 ${typeLabel}`),
-          h('span', { class: 'c4d-percent-text' }, `${percent}%`)
+          h('span', null, `${stageLabel} ${typeLabel}`),
+          h('span', { class: 'c4d-percent-text' }, percentText)
         ]),
         description: h('div', null, [
-          h('span', null, isStarting 
-            ? '正在从远程服务器打包直写本地磁盘，请稍候...' 
-            : `已接收数据: ${sizeMb} MB (从服务器流式传输中...)`),
+          h('span', null, description),
           h('div', { class: 'c4d-progress-wrapper' }, [
             h('div', { class: 'c4d-progress-track' }, [
-              h('div', { class: 'c4d-progress-bar is-downloading', style: `width: ${percent}%` })
+              h('div', { class: 'c4d-progress-bar is-downloading', style: progressStyle })
             ])
           ])
         ]),
@@ -597,22 +617,25 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
         }
       });
 
-      // 异步释放标志位，确保本轮渲染中引发的所有 onClose 事件都被成功过滤
       setTimeout(() => {
         isUpdatingNotification = false;
       }, 50);
     };
 
-    // 首次唤起前台进度条
-    triggerNotification();
+    /**
+     * 根据服务端 SSE 更新下载状态。
+     * @param event 保存事件
+     */
+    const handleSaveEvent = (event: NginxArchiveSaveEvent) => {
+      if (event.stage) currentStage = event.stage;
+      if (event.message) currentStageMessage = event.message;
+      if (event.loaded !== undefined) currentLoaded = event.loaded;
+      if (event.filePath) savedFilePath = event.filePath;
+      if (event.fileName) savedFileName = event.fileName;
+      if (!event.finished) triggerNotification();
+    };
 
-    // 启动百分比自爬升定时器，每 500ms 增加 1%，最高至 12% 封顶
-    timerId = setInterval(() => {
-      if (!isFinished && currentLoaded === 0 && simulatedPercent < 12) {
-        simulatedPercent += 1;
-        triggerNotification();
-      }
-    }, 500);
+    triggerNotification();
 
     runtimeArchiveDownloading.value = true;
     try {
@@ -620,29 +643,21 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
         instance.id,
         type,
         filePath,
-        (loaded) => {
-          // 一旦收到流式流量，清除自爬升定时器，切换至真实流量计算
-          clearTimer();
-          currentLoaded = loaded;
-          triggerNotification();
-        },
+        handleSaveEvent,
         controller.signal
       );
 
       isFinished = true;
-      clearTimer();
-
-      // 提取物理保存的文件名
-      const fileBaseName = filePath.substring(filePath.lastIndexOf(filePath.includes('\\') ? '\\' : '/') + 1);
+      const fileBaseName = savedFileName || savedFilePath.substring(savedFilePath.lastIndexOf(savedFilePath.includes('\\') ? '\\' : '/') + 1);
 
       const openFolderLink = h('a', {
         href: 'javascript:;',
         class: 'c4d-locate-btn',
         onClick: () => {
-          invoke('reveal_in_file_manager', { path: filePath })
+          invoke('reveal_in_file_manager', { path: savedFilePath })
             .catch(err => message.error(`定位失败: ${err}`));
         }
-      }, '🔍 在文件夹中定位文件');
+      }, '打开文件位置');
 
       if (type === 'conf') {
         notification.success({
@@ -692,7 +707,6 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
       }
     } catch (error: any) {
       isFinished = true;
-      clearTimer();
       if (error.name === 'AbortError') {
         message.info(`已取消下载 ${typeLabel}`);
         notification.close(notificationKey);
@@ -715,7 +729,6 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
         onClose: () => {},
       });
     } finally {
-      clearTimer();
       runtimeArchiveDownloading.value = false;
     }
   };

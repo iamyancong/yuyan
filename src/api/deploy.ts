@@ -336,6 +336,20 @@ export interface NginxInstanceArchiveDownload {
   scriptPath: string;
 }
 
+/** 托管 Nginx 运行包保存阶段 */
+export type NginxArchiveSaveStage = 'preparing' | 'prechecking' | 'packing' | 'writing' | 'finished';
+
+/** 托管 Nginx 运行包保存事件 */
+export interface NginxArchiveSaveEvent {
+  stage?: NginxArchiveSaveStage;
+  message?: string;
+  loaded?: number;
+  finished?: boolean;
+  filePath?: string;
+  fileName?: string;
+  error?: string;
+}
+
 /** 托管 Nginx 站点同步结果 */
 export interface NginxSiteSyncResult {
   success: boolean;
@@ -561,14 +575,14 @@ export async function downloadNginxInstanceArchive(
  * @param instanceId Nginx 实例 ID
  * @param type 下载类型
  * @param filePath 本地保存路径
- * @param onProgress 进度回调（已写入字节数）
+ * @param onEvent 保存事件回调
  * @param signal 中断信号
  */
 export async function saveNginxInstanceArchiveToLocal(
   instanceId: number,
   type: 'all' | 'html' | 'conf',
   filePath: string,
-  onProgress?: (loaded: number) => void,
+  onEvent?: (event: NginxArchiveSaveEvent) => void,
   signal?: AbortSignal
 ): Promise<void> {
   const response = await fetch(getApiBase(`/deploy-api/nginx-instances/${instanceId}/archive-save`), {
@@ -605,13 +619,11 @@ export async function saveNginxInstanceArchiveToLocal(
 
       try {
         const rawJson = trimmed.slice(5).trim();
-        const data = JSON.parse(rawJson);
+        const data = JSON.parse(rawJson) as NginxArchiveSaveEvent;
         if (data.error) {
           throw new Error(data.error);
         }
-        if (data.loaded !== undefined) {
-          onProgress?.(data.loaded);
-        }
+        onEvent?.(data);
       } catch (e) {
         if (e instanceof Error && e.message !== 'Unexpected end of JSON input') {
           throw e;
