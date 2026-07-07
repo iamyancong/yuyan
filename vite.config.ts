@@ -3,6 +3,8 @@ import vue from '@vitejs/plugin-vue';
 import Components from 'unplugin-vue-components/vite';
 import { AntDesignVueResolver } from 'unplugin-vue-components/resolvers';
 import path from 'node:path';
+import pkg from './package.json';
+
 
 /**
  * 按依赖来源拆分构建产物，降低首屏入口包体积并提升浏览器缓存命中率。
@@ -52,6 +54,7 @@ export default defineConfig({
   // 解决 Babel 在浏览器运行时依赖 process 的问题
   define: {
     'process.env': {},
+    __APP_VERSION__: JSON.stringify(pkg.version),
   },
   server: {
     port: 1420,
