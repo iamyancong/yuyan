@@ -838,29 +838,45 @@ export const backupDbFromServer = (serverUrl: string): Promise<ArrayBuffer> => {
 let activeLocalPort: number | null = null;
 
 /**
- * 动态检测并嗅探当前客户端本地服务监听的端口 (3101 或 3100)
- * @description 兼容新版 (3101) 和旧版 (3100) 客户端外壳，避免由于版本不一致导致更新和同步功能失效
+ * 动态检测并嗅探当前客户端本地服务监听的端口
+ * @description 优先在 Tauri 环境下向 Rust 查询动态端口，兜底策略下通过 HTTP 健康检查探测 3101 和 3100 端口
  */
 const getActiveLocalPort = async (): Promise<number> => {
   if (activeLocalPort !== null) {
     return activeLocalPort;
   }
   
-  // 1. 优先尝试请求 3101（新端口）
+  // 1. 如果是在 Tauri 客户端环境中，首先向 Rust 主程序查询动态分配的本地端口
+  const isTauri = typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__ !== undefined;
+  if (isTauri) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const port = await invoke<number>('get_local_server_port');
+      if (port) {
+        activeLocalPort = port;
+        console.log(`[Port Detector] 从 Tauri 状态中获取到本地服务运行在端口: ${port}`);
+        return port;
+      }
+    } catch (e) {
+      console.warn('[Port Detector] 从 Tauri 获取本地服务端口失败，回退到端口探测模式', e);
+    }
+  }
+  
+  // 2. 兜底/调试环境探测：优先尝试请求 3101（新端口）
   try {
     await axios.get('http://localhost:3101/deploy-api/app-update/status', { timeout: 1000 });
     activeLocalPort = 3101;
     console.log('[Port Detector] 探测到本地辅助服务运行在 3101 端口');
     return 3101;
   } catch (e) {
-    // 2. 3101 不通，尝试 3100（旧端口）
+    // 3. 3101 不通，尝试 3100（旧端口）
     try {
       await axios.get('http://localhost:3100/deploy-api/app-update/status', { timeout: 1000 });
       activeLocalPort = 3100;
       console.log('[Port Detector] 探测到本地辅助服务运行在 3100 端口 (旧版本客户端)');
       return 3100;
     } catch (e2) {
-      // 3. 两个都不通，默认为 3101，后续发起具体请求时会触发错误
+      // 4. 均不通，默认为 3101
       console.warn('[Port Detector] 未探测到本地辅助服务端口，默认使用 3101');
       return 3101;
     }
