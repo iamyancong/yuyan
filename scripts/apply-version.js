@@ -33,3 +33,18 @@ if (fs.existsSync(cargoTomlPath)) {
   fs.writeFileSync(cargoTomlPath, cargoToml, 'utf8');
   console.log(`Updated Cargo.toml version to ${targetVersion}`);
 }
+
+// 4. 更新 Cargo.lock 中 name = "yuyan-app" 下的 version
+const cargoLockPath = path.resolve('src-tauri/Cargo.lock');
+if (fs.existsSync(cargoLockPath)) {
+  let cargoLock = fs.readFileSync(cargoLockPath, 'utf8');
+  const regex = /((?:^|\n)\[\[package\]\]\r?\nname\s*=\s*"yuyan-app"\r?\nversion\s*=\s*")[^"]*"/;
+  if (regex.test(cargoLock)) {
+    cargoLock = cargoLock.replace(regex, `$1${targetVersion}"`);
+    fs.writeFileSync(cargoLockPath, cargoLock, 'utf8');
+    console.log(`Updated Cargo.lock version to ${targetVersion}`);
+  } else {
+    console.warn('Warning: Could not find yuyan-app package block in Cargo.lock');
+  }
+}
+
