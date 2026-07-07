@@ -132,7 +132,7 @@ try {
  */
 function setupSelfDestruct() {
   // 仅在作为子进程启动（由主程序传入关键环境变量）时启用，避免影响命令行手动调试
-  if (!process.send && !process.env.DEPLOY_DATA_DIR) {
+  if (process.env.IS_TAURI_SUBPROCESS !== 'true') {
     return;
   }
 
