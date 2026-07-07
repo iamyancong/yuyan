@@ -9,6 +9,7 @@ import SettingsDrawer from '@/components/SettingsDrawer.vue';
 import LoginModal from '@/components/LoginModal.vue';
 import LayoutHeader from './components/LayoutHeader.vue';
 import LayoutSider from './components/LayoutSider.vue';
+import AboutModal from '@/components/AboutModal/index.vue';
 
 defineOptions({ name: 'BasicLayout' });
 
@@ -20,6 +21,11 @@ const showLoginModal = ref(false);
 
 /** 平台设置抽屉可见性 */
 const openDrawer = ref(false);
+
+/** 关于雨燕弹窗可见性 */
+const showAboutModal = ref(false);
+
+let unlistenMenuAbout: (() => void) | undefined;
 
 const { primaryColor } = useTheme();
 const { isLoggedIn, currentUser, checkAuth } = useAuth();
@@ -51,6 +57,13 @@ const handleShowLoginModal = () => {
 };
 
 /**
+ * 显示关于雨燕弹窗的回调（全局事件驱动）
+ */
+const handleShowAboutModal = () => {
+  showAboutModal.value = true;
+};
+
+/**
  * 登录成功后的回调函数，用于确保刷新全局用户状态与 UI
  */
 const handleLoginSuccess = async () => {
@@ -67,10 +80,26 @@ const handleLoginSuccess = async () => {
 
 onMounted(() => {
   window.addEventListener('show-login-modal', handleShowLoginModal);
+  window.addEventListener('show-about-modal', handleShowAboutModal);
+
+  // 监听 macOS 顶部系统菜单"关于雨燕"点击事件
+  if (isTauri()) {
+    import('@tauri-apps/api/event').then(({ listen }) => {
+      listen('menu-about', () => {
+        showAboutModal.value = true;
+      }).then((unlisten) => {
+        unlistenMenuAbout = unlisten;
+      });
+    });
+  }
 });
 
 onUnmounted(() => {
   window.removeEventListener('show-login-modal', handleShowLoginModal);
+  window.removeEventListener('show-about-modal', handleShowAboutModal);
+  if (unlistenMenuAbout) {
+    unlistenMenuAbout();
+  }
 });
 </script>
 
@@ -100,6 +129,7 @@ onUnmounted(() => {
         :isTauriClient="isTauriClient" 
         @openSettings="openDrawer = true" 
         @openLogin="showLoginModal = true" 
+        @openAbout="showAboutModal = true"
       />
       
       <!-- 主体内容区域 -->
@@ -117,6 +147,9 @@ onUnmounted(() => {
   
   <!-- 登录弹窗 -->
   <LoginModal v-model:visible="showLoginModal" @login-success="handleLoginSuccess" />
+  
+  <!-- 关于雨燕弹窗 -->
+  <AboutModal v-model:open="showAboutModal" />
 </template>
 
 <style scoped lang="less">
