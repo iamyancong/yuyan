@@ -21,6 +21,7 @@
     "@babel/traverse": "^8.0.0",
     "@babel/types": "^8.0.0",
     "@tauri-apps/api": "^2.6.0",
+    "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-opener": "^2.2.0",
     "@vue/compiler-dom": "^3.5.38",
     "@vue/compiler-sfc": "^3.5.38",

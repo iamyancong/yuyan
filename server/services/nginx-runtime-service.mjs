@@ -6,6 +6,8 @@
 
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
+import { createWriteStream } from 'node:fs';
+import { Writable } from 'node:stream';
 import path from 'node:path';
 import { NGINX_RUNTIME_ASSET_DIR, NGINX_RUNTIME_REGISTRY_PATH } from '../config/constants.mjs';
 import {
@@ -997,6 +999,95 @@ export async function streamNginxInstanceArchive(instanceId, type = 'all', outpu
       await streamSshCommand(conn, buildArchiveTarCommand(config, archiveRoot, type), output, {
         label: `导出托管 Nginx 运行包(${type})`,
       });
+    }
+  });
+
+  return meta;
+}
+
+/**
+ * 本地直写：流式导出托管 Nginx 实例运行包并保存到指定磁盘路径。
+ * @param {number} instanceId - Nginx 实例 ID
+ * @param {string} type - 下载类型 ('all' | 'html' | 'conf')
+ * @param {string} filePath - 本地保存路径
+ * @param {(loaded: number) => void} onProgress - 进度回调（已写入字节数）
+ * @param {() => boolean} isAbortedFn - 外部传递的是否 Abort 判断函数
+ * @returns {Promise<Object>} 导出元信息
+ */
+export async function saveNginxInstanceArchiveToPath(instanceId, type = 'all', filePath, onProgress, isAbortedFn) {
+  const { instance, server } = await getNginxInstanceContext(instanceId);
+  if (instance.instanceType !== 'managed') throw new Error('只有托管 Nginx 实例支持下载运行包');
+
+  const config = resolveRuntimeConfig(instance);
+  
+  let archiveRoot = '';
+  if (type === 'html') {
+    archiveRoot = resolveArchiveRoot(config.webRoot);
+  } else if (type !== 'conf') {
+    archiveRoot = resolveArchiveRoot(config.baseRoot);
+  }
+
+  const fileName = buildArchiveFileName(server, instance, type);
+  const meta = {
+    fileName,
+    baseRoot: config.baseRoot,
+    scriptPath: config.scriptPath,
+  };
+
+  await withSsh(server, async (conn) => {
+    await execSsh(conn, buildArchivePrecheckCommand(config, type), { label: `预检托管 Nginx 运行包(${type})` });
+    
+    if (isAbortedFn?.()) return;
+
+    // 创建本地写入流
+    const fileStream = createWriteStream(filePath);
+    let loaded = 0;
+
+    // 进度包装流
+    const progressWrapper = new Writable({
+      write(chunk, encoding, callback) {
+        if (isAbortedFn?.()) {
+          fileStream.destroy();
+          callback(new Error('Abort'));
+          return;
+        }
+        fileStream.write(chunk, encoding, (err) => {
+          if (err) {
+            callback(err);
+            return;
+          }
+          loaded += chunk.length;
+          onProgress?.(loaded);
+          callback();
+        });
+      },
+      destroy(err, callback) {
+        fileStream.destroy(err);
+        callback(err);
+      }
+    });
+
+    try {
+      if (type === 'conf') {
+        const sudo = config.useSudo ? 'sudo -n ' : '';
+        await streamSshCommand(conn, `${sudo}cat ${shellQuote(config.mainConfPath)}`, progressWrapper, {
+          label: '导出 Nginx 配置文件',
+        });
+      } else {
+        await streamSshCommand(conn, buildArchiveTarCommand(config, archiveRoot, type), progressWrapper, {
+          label: `导出托管 Nginx 运行包(${type})`,
+        });
+      }
+      
+      // 等待本地流完全写入磁盘
+      await new Promise((resolve, reject) => {
+        fileStream.on('finish', resolve);
+        fileStream.on('error', reject);
+        progressWrapper.end();
+      });
+    } catch (err) {
+      fileStream.destroy();
+      throw err;
     }
   });
 

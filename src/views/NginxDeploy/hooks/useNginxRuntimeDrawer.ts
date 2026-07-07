@@ -1,4 +1,4 @@
-import { reactive, ref } from 'vue';
+import { reactive, ref, h } from 'vue';
 import message from 'ant-design-vue/es/message';
 import notification from 'ant-design-vue/es/notification';
 import Modal from 'ant-design-vue/es/modal';
@@ -6,6 +6,7 @@ import {
   createNginxInstance,
   deleteNginxInstance,
   downloadNginxInstanceArchive,
+  saveNginxInstanceArchiveToLocal,
   getNginxInstanceStatus,
   initNginxInstanceWithProgress,
   runNginxInstanceAction,
@@ -21,6 +22,9 @@ import {
 import type { RefreshActiveTabOptions } from '../types';
 import { getErrorMessage, getPreferredNginxInstance, getVisibleNginxInstances } from '../utils';
 import { createDefaultNginxInstanceForm } from '../components/NginxRuntimeDrawer/constant';
+import { save } from '@tauri-apps/plugin-dialog';
+import { downloadDir } from '@tauri-apps/api/path';
+import { invoke } from '@tauri-apps/api/core';
 
 /** Nginx 运行时抽屉 Hook 参数 */
 interface UseNginxRuntimeDrawerParams {
@@ -452,6 +456,44 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
     };
     const typeLabel = typeLabels[type] || '运行包';
 
+    // 1. 构造默认文件名
+    const sanitizeName = (val: string) => val.trim().replace(/\s+/g, '-').replace(/[\\/:*?"<>|]/g, '-').replace(/-+/g, '-');
+    const serverPart = sanitizeName(runtimeServer.value?.name || runtimeServer.value?.host || 'server');
+    const instancePart = sanitizeName(instance.name || 'instance');
+    const pad = (v: number) => String(v).padStart(2, '0');
+    const d = new Date();
+    const ts = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+    
+    let defaultFileName = '';
+    if (type === 'conf') {
+      defaultFileName = 'nginx.conf';
+    } else {
+      const suffix = type === 'html' ? '-html' : '';
+      defaultFileName = `${serverPart}-${instancePart}${suffix}-${ts}.tar.gz`;
+    }
+
+    // 2. 尝试获取默认下载目录，唤起系统的另存为 Dialog
+    let defaultPath = defaultFileName;
+    try {
+      const dlDir = await downloadDir();
+      defaultPath = `${dlDir}/${defaultFileName}`;
+    } catch (e) {
+      console.warn('获取默认下载目录失败', e);
+    }
+
+    const filePath = await save({
+      title: `保存 ${typeLabel}`,
+      defaultPath,
+      filters: type === 'conf'
+        ? [{ name: 'Nginx Config', extensions: ['conf'] }]
+        : [{ name: 'Archive Package', extensions: ['tar.gz'] }]
+    });
+
+    if (!filePath) {
+      // 用户取消了另存为弹窗，静默返回
+      return;
+    }
+
     const controller = new AbortController();
     let isFinished = false;
 
@@ -459,13 +501,13 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
     notification.info({
       key: notificationKey,
       message: `开始下载 ${typeLabel}`,
-      description: '正在从远程服务器打包并传输中，请稍候...',
+      description: '正在从远程服务器打包直写本地磁盘，请稍候...',
       duration: 0,
       onClose: () => {
         if (!isFinished) {
           Modal.confirm({
             title: '确认要取消下载吗？',
-            content: '选择“取消下载”将终止网络传输并释放服务器与本地资源；选择“后台运行”则关闭当前提示，下载仍在后台继续。',
+            content: '选择“取消下载”将终止直写并释放服务器资源；选择“后台运行”则关闭当前提示，下载仍在后台继续。',
             okText: '取消下载',
             cancelText: '后台运行',
             onOk() {
@@ -482,21 +524,22 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
 
     runtimeArchiveDownloading.value = true;
     try {
-      const result = await downloadNginxInstanceArchive(
+      await saveNginxInstanceArchiveToLocal(
         instance.id,
         type,
+        filePath,
         (loaded) => {
           const sizeMb = (loaded / 1024 / 1024).toFixed(2);
           notification.info({
             key: notificationKey,
             message: `正在传输 ${typeLabel}`,
-            description: `已接收数据: ${sizeMb} MB (从服务器流式传输中...)`,
+            description: `已直写数据: ${sizeMb} MB (从服务器流式写入中...)`,
             duration: 0,
             onClose: () => {
               if (!isFinished) {
                 Modal.confirm({
                   title: '确认要取消下载吗？',
-                  content: '选择“取消下载”将终止网络传输并释放服务器与本地资源；选择“后台运行”则关闭当前提示，下载仍在后台继续。',
+                  content: '选择“取消下载”将终止直写并释放服务器资源；选择“后台运行”则关闭当前提示，下载仍在后台继续。',
                   okText: '取消下载',
                   cancelText: '后台运行',
                   onOk() {
@@ -515,32 +558,41 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
       );
 
       isFinished = true;
-      
-      const blobUrl = window.URL.createObjectURL(result.blob);
-      const link = document.createElement('a');
-      link.href = blobUrl;
-      link.download = result.fileName;
-      link.style.display = 'none';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.setTimeout(() => window.URL.revokeObjectURL(blobUrl), 1000);
 
-      const sizeMb = (result.blob.size / 1024 / 1024).toFixed(2);
+      // 提取物理保存的文件名
+      const fileBaseName = filePath.substring(filePath.lastIndexOf(filePath.includes('\\') ? '\\' : '/') + 1);
+
+      const openFolderLink = h('a', {
+        href: 'javascript:;',
+        style: 'margin-top: 8px; display: block; color: #1890ff; font-weight: bold;',
+        onClick: () => {
+          invoke('reveal_in_file_manager', { path: filePath })
+            .catch(err => message.error(`定位失败: ${err}`));
+        }
+      }, '🔍 在文件夹中定位文件');
+
       if (type === 'conf') {
         notification.success({
           key: notificationKey,
           message: '下载已完成',
-          description: `Nginx 配置文件已下载完成 (${sizeMb} MB)。`,
-          duration: 4.5,
+          description: h('div', null, [
+            h('p', null, `Nginx 配置文件已直写完成：${fileBaseName}`),
+            openFolderLink
+          ]),
+          duration: 6,
           onClose: () => {},
         });
       } else {
-        const scriptPath = result.scriptPath || runtimeStatus.value?.scriptPath || instance.scriptPath || `${result.baseRoot || instance.baseRoot}/nginx/yuyan-nginx.sh`;
+        const scriptPath = instance.scriptPath || `${instance.baseRoot}/nginx/yuyan-nginx.sh`;
         notification.success({
           key: notificationKey,
           message: '下载已完成',
-          description: `已成功保存 ${result.fileName} (${sizeMb} MB)。可在目标机执行：tar -xzf ${result.fileName} -C / ；并运行 ${scriptPath} start 启动服务。`,
+          description: h('div', null, [
+            h('p', null, `已成功直写保存：${fileBaseName}`),
+            h('p', { style: 'font-size: 12px; color: rgba(0,0,0,0.45); margin-bottom: 8px;' },
+              `目标机执行：tar -xzf ${fileBaseName} -C / ；运行 ${scriptPath} start 启动服务。`),
+            openFolderLink
+          ]),
           duration: 10,
           onClose: () => {},
         });

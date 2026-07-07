@@ -49,6 +49,7 @@ import {
   runNginxInstanceAction,
   runNginxRuntimeAction,
   streamNginxInstanceArchive,
+  saveNginxInstanceArchiveToPath,
   syncTargetNginxSite,
 } from '../services/nginx-runtime-service.mjs';
 import {
@@ -575,6 +576,50 @@ export async function handleDownloadNginxInstanceArchive(req, res) {
       return;
     }
     sendError(res, error, 400);
+  }
+}
+
+/**
+ * 另存为直写：导出托管 Nginx 实例运行包并保存到指定绝对物理路径，实时输出 SSE 进度。
+ */
+export async function handleSaveNginxInstanceArchive(req, res) {
+  const { filePath, type } = req.body;
+  if (!filePath) {
+    return sendError(res, new Error('缺少保存文件路径'), 400);
+  }
+  
+  try {
+    // 设置响应为分块事件流 (SSE)
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+
+    let isAborted = false;
+    req.on('close', () => {
+      isAborted = true;
+    });
+
+    const onWriteProgress = (loaded) => {
+      if (!isAborted) {
+        res.write(`data: ${JSON.stringify({ loaded })}\n\n`);
+      }
+    };
+
+    await saveNginxInstanceArchiveToPath(Number(req.params.id), type || 'all', filePath, onWriteProgress, () => isAborted);
+    
+    if (!isAborted) {
+      res.write(`data: ${JSON.stringify({ finished: true })}\n\n`);
+      res.end();
+    }
+  } catch (error) {
+    if (!res.headersSent) {
+      sendError(res, error, 400);
+    } else {
+      res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
+      res.end();
+    }
   }
 }
 

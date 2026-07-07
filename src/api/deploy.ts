@@ -555,6 +555,72 @@ export async function downloadNginxInstanceArchive(
   };
 }
 
+/**
+ * 另存为直写：导出托管 Nginx 实例运行包并保存到指定磁盘物理路径。
+ * 通过 SSE 流实时接收保存进度。
+ * @param instanceId Nginx 实例 ID
+ * @param type 下载类型
+ * @param filePath 本地保存路径
+ * @param onProgress 进度回调（已写入字节数）
+ * @param signal 中断信号
+ */
+export async function saveNginxInstanceArchiveToLocal(
+  instanceId: number,
+  type: 'all' | 'html' | 'conf',
+  filePath: string,
+  onProgress?: (loaded: number) => void,
+  signal?: AbortSignal
+): Promise<void> {
+  const response = await fetch(getApiBase(`/deploy-api/nginx-instances/${instanceId}/archive-save`), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ filePath, type }),
+    signal,
+  });
+
+  if (!response.ok) {
+    const data = await parseJsonOrText(response);
+    throw new Error(typeof data === 'string' ? data : data?.error || data?.message || '直写保存文件失败');
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) return;
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || !trimmed.startsWith('data:')) continue;
+
+      try {
+        const rawJson = trimmed.slice(5).trim();
+        const data = JSON.parse(rawJson);
+        if (data.error) {
+          throw new Error(data.error);
+        }
+        if (data.loaded !== undefined) {
+          onProgress?.(data.loaded);
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message !== 'Unexpected end of JSON input') {
+          throw e;
+        }
+      }
+    }
+  }
+}
+
 /** 获取托管 Nginx 下一个可用端口 */
 export const getNextNginxRuntimePort = (serverId: number, excludeTargetId = 0) =>
   client.get(`/servers/${serverId}/nginx-runtime/next-port`, { params: excludeTargetId ? { excludeTargetId } : undefined }).then(unwrap<{ port: number }>);
