@@ -13,6 +13,7 @@ import {
   handleDeleteTarget,
   handleDeployTarget,
   handleDownloadNginxInstanceArchive,
+  handleSaveNginxInstanceArchive,
   handleGetNextNginxInstancePort,
   handleGetTargetDeployProgress,
   handleGetRecord,
@@ -64,6 +65,7 @@ router.post('/servers/:id/nginx-runtime/:action', handleRunNginxRuntimeAction);
 router.put('/nginx-instances/:id', handleUpdateNginxInstance);
 router.delete('/nginx-instances/:id', handleDeleteNginxInstance);
 router.get('/nginx-instances/:id/archive', handleDownloadNginxInstanceArchive);
+router.post('/nginx-instances/:id/archive-save', handleSaveNginxInstanceArchive);
 router.get('/nginx-instances/:id/status', handleGetNginxInstanceStatus);
 router.post('/nginx-instances/:id/init', handleInitNginxInstance);
 router.post('/nginx-instances/:id/actions/:action', handleRunNginxInstanceAction);

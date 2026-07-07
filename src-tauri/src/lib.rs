@@ -214,6 +214,44 @@ fn exit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+/** 在系统的文件管理器中定位并选中该文件。 */
+#[tauri::command]
+fn reveal_in_file_manager(path: String) -> Result<(), String> {
+    println!("🔍 正在打开文件管理器定位文件: {}", path);
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer.exe")
+            .arg("/select,")
+            .arg(&path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg("-R")
+            .arg(&path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        if let Some(parent) = std::path::Path::new(&path).parent() {
+            Command::new("xdg-open")
+                .arg(parent)
+                .spawn()
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        } else {
+            Err("无效路径".to_string())
+        }
+    }
+}
+
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -239,7 +277,8 @@ pub fn run() {
             app_update::get_app_update_status,
             app_update::get_app_update_target,
             app_update::install_app_update,
-            exit_app
+            exit_app,
+            reveal_in_file_manager
         ])
 
         .on_window_event(|window, event| {
