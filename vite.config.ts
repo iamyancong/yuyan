@@ -34,6 +34,16 @@ const resolveManualChunk = (id: string) => {
   }
   if (normalizedId.includes('/node_modules/@formily/')) return 'vendor-formily';
   if (normalizedId.includes('/node_modules/@babel/')) return 'vendor-babel';
+  if (normalizedId.includes('/node_modules/@univerjs/')) return 'vendor-univerjs';
+  if (
+    normalizedId.includes('/node_modules/react/') ||
+    normalizedId.includes('/node_modules/react-dom/') ||
+    normalizedId.includes('/node_modules/@radix-ui/') ||
+    normalizedId.includes('/node_modules/@floating-ui/') ||
+    normalizedId.includes('/node_modules/sonner/')
+  ) {
+    return 'vendor-react-deps';
+  }
   return 'vendor';
 };
 
@@ -60,6 +70,16 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
     host: '127.0.0.1',
+    proxy: {
+      '/deploy-api': {
+        target: 'http://192.168.164.27:3100',
+        changeOrigin: true,
+      },
+      '/scaffold-api': {
+        target: 'http://192.168.164.27:3100',
+        changeOrigin: true,
+      },
+    },
   },
   resolve: {
     alias: {
@@ -71,7 +91,14 @@ export default defineConfig({
   },
   build: {
     modulePreload: false,
+    chunkSizeWarningLimit: 1200,
     rollupOptions: {
+      onwarn(warning, warn) {
+        if (warning.code === 'MODULE_LEVEL_DIRECTIVE' && warning.message.includes('"use client"')) {
+          return;
+        }
+        warn(warning);
+      },
       output: {
         hoistTransitiveImports: false,
         manualChunks: resolveManualChunk,
