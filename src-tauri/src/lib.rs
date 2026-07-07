@@ -220,6 +220,74 @@ fn change_app_icon(app_handle: tauri::AppHandle, is_dark: bool) -> Result<(), St
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SystemInfo {
+    app_version: String,
+    tauri_version: String,
+    node_version: String,
+    os_info: String,
+}
+
+/** 获取桌面端系统诊断信息的命令。 */
+#[tauri::command]
+fn get_system_info(app_handle: tauri::AppHandle) -> SystemInfo {
+    let app_version = app_handle.package_info().version.to_string();
+    
+    // 获取 Node 版本
+    let node_path = get_node_path(&app_handle);
+    let node_version = Command::new(&node_path)
+        .arg("--version")
+        .output()
+        .map(|o| {
+            if o.status.success() {
+                String::from_utf8_lossy(&o.stdout).trim().to_string()
+            } else {
+                "Unknown".to_string()
+            }
+        })
+        .unwrap_or_else(|_| "Not Installed".to_string());
+        
+    // 操作系统信息
+    #[cfg(target_os = "macos")]
+    let os_version = Command::new("sw_vers")
+        .arg("-productVersion")
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|_| "Unknown".to_string());
+
+    #[cfg(target_os = "windows")]
+    let os_version = Command::new("cmd")
+        .args(&["/c", "ver"])
+        .output()
+        .map(|o| {
+            let ver_str = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if let Some(start) = ver_str.find("Version ") {
+                let temp = &ver_str[start + 8..];
+                if let Some(end) = temp.find(']') {
+                    temp[..end].to_string()
+                } else {
+                    ver_str
+                }
+            } else {
+                ver_str
+            }
+        })
+        .unwrap_or_else(|_| "Unknown".to_string());
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let os_version = "Unknown".to_string();
+
+    let os_info = format!("{} ({} {})", os_version, std::env::consts::OS, std::env::consts::ARCH);
+
+    SystemInfo {
+        app_version,
+        tauri_version: tauri::VERSION.to_string(),
+        node_version,
+        os_info,
+    }
+}
+
 /** 安全退出整个应用并清理 Node 子进程的命令。 */
 #[tauri::command]
 fn exit_app(app: tauri::AppHandle) {
@@ -291,7 +359,8 @@ pub fn run() {
             app_update::get_app_update_target,
             app_update::install_app_update,
             exit_app,
-            reveal_in_file_manager
+            reveal_in_file_manager,
+            get_system_info
         ])
 
         .on_window_event(|window, event| {
@@ -305,8 +374,11 @@ pub fn run() {
             }
         })
         .on_menu_event(|app_handle, event| {
-            if event.id().as_ref() == "check-update" {
+            let event_id = event.id().as_ref();
+            if event_id == "check-update" {
                 let _ = app_handle.emit("menu-check-update", ());
+            } else if event_id == "about-yuyan" {
+                let _ = app_handle.emit("menu-about", ());
             }
         })
         .setup(move |app| {
@@ -318,6 +390,16 @@ pub fn run() {
                     if let Ok(items) = menu.items() {
                         if let Some(first_item) = items.first() {
                             if let Some(app_submenu) = first_item.as_submenu() {
+                                // 移除默认的 About 菜单项 (通常在索引 0)
+                                let _ = app_submenu.remove_at(0);
+                                // 插入自定义的关于菜单项
+                                if let Ok(about_item) = MenuItemBuilder::new("关于雨燕")
+                                    .id("about-yuyan")
+                                    .build(app_handle)
+                                {
+                                    let _ = app_submenu.insert(&about_item, 0);
+                                }
+
                                 if let Ok(check_update_item) = MenuItemBuilder::new("检查更新")
                                     .id("check-update")
                                     .build(app_handle)

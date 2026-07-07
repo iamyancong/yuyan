@@ -8,7 +8,8 @@ import {
   LogoutOutlined,
   LoginOutlined,
   SyncOutlined,
-  CloudDownloadOutlined
+  CloudDownloadOutlined,
+  InfoCircleOutlined
 } from '@ant-design/icons-vue';
 import { useDataSync } from '../hooks/useDataSync';
 
@@ -24,6 +25,8 @@ defineEmits<{
   (e: 'openSettings'): void;
   /** 触发打开登录弹窗 */
   (e: 'openLogin'): void;
+  /** 触发打开关于雨燕弹窗 */
+  (e: 'openAbout'): void;
 }>();
 
 const { isLoggedIn, userName, userAvatar, logout, authLoading } = useAuth();
@@ -93,7 +96,14 @@ const handleLogout = async () => {
                   检查更新
                 </a-menu-item>
                 
-                <a-menu-divider v-if="isTauriClient" />
+                <a-menu-item key="about" @click="$emit('openAbout')">
+                  <template #icon>
+                    <InfoCircleOutlined />
+                  </template>
+                  关于雨燕
+                </a-menu-item>
+                
+                <a-menu-divider />
                 
                 <a-menu-item key="profile" disabled>
                   <template #icon>
