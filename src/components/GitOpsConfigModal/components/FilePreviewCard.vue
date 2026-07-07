@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { YMonaco, YMonacoDiff } from '@yss-ui/components/lite';
-import '@yss-ui/components/dist/style.css';
 import type { FileItem, OperationMode } from '../constant';
 
 defineOptions({ name: 'FilePreviewCard' });
