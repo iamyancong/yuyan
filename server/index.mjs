@@ -206,12 +206,15 @@ async function bootstrap() {
     await getDeployDb();
     console.log(`[bootstrap] ✅ 独立服务器部署数据库已就绪: ${DEPLOY_DB_PATH}`);
 
-    // 启动服务，明确指定仅监听 127.0.0.1 本地回环地址，防止局域网外部访问并规避防火墙弹窗提示
-    const server = app.listen(PORT, '127.0.0.1', () => {
+    // 根据运行环境动态选择监听地址：
+    // - Tauri 桌面端：绑定 127.0.0.1 防止局域网外部访问并规避 Windows 防火墙弹窗
+    // - Docker/服务器端：绑定 0.0.0.0 允许容器外部（反向代理/Docker 网络）正常访问
+    const BIND_HOST = process.env.IS_TAURI_SUBPROCESS === 'true' ? '127.0.0.1' : '0.0.0.0';
+    const server = app.listen(PORT, BIND_HOST, () => {
       console.log('='.repeat(60));
       console.log(`🚀 Scaffold 服务启动成功!`);
-      console.log(`📍 服务地址: http://127.0.0.1:${PORT}`);
-      console.log(`💚 健康检查: http://127.0.0.1:${PORT}/health`);
+      console.log(`📍 服务地址: http://${BIND_HOST}:${PORT}`);
+      console.log(`💚 健康检查: http://${BIND_HOST}:${PORT}/health`);
       console.log('='.repeat(60));
       console.log(`✨ 服务正在运行中，等待请求...`);
     });
