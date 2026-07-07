@@ -275,3 +275,26 @@
     flex-direction: column;
   }
 }
+
+/* -- 下载按钮组 -- */
+.nginx-runtime-download-group {
+  display: inline-flex;
+  align-items: center;
+
+  :deep(.y-button) {
+    &:first-child {
+      border-top-right-radius: 0;
+      border-bottom-right-radius: 0;
+      border-right: 1px solid rgba(255, 255, 255, 0.15);
+    }
+    &.nginx-runtime-download-arrow {
+      border-top-left-radius: 0;
+      border-bottom-left-radius: 0;
+      padding: 0 8px;
+      min-width: unset;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+  }
+}
