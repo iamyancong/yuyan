@@ -601,6 +601,9 @@ export async function handleSaveNginxInstanceArchive(req, res) {
     const onWriteProgress = (loaded) => {
       if (!isAborted) {
         res.write(`data: ${JSON.stringify({ loaded })}\n\n`);
+        if (typeof res.flush === 'function') {
+          res.flush();
+        }
       }
     };
 
@@ -608,6 +611,9 @@ export async function handleSaveNginxInstanceArchive(req, res) {
     
     if (!isAborted) {
       res.write(`data: ${JSON.stringify({ finished: true })}\n\n`);
+      if (typeof res.flush === 'function') {
+        res.flush();
+      }
       res.end();
     }
   } catch (error) {
@@ -615,6 +621,9 @@ export async function handleSaveNginxInstanceArchive(req, res) {
       sendError(res, error, 400);
     } else {
       res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
+      if (typeof res.flush === 'function') {
+        res.flush();
+      }
       res.end();
     }
   }
