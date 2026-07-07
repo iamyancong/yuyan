@@ -105,6 +105,17 @@ function syncCssVariables() {
   root.style.setProperty('--primary-color-light', primaryColorLight);
   root.style.setProperty('--primary-color-lighter', primaryColorLighter);
 
+  // 兼容 Ant Design 默认 CSS 变量，确保第三方组件和历史样式能读取到正确的主题色
+  root.style.setProperty('--ant-primary-color', primaryColor);
+  root.style.setProperty('--ant-primary-color-hover', primaryColorHover);
+  root.style.setProperty('--ant-primary-color-active', primaryColorActive);
+
+  // 兼容 YSS UI 组件库 (YButton) 所需的内置主色阶变量
+  root.style.setProperty('--yss-color-primary-6', primaryColor);
+  root.style.setProperty('--yss-color-primary-5', primaryColorHover);
+  root.style.setProperty('--yss-color-primary-7', primaryColorActive);
+
+
   // vxe-table 会在 data-vxe-ui-theme 下声明默认蓝色变量，需要直接写入根节点内联变量覆盖。
   root.setAttribute('data-vxe-ui-theme', isDark ? 'dark' : 'light');
   root.style.setProperty('--vxe-primary-color', primaryColor);
@@ -137,6 +148,12 @@ function syncCssVariables() {
   root.style.setProperty('--warning-color', warningColor);
   root.style.setProperty('--error-color', errorColor);
   root.style.setProperty('--info-color', infoColor);
+
+  // 兼容 Ant Design 默认语义化颜色变量，确保第三方组件和历史样式能正常引用
+  root.style.setProperty('--ant-success-color', successColor);
+  root.style.setProperty('--ant-warning-color', warningColor);
+  root.style.setProperty('--ant-error-color', errorColor);
+  root.style.setProperty('--ant-info-color', infoColor);
 
   // 联动同步应用图标
   syncAppIcon(isDark);
