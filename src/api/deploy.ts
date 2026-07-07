@@ -347,6 +347,7 @@ export interface NginxArchiveSaveEvent {
   finished?: boolean;
   filePath?: string;
   fileName?: string;
+  idleSeconds?: number;
   error?: string;
 }
 
@@ -585,7 +586,7 @@ export async function saveNginxInstanceArchiveToLocal(
   onEvent?: (event: NginxArchiveSaveEvent) => void,
   signal?: AbortSignal
 ): Promise<void> {
-  const response = await fetch(getApiBase(`/deploy-api/nginx-instances/${instanceId}/archive-save`), {
+  const response = await fetch(await getLocalDeployApiUrl(`/deploy-api/nginx-instances/${instanceId}/archive-save`), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -605,6 +606,28 @@ export async function saveNginxInstanceArchiveToLocal(
   const decoder = new TextDecoder();
   let buffer = '';
 
+  /**
+   * 消费一行 SSE data 事件。
+   * @param line 原始行
+   */
+  const consumeEventLine = (line: string) => {
+    const trimmed = line.trim();
+    if (!trimmed || !trimmed.startsWith('data:')) return;
+
+    try {
+      const rawJson = trimmed.slice(5).trim();
+      const data = JSON.parse(rawJson) as NginxArchiveSaveEvent;
+      if (data.error) {
+        throw new Error(data.error);
+      }
+      onEvent?.(data);
+    } catch (e) {
+      if (e instanceof Error && e.message !== 'Unexpected end of JSON input') {
+        throw e;
+      }
+    }
+  };
+
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -614,23 +637,11 @@ export async function saveNginxInstanceArchiveToLocal(
     buffer = lines.pop() || '';
 
     for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || !trimmed.startsWith('data:')) continue;
-
-      try {
-        const rawJson = trimmed.slice(5).trim();
-        const data = JSON.parse(rawJson) as NginxArchiveSaveEvent;
-        if (data.error) {
-          throw new Error(data.error);
-        }
-        onEvent?.(data);
-      } catch (e) {
-        if (e instanceof Error && e.message !== 'Unexpected end of JSON input') {
-          throw e;
-        }
-      }
+      consumeEventLine(line);
     }
   }
+  buffer += decoder.decode();
+  if (buffer.trim()) consumeEventLine(buffer);
 }
 
 /** 获取托管 Nginx 下一个可用端口 */
@@ -854,6 +865,17 @@ const getActiveLocalPort = async (): Promise<number> => {
       return 3101;
     }
   }
+};
+
+/**
+ * 构建本机辅助服务 API 地址。
+ * @param path - deploy-api 路径
+ * @returns 本机辅助服务完整 URL
+ */
+const getLocalDeployApiUrl = async (path: string): Promise<string> => {
+  const port = await getActiveLocalPort();
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  return `http://localhost:${port}${normalizedPath}`;
 };
 
 /**

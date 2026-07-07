@@ -95,15 +95,42 @@ export function execSsh(conn, command, options = {}) {
 
       let stdout = '';
       let stderr = '';
+      let settled = false;
+
+      /**
+       * 按远程命令退出码结束 Promise。
+       * @param {number} code - 退出码
+       */
+      const finishWithCode = (code) => {
+        if (settled) return;
+        settled = true;
+        const result = { stdout, stderr, code: Number(code || 0) };
+        if (result.code === 0 || options.allowFailure) {
+          resolve(result);
+          return;
+        }
+        reject(new Error(`${options.label || command} 执行失败，退出码 ${result.code}\n${stderr || stdout}`));
+      };
+
+      /**
+       * 按错误结束 Promise。
+       * @param {Error} streamError - SSH 流错误
+       */
+      const finishWithError = (streamError) => {
+        if (settled) return;
+        settled = true;
+        reject(streamError);
+      };
 
       stream
+        .on('error', (error) => {
+          finishWithError(error);
+        })
+        .on('exit', (code) => {
+          setTimeout(() => finishWithCode(code), 0);
+        })
         .on('close', (code) => {
-          const result = { stdout, stderr, code: Number(code || 0) };
-          if (result.code === 0 || options.allowFailure) {
-            resolve(result);
-            return;
-          }
-          reject(new Error(`${options.label || command} 执行失败，退出码 ${result.code}\n${stderr || stdout}`));
+          finishWithCode(code);
         })
         .on('data', (chunk) => {
           const text = chunk.toString();
@@ -132,6 +159,52 @@ export function streamSshCommand(conn, command, output, options = {}) {
   return new Promise((resolve, reject) => {
     let settled = false;
     let stderr = '';
+    let idleTimer = null;
+    let abortTimer = null;
+    let activeStream = null;
+
+    /** 清理空闲超时定时器。 */
+    const clearIdleTimer = () => {
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
+    };
+
+    /** 清理外部中断检查定时器。 */
+    const clearAbortTimer = () => {
+      if (abortTimer) {
+        clearInterval(abortTimer);
+        abortTimer = null;
+      }
+    };
+
+    /** 启动外部中断检查。 */
+    const startAbortTimer = () => {
+      if (abortTimer || typeof options.isAborted !== 'function') return;
+      abortTimer = setInterval(() => {
+        if (!options.isAborted()) return;
+        const error = new Error(options.abortMessage || `${options.label || command} 已取消`);
+        activeStream?.destroy?.();
+        output.destroy?.();
+        finish(error);
+      }, 1000);
+    };
+
+    /** 重置 SSH 输出空闲超时。 */
+    const resetIdleTimer = () => {
+      clearIdleTimer();
+      const timeoutMs = Number(options.idleTimeoutMs || 0);
+      if (!timeoutMs || settled) return;
+      idleTimer = setTimeout(() => {
+        const error = new Error(
+          options.idleTimeoutMessage || `${options.label || command} 超过 ${Math.ceil(timeoutMs / 1000)} 秒没有输出，已中断`
+        );
+        activeStream?.destroy?.();
+        output.destroy?.();
+        finish(error);
+      }, timeoutMs);
+    };
 
     /**
      * 安全结束当前 Promise。
@@ -141,6 +214,8 @@ export function streamSshCommand(conn, command, output, options = {}) {
     const finish = (error, result) => {
       if (settled) return;
       settled = true;
+      clearIdleTimer();
+      clearAbortTimer();
       output.off?.('error', onOutputError);
       if (error) {
         reject(error);
@@ -150,7 +225,23 @@ export function streamSshCommand(conn, command, output, options = {}) {
     };
 
     /** 输出流错误处理。 */
-    const onOutputError = (error) => finish(error);
+    const onOutputError = (error) => {
+      activeStream?.destroy?.();
+      finish(error);
+    };
+
+    /**
+     * 根据远程退出码结束流式命令。
+     * @param {number} code - 退出码
+     */
+    const finishWithCode = (code) => {
+      const result = { stderr, code: Number(code || 0) };
+      if (result.code === 0 || options.allowFailure) {
+        finish(null, result);
+        return;
+      }
+      finish(new Error(`${options.label || command} 执行失败，退出码 ${result.code}\n${stderr}`));
+    };
 
     output.on?.('error', onOutputError);
     conn.exec(command, (error, stream) => {
@@ -158,27 +249,33 @@ export function streamSshCommand(conn, command, output, options = {}) {
         finish(error);
         return;
       }
+      activeStream = stream;
+      resetIdleTimer();
+      startAbortTimer();
 
       stream
+        .on('exit', (code) => {
+          setTimeout(() => finishWithCode(code), 0);
+        })
         .on('close', (code) => {
-          const result = { stderr, code: Number(code || 0) };
-          if (result.code === 0 || options.allowFailure) {
-            finish(null, result);
-            return;
-          }
-          finish(new Error(`${options.label || command} 执行失败，退出码 ${result.code}\n${stderr}`));
+          finishWithCode(code);
         })
         .on('data', (chunk) => {
+          resetIdleTimer();
           options.onStdout?.(chunk);
           if (!output.write(chunk)) {
             stream.pause();
-            output.once('drain', () => stream.resume());
+            output.once('drain', () => {
+              resetIdleTimer();
+              stream.resume();
+            });
           }
         });
 
       stream.stderr.on('data', (chunk) => {
         const text = chunk.toString();
         stderr += text;
+        resetIdleTimer();
         options.onStderr?.(text);
       });
     });

@@ -7,7 +7,8 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
-import { Writable } from 'node:stream';
+import { PassThrough } from 'node:stream';
+import { finished } from 'node:stream/promises';
 import path from 'node:path';
 import { NGINX_RUNTIME_ASSET_DIR, NGINX_RUNTIME_REGISTRY_PATH } from '../config/constants.mjs';
 import {
@@ -56,6 +57,12 @@ const ARCHIVE_EXCLUDE_PATTERNS = [
   ...ARCHIVE_EXCLUDE_METADATA_DIRS.map((dir) => `*/${dir}/*`),
   '*/yuyan-nginx.sh.bak.*',
 ];
+
+/** 运行包导出无数据超时时间，避免远程 tar 或 SSH 通道无限挂起。 */
+const ARCHIVE_STREAM_IDLE_TIMEOUT_MS = Number(process.env.NGINX_ARCHIVE_IDLE_TIMEOUT_MS || 120000);
+
+/** 运行包导出无新增数据提示间隔。 */
+const ARCHIVE_STREAM_HEARTBEAT_MS = 5000;
 
 // ──────────────────────────────────────────────
 // 路径派生
@@ -1064,56 +1071,75 @@ export async function saveNginxInstanceArchiveToPath(instanceId, type = 'all', f
     
     if (isAbortedFn?.()) return;
 
-    // 创建本地写入流
+    // 通过标准 PassThrough 管道写入本地文件，同时在 data 事件中统计进度。
     const fileStream = createWriteStream(filePath);
     let loaded = 0;
+    let lastProgressAt = Date.now();
+    const progressStream = new PassThrough();
+    const fileWritePromise = finished(fileStream);
 
-    // 进度包装流
-    const progressWrapper = new Writable({
-      write(chunk, encoding, callback) {
-        if (isAbortedFn?.()) {
-          fileStream.destroy();
-          callback(new Error('Abort'));
-          return;
-        }
-        fileStream.write(chunk, encoding, (err) => {
-          if (err) {
-            callback(err);
-            return;
-          }
-          loaded += chunk.length;
-          emit({ stage: 'writing', message: '正在写入本地磁盘', loaded });
-          callback();
-        });
-      },
-      destroy(err, callback) {
-        fileStream.destroy(err);
-        callback(err);
-      }
+    progressStream.on('data', (chunk) => {
+      loaded += chunk.length;
+      lastProgressAt = Date.now();
+      emit({ stage: 'writing', message: '正在写入本地磁盘', loaded });
     });
+    progressStream.on('error', (error) => {
+      fileStream.destroy(error);
+    });
+    progressStream.pipe(fileStream);
+
+    /**
+     * 流式执行远程导出命令并发送空闲心跳。
+     * @param {string} command - 远程命令
+     * @param {string} label - 命令标签
+     * @param {string} idleMessage - 无数据提示文案
+     * @returns {Promise<void>}
+     */
+    const runArchiveStream = async (command, label, idleMessage) => {
+      const heartbeat = setInterval(() => {
+        if (isAbortedFn?.()) return;
+        const idleSeconds = Math.floor((Date.now() - lastProgressAt) / 1000);
+        if (idleSeconds < 10) return;
+        emit({
+          stage: loaded > 0 ? 'writing' : 'packing',
+          message: `${idleMessage}，已 ${idleSeconds} 秒无新增数据`,
+          loaded,
+          idleSeconds,
+        });
+      }, ARCHIVE_STREAM_HEARTBEAT_MS);
+
+      try {
+        await streamSshCommand(conn, command, progressStream, {
+          label,
+          isAborted: isAbortedFn,
+          abortMessage: `${label} 已取消`,
+          idleTimeoutMs: ARCHIVE_STREAM_IDLE_TIMEOUT_MS,
+          idleTimeoutMessage: `${label} 超过 ${Math.ceil(ARCHIVE_STREAM_IDLE_TIMEOUT_MS / 1000)} 秒没有输出，已中断。请检查远程目录是否存在超大文件、网络是否稳定，或改用“仅前端静态产物/仅配置文件”分包下载。`,
+        });
+      } finally {
+        clearInterval(heartbeat);
+      }
+    };
 
     try {
       if (type === 'conf') {
         const sudo = config.useSudo ? 'sudo -n ' : '';
         emit({ stage: 'packing', message: '正在读取远程 Nginx 配置文件' });
-        await streamSshCommand(conn, `${sudo}cat ${shellQuote(config.mainConfPath)}`, progressWrapper, {
-          label: '导出 Nginx 配置文件',
-        });
+        await runArchiveStream(`${sudo}cat ${shellQuote(config.mainConfPath)}`, '导出 Nginx 配置文件', '正在等待远程配置文件输出');
       } else {
         emit({ stage: 'packing', message: '正在远程打包运行目录并开始传输' });
-        await streamSshCommand(conn, buildArchiveTarCommand(config, archiveRoot, type), progressWrapper, {
-          label: `导出托管 Nginx 运行包(${type})`,
-        });
+        await runArchiveStream(
+          buildArchiveTarCommand(config, archiveRoot, type),
+          `导出托管 Nginx 运行包(${type})`,
+          '远程打包仍在运行'
+        );
       }
       
-      // 等待本地流完全写入磁盘
-      await new Promise((resolve, reject) => {
-        fileStream.on('finish', resolve);
-        fileStream.on('error', reject);
-        progressWrapper.end();
-      });
+      progressStream.end();
+      await fileWritePromise;
       emit({ stage: 'finished', message: '运行包已保存到本地磁盘', loaded });
     } catch (err) {
+      progressStream.destroy(err);
       fileStream.destroy();
       throw err;
     }

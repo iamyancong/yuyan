@@ -530,23 +530,7 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
     let savedFileName = defaultFileName;
     let isUpdatingNotification = false;
 
-    const expectedSizeMap = {
-      conf: 15 * 1024,
-      html: 80 * 1024 * 1024,
-      all: 360 * 1024 * 1024,
-    };
-    const expectedSize = expectedSizeMap[type];
-
     const notificationKey = `download-${Date.now()}`;
-
-    /**
-     * 获取当前写入阶段的近似百分比。
-     * @returns 百分比或 null
-     */
-    const getWritingPercent = () => {
-      if (currentLoaded <= 0) return null;
-      return Math.max(1, Math.min(99, Math.floor((currentLoaded / expectedSize) * 100)));
-    };
 
     /** 展示关闭下载通知时的二次确认。 */
     const showConfirmModal = () => {
@@ -582,13 +566,11 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
     const triggerNotification = () => {
       if (isFinished) return;
 
-      const percent = getWritingPercent();
       const stageLabel = ARCHIVE_SAVE_STAGE_LABEL[currentStage] || '下载中';
-      const percentText = percent === null ? '处理中' : `${percent}%`;
+      const progressText = currentLoaded > 0 ? formatBytes(currentLoaded) : '处理中';
       const description = currentLoaded > 0
         ? `${currentStageMessage}，已写入 ${formatBytes(currentLoaded)}`
         : currentStageMessage;
-      const progressStyle = percent === null ? undefined : `width: ${percent}%`;
 
       isUpdatingNotification = true;
 
@@ -598,13 +580,13 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
         icon: h('span', { class: 'c4d-status-led is-downloading' }),
         message: h('div', { style: 'display: flex; justify-content: space-between; align-items: center; width: 100%;' }, [
           h('span', null, `${stageLabel} ${typeLabel}`),
-          h('span', { class: 'c4d-percent-text' }, percentText)
+          h('span', { class: 'c4d-percent-text' }, progressText)
         ]),
         description: h('div', null, [
           h('span', null, description),
           h('div', { class: 'c4d-progress-wrapper' }, [
             h('div', { class: 'c4d-progress-track' }, [
-              h('div', { class: 'c4d-progress-bar is-downloading', style: progressStyle })
+              h('div', { class: 'c4d-progress-bar is-downloading' })
             ])
           ])
         ]),
