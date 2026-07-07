@@ -514,7 +514,7 @@ export const runNginxInstanceAction = (instanceId: number, action: NginxRuntimeA
  * @returns 运行包 Blob 与响应元信息
  */
 export async function downloadNginxInstanceArchive(instanceId: number): Promise<NginxInstanceArchiveDownload> {
-  const response = await fetch(getApiBase(`/deploy-api/nginx-instances/${instanceId}/archive`), { credentials: 'include' });
+  const response = await fetch(getApiBase(`/deploy-api/nginx-instances/${instanceId}/archive`));
   if (!response.ok) {
     const data = await parseJsonOrText(response);
     throw new Error(typeof data === 'string' ? data : data?.error || data?.message || '下载运行包失败');

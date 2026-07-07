@@ -29,7 +29,12 @@ import { getDeployDb } from './services/deploy-store.mjs';
 const app = express();
 
 // 中间件配置
-app.use(cors());
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+  })
+);
 app.use(express.json({ limit: '2mb' }));
 
 // 健康检查路由

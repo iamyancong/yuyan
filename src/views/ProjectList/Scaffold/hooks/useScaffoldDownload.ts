@@ -19,7 +19,7 @@ export const useScaffoldDownload = (result: Ref<ScaffoldResult>) => {
     if (!downloadPath) return;
 
     try {
-      const response = await fetch(downloadPath, { credentials: 'include' });
+      const response = await fetch(downloadPath);
       if (!response.ok) {
         const text = await response.text();
         let errorMessage = text || '下载失败';
