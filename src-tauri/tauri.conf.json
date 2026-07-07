@@ -39,10 +39,7 @@
       "icons/icon.ico"
      ],
     "macOS": {
-      "infoPlist": {
-        "CFBundleDevelopmentRegion": "zh_CN",
-        "CFBundleLocalizations": ["zh_CN"]
-      }
+      "infoPlist": "Info.plist"
     },
     "windows": {
       "nsis": {
