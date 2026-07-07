@@ -165,6 +165,19 @@ fn start_node_server(app: &tauri::App, node_path: &std::path::Path) -> Result<Ch
     if let Some(stderr) = child.stderr.take() {
         pipe_output(stderr, "STDERR");
     }
+
+    thread::sleep(std::time::Duration::from_millis(800));
+    match child.try_wait() {
+        Ok(Some(status)) => {
+            return Err(format!(
+                "Node 服务进程启动后立即退出，状态: {status}。可能是端口 3101 已被旧服务占用，请先关闭旧的雨燕进程或释放 3101 端口后重试。"
+            ));
+        }
+        Ok(None) => {}
+        Err(e) => {
+            return Err(format!("检查 Node 服务进程状态失败: {}", e));
+        }
+    }
     
     Ok(child)
 }
@@ -342,7 +355,7 @@ pub fn run() {
                 Ok(child) => {
                     let mut lock = child_state.lock().unwrap();
                     *lock = Some(child);
-                    println!("✅ Node 服务启动成功！进程监听端口: 3100");
+                    println!("✅ Node 服务启动成功！进程监听端口: 3101");
                 }
                 Err(err) => {
                     let handle = app.handle().clone();

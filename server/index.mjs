@@ -167,13 +167,21 @@ async function bootstrap() {
     console.log(`[bootstrap] ✅ 独立服务器部署数据库已就绪: ${DEPLOY_DB_PATH}`);
 
     // 启动服务
-    app.listen(PORT, () => {
+    const server = app.listen(PORT, () => {
       console.log('='.repeat(60));
       console.log(`🚀 Scaffold 服务启动成功!`);
       console.log(`📍 服务地址: http://localhost:${PORT}`);
       console.log(`💚 健康检查: http://localhost:${PORT}/health`);
       console.log('='.repeat(60));
       console.log(`✨ 服务正在运行中，等待请求...`);
+    });
+    server.on('error', (error) => {
+      if (error?.code === 'EADDRINUSE') {
+        console.error(`[bootstrap] ❌ 端口 ${PORT} 已被占用，请关闭旧的雨燕 Node 服务后重试`);
+      } else {
+        console.error('[bootstrap] ❌ 服务监听失败:', error);
+      }
+      process.exit(1);
     });
   } catch (error) {
     console.error('[bootstrap] ❌ 服务启动失败:', error);

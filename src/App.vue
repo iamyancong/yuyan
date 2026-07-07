@@ -244,10 +244,10 @@ body,
         inset 0 1px 0 rgba(255, 255, 255, 0.4);
 
       &.is-downloading {
-        width: 100%;
+        width: 34%;
         background: linear-gradient(90deg, #7c3aed, #ec4899, #3b82f6, #7c3aed);
         background-size: 200% 100%;
-        animation: c4d-bar-flow 2s linear infinite;
+        animation: c4d-bar-indeterminate 1.4s ease-in-out infinite, c4d-bar-flow 2s linear infinite;
       }
 
       &.is-success {
@@ -276,6 +276,15 @@ body,
   }
   100% {
     background-position: -200% 0%;
+  }
+}
+
+@keyframes c4d-bar-indeterminate {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(320%);
   }
 }
 
