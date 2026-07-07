@@ -133,10 +133,14 @@ function sanitizeArchiveFilePart(value, fallback) {
  * @param {Object} instance - Nginx 实例
  * @returns {string} 运行包文件名
  */
-function buildArchiveFileName(server, instance) {
+function buildArchiveFileName(server, instance, type = 'all') {
+  if (type === 'conf') {
+    return 'nginx.conf';
+  }
   const serverName = sanitizeArchiveFilePart(server?.name || server?.host, `server-${server?.id || 'unknown'}`);
   const instanceName = sanitizeArchiveFilePart(instance?.name, `nginx-${instance?.id || 'instance'}`);
-  return `${serverName}-${instanceName}-${formatArchiveTimestamp()}.tar.gz`;
+  const suffix = type === 'html' ? '-html' : '';
+  return `${serverName}-${instanceName}${suffix}-${formatArchiveTimestamp()}.tar.gz`;
 }
 
 /**
@@ -159,30 +163,45 @@ function resolveArchiveRoot(baseRoot) {
 /**
  * 构建运行包远程预检命令。
  * @param {Object} config - 运行时配置
+ * @param {string} type - 下载类型 ('all' | 'html' | 'conf')
  * @returns {string} 预检命令
  */
-function buildArchivePrecheckCommand(config) {
+function buildArchivePrecheckCommand(config, type = 'all') {
   const sudo = config.useSudo ? 'sudo -n ' : '';
-  return [
-    `command -v tar >/dev/null 2>&1 || { echo ${shellQuote('远程服务器未安装 tar，无法生成运行包')} >&2; exit 10; }`,
-    config.useSudo ? `sudo -n true || { echo ${shellQuote('当前账号无法免密 sudo，无法读取托管 Nginx 目录')} >&2; exit 11; }` : '',
-    `${sudo}test -d ${shellQuote(config.baseRoot)} || { echo ${shellQuote(`托管根目录不存在：${config.baseRoot}`)} >&2; exit 12; }`,
-    `${sudo}test -d ${shellQuote(config.webRoot)} || { echo ${shellQuote(`HTML 根目录不存在：${config.webRoot}`)} >&2; exit 13; }`,
-    `${sudo}test -f ${shellQuote(config.mainConfPath)} || { echo ${shellQuote(`Nginx 主配置不存在：${config.mainConfPath}`)} >&2; exit 14; }`,
-    `${sudo}test -x ${shellQuote(config.scriptPath)} || { echo ${shellQuote(`管理脚本不存在或不可执行：${config.scriptPath}`)} >&2; exit 15; }`,
-  ]
-    .filter(Boolean)
-    .join(' && ');
+  const checks = [];
+
+  if (type === 'all' || type === 'html') {
+    checks.push(`command -v tar >/dev/null 2>&1 || { echo ${shellQuote('远程服务器未安装 tar，无法生成运行包')} >&2; exit 10; }`);
+  }
+  if (config.useSudo) {
+    checks.push(`sudo -n true || { echo ${shellQuote('当前账号无法免密 sudo，无法读取托管 Nginx 目录')} >&2; exit 11; }`);
+  }
+  if (type === 'all') {
+    checks.push(`${sudo}test -d ${shellQuote(config.baseRoot)} || { echo ${shellQuote(`托管根目录不存在：${config.baseRoot}`)} >&2; exit 12; }`);
+    checks.push(`${sudo}test -d ${shellQuote(config.webRoot)} || { echo ${shellQuote(`HTML 根目录不存在：${config.webRoot}`)} >&2; exit 13; }`);
+    checks.push(`${sudo}test -f ${shellQuote(config.mainConfPath)} || { echo ${shellQuote(`Nginx 主配置不存在：${config.mainConfPath}`)} >&2; exit 14; }`);
+    checks.push(`${sudo}test -x ${shellQuote(config.scriptPath)} || { echo ${shellQuote(`管理脚本不存在或不可执行：${config.scriptPath}`)} >&2; exit 15; }`);
+  } else if (type === 'html') {
+    checks.push(`${sudo}test -d ${shellQuote(config.webRoot)} || { echo ${shellQuote(`HTML 根目录不存在：${config.webRoot}`)} >&2; exit 13; }`);
+  } else if (type === 'conf') {
+    checks.push(`${sudo}test -f ${shellQuote(config.mainConfPath)} || { echo ${shellQuote(`Nginx 主配置不存在：${config.mainConfPath}`)} >&2; exit 14; }`);
+  }
+
+  return checks.filter(Boolean).join(' && ');
 }
 
 /**
  * 构建运行包 tar 流式导出命令。
  * @param {Object} config - 运行时配置
  * @param {string} archiveRoot - tar 内相对根路径
+ * @param {string} type - 下载类型 ('all' | 'html')
  * @returns {string} tar 命令
  */
-function buildArchiveTarCommand(config, archiveRoot) {
+function buildArchiveTarCommand(config, archiveRoot, type = 'all') {
   const sudo = config.useSudo ? 'sudo -n ' : '';
+  if (type === 'html') {
+    return `${sudo}tar -czf - -C / ${shellQuote(archiveRoot)}`;
+  }
   const excludeArgs = ARCHIVE_EXCLUDE_DIRS.flatMap((dir) => [
     `--exclude=${shellQuote(`${archiveRoot}/nginx/${dir}`)}`,
     `--exclude=${shellQuote(`${archiveRoot}/nginx/${dir}/*`)}`,
@@ -941,17 +960,25 @@ export async function runNginxInstanceAction(instanceId, action) {
 /**
  * 流式导出托管 Nginx 实例运行包。
  * @param {number} instanceId - Nginx 实例 ID
+ * @param {string} type - 下载类型 ('all' | 'html' | 'conf')
  * @param {import('node:stream').Writable} output - 输出流
  * @param {(meta: Object) => void} onReady - 响应头准备回调
  * @returns {Promise<Object>} 导出元信息
  */
-export async function streamNginxInstanceArchive(instanceId, output, onReady) {
+export async function streamNginxInstanceArchive(instanceId, type = 'all', output, onReady) {
   const { instance, server } = await getNginxInstanceContext(instanceId);
   if (instance.instanceType !== 'managed') throw new Error('只有托管 Nginx 实例支持下载运行包');
 
   const config = resolveRuntimeConfig(instance);
-  const archiveRoot = resolveArchiveRoot(config.baseRoot);
-  const fileName = buildArchiveFileName(server, instance);
+  
+  let archiveRoot = '';
+  if (type === 'html') {
+    archiveRoot = resolveArchiveRoot(config.webRoot);
+  } else if (type !== 'conf') {
+    archiveRoot = resolveArchiveRoot(config.baseRoot);
+  }
+
+  const fileName = buildArchiveFileName(server, instance, type);
   const meta = {
     fileName,
     baseRoot: config.baseRoot,
@@ -959,11 +986,18 @@ export async function streamNginxInstanceArchive(instanceId, output, onReady) {
   };
 
   await withSsh(server, async (conn) => {
-    await execSsh(conn, buildArchivePrecheckCommand(config), { label: '预检托管 Nginx 运行包' });
+    await execSsh(conn, buildArchivePrecheckCommand(config, type), { label: `预检托管 Nginx 运行包(${type})` });
     onReady?.(meta);
-    await streamSshCommand(conn, buildArchiveTarCommand(config, archiveRoot), output, {
-      label: '导出托管 Nginx 运行包',
-    });
+    if (type === 'conf') {
+      const sudo = config.useSudo ? 'sudo -n ' : '';
+      await streamSshCommand(conn, `${sudo}cat ${shellQuote(config.mainConfPath)}`, output, {
+        label: '导出 Nginx 配置文件',
+      });
+    } else {
+      await streamSshCommand(conn, buildArchiveTarCommand(config, archiveRoot, type), output, {
+        label: `导出托管 Nginx 运行包(${type})`,
+      });
+    }
   });
 
   return meta;

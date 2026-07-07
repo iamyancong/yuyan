@@ -511,16 +511,44 @@ export const runNginxInstanceAction = (instanceId: number, action: NginxRuntimeA
 /**
  * 下载托管 Nginx 实例运行包。
  * @param instanceId Nginx 实例 ID
+ * @param type 下载类型
+ * @param onProgress 下载进度回调（已下载字节数）
  * @returns 运行包 Blob 与响应元信息
  */
-export async function downloadNginxInstanceArchive(instanceId: number): Promise<NginxInstanceArchiveDownload> {
-  const response = await fetch(getApiBase(`/deploy-api/nginx-instances/${instanceId}/archive`));
+export async function downloadNginxInstanceArchive(
+  instanceId: number,
+  type: 'all' | 'html' | 'conf' = 'all',
+  onProgress?: (loaded: number) => void,
+  signal?: AbortSignal
+): Promise<NginxInstanceArchiveDownload> {
+  const response = await fetch(getApiBase(`/deploy-api/nginx-instances/${instanceId}/archive?type=${type}`), { signal });
   if (!response.ok) {
     const data = await parseJsonOrText(response);
     throw new Error(typeof data === 'string' ? data : data?.error || data?.message || '下载运行包失败');
   }
+
+  const reader = response.body?.getReader();
+  let blob: Blob;
+
+  if (reader) {
+    const chunks: Uint8Array[] = [];
+    let loaded = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        chunks.push(value);
+        loaded += value.length;
+        onProgress?.(loaded);
+      }
+    }
+    blob = new Blob(chunks, { type: response.headers.get('Content-Type') || 'application/octet-stream' });
+  } else {
+    blob = await response.blob();
+  }
+
   return {
-    blob: await response.blob(),
+    blob,
     fileName: parseDownloadFileName(response.headers.get('Content-Disposition'), `nginx-instance-${instanceId}.tar.gz`),
     baseRoot: decodeResponseHeader(response.headers.get('X-Nginx-Base-Root')),
     scriptPath: decodeResponseHeader(response.headers.get('X-Nginx-Script-Path')),

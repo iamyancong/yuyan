@@ -554,14 +554,13 @@ export async function handleGetNginxInstanceStatus(req, res) {
   }
 }
 
-/**
- * 下载托管 Nginx 实例运行包。
- */
 export async function handleDownloadNginxInstanceArchive(req, res) {
   try {
-    await streamNginxInstanceArchive(Number(req.params.id), res, ({ fileName, baseRoot, scriptPath }) => {
+    const type = req.query.type || 'all';
+    await streamNginxInstanceArchive(Number(req.params.id), type, res, ({ fileName, baseRoot, scriptPath }) => {
       res.status(200);
-      res.setHeader('Content-Type', 'application/gzip');
+      const contentType = type === 'conf' ? 'text/plain; charset=utf-8' : 'application/gzip';
+      res.setHeader('Content-Type', contentType);
       res.setHeader('Content-Disposition', `attachment; filename="${fileName}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
       res.setHeader('Cache-Control', 'no-cache, no-transform');
       res.setHeader('X-Accel-Buffering', 'no');

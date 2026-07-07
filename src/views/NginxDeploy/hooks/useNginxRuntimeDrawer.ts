@@ -1,5 +1,7 @@
 import { reactive, ref } from 'vue';
 import message from 'ant-design-vue/es/message';
+import notification from 'ant-design-vue/es/notification';
+import Modal from 'ant-design-vue/es/modal';
 import {
   createNginxInstance,
   deleteNginxInstance,
@@ -430,8 +432,7 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
     }
   };
 
-  /** 下载当前托管 Nginx 实例运行包 */
-  const downloadActiveNginxArchive = async () => {
+  const downloadActiveNginxArchive = async (type: 'all' | 'html' | 'conf' = 'all') => {
     if (!params.ensureLoggedIn()) return;
     const instance = getActiveInstance();
     if (!instance) return;
@@ -444,9 +445,77 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
       return;
     }
 
+    const typeLabels = {
+      all: '完整运行包',
+      html: '前端静态产物 (HTML)',
+      conf: 'Nginx 配置文件 (nginx.conf)',
+    };
+    const typeLabel = typeLabels[type] || '运行包';
+
+    const controller = new AbortController();
+    let isFinished = false;
+
+    const notificationKey = `download-${Date.now()}`;
+    notification.info({
+      key: notificationKey,
+      message: `开始下载 ${typeLabel}`,
+      description: '正在从远程服务器打包并传输中，请稍候...',
+      duration: 0,
+      onClose: () => {
+        if (!isFinished) {
+          Modal.confirm({
+            title: '确认要取消下载吗？',
+            content: '选择“取消下载”将终止网络传输并释放服务器与本地资源；选择“后台运行”则关闭当前提示，下载仍在后台继续。',
+            okText: '取消下载',
+            cancelText: '后台运行',
+            onOk() {
+              isFinished = true;
+              controller.abort();
+            },
+            onCancel() {
+              message.info(`已转为后台下载 ${typeLabel}`);
+            },
+          });
+        }
+      },
+    });
+
     runtimeArchiveDownloading.value = true;
     try {
-      const result = await downloadNginxInstanceArchive(instance.id);
+      const result = await downloadNginxInstanceArchive(
+        instance.id,
+        type,
+        (loaded) => {
+          const sizeMb = (loaded / 1024 / 1024).toFixed(2);
+          notification.info({
+            key: notificationKey,
+            message: `正在传输 ${typeLabel}`,
+            description: `已接收数据: ${sizeMb} MB (从服务器流式传输中...)`,
+            duration: 0,
+            onClose: () => {
+              if (!isFinished) {
+                Modal.confirm({
+                  title: '确认要取消下载吗？',
+                  content: '选择“取消下载”将终止网络传输并释放服务器与本地资源；选择“后台运行”则关闭当前提示，下载仍在后台继续。',
+                  okText: '取消下载',
+                  cancelText: '后台运行',
+                  onOk() {
+                    isFinished = true;
+                    controller.abort();
+                  },
+                  onCancel() {
+                    message.info(`已转为后台下载 ${typeLabel}`);
+                  },
+                });
+              }
+            },
+          });
+        },
+        controller.signal
+      );
+
+      isFinished = true;
+      
       const blobUrl = window.URL.createObjectURL(result.blob);
       const link = document.createElement('a');
       link.href = blobUrl;
@@ -457,10 +526,39 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
       document.body.removeChild(link);
       window.setTimeout(() => window.URL.revokeObjectURL(blobUrl), 1000);
 
-      const scriptPath = result.scriptPath || runtimeStatus.value?.scriptPath || instance.scriptPath || `${result.baseRoot || instance.baseRoot}/nginx/yuyan-nginx.sh`;
-      message.success(`运行包下载已开始：tar -xzf ${result.fileName} -C /；${scriptPath} start`, 8);
+      const sizeMb = (result.blob.size / 1024 / 1024).toFixed(2);
+      if (type === 'conf') {
+        notification.success({
+          key: notificationKey,
+          message: '下载已完成',
+          description: `Nginx 配置文件已下载完成 (${sizeMb} MB)。`,
+          duration: 4.5,
+          onClose: () => {},
+        });
+      } else {
+        const scriptPath = result.scriptPath || runtimeStatus.value?.scriptPath || instance.scriptPath || `${result.baseRoot || instance.baseRoot}/nginx/yuyan-nginx.sh`;
+        notification.success({
+          key: notificationKey,
+          message: '下载已完成',
+          description: `已成功保存 ${result.fileName} (${sizeMb} MB)。可在目标机执行：tar -xzf ${result.fileName} -C / ；并运行 ${scriptPath} start 启动服务。`,
+          duration: 10,
+          onClose: () => {},
+        });
+      }
     } catch (error: any) {
-      message.error(getErrorMessage(error));
+      isFinished = true;
+      if (error.name === 'AbortError') {
+        message.info(`已取消下载 ${typeLabel}`);
+        notification.close(notificationKey);
+        return;
+      }
+      notification.error({
+        key: notificationKey,
+        message: '下载失败',
+        description: getErrorMessage(error),
+        duration: 5,
+        onClose: () => {},
+      });
     } finally {
       runtimeArchiveDownloading.value = false;
     }

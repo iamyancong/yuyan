@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { YButton, YMonaco, YssFormily } from '@ycwang-dev/components/lite';
+import { DownOutlined } from '@ant-design/icons-vue';
 import type {
   DeployProgressEvent,
   DeployServer,
@@ -68,7 +69,7 @@ const emit = defineEmits<{
   (e: 'deleteInstance'): void;
   (e: 'init'): void;
   (e: 'action', value: NginxRuntimeAction): void;
-  (e: 'downloadArchive'): void;
+  (e: 'downloadArchive', type: 'all' | 'html' | 'conf'): void;
   (e: 'refresh'): void;
 }>();
 
@@ -311,9 +312,32 @@ const computedInstanceFormSchema = computed(() => {
                   <strong>{{ isManagedInstance ? '路径预览' : '实例路径与命令' }}</strong>
                   <span>{{ pathPreviewTip }}</span>
                 </div>
-                <YButton v-if="isManagedInstance" size="small" :disabled="!canDownloadArchive" :loading="archiveDownloading" @click="emit('downloadArchive')">
-                  下载运行包
-                </YButton>
+                <div v-if="isManagedInstance" class="nginx-runtime-download-group">
+                  <YButton
+                    size="small"
+                    :disabled="!canDownloadArchive"
+                    :loading="archiveDownloading"
+                    @click="emit('downloadArchive', 'all')"
+                  >
+                    下载运行包
+                  </YButton>
+                  <a-dropdown :disabled="!canDownloadArchive" placement="bottomRight">
+                    <YButton
+                      size="small"
+                      class="nginx-runtime-download-arrow"
+                      :disabled="!canDownloadArchive"
+                    >
+                      <down-outlined />
+                    </YButton>
+                    <template #overlay>
+                      <a-menu @click="(e: any) => emit('downloadArchive', e.key)">
+                        <a-menu-item key="all">📦 完整运行包 (tar.gz)</a-menu-item>
+                        <a-menu-item key="html">🌐 仅前端静态产物 (tar.gz)</a-menu-item>
+                        <a-menu-item key="conf">⚙️ 仅 Nginx 配置文件 (nginx.conf)</a-menu-item>
+                      </a-menu>
+                    </template>
+                  </a-dropdown>
+                </div>
               </div>
               <div class="nginx-runtime-paths">
                 <div v-for="item in pathRows" :key="item.label" class="nginx-runtime-path-row">
