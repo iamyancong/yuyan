@@ -12,10 +12,24 @@ const DARK_ICON: &[u8] = include_bytes!("../resources/yuyan_dark_clean.png");
 const LIGHT_ICON: &[u8] = include_bytes!("../resources/yuyan_light_clean.png");
 
 
+// 检测本地端口是否可用
+fn is_port_free(port: u16) -> bool {
+    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
+// 动态获取系统当前闲置的可用端口
+fn get_free_port() -> Option<u16> {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .ok()
+        .and_then(|listener| listener.local_addr().ok())
+        .map(|addr| addr.port())
+}
+
 // 存储 Node 服务进程的全局状态
 #[allow(dead_code)]
 struct ServerState {
     child: Arc<Mutex<Option<Child>>>,
+    port: u16,
 }
 
 // 获取 Node.js 可执行文件的路径
@@ -101,7 +115,7 @@ fn pipe_output<R: std::io::Read + Send + 'static>(reader: R, prefix: &'static st
 }
 
 // 启动 Express Node 服务
-fn start_node_server(app: &tauri::App, node_path: &std::path::Path) -> Result<Child, String> {
+fn start_node_server(app: &tauri::App, node_path: &std::path::Path, port: u16) -> Result<Child, String> {
     let resource_path = if cfg!(dev) {
         let cwd = std::env::current_dir().unwrap();
         let path1 = cwd.join("server/index.mjs");
@@ -142,6 +156,7 @@ fn start_node_server(app: &tauri::App, node_path: &std::path::Path) -> Result<Ch
         
     println!("==================================================");
     println!("🚀 正在启动内嵌 Node 服务...");
+    println!("📂 监听端口 (PORT): {}", port);
     println!("📂 脚本路径: {:?}", resource_path);
     println!("📂 部署数据目录 (DEPLOY_DATA_DIR): {:?}", deploy_data_dir);
     println!("📂 模板缓存目录 (TEMPLATE_REPO_PATH): {:?}", template_repo_path);
@@ -152,7 +167,8 @@ fn start_node_server(app: &tauri::App, node_path: &std::path::Path) -> Result<Ch
         .env("DEPLOY_DATA_DIR", deploy_data_dir.to_str().unwrap_or(""))
         .env("TEMPLATE_REPO_PATH", template_repo_path.to_str().unwrap_or(""))
         .env("DEPLOY_SECRET_KEY", "15170bd388b349e5f3f40cb8080ba6d1e82c66f8d097ef7b18e6243ddbb655b6")
-        .env("PORT", "3101")
+        .env("PORT", port.to_string())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -170,7 +186,7 @@ fn start_node_server(app: &tauri::App, node_path: &std::path::Path) -> Result<Ch
     match child.try_wait() {
         Ok(Some(status)) => {
             return Err(format!(
-                "Node 服务进程启动后立即退出，状态: {status}。可能是端口 3101 已被旧服务占用，请先关闭旧的雨燕进程或释放 3101 端口后重试。"
+                "Node 服务进程启动后立即退出，状态: {status}。可能是端口 {port} 已被旧服务占用，请先关闭旧的雨燕进程或释放该端口后重试。"
             ));
         }
         Ok(None) => {}
@@ -218,6 +234,12 @@ fn change_app_icon(app_handle: tauri::AppHandle, is_dark: bool) -> Result<(), St
     }
 
     Ok(())
+}
+
+/** 获取当前运行的本地 Node 服务端口的命令。 */
+#[tauri::command]
+fn get_local_server_port(state: tauri::State<'_, ServerState>) -> u16 {
+    state.port
 }
 
 #[derive(serde::Serialize)]
@@ -360,7 +382,8 @@ pub fn run() {
             app_update::install_app_update,
             exit_app,
             reveal_in_file_manager,
-            get_system_info
+            get_system_info,
+            get_local_server_port
         ])
 
         .on_window_event(|window, event| {
@@ -420,40 +443,63 @@ pub fn run() {
 
 
             // 1. 检查 Node.js 环境
-            if !check_node_installed(&node_path) {
+            let node_installed = check_node_installed(&node_path);
+            if !node_installed {
                 let handle = app.handle().clone();
-                // 弹出警告弹窗
+                // 弹出提示弹窗，告知用户缺失 Node.js，但不退出程序
                 handle.dialog()
-                    .message("未检测到本地 Node.js 环境。\n\n雨燕平台桌面端需要依赖 Node.js 来启动本地服务，请先在系统中安装 Node.js（推荐使用 LTS 版本）后，再重新运行此应用。")
-                    .title("系统环境缺失")
-                    .kind(MessageDialogKind::Error)
+                    .message("未检测到本地 Node.js 环境。\n\n雨燕平台需要依赖 Node.js 来启动本地数据库和辅助服务。请先安装 Node.js（推荐 LTS 版本）后重启应用。\n\n当前您仍可点击“确定”继续使用连接远程测试环境的功能。")
+                    .title("本地环境缺失")
+                    .kind(MessageDialogKind::Warning)
                     .blocking_show();
-                    
-                std::process::exit(1);
             }
 
-            // 2. 启动 Express 数据库与服务
-            match start_node_server(app, &node_path) {
-                Ok(child) => {
-                    let mut lock = child_state.lock().unwrap();
-                    *lock = Some(child);
-                    println!("✅ Node 服务启动成功！进程监听端口: 3101");
+            let mut final_port = 3101;
+            if node_installed {
+                let mut retries = 0;
+                let mut success = false;
+                let mut last_err = String::new();
+
+                while retries < 3 {
+                    // 确定分配的端口：首次尝试 3101（若空闲），后续重试每次动态寻找全新空闲端口
+                    final_port = if retries == 0 && is_port_free(3101) {
+                        3101
+                    } else {
+                        get_free_port().unwrap_or(3102 + retries)
+                    };
+
+                    println!("⏳ 正在尝试在端口 {} 启动 Node 服务（第 {} 次尝试）...", final_port, retries + 1);
+
+                    match start_node_server(app, &node_path, final_port) {
+                        Ok(child) => {
+                            let mut lock = child_state.lock().unwrap();
+                            *lock = Some(child);
+                            println!("✅ Node 服务启动成功！进程监听端口: {final_port}");
+                            success = true;
+                            break;
+                        }
+                        Err(err) => {
+                            println!("⚠️ 在端口 {} 启动 Node 服务失败: {}，准备重试...", final_port, err);
+                            last_err = err;
+                            retries += 1;
+                        }
+                    }
                 }
-                Err(err) => {
+
+                if !success {
                     let handle = app.handle().clone();
                     handle.dialog()
-                        .message(&format!("Node 本地服务启动失败：\n{}\n\n请检查服务脚本及文件完整性。", err))
-                        .title("服务启动错误")
-                        .kind(MessageDialogKind::Error)
+                        .message(&format!("Node 本地服务在重试 3 次后均启动失败：\n{}\n\n请检查端口占用或服务脚本完整性。\n\n当前您仍可点击“确定”继续使用连接远程测试环境的功能。", last_err))
+                        .title("本地服务启动错误")
+                        .kind(MessageDialogKind::Warning)
                         .blocking_show();
-                        
-                    std::process::exit(1);
                 }
             }
 
             // 将进程状态托管到 Tauri State 中
             app.manage(ServerState {
                 child: Arc::clone(&child_state),
+                port: final_port,
             });
 
             Ok(())

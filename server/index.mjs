@@ -127,9 +127,49 @@ try {
 } catch {}
 
 /**
+ * 启用子进程生命周期守护与自毁机制
+ * @description 当父进程（Tauri 客户端）异常退出、被强杀或崩溃时，Node 服务能自动退出，避免残留僵尸进程占用端口
+ */
+function setupSelfDestruct() {
+  // 仅在作为子进程启动（由主程序传入关键环境变量）时启用，避免影响命令行手动调试
+  if (!process.send && !process.env.DEPLOY_DATA_DIR) {
+    return;
+  }
+
+  console.log('[SelfDestruct] 已启用主进程生命周期守护自毁机制');
+
+  // 1. 激活 stdin 管道监听。当主程序崩溃或退出时，系统会自动关闭管道，触发 'end' 事件
+  try {
+    process.stdin.resume();
+    process.stdin.on('end', () => {
+      console.log('[SelfDestruct] 检测到父进程已关闭标准输入管道，正在自毁退出 Node 服务...');
+      process.exit(0);
+    });
+  } catch (error) {
+    console.warn('[SelfDestruct] 激活 stdin 监听失败:', error);
+  }
+
+  // 2. 定时心跳轮询检测父进程存活状态（作为 stdin 管道在某些平台失效时的兜底）
+  if (process.ppid) {
+    setInterval(() => {
+      try {
+        // 向父进程 PID 发送 0 信号用于探测其是否存活，若不存在会抛出错误
+        process.kill(process.ppid, 0);
+      } catch {
+        console.log(`[SelfDestruct] 检测到父进程 (PID: ${process.ppid}) 已不存在，正在自毁退出 Node 服务...`);
+        process.exit(0);
+      }
+    }, 5000).unref(); // 使用 unref 避免该定时器阻止进程因其他正常原因退出
+  }
+}
+
+/**
  * 服务启动入口
  */
 async function bootstrap() {
+  // 启动生命周期守护
+  setupSelfDestruct();
+
   try {
     console.log('='.repeat(60));
     console.log(`🚀 Scaffold 服务启动中...`);
@@ -166,12 +206,12 @@ async function bootstrap() {
     await getDeployDb();
     console.log(`[bootstrap] ✅ 独立服务器部署数据库已就绪: ${DEPLOY_DB_PATH}`);
 
-    // 启动服务
-    const server = app.listen(PORT, () => {
+    // 启动服务，明确指定仅监听 127.0.0.1 本地回环地址，防止局域网外部访问并规避防火墙弹窗提示
+    const server = app.listen(PORT, '127.0.0.1', () => {
       console.log('='.repeat(60));
       console.log(`🚀 Scaffold 服务启动成功!`);
-      console.log(`📍 服务地址: http://localhost:${PORT}`);
-      console.log(`💚 健康检查: http://localhost:${PORT}/health`);
+      console.log(`📍 服务地址: http://127.0.0.1:${PORT}`);
+      console.log(`💚 健康检查: http://127.0.0.1:${PORT}/health`);
       console.log('='.repeat(60));
       console.log(`✨ 服务正在运行中，等待请求...`);
     });
