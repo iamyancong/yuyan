@@ -38,6 +38,12 @@
       "icons/icon.icns",
       "icons/icon.ico"
      ],
+    "macOS": {
+      "infoPlist": {
+        "CFBundleDevelopmentRegion": "zh_CN",
+        "CFBundleLocalizations": ["zh_CN"]
+      }
+    },
     "windows": {
       "nsis": {
         "languages": ["SimpChinese"],
