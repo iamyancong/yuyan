@@ -496,31 +496,123 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
 
     const controller = new AbortController();
     let isFinished = false;
+    let currentLoaded = 0;
+    let isUpdatingNotification = false;
+
+    const expectedSizeMap = {
+      conf: 15 * 1024, // 15KB
+      html: 80 * 1024 * 1024, // 80MB
+      all: 360 * 1024 * 1024 // 360MB
+    };
+    const expectedSize = expectedSizeMap[type];
 
     const notificationKey = `download-${Date.now()}`;
-    notification.info({
-      key: notificationKey,
-      message: `开始下载 ${typeLabel}`,
-      description: '正在从远程服务器打包直写本地磁盘，请稍候...',
-      duration: 0,
-      onClose: () => {
-        if (!isFinished) {
-          Modal.confirm({
-            title: '确认要取消下载吗？',
-            content: '选择“取消下载”将终止直写并释放服务器资源；选择“后台运行”则关闭当前提示，下载仍在后台继续。',
-            okText: '取消下载',
-            cancelText: '后台运行',
-            onOk() {
-              isFinished = true;
-              controller.abort();
-            },
-            onCancel() {
+
+    let simulatedPercent = 0;
+    let timerId: any = null;
+
+    const clearTimer = () => {
+      if (timerId) {
+        clearInterval(timerId);
+        timerId = null;
+      }
+    };
+
+    // 二次确认弹窗辅助函数
+    const showConfirmModal = () => {
+      if (isFinished) return;
+
+      const confirmModal = Modal.confirm({
+        title: '确认要关闭提示吗？',
+        okText: '终止下载',
+        cancelText: '取消',
+        okButtonProps: { danger: true },
+        content: h('div', null, [
+          h('p', null, '选择“终止下载”将终止本次直写并释放服务器资源。点击“取消”将返回前台下载界面。'),
+          h('p', { style: 'margin-bottom: 12px; color: rgba(0,0,0,0.45); font-size: 12px;' }, '您也可以转为后台静默下载，不会关闭下载进程：'),
+          h('button', {
+            class: 'ant-btn ant-btn-primary ant-btn-sm',
+            onClick: () => {
               message.info(`已转为后台下载 ${typeLabel}`);
-            },
-          });
+              confirmModal.destroy();
+            }
+          }, '转为后台运行')
+        ]),
+        onOk() {
+          isFinished = true;
+          clearTimer();
+          controller.abort();
+        },
+        onCancel() {
+          // 用户取消/按Esc/点击遮罩层：重新拉起前台进度通知
+          triggerNotification();
         }
-      },
-    });
+      });
+    };
+
+    // 获取当前计算/估算百分比
+    const getPercent = () => {
+      if (isFinished) return 100;
+      if (currentLoaded === 0) {
+        return simulatedPercent;
+      }
+      return 12 + Math.min(Math.floor((currentLoaded / expectedSize) * 87), 87);
+    };
+
+    // 统一通知触发与渲染函数
+    const triggerNotification = () => {
+      if (isFinished) return;
+
+      const percent = getPercent();
+      const sizeMb = (currentLoaded / 1024 / 1024).toFixed(2);
+      const isStarting = currentLoaded === 0;
+
+      // 标记为正在进行程序更新，用以过滤原地更新误触发的 onClose
+      isUpdatingNotification = true;
+
+      notification.info({
+        key: notificationKey,
+        class: 'c4d-download-notification',
+        icon: h('span', { class: 'c4d-status-led is-downloading' }),
+        message: h('div', { style: 'display: flex; justify-content: space-between; align-items: center; width: 100%;' }, [
+          h('span', null, isStarting ? `开始下载 ${typeLabel}` : `正在传输 ${typeLabel}`),
+          h('span', { class: 'c4d-percent-text' }, `${percent}%`)
+        ]),
+        description: h('div', null, [
+          h('span', null, isStarting 
+            ? '正在从远程服务器打包直写本地磁盘，请稍候...' 
+            : `已接收数据: ${sizeMb} MB (从服务器流式传输中...)`),
+          h('div', { class: 'c4d-progress-wrapper' }, [
+            h('div', { class: 'c4d-progress-track' }, [
+              h('div', { class: 'c4d-progress-bar is-downloading', style: `width: ${percent}%` })
+            ])
+          ])
+        ]),
+        duration: 0,
+        onClose: () => {
+          if (isUpdatingNotification) {
+            return;
+          }
+          showConfirmModal();
+        }
+      });
+
+      // 异步释放标志位，确保本轮渲染中引发的所有 onClose 事件都被成功过滤
+      setTimeout(() => {
+        isUpdatingNotification = false;
+      }, 50);
+    };
+
+    // 首次唤起前台进度条
+    triggerNotification();
+
+    // 启动百分比自爬升定时器，每 500ms 增加 1%，最高至 12% 封顶
+    timerId = setInterval(() => {
+      if (!isFinished && currentLoaded === 0 && simulatedPercent < 12) {
+        simulatedPercent += 1;
+        triggerNotification();
+      }
+    }, 500);
 
     runtimeArchiveDownloading.value = true;
     try {
@@ -529,42 +621,23 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
         type,
         filePath,
         (loaded) => {
-          const sizeMb = (loaded / 1024 / 1024).toFixed(2);
-          notification.info({
-            key: notificationKey,
-            message: `正在传输 ${typeLabel}`,
-            description: `已直写数据: ${sizeMb} MB (从服务器流式写入中...)`,
-            duration: 0,
-            onClose: () => {
-              if (!isFinished) {
-                Modal.confirm({
-                  title: '确认要取消下载吗？',
-                  content: '选择“取消下载”将终止直写并释放服务器资源；选择“后台运行”则关闭当前提示，下载仍在后台继续。',
-                  okText: '取消下载',
-                  cancelText: '后台运行',
-                  onOk() {
-                    isFinished = true;
-                    controller.abort();
-                  },
-                  onCancel() {
-                    message.info(`已转为后台下载 ${typeLabel}`);
-                  },
-                });
-              }
-            },
-          });
+          // 一旦收到流式流量，清除自爬升定时器，切换至真实流量计算
+          clearTimer();
+          currentLoaded = loaded;
+          triggerNotification();
         },
         controller.signal
       );
 
       isFinished = true;
+      clearTimer();
 
       // 提取物理保存的文件名
       const fileBaseName = filePath.substring(filePath.lastIndexOf(filePath.includes('\\') ? '\\' : '/') + 1);
 
       const openFolderLink = h('a', {
         href: 'javascript:;',
-        style: 'margin-top: 8px; display: block; color: #1890ff; font-weight: bold;',
+        class: 'c4d-locate-btn',
         onClick: () => {
           invoke('reveal_in_file_manager', { path: filePath })
             .catch(err => message.error(`定位失败: ${err}`));
@@ -574,9 +647,19 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
       if (type === 'conf') {
         notification.success({
           key: notificationKey,
-          message: '下载已完成',
+          class: 'c4d-download-notification',
+          icon: h('span', { class: 'c4d-status-led is-success' }),
+          message: h('div', { style: 'display: flex; justify-content: space-between; align-items: center; width: 100%;' }, [
+            h('span', null, '下载已完成'),
+            h('span', { class: 'c4d-percent-text success' }, '100%')
+          ]),
           description: h('div', null, [
-            h('p', null, `Nginx 配置文件已直写完成：${fileBaseName}`),
+            h('p', { style: 'margin-bottom: 4px;' }, `Nginx 配置文件已直写完成：${fileBaseName}`),
+            h('div', { class: 'c4d-progress-wrapper', style: 'margin-bottom: 12px;' }, [
+              h('div', { class: 'c4d-progress-track' }, [
+                h('div', { class: 'c4d-progress-bar is-success', style: 'width: 100%' })
+              ])
+            ]),
             openFolderLink
           ]),
           duration: 6,
@@ -586,11 +669,21 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
         const scriptPath = instance.scriptPath || `${instance.baseRoot}/nginx/yuyan-nginx.sh`;
         notification.success({
           key: notificationKey,
-          message: '下载已完成',
+          class: 'c4d-download-notification',
+          icon: h('span', { class: 'c4d-status-led is-success' }),
+          message: h('div', { style: 'display: flex; justify-content: space-between; align-items: center; width: 100%;' }, [
+            h('span', null, '下载已完成'),
+            h('span', { class: 'c4d-percent-text success' }, '100%')
+          ]),
           description: h('div', null, [
-            h('p', null, `已成功直写保存：${fileBaseName}`),
+            h('p', { style: 'margin-bottom: 4px;' }, `已成功直写保存：${fileBaseName}`),
             h('p', { style: 'font-size: 12px; color: rgba(0,0,0,0.45); margin-bottom: 8px;' },
               `目标机执行：tar -xzf ${fileBaseName} -C / ；运行 ${scriptPath} start 启动服务。`),
+            h('div', { class: 'c4d-progress-wrapper', style: 'margin-bottom: 12px;' }, [
+              h('div', { class: 'c4d-progress-track' }, [
+                h('div', { class: 'c4d-progress-bar is-success', style: 'width: 100%' })
+              ])
+            ]),
             openFolderLink
           ]),
           duration: 10,
@@ -599,6 +692,7 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
       }
     } catch (error: any) {
       isFinished = true;
+      clearTimer();
       if (error.name === 'AbortError') {
         message.info(`已取消下载 ${typeLabel}`);
         notification.close(notificationKey);
@@ -606,12 +700,22 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
       }
       notification.error({
         key: notificationKey,
+        class: 'c4d-download-notification',
+        icon: h('span', { class: 'c4d-status-led is-error' }),
         message: '下载失败',
-        description: getErrorMessage(error),
+        description: h('div', null, [
+          h('p', { style: 'margin-bottom: 8px;' }, getErrorMessage(error)),
+          h('div', { class: 'c4d-progress-wrapper' }, [
+            h('div', { class: 'c4d-progress-track' }, [
+              h('div', { class: 'c4d-progress-bar is-error', style: 'width: 100%' })
+            ])
+          ])
+        ]),
         duration: 5,
         onClose: () => {},
       });
     } finally {
+      clearTimer();
       runtimeArchiveDownloading.value = false;
     }
   };

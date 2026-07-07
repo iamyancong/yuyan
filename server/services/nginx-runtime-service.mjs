@@ -43,8 +43,19 @@ const SUPPORTED_ARCHES = new Set(['x86_64', 'amd64']);
 /** Nginx 运行时操作 */
 const RUNTIME_ACTIONS = new Set(['test', 'start', 'stop', 'reload', 'status']);
 
-/** 运行包导出时排除的运行态目录 */
+/** 运行包导出时排除的 Nginx 运行态目录 */
 const ARCHIVE_EXCLUDE_DIRS = ['logs', 'run', 'client_body_temp', 'proxy_temp'];
+
+/** 运行包导出时排除的部署元数据目录 */
+const ARCHIVE_EXCLUDE_METADATA_DIRS = ['.yuyan-backups', '.yuyan-manifests'];
+
+/** 运行包导出时排除的全局匹配模式 */
+const ARCHIVE_EXCLUDE_PATTERNS = [
+  ...ARCHIVE_EXCLUDE_METADATA_DIRS,
+  ...ARCHIVE_EXCLUDE_METADATA_DIRS.map((dir) => `*/${dir}`),
+  ...ARCHIVE_EXCLUDE_METADATA_DIRS.map((dir) => `*/${dir}/*`),
+  '*/yuyan-nginx.sh.bak.*',
+];
 
 // ──────────────────────────────────────────────
 // 路径派生
@@ -193,22 +204,30 @@ function buildArchivePrecheckCommand(config, type = 'all') {
 }
 
 /**
+ * 构建 tar 排除参数。
+ * @param {string[]} patterns - 排除匹配模式
+ * @returns {string} tar 排除参数
+ */
+function buildArchiveExcludeArgs(patterns) {
+  return patterns.map((pattern) => `--exclude=${shellQuote(pattern)}`).join(' ');
+}
+
+/**
  * 构建运行包 tar 流式导出命令。
  * @param {Object} config - 运行时配置
  * @param {string} archiveRoot - tar 内相对根路径
  * @param {string} type - 下载类型 ('all' | 'html')
  * @returns {string} tar 命令
  */
-function buildArchiveTarCommand(config, archiveRoot, type = 'all') {
+export function buildArchiveTarCommand(config, archiveRoot, type = 'all') {
   const sudo = config.useSudo ? 'sudo -n ' : '';
-  if (type === 'html') {
-    return `${sudo}tar -czf - -C / ${shellQuote(archiveRoot)}`;
+  const excludePatterns = [...ARCHIVE_EXCLUDE_PATTERNS];
+  if (type === 'all') {
+    excludePatterns.push(
+      ...ARCHIVE_EXCLUDE_DIRS.flatMap((dir) => [`${archiveRoot}/nginx/${dir}`, `${archiveRoot}/nginx/${dir}/*`])
+    );
   }
-  const excludeArgs = ARCHIVE_EXCLUDE_DIRS.flatMap((dir) => [
-    `--exclude=${shellQuote(`${archiveRoot}/nginx/${dir}`)}`,
-    `--exclude=${shellQuote(`${archiveRoot}/nginx/${dir}/*`)}`,
-  ]).join(' ');
-  return `${sudo}tar -czf - -C / ${excludeArgs} ${shellQuote(archiveRoot)}`;
+  return `${sudo}tar -czf - -C / ${buildArchiveExcludeArgs(excludePatterns)} ${shellQuote(archiveRoot)}`;
 }
 
 // ──────────────────────────────────────────────
