@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { onMounted } from 'vue';
-import '@ycwang-dev/components/dist/style.css';
 import { useYssVxeUI } from '@/composables/useYssVxeUI';
 import NginxDeployWorkspace from './components/NginxDeployWorkspace/index.vue';
 import NginxDeployOverlays from './components/NginxDeployOverlays/index.vue';

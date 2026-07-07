@@ -75,4 +75,61 @@ body,
     }
   }
 }
+
+/* 强制主按钮（含第三方组件库按钮）走全局配置的主题色变量，应对跨实例和打包外部化失效 */
+.ant-btn-primary {
+  background-color: var(--primary-color) !important;
+  border-color: var(--primary-color) !important;
+  color: #ffffff !important;
+  box-shadow: 0 2px 0 var(--primary-color-lighter);
+  transition: all 0.2s cubic-bezier(0.645, 0.045, 0.355, 1);
+
+  &,
+  span,
+  .anticon {
+    color: #ffffff !important;
+  }
+
+  &:hover,
+  &:focus {
+    background-color: var(--primary-color-hover) !important;
+    border-color: var(--primary-color-hover) !important;
+    color: #ffffff !important;
+
+    &,
+    span,
+    .anticon {
+      color: #ffffff !important;
+    }
+  }
+
+  &:active {
+    background-color: var(--primary-color-active) !important;
+    border-color: var(--primary-color-active) !important;
+    color: #ffffff !important;
+
+    &,
+    span,
+    .anticon {
+      color: #ffffff !important;
+    }
+  }
+
+  &[disabled],
+  &.ant-btn-background-ghost[disabled] {
+    background-color: var(--border-color-split) !important;
+    border-color: var(--border-color-split) !important;
+    color: var(--text-color-tertiary) !important;
+    opacity: 0.6;
+    cursor: not-allowed;
+
+    &,
+    span,
+    .anticon {
+      color: var(--text-color-tertiary) !important;
+    }
+  }
+}
 </style>
+
+

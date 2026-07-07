@@ -2,7 +2,6 @@
 import { computed, defineAsyncComponent, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { YCard } from '@ycwang-dev/components/lite';
-import '@ycwang-dev/components/dist/style.css';
 import ProjectSearchForm from '@/views/ProjectList/components/SearchForm.vue';
 import ProjectTable from '@/views/ProjectList/components/ProjectTable.vue';
 import type { GitLabProject } from '@/api/gitlab';
