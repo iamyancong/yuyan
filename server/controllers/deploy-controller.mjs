@@ -597,29 +597,46 @@ export async function handleSaveNginxInstanceArchive(req, res) {
     res.flushHeaders?.();
 
     let isAborted = false;
-    req.on('close', () => {
+    req.on('aborted', () => {
       isAborted = true;
     });
+    res.on('close', () => {
+      if (!res.writableEnded) isAborted = true;
+    });
 
-    const onWriteProgress = (loaded) => {
+    /**
+     * 写入运行包保存事件。
+     * @param {Object} event - SSE 事件数据
+     */
+    const writeArchiveEvent = (event) => {
       if (!isAborted) {
-        res.write(`data: ${JSON.stringify({ loaded })}\n\n`);
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
         if (typeof res.flush === 'function') {
           res.flush();
         }
       }
     };
 
-    await saveNginxInstanceArchiveToPath(Number(req.params.id), type || 'all', filePath, onWriteProgress, () => isAborted);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    writeArchiveEvent({ stage: 'preparing', message: '正在创建本地保存目录' });
+
+    const meta = await saveNginxInstanceArchiveToPath(Number(req.params.id), type || 'all', filePath, writeArchiveEvent, () => isAborted);
     
     if (!isAborted) {
-      res.write(`data: ${JSON.stringify({ finished: true })}\n\n`);
-      if (typeof res.flush === 'function') {
-        res.flush();
-      }
+      writeArchiveEvent({
+        stage: 'finished',
+        message: '运行包已保存到本地磁盘',
+        finished: true,
+        filePath,
+        fileName: meta?.fileName || path.basename(filePath),
+      });
       res.end();
     }
   } catch (error) {
+    if (isAborted) {
+      if (!res.writableEnded) res.end();
+      return;
+    }
     if (!res.headersSent) {
       sendError(res, error, 400);
     } else {

@@ -1029,11 +1029,16 @@ export async function streamNginxInstanceArchive(instanceId, type = 'all', outpu
  * @param {number} instanceId - Nginx 实例 ID
  * @param {string} type - 下载类型 ('all' | 'html' | 'conf')
  * @param {string} filePath - 本地保存路径
- * @param {(loaded: number) => void} onProgress - 进度回调（已写入字节数）
+ * @param {(event: Object) => void} onEvent - 下载阶段与进度事件回调
  * @param {() => boolean} isAbortedFn - 外部传递的是否 Abort 判断函数
  * @returns {Promise<Object>} 导出元信息
  */
-export async function saveNginxInstanceArchiveToPath(instanceId, type = 'all', filePath, onProgress, isAbortedFn) {
+export async function saveNginxInstanceArchiveToPath(instanceId, type = 'all', filePath, onEvent, isAbortedFn) {
+  const emit = (event) => {
+    if (!isAbortedFn?.()) onEvent?.(event);
+  };
+
+  emit({ stage: 'preparing', message: '正在准备下载任务' });
   const { instance, server } = await getNginxInstanceContext(instanceId);
   if (instance.instanceType !== 'managed') throw new Error('只有托管 Nginx 实例支持下载运行包');
 
@@ -1054,6 +1059,7 @@ export async function saveNginxInstanceArchiveToPath(instanceId, type = 'all', f
   };
 
   await withSsh(server, async (conn) => {
+    emit({ stage: 'prechecking', message: '正在校验远程运行包依赖与路径' });
     await execSsh(conn, buildArchivePrecheckCommand(config, type), { label: `预检托管 Nginx 运行包(${type})` });
     
     if (isAbortedFn?.()) return;
@@ -1076,7 +1082,7 @@ export async function saveNginxInstanceArchiveToPath(instanceId, type = 'all', f
             return;
           }
           loaded += chunk.length;
-          onProgress?.(loaded);
+          emit({ stage: 'writing', message: '正在写入本地磁盘', loaded });
           callback();
         });
       },
@@ -1089,10 +1095,12 @@ export async function saveNginxInstanceArchiveToPath(instanceId, type = 'all', f
     try {
       if (type === 'conf') {
         const sudo = config.useSudo ? 'sudo -n ' : '';
+        emit({ stage: 'packing', message: '正在读取远程 Nginx 配置文件' });
         await streamSshCommand(conn, `${sudo}cat ${shellQuote(config.mainConfPath)}`, progressWrapper, {
           label: '导出 Nginx 配置文件',
         });
       } else {
+        emit({ stage: 'packing', message: '正在远程打包运行目录并开始传输' });
         await streamSshCommand(conn, buildArchiveTarCommand(config, archiveRoot, type), progressWrapper, {
           label: `导出托管 Nginx 运行包(${type})`,
         });
@@ -1104,6 +1112,7 @@ export async function saveNginxInstanceArchiveToPath(instanceId, type = 'all', f
         fileStream.on('error', reject);
         progressWrapper.end();
       });
+      emit({ stage: 'finished', message: '运行包已保存到本地磁盘', loaded });
     } catch (err) {
       fileStream.destroy();
       throw err;
