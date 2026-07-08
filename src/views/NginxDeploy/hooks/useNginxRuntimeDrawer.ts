@@ -660,7 +660,10 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        URL.revokeObjectURL(downloadUrl);
+        // 延迟释放，防止某些浏览器在 Blob 还没完全读取时就被销毁导致文件损坏
+        setTimeout(() => {
+          URL.revokeObjectURL(downloadUrl);
+        }, 1000);
       }
 
       isFinished = true;
