@@ -6,6 +6,7 @@ import {
   createNginxInstance,
   deleteNginxInstance,
   saveNginxInstanceArchiveToLocal,
+  downloadNginxInstanceArchive,
   getNginxInstanceStatus,
   initNginxInstanceWithProgress,
   runNginxInstanceAction,
@@ -25,6 +26,7 @@ import { getErrorMessage, getPreferredNginxInstance, getVisibleNginxInstances } 
 import { createDefaultNginxInstanceForm } from '../components/NginxRuntimeDrawer/constant';
 import { downloadDir } from '@tauri-apps/api/path';
 import { invoke } from '@tauri-apps/api/core';
+import { isTauri } from '@/utils/env';
 
 /** Nginx 运行时抽屉 Hook 参数 */
 interface UseNginxRuntimeDrawerParams {
@@ -511,21 +513,24 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
       defaultFileName = `${serverPart}-${instancePart}${suffix}-${ts}.tar.gz`;
     }
 
+    const isTauriClient = isTauri();
     let filePath = '';
-    try {
-      const dlDir = await downloadDir();
-      filePath = joinNativePath(dlDir, ARCHIVE_DOWNLOAD_DIR_NAME, defaultFileName);
-    } catch (e) {
-      console.warn('获取默认下载目录失败', e);
-      message.error('获取系统下载目录失败，无法自动保存运行包');
-      return;
+    if (isTauriClient) {
+      try {
+        const dlDir = await downloadDir();
+        filePath = joinNativePath(dlDir, ARCHIVE_DOWNLOAD_DIR_NAME, defaultFileName);
+      } catch (e) {
+        console.warn('获取默认下载目录失败', e);
+        message.error('获取系统下载目录失败，无法自动保存运行包');
+        return;
+      }
     }
 
     const controller = new AbortController();
     let isFinished = false;
     let currentLoaded = 0;
     let currentStage: NginxArchiveSaveStage = 'preparing';
-    let currentStageMessage = '正在准备自动下载任务';
+    let currentStageMessage = isTauriClient ? '正在准备自动下载任务' : '正在准备自动下载...';
     let savedFilePath = filePath;
     let savedFileName = defaultFileName;
     let isUpdatingNotification = false;
@@ -621,25 +626,57 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
 
     runtimeArchiveDownloading.value = true;
     try {
-      await saveNginxInstanceArchiveToLocal(
-        instance.id,
-        type,
-        filePath,
-        handleSaveEvent,
-        controller.signal
-      );
+      if (isTauriClient) {
+        await saveNginxInstanceArchiveToLocal(
+          instance.id,
+          type,
+          filePath,
+          handleSaveEvent,
+          controller.signal
+        );
+      } else {
+        currentStage = 'writing';
+        currentStageMessage = '正在打包并下载运行包...';
+        triggerNotification();
+
+        const result = await downloadNginxInstanceArchive(
+          instance.id,
+          type,
+          (loaded) => {
+            currentLoaded = loaded;
+            triggerNotification();
+          },
+          controller.signal
+        );
+
+        isFinished = true;
+        savedFileName = result.fileName || defaultFileName;
+
+        // 触发浏览器默认下载行为
+        const downloadUrl = URL.createObjectURL(result.blob);
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = savedFileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(downloadUrl);
+      }
 
       isFinished = true;
       const fileBaseName = savedFileName || savedFilePath.substring(savedFilePath.lastIndexOf(savedFilePath.includes('\\') ? '\\' : '/') + 1);
 
-      const openFolderLink = h('a', {
+      const openFolderLink = isTauriClient ? h('a', {
         href: 'javascript:;',
         class: 'c4d-locate-btn',
         onClick: () => {
           invoke('reveal_in_file_manager', { path: savedFilePath })
             .catch(err => message.error(`定位失败: ${err}`));
         }
-      }, '打开文件位置');
+      }, '打开文件位置') : null;
+
+      const successText = isTauriClient ? '已成功直写保存' : '已成功下载保存';
+      const confSuccessText = isTauriClient ? 'Nginx 配置文件已直写完成' : 'Nginx 配置文件已下载完成';
 
       if (type === 'conf') {
         notification.success({
@@ -651,7 +688,7 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
             h('span', { class: 'c4d-percent-text success' }, '100%')
           ]),
           description: h('div', null, [
-            h('p', { style: 'margin-bottom: 4px;' }, `Nginx 配置文件已直写完成：${fileBaseName}`),
+            h('p', { style: 'margin-bottom: 4px;' }, `${confSuccessText}：${fileBaseName}`),
             h('div', { class: 'c4d-progress-wrapper', style: 'margin-bottom: 12px;' }, [
               h('div', { class: 'c4d-progress-track' }, [
                 h('div', { class: 'c4d-progress-bar is-success', style: 'width: 100%' })
@@ -664,6 +701,10 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
         });
       } else {
         const scriptPath = instance.scriptPath || `${instance.baseRoot}/nginx/yuyan-nginx.sh`;
+        const actionTip = isTauriClient
+          ? `目标机执行：tar -xzf ${fileBaseName} -C / ；运行 ${scriptPath} start 启动服务。`
+          : '请将下载好的运行包上传至服务器目标路径后解压，并执行启动脚本。';
+
         notification.success({
           key: notificationKey,
           class: 'c4d-download-notification',
@@ -673,9 +714,8 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
             h('span', { class: 'c4d-percent-text success' }, '100%')
           ]),
           description: h('div', null, [
-            h('p', { style: 'margin-bottom: 4px;' }, `已成功直写保存：${fileBaseName}`),
-            h('p', { style: 'font-size: 12px; color: rgba(0,0,0,0.45); margin-bottom: 8px;' },
-              `目标机执行：tar -xzf ${fileBaseName} -C / ；运行 ${scriptPath} start 启动服务。`),
+            h('p', { style: 'margin-bottom: 4px;' }, `${successText}：${fileBaseName}`),
+            h('p', { style: 'font-size: 12px; color: rgba(0,0,0,0.45); margin-bottom: 8px;' }, actionTip),
             h('div', { class: 'c4d-progress-wrapper', style: 'margin-bottom: 12px;' }, [
               h('div', { class: 'c4d-progress-track' }, [
                 h('div', { class: 'c4d-progress-bar is-success', style: 'width: 100%' })

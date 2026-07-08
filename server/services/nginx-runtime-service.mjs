@@ -1013,19 +1013,34 @@ export async function streamNginxInstanceArchive(instanceId, type = 'all', outpu
     scriptPath: config.scriptPath,
   };
 
+  const archiveStream = new PassThrough();
+  archiveStream.pipe(output);
+
+  // 监听 output 的结束事件，用于等待网络传输完成
+  const outputFinished = new Promise((resolve) => {
+    output.on('finish', resolve);
+    output.on('close', resolve);
+    // 10秒超时兜底，防止某些特殊情况下 stream 挂起导致 SSH 无法释放
+    setTimeout(resolve, 10000);
+  });
+
   await withSsh(server, async (conn) => {
     await execSsh(conn, buildArchivePrecheckCommand(config, type), { label: `预检托管 Nginx 运行包(${type})` });
     onReady?.(meta);
     if (type === 'conf') {
       const sudo = config.useSudo ? 'sudo -n ' : '';
-      await streamSshCommand(conn, `${sudo}cat ${shellQuote(config.mainConfPath)}`, output, {
+      await streamSshCommand(conn, `${sudo}cat ${shellQuote(config.mainConfPath)}`, archiveStream, {
         label: '导出 Nginx 配置文件',
       });
     } else {
-      await streamSshCommand(conn, buildArchiveTarCommand(config, archiveRoot, type), output, {
+      await streamSshCommand(conn, buildArchiveTarCommand(config, archiveRoot, type), archiveStream, {
         label: `导出托管 Nginx 运行包(${type})`,
       });
     }
+    
+    // 数据推送完毕，发送结束符并等待管道数据全数写入网络
+    archiveStream.end();
+    await outputFinished;
   });
 
   return meta;
