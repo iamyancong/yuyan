@@ -5,7 +5,7 @@ import { detectPlatform } from '@/utils/platformDetect';
 import { useTheme } from '@/hooks/useTheme';
 import { useAuth } from '@/composables/useAuth';
 import { useNavigation } from './hooks/useNavigation';
-import SettingsDrawer from '@/components/SettingsDrawer.vue';
+import SettingsDrawer from '@/components/SettingsDrawer/index.vue';
 import LoginModal from '@/components/LoginModal.vue';
 import LayoutHeader from './components/LayoutHeader.vue';
 import LayoutSider from './components/LayoutSider.vue';
