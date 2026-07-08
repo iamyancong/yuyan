@@ -1,5 +1,66 @@
-import type { DeployProgressEvent, NginxInstancePayload, NginxRuntimePayload, NginxRuntimeStatus } from '@/api/deploy';
+import type {
+  DeployProgressEvent,
+  DeployServer,
+  NginxInstance,
+  NginxInstancePayload,
+  NginxRuntimeAction,
+  NginxRuntimePayload,
+  NginxRuntimeStatus,
+} from '@/api/deploy';
 import { formatDeployDateTime } from '../../constant';
+
+/** Nginx 初始化进度状态 */
+export interface RuntimeProgressState {
+  percent: number;
+  title: string;
+  detail: string;
+  logs: DeployProgressEvent[];
+  running: boolean;
+}
+
+/** Nginx 运行时抽屉属性 */
+export interface NginxRuntimeDrawerProps {
+  open: boolean;
+  servers: DeployServer[];
+  server: DeployServer | null;
+  instances: NginxInstance[];
+  activeInstanceId: number | null;
+  status: NginxRuntimeStatus | null;
+  form: NginxRuntimePayload;
+  loading: boolean;
+  initializing: boolean;
+  actionLoading: NginxRuntimeAction | '';
+  archiveDownloading: boolean;
+  instanceFormOpen: boolean;
+  instanceFormKey: number;
+  instanceSaving: boolean;
+  instanceForm: NginxInstancePayload;
+  progress: RuntimeProgressState;
+}
+
+/** Nginx 运行时抽屉事件 */
+export type NginxRuntimeDrawerEmits = {
+  (e: 'update:open', value: boolean): void;
+  (e: 'update:form', value: Partial<NginxRuntimePayload>): void;
+  (e: 'update:instanceFormOpen', value: boolean): void;
+  (e: 'update:instanceForm', value: Partial<NginxInstancePayload>): void;
+  (e: 'changeServer', value: number): void;
+  (e: 'selectInstance', value: number): void;
+  (e: 'createInstance', value: NginxInstance['instanceType']): void;
+  (e: 'editInstance'): void;
+  (e: 'saveInstance'): void;
+  (e: 'deleteInstance'): void;
+  (e: 'init'): void;
+  (e: 'action', value: NginxRuntimeAction): void;
+  (e: 'downloadArchive', type: 'all' | 'html' | 'conf'): void;
+  (e: 'refresh'): void;
+};
+
+/** Nginx 运行时路径展示行 */
+export interface RuntimePathRow {
+  label: string;
+  value?: string;
+}
 
 /** Nginx 运行时状态文案 */
 export const NGINX_RUNTIME_STATUS_LABEL: Record<string, string> = {
@@ -217,7 +278,7 @@ export const getRuntimeDrawerTitle = (status: NginxRuntimeStatus | null, initial
  * @param form 初始化表单
  * @returns 路径预览
  */
-export const getRuntimePreviewRows = (form: NginxRuntimePayload) => {
+export const getRuntimePreviewRows = (form: NginxRuntimePayload): RuntimePathRow[] => {
   const baseRoot = String(form.baseRoot || '/opt/yuyan').replace(/\/+$/, '');
   return [
     { label: '运行时变体', value: '初始化时自动选择' },
@@ -241,7 +302,7 @@ const VARIANT_LABELS: Record<string, string> = {
  * @param form 初始化表单
  * @returns 路径摘要
  */
-export const getRuntimePathRows = (status: NginxRuntimeStatus | null, form: NginxRuntimePayload) => {
+export const getRuntimePathRows = (status: NginxRuntimeStatus | null, form: NginxRuntimePayload): RuntimePathRow[] => {
   if (!status?.initialized) return getRuntimePreviewRows(form);
   const variantId = status.packageVariant || status.runtime?.packageVariant || '';
   const variantLabel = VARIANT_LABELS[variantId] || variantId || '未知';
