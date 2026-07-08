@@ -253,23 +253,26 @@ export function streamSshCommand(conn, command, output, options = {}) {
       resetIdleTimer();
       startAbortTimer();
 
+      stream.pipe(output, { end: false });
+
+      if (options.onStdout) {
+        stream.on('data', (chunk) => {
+          options.onStdout?.(chunk);
+          resetIdleTimer();
+        });
+      } else {
+        stream.on('data', () => {
+          resetIdleTimer();
+        });
+      }
+
       stream
         .on('exit', (code) => {
           setTimeout(() => finishWithCode(code), 0);
         })
         .on('close', (code) => {
+          stream.resume(); // 确保因背压被 pause 的流在关闭时能完全排空并发出所有剩余数据
           finishWithCode(code);
-        })
-        .on('data', (chunk) => {
-          resetIdleTimer();
-          options.onStdout?.(chunk);
-          if (!output.write(chunk)) {
-            stream.pause();
-            output.once('drain', () => {
-              resetIdleTimer();
-              stream.resume();
-            });
-          }
         });
 
       stream.stderr.on('data', (chunk) => {
