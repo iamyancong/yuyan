@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue';
-import { YCard, YTable } from '@yss-ui/components/lite';
+import { computed, nextTick, ref, watch } from 'vue';
+import { YTable } from '@yss-ui/components/lite';
 import { openExternal } from '@/utils/open';
 import { useTableHeight } from '@yss-ui/hooks';
 import { SyncOutlined } from '@ant-design/icons-vue';
@@ -44,6 +44,7 @@ interface RecordPagination {
 
 /** 发布历史 Tab 属性 */
 interface DeployRecordTabProps {
+  active: boolean;
   loading: boolean;
   records: DeployRecord[];
   actionConfig: YTableActionConfig;
@@ -87,6 +88,16 @@ const recalculateAfterRender = async () => {
 watch([() => props.loading, () => props.records.length, () => props.pagination.pageSize], recalculateAfterRender, {
   flush: 'post',
 });
+
+watch(
+  () => props.active,
+  (isActive) => {
+    if (isActive) {
+      void recalculateAfterRender();
+    }
+  },
+  { flush: 'post' }
+);
 
 /**
  * 获取 GitLab 提交记录页面链接。
@@ -133,7 +144,7 @@ const getCommitUrl = (record: DeployRecord): string => {
 </script>
 
 <template>
-  <YCard class="nginx-deploy-tab-card" :padding="12">
+  <div class="nginx-deploy-tab-pane">
     <div class="record-filter-bar">
       <div class="record-filter-bar__left">
         <a-space>
@@ -195,7 +206,7 @@ const getCommitUrl = (record: DeployRecord): string => {
         :columns="recordColumns"
         :loading="loading"
         :action-config="actionConfig"
-        :max-height="tableHeight"
+        :height="tableHeight"
         :pageable="true"
         :pagination="pagination"
         size="small"
@@ -224,7 +235,7 @@ const getCommitUrl = (record: DeployRecord): string => {
         </template>
       </YTable>
     </div>
-  </YCard>
+  </div>
 </template>
 
 <style scoped lang="less">

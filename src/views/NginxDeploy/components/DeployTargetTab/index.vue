@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
 import { SearchOutlined } from '@ant-design/icons-vue';
-import { YButton, YCard, YTable } from '@yss-ui/components/lite';
+import { YButton, YTable } from '@yss-ui/components/lite';
 import { openExternal } from '@/utils/open';
 import { useTableHeight } from '@yss-ui/hooks';
 import type { YTableActionConfig } from '@yss-ui/components/lite';
@@ -77,7 +77,7 @@ watch([() => props.loading, () => props.targets.length], recalculateAfterRender,
 </script>
 
 <template>
-  <YCard class="nginx-deploy-tab-card" :padding="12">
+  <div class="nginx-deploy-tab-pane">
     <div class="target-filter-bar">
       <a-form
         layout="horizontal"
@@ -148,7 +148,7 @@ watch([() => props.loading, () => props.targets.length], recalculateAfterRender,
         :columns="targetColumns"
         :loading="loading"
         :action-config="actionConfig"
-        :max-height="tableHeight"
+        :height="tableHeight"
         :cell-config="{ height: 58 }"
         :header-height="42"
         :pageable="false"
@@ -174,7 +174,7 @@ watch([() => props.loading, () => props.targets.length], recalculateAfterRender,
         </template>
       </YTable>
     </div>
-  </YCard>
+  </div>
 </template>
 
 <style scoped lang="less">

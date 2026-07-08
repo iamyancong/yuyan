@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { CloudServerOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/icons-vue';
 import message from 'ant-design-vue/es/message';
-import { YButton } from '@yss-ui/components/lite';
+import { YCard } from '@yss-ui/components/lite';
 import type { YTableActionConfig } from '@yss-ui/components/lite';
 import type { DeployProjectContext, TargetFilterForm } from '../../types';
+import DeployHero from '../DeployHero/index.vue';
 import DeployTargetTab from '../DeployTargetTab/index.vue';
 import DeployServerTab from '../DeployServerTab/index.vue';
 import DeployRecordTab from '../DeployRecordTab/index.vue';
@@ -47,72 +47,69 @@ const handleOpenNginxRuntime = async () => {
 
 <template>
   <div class="nginx-deploy-page">
-    <div class="nginx-deploy-header">
-      <div>
-        <h2>独立服务器部署中心</h2>
-        <p v-if="targetState.hasProjectContext.value">已从平台应用列表预选：{{ project.projectName }}（{{ project.defaultBranch || 'dev' }}）</p>
-        <p v-else>可直接选择项目和分支新建部署目标，也可从“平台应用列表”带项目上下文进入。</p>
-      </div>
-      <a-space>
-        <YButton @click="serverState.openCreateServer">
-          <template #icon><CloudServerOutlined /></template>
-          新增服务器
-        </YButton>
-        <YButton @click="handleOpenNginxRuntime">
-          <template #icon><ThunderboltOutlined /></template>
-          Nginx 管理
-        </YButton>
-        <YButton type="primary" @click="targetState.openCreateTarget">
-          <template #icon><PlusOutlined /></template>
-          新增部署目标
-        </YButton>
-      </a-space>
-    </div>
+    <DeployHero
+      :has-project-context="targetState.hasProjectContext.value"
+      :project-name="project.projectName"
+      :default-branch="project.defaultBranch"
+      @create-server="serverState.openCreateServer"
+      @nginx-manage="handleOpenNginxRuntime"
+      @create-target="targetState.openCreateTarget"
+    />
 
-    <a-tabs v-model:activeKey="lifecycleState.activeTabKey.value" @change="lifecycleState.handleTabChange">
-      <a-tab-pane key="targets" tab="部署目标">
-        <DeployTargetTab
-          :loading="lifecycleState.loading.value"
-          :repair-loading="targetState.targetBindingRepairing.value"
-          :targets="targetState.runtimeTargets.value"
-          :filter-form="targetState.targetFilterForm"
-          :branch-options="targetState.targetBranchFilterOptions.value"
-          :server-options="targetState.targetServerFilterOptions.value"
-          :action-config="targetActionConfig"
-          @update:filter-form="updateTargetFilterForm"
-          @search="targetState.handleTargetFilterSearch"
-          @reset="targetState.handleTargetFilterReset"
-          @repair-nginx-bindings="targetState.repairManagedNginxBindings"
-          @open-progress="progressState.openTargetProgress"
-        />
-      </a-tab-pane>
-      <a-tab-pane key="servers" tab="服务器管理">
-        <DeployServerTab
-          :loading="lifecycleState.loading.value"
-          :servers="serverState.servers.value"
-          :action-config="serverActionConfig"
-        />
-      </a-tab-pane>
-      <a-tab-pane key="records" tab="发布历史">
-        <DeployRecordTab
-          :loading="lifecycleState.loading.value"
-          :records="recordState.records.value"
-          :action-config="recordActionConfig"
-          :server-filter="recordState.recordServerFilter.value"
-          :project-filter="recordState.recordProjectFilter.value"
-          :branch-filter="recordState.recordBranchFilter.value"
-          :server-options="recordState.recordServerOptions.value"
-          :project-options="recordState.recordProjectOptions.value"
-          :branch-options="recordState.recordBranchOptions.value"
-          :pagination="recordState.recordPagination"
-          @server-change="recordState.handleRecordServerChange"
-          @project-change="recordState.handleRecordProjectChange"
-          @branch-change="recordState.handleRecordBranchChange"
-          @page-change="recordState.handleRecordPageChange"
-          @refresh="lifecycleState.refreshActiveTab"
-        />
-      </a-tab-pane>
-    </a-tabs>
+    <div class="deploy-tabs-wrapper">
+      <YCard class="nginx-deploy-main-card" :padding="0">
+        <a-tabs
+          v-model:activeKey="lifecycleState.activeTabKey.value"
+          :animated="{ inkBar: true, tabPane: false }"
+          :destroy-inactive-tab-pane="false"
+          @change="lifecycleState.handleTabChange"
+        >
+          <a-tab-pane key="targets" tab="部署目标">
+            <DeployTargetTab
+              :loading="lifecycleState.loading.value"
+              :repair-loading="targetState.targetBindingRepairing.value"
+              :targets="targetState.runtimeTargets.value"
+              :filter-form="targetState.targetFilterForm"
+              :branch-options="targetState.targetBranchFilterOptions.value"
+              :server-options="targetState.targetServerFilterOptions.value"
+              :action-config="targetActionConfig"
+              @update:filter-form="updateTargetFilterForm"
+              @search="targetState.handleTargetFilterSearch"
+              @reset="targetState.handleTargetFilterReset"
+              @repair-nginx-bindings="targetState.repairManagedNginxBindings"
+              @open-progress="progressState.openTargetProgress"
+            />
+          </a-tab-pane>
+          <a-tab-pane key="servers" tab="服务器管理">
+            <DeployServerTab
+              :loading="lifecycleState.loading.value"
+              :servers="serverState.servers.value"
+              :action-config="serverActionConfig"
+            />
+          </a-tab-pane>
+          <a-tab-pane key="records" tab="发布历史">
+            <DeployRecordTab
+              :active="lifecycleState.activeTabKey.value === 'records'"
+              :loading="lifecycleState.loading.value"
+              :records="recordState.records.value"
+              :action-config="recordActionConfig"
+              :server-filter="recordState.recordServerFilter.value"
+              :project-filter="recordState.recordProjectFilter.value"
+              :branch-filter="recordState.recordBranchFilter.value"
+              :server-options="recordState.recordServerOptions.value"
+              :project-options="recordState.recordProjectOptions.value"
+              :branch-options="recordState.recordBranchOptions.value"
+              :pagination="recordState.recordPagination"
+              @server-change="recordState.handleRecordServerChange"
+              @project-change="recordState.handleRecordProjectChange"
+              @branch-change="recordState.handleRecordBranchChange"
+              @page-change="recordState.handleRecordPageChange"
+              @refresh="lifecycleState.refreshActiveTab"
+            />
+          </a-tab-pane>
+        </a-tabs>
+      </YCard>
+    </div>
   </div>
 </template>
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
-import { YCard, YTable } from '@yss-ui/components/lite';
+import { YTable } from '@yss-ui/components/lite';
 import { useTableHeight } from '@yss-ui/hooks';
 import type { YTableActionConfig } from '@yss-ui/components/lite';
 import type { DeployServer } from '@/api/deploy';
@@ -44,20 +44,20 @@ watch([() => props.loading, () => props.servers.length], recalculateAfterRender,
 </script>
 
 <template>
-  <YCard class="nginx-deploy-tab-card" :padding="12">
+  <div class="nginx-deploy-tab-pane">
     <div ref="tableAreaRef" class="nginx-deploy-table-area">
       <YTable
         :data="servers"
         :columns="serverColumns"
         :loading="loading"
         :action-config="actionConfig"
-        :max-height="tableHeight"
+        :height="tableHeight"
         :pageable="false"
         size="small"
         id="nginx-deploy-servers"
       />
     </div>
-  </YCard>
+  </div>
 </template>
 
 <style scoped lang="less">
