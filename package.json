@@ -1,6 +1,6 @@
 {
   "name": "yuyan-app",
-  "version": "1.0.34",
+  "version": "1.0.35",
   "private": true,
   "type": "module",
   "description": "雨燕平台桌面端 - 运维及部署工具",
