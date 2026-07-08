@@ -6,7 +6,7 @@
   background:
     radial-gradient(circle at 5% 5%, var(--primary-color-light), transparent 30%),
     radial-gradient(circle at 80% 10%, rgba(20, 184, 166, 0.1), transparent 30%),
-    linear-gradient(135deg, #ffffff 0%, #f6f8ff 45%, #eff2ff 100%);
+    var(--hero-gradient);
   border: 1px solid var(--primary-color-lighter);
   border-radius: 16px;
   // 180-240ms 入场及悬浮过渡
@@ -54,7 +54,7 @@
 
 .deploy-hero__title {
   margin: 0 0 8px 0;
-  color: #1e1b4b;
+  color: var(--text-color);
   font-size: 26px;
   font-weight: 800;
   line-height: 1.2;
@@ -66,12 +66,12 @@
 
   .context-desc {
     margin: 0;
-    color: #4b5563;
+    color: var(--text-color-secondary);
     font-size: 13px;
     line-height: 20px;
 
     strong {
-      color: #1e1b4b;
+      color: var(--text-color);
       font-weight: 600;
     }
   }
@@ -95,13 +95,13 @@
   align-items: center;
   gap: 12px;
   margin-top: 4px;
-  color: #475569;
+  color: var(--text-color-secondary);
   font-size: 12px;
   font-weight: 600;
 
   .flow-step {
     padding: 4px 12px;
-    background: rgba(255, 255, 255, 0.75);
+    background: var(--glass-bg);
     border: 1px solid var(--primary-color-lighter);
     border-radius: 999px;
     color: var(--primary-color);
@@ -109,7 +109,7 @@
     transition: all 0.2s ease;
 
     &:hover {
-      background: rgba(255, 255, 255, 0.95);
+      background: var(--glass-bg-heavy);
       border-color: var(--primary-color-light);
     }
   }
@@ -137,22 +137,22 @@
     padding: 0 16px;
     border-radius: 9px;
     border: 1px solid rgba(15, 23, 42, 0.12) !important;
-    background: rgba(255, 255, 255, 0.85) !important;
+    background: var(--glass-bg) !important;
     box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04);
     font-weight: 600;
-    color: #374151 !important;
+    color: var(--text-color) !important;
     transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 
     &,
     :deep(span),
     :deep(.anticon) {
-      color: #374151 !important;
+      color: var(--text-color) !important;
     }
 
     &:hover {
       color: var(--primary-color) !important;
       border-color: var(--primary-color-light) !important;
-      background: #ffffff !important;
+      background: var(--glass-bg-heavy) !important;
       transform: translateY(-1px);
       box-shadow: 0 6px 16px var(--primary-color-lighter) !important;
 

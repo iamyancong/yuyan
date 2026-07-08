@@ -11,7 +11,6 @@
       <div class="section-title">主题模式</div>
       <a-space size="middle" direction="vertical" style="width: 100%">
         <a-switch :checked="isDark" @change="setDarkMode" checked-children="暗" un-checked-children="亮" />
-        <a-segmented :options="menuThemeOptions" v-model:value="menuTheme" />
       </a-space>
     </div>
 
@@ -43,10 +42,25 @@
     </div>
 
     <div class="section">
-      <div class="section-title">密度与圆角</div>
-      <a-space direction="vertical" style="width: 100%">
+      <div class="section-title">密度与设计</div>
+      <a-space direction="vertical" style="width: 100%" size="middle">
         <a-switch :checked="isCompact" @change="setCompact" checked-children="紧凑" un-checked-children="默认" />
-        <a-slider :min="0" :max="12" v-model:value="borderRadiusValue" />
+        
+        <div>
+          <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+            <span>圆角大小</span>
+            <span>{{ borderRadiusValue }}px</span>
+          </div>
+          <a-slider :min="0" :max="12" v-model:value="borderRadiusValue" />
+        </div>
+
+        <div>
+          <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+            <span>布局间距</span>
+            <span>{{ spacingValue }}px</span>
+          </div>
+          <a-slider :min="8" :max="24" v-model:value="spacingValue" />
+        </div>
       </a-space>
     </div>
 
@@ -72,16 +86,11 @@ import { useTheme } from '@/hooks/useTheme';
 defineProps<{ open: boolean }>();
 defineEmits<{ (e: 'update:open', v: boolean): void }>();
 
-const { isDark, isCompact, borderRadius, menuTheme, primaryColor, setDarkMode, setCompact, setBorderRadius, setPrimaryColor, resetTheme } =
+const { isDark, isCompact, borderRadius, spacing, primaryColor, setDarkMode, setCompact, setBorderRadius, setSpacing, setPrimaryColor, resetTheme } =
   useTheme();
 
 // 预设主题色（与面板色块对应）
 const presetColors = ['#722ED1', '#3371ff', '#FA8C16', '#F5222D'];
-
-const menuThemeOptions = [
-  { label: '暗色菜单', value: 'dark' },
-  { label: '亮色菜单', value: 'light' },
-];
 
 const colorValue = computed({
   get: () => primaryColor.value,
@@ -91,6 +100,11 @@ const colorValue = computed({
 const borderRadiusValue = computed({
   get: () => borderRadius.value,
   set: (v: number) => setBorderRadius(v),
+});
+
+const spacingValue = computed({
+  get: () => spacing.value,
+  set: (v: number) => setSpacing(v),
 });
 
 function onPickColor(e: Event) {

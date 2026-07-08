@@ -9,7 +9,7 @@
   flex: none;
   margin-bottom: 12px;
   padding: 14px 16px;
-  background: rgba(255, 255, 255, 0.4);
+  background: var(--glass-bg);
   border: 1px solid var(--primary-color-lighter);
   border-radius: 10px;
 
@@ -34,7 +34,7 @@
   }
 
   :deep(.ant-form-item-label > label) {
-    color: #374151;
+    color: var(--text-color);
     font-weight: 600;
     font-size: 13px;
   }
@@ -116,14 +116,14 @@
 // 覆盖 AntDV Select/Input 样式以符合玻璃态渐变风格
 :deep(.ant-input),
 :deep(.project-select .ant-select-selector) {
-  background: rgba(255, 255, 255, 0.8) !important;
+  background: var(--input-bg) !important;
   border-color: var(--primary-color-light) !important;
   border-radius: 8px !important;
   transition: all 0.2s;
 
   &:hover {
     border-color: var(--primary-color-light) !important;
-    background: #ffffff !important;
+    background: var(--input-bg-hover) !important;
   }
 }
 
@@ -131,5 +131,5 @@
 :deep(.ant-input:focus) {
   border-color: var(--primary-color) !important;
   box-shadow: 0 0 0 3px var(--primary-color-light) !important;
-  background: #ffffff !important;
+  background: var(--input-bg-hover) !important;
 }

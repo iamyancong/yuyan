@@ -3,14 +3,14 @@
   min-height: 0;
   overflow: hidden;
   border-radius: 10px;
-  background: #ffffff;
+  background: var(--bg-color-container);
 
   :deep(.vxe-table--header-wrapper) {
-    background: linear-gradient(180deg, #fbfcff 0%, #f6f8fb 100%);
+    background: var(--bg-color-elevated);
   }
 
   :deep(.vxe-header--column) {
-    color: #1f2937;
+    color: var(--text-color);
     font-weight: 650;
   }
 
@@ -25,7 +25,7 @@
 
   :deep(.y-table__pagination),
   :deep(.ant-pagination) {
-    margin: 14px 0 2px;
+    margin: var(--spacing-md) 0 2px;
   }
 }
 

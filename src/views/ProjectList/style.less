@@ -11,8 +11,8 @@
   flex-direction: column;
   overflow: hidden;
   border-radius: 14px;
-  background: #ffffff;
-  box-shadow: 0 10px 30px rgb(15 23 42 / 6%);
+  background: var(--bg-color-container);
+  box-shadow: var(--glass-shadow);
 
   :deep(.ant-card-head) {
     flex: none;
@@ -33,13 +33,13 @@
   gap: 12px;
 
   span {
-    color: #111827;
+    color: var(--text-color);
     font-size: 16px;
     font-weight: 700;
   }
 
   em {
-    color: #6b7280;
+    color: var(--text-color-secondary);
     font-size: 12px;
     font-style: normal;
     font-weight: 500;

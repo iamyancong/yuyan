@@ -154,7 +154,7 @@ watch(rawText, async () => {
   width: 100%;
   max-width: 100%;
   overflow: hidden;
-  color: #4b5563;
+  color: var(--text-color-secondary);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
   font-size: 12px;
   white-space: nowrap;

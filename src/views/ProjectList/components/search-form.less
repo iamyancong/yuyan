@@ -1,9 +1,9 @@
 .search-form {
-  margin-bottom: 18px;
-  padding: 16px 18px 0;
-  border: 1px solid #edf0f6;
+  margin-bottom: var(--spacing-lg);
+  padding: var(--spacing-md) var(--spacing-lg) 0;
+  border: 1px solid var(--border-color-split);
   border-radius: 10px;
-  background: linear-gradient(180deg, #ffffff 0%, #fbfcff 100%);
+  background: var(--bg-color-container);
 
   :deep(.ant-form) {
     gap: 8px 12px;
@@ -11,11 +11,11 @@
 
   :deep(.ant-form-item) {
     margin-right: 0;
-    margin-bottom: 16px;
+    margin-bottom: var(--spacing-lg);
   }
 
   :deep(.ant-form-item-label > label) {
-    color: #374151;
+    color: var(--text-color);
     font-weight: 600;
   }
 }

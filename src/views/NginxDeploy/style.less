@@ -19,8 +19,8 @@
     justify-content: space-between;
     margin-bottom: 12px;
     padding: 14px 16px;
-    background: #fff;
-    border: 1px solid #f0f0f0;
+    background: var(--bg-color-container);
+    border: 1px solid var(--border-color-split);
     border-radius: 6px;
 
     h2 {
@@ -31,7 +31,7 @@
 
     p {
       margin: 4px 0 0;
-      color: #666;
+      color: var(--text-color-secondary);
     }
   }
 
@@ -92,10 +92,10 @@
     justify-content: flex-start;
     margin-bottom: 12px;
     padding-bottom: 12px;
-    border-bottom: 1px solid #f0f0f0;
+    border-bottom: 1px solid var(--border-color-split);
 
     &__label {
-      color: #4b5563;
+      color: var(--text-color-secondary);
       font-weight: 500;
     }
 
@@ -119,7 +119,7 @@
     }
 
     :deep(.ant-form-item-label > label) {
-      color: #374151;
+      color: var(--text-color);
       font-weight: 600;
     }
 
@@ -208,7 +208,7 @@
 .target-config-form {
   min-width: 0;
   border-radius: 8px;
-  background: #fff;
+  background: var(--bg-color-container);
 
   :deep(.ant-formily-item) {
     margin-bottom: 14px;
@@ -236,14 +236,14 @@
   background: linear-gradient(90deg, var(--primary-color-lighter) 0%, #ffffff 78%);
 
   strong {
-    color: #111827;
+    color: var(--text-color);
     font-size: 16px;
     font-weight: 800;
     line-height: 24px;
   }
 
   span {
-    color: #6b7280;
+    color: var(--text-color-secondary);
     font-size: 13px;
   }
 }
@@ -274,7 +274,7 @@
   min-height: 52px;
   padding: 8px 12px;
   border-radius: 10px;
-  color: #1d1d1f;
+  color: var(--text-color);
   margin-bottom: 4px;
 }
 
@@ -283,7 +283,7 @@
 }
 
 :global(.project-select-dropdown .ant-select-item-option-active:not(.ant-select-item-option-disabled)) {
-  background: #f5f5f7;
+  background: var(--bg-color-elevated);
 }
 
 :global(.project-select-dropdown .ant-select-item-option-selected:not(.ant-select-item-option-disabled)) {
@@ -307,7 +307,7 @@
 
 :global(.project-select-dropdown .project-select-option__title) {
   overflow: hidden;
-  color: #1d1d1f;
+  color: var(--text-color);
   font-size: 15px;
   font-weight: 600;
   letter-spacing: 0;
@@ -328,7 +328,7 @@
 :global(.project-select .ant-select-selection-item),
 :global(.project-select .ant-select-selection-placeholder),
 :global(.project-select .ant-select-selection-search-input) {
-  color: #1d1d1f;
+  color: var(--text-color);
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Helvetica Neue', Arial, sans-serif;
   font-weight: 500;
   letter-spacing: 0;
