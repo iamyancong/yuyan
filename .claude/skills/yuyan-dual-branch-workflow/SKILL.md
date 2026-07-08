@@ -41,6 +41,7 @@ description: 管理雨燕平台桌面端的 GitHub/GitLab 双分支协作。凡�
 - 只同步本次业务提交；不要夹带其他用户改动或无关重构。
 - 如果当前存在未提交改动，先区分本次改动与用户既有改动；不得为了 cherry-pick 或切分支回滚用户改动。
 - 推荐使用独立 worktree 处理 `yuyan-3.0`，避免污染 `feat/github-actions-build` 客户端工作区。
+- **注意包名与路径差异 (Critical)**：客户端主线 `feat/github-actions-build` 中使用核心组件库 `@ycwang-dev/components`（以及 `hooks`、`utils` 等）；而内网分支 `yuyan-3.0` 对应使用企业内网组件库 `@yss-ui/components`（及其 hooks、utils）。当从客户端 cherry-pick 代码到内网分支时，若修改涉及到这些包的引入，**必须手动将 `@ycwang-dev/components` 改为 `@yss-ui/components`**（对 hooks 和 utils 亦同），并测试本地构建通过。
 
 ## 提交与验证
 
