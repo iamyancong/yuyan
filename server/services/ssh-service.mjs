@@ -162,6 +162,7 @@ export function streamSshCommand(conn, command, output, options = {}) {
     let idleTimer = null;
     let abortTimer = null;
     let activeStream = null;
+    let exitCode = null;
 
     /** 清理空闲超时定时器。 */
     const clearIdleTimer = () => {
@@ -268,11 +269,11 @@ export function streamSshCommand(conn, command, output, options = {}) {
 
       stream
         .on('exit', (code) => {
-          setTimeout(() => finishWithCode(code), 0);
+          exitCode = code;
         })
         .on('close', (code) => {
           stream.resume(); // 确保因背压被 pause 的流在关闭时能完全排空并发出所有剩余数据
-          finishWithCode(code);
+          finishWithCode(exitCode ?? code);
         });
 
       stream.stderr.on('data', (chunk) => {

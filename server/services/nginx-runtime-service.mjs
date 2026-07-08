@@ -1018,10 +1018,8 @@ export async function streamNginxInstanceArchive(instanceId, type = 'all', outpu
 
   // 监听 output 的结束事件，用于等待网络传输完成
   const outputFinished = new Promise((resolve) => {
-    output.on('finish', resolve);
-    output.on('close', resolve);
-    // 10秒超时兜底，防止某些特殊情况下 stream 挂起导致 SSH 无法释放
-    setTimeout(resolve, 10000);
+    output.once('finish', resolve);
+    output.once('close', resolve);
   });
 
   await withSsh(server, async (conn) => {
