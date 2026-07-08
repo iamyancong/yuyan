@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
-import { YTable, YButton } from '@yss-ui/components/lite';
+import { YTable } from '@yss-ui/components/lite';
 import { openExternal } from '@/utils/open';
 import { useTableHeight } from '@yss-ui/hooks';
-import { SyncOutlined } from '@ant-design/icons-vue';
 import type { YTableActionConfig } from '@yss-ui/components/lite';
 import type { DeployRecord } from '@/api/deploy';
 import {
@@ -14,6 +13,7 @@ import {
   recordColumns,
 } from '../../constant';
 import type { RecordProjectOption, RecordServerOption } from '../../types';
+import DeployRecordFilterBar from './components/DeployRecordFilterBar.vue';
 
 defineOptions({ name: 'DeployRecordTab' });
 
@@ -145,61 +145,19 @@ const getCommitUrl = (record: DeployRecord): string => {
 
 <template>
   <div class="nginx-deploy-tab-pane">
-    <div class="record-filter-bar">
-      <div class="record-filter-bar__left">
-        <a-space>
-          <span class="record-filter-bar__label">服务器</span>
-          <a-select
-            :value="serverFilter"
-            class="record-filter-bar__server-select project-select"
-            :options="serverOptions"
-            :disabled="!serverOptions.length"
-            show-search
-            option-filter-prop="searchKey"
-            option-label-prop="title"
-            placeholder="请选择服务器"
-            :dropdown-match-select-width="300"
-            popup-class-name="project-select-dropdown"
-            @change="(value?: number) => emit('serverChange', value)"
-          />
-          <span class="record-filter-bar__label">项目</span>
-          <a-select
-            :value="projectFilter"
-            class="record-filter-bar__select project-select"
-            :options="projectOptions"
-            :disabled="!projectOptions.length"
-            show-search
-            option-filter-prop="searchKey"
-            option-label-prop="title"
-            popup-class-name="project-select-dropdown"
-            placeholder="请选择已配置项目"
-            @change="(value: string) => emit('projectChange', value)"
-          />
-          <span class="record-filter-bar__label">分支</span>
-          <a-select
-            :value="branchFilter"
-            class="record-filter-bar__branch-select project-select"
-            :options="branchOptions"
-            :disabled="!branchOptions.length"
-            allow-clear
-            show-search
-            option-filter-prop="searchKey"
-            option-label-prop="title"
-            placeholder="全部分支"
-            popup-class-name="project-select-dropdown"
-            @change="(value?: string) => emit('branchChange', value)"
-          />
-        </a-space>
-      </div>
-      <div class="record-filter-bar__right">
-        <YButton :loading="loading" @click="emit('refresh')">
-          <template #icon>
-            <SyncOutlined v-if="!loading" />
-          </template>
-          刷新
-        </YButton>
-      </div>
-    </div>
+    <DeployRecordFilterBar
+      :loading="loading"
+      :server-filter="serverFilter"
+      :project-filter="projectFilter"
+      :branch-filter="branchFilter"
+      :server-options="serverOptions"
+      :project-options="projectOptions"
+      :branch-options="branchOptions"
+      @server-change="(val?: number) => emit('serverChange', val)"
+      @project-change="(val: string) => emit('projectChange', val)"
+      @branch-change="(val?: string) => emit('branchChange', val)"
+      @refresh="emit('refresh')"
+    />
     <div ref="tableAreaRef" class="nginx-deploy-table-area">
       <YTable
         :data="records"
