@@ -560,10 +560,12 @@ export async function handleDownloadNginxInstanceArchive(req, res) {
     const type = req.query.type || 'all';
     await streamNginxInstanceArchive(Number(req.params.id), type, res, ({ fileName, baseRoot, scriptPath }) => {
       res.status(200);
-      const contentType = type === 'conf' ? 'text/plain; charset=utf-8' : 'application/gzip';
+      const contentType = type === 'conf' ? 'text/plain; charset=utf-8' : 'application/octet-stream';
       res.setHeader('Content-Type', contentType);
       res.setHeader('Content-Disposition', `attachment; filename="${fileName}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+      res.setHeader('Content-Encoding', 'identity');
       res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('X-Accel-Buffering', 'no');
       res.setHeader('X-Nginx-Base-Root', encodeURIComponent(baseRoot || ''));
       res.setHeader('X-Nginx-Script-Path', encodeURIComponent(scriptPath || ''));

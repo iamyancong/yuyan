@@ -5,14 +5,34 @@
 }
 
 .record-filter-bar {
+  flex: none;
   margin-bottom: 12px;
-  padding: 12px 16px;
+  padding: 14px 16px;
   background: var(--glass-bg);
   border: 1px solid var(--primary-color-lighter);
   border-radius: 10px;
 
-  &__form {
+  :deep(.ant-form) {
     width: 100%;
+  }
+
+  :deep(.ant-row) {
+    align-items: center;
+  }
+
+  :deep(.ant-form-item) {
+    margin-right: 0;
+    margin-bottom: 0;
+
+    .ant-form-item-row {
+      align-items: center;
+      width: 100%;
+    }
+  }
+
+  :deep(.ant-form-item-label > label) {
+    color: var(--text-color);
+    font-weight: 600;
   }
 
   &__actions {
@@ -22,30 +42,10 @@
     height: 100%;
   }
 
-  :deep(.ant-form) {
-    gap: 8px 12px;
-  }
-
-  :deep(.ant-form-item) {
-    margin-right: 0;
-    margin-bottom: 0;
-  }
-
-  :deep(.ant-form-item-label > label) {
-    color: var(--text-color);
-    font-weight: 600;
-  }
-
-  &__select {
-    width: min(450px, 100%);
-  }
-
-  &__server-select {
-    width: 220px;
-  }
-
+  &__select,
+  &__server-select,
   &__branch-select {
-    width: 180px;
+    width: 100%;
   }
 }
 
@@ -93,12 +93,19 @@
 
 @media (max-width: 1200px) {
   .record-filter-bar {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 12px;
-
-    &__right {
-      justify-content: flex-end;
+    &__actions {
+      flex: 0 0 100% !important;
+      max-width: 100% !important;
+      justify-content: flex-end !important;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px dashed var(--primary-color-light);
     }
+  }
+}
+
+@media (max-width: 768px) {
+  .record-filter-bar {
+    padding: 10px 12px;
   }
 }

@@ -320,6 +320,9 @@ export interface NginxRuntimeStatus {
 /** 托管 Nginx 操作 */
 export type NginxRuntimeAction = 'test' | 'start' | 'stop' | 'reload' | 'status';
 
+/** 托管 Nginx 运行包下载类型 */
+export type NginxArchiveDownloadType = 'all' | 'html' | 'conf';
+
 /** 托管 Nginx 操作结果 */
 export interface NginxRuntimeActionResult {
   success: boolean;
@@ -524,6 +527,17 @@ export const runNginxInstanceAction = (instanceId: number, action: NginxRuntimeA
   client.post(`/nginx-instances/${instanceId}/actions/${action}`).then(unwrap<NginxRuntimeActionResult>);
 
 /**
+ * 构建托管 Nginx 实例运行包浏览器直连下载地址。
+ * @param instanceId Nginx 实例 ID
+ * @param type 下载类型
+ * @returns 运行包下载 URL
+ */
+export const getNginxInstanceArchiveDownloadUrl = (
+  instanceId: number,
+  type: NginxArchiveDownloadType = 'all'
+) => getApiBase(`/deploy-api/nginx-instances/${instanceId}/archive?type=${encodeURIComponent(type)}`);
+
+/**
  * 下载托管 Nginx 实例运行包。
  * @param instanceId Nginx 实例 ID
  * @param type 下载类型
@@ -532,7 +546,7 @@ export const runNginxInstanceAction = (instanceId: number, action: NginxRuntimeA
  */
 export async function downloadNginxInstanceArchive(
   instanceId: number,
-  type: 'all' | 'html' | 'conf' = 'all',
+  type: NginxArchiveDownloadType = 'all',
   onProgress?: (loaded: number) => void,
   signal?: AbortSignal
 ): Promise<NginxInstanceArchiveDownload> {
@@ -581,7 +595,7 @@ export async function downloadNginxInstanceArchive(
  */
 export async function saveNginxInstanceArchiveToLocal(
   instanceId: number,
-  type: 'all' | 'html' | 'conf',
+  type: NginxArchiveDownloadType,
   filePath: string,
   onEvent?: (event: NginxArchiveSaveEvent) => void,
   signal?: AbortSignal
