@@ -1,300 +1,709 @@
-/* ===== NginxRuntimeDrawer 布局样式 ===== */
+/* ===== NginxRuntimeDrawer 设置工作台 ===== */
 
-:deep(.nginx-runtime-drawer .ant-drawer-body) {
-  padding-top: 16px;
-  background: var(--bg-color-elevated);
+:global(.nginx-runtime-drawer-root .ant-drawer-content.nginx-runtime-drawer) {
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 10% 0%, var(--primary-color-light), transparent 34%),
+    radial-gradient(circle at 96% 6%, rgba(20, 184, 166, 0.1), transparent 30%),
+    linear-gradient(135deg, var(--primary-color-lighter), transparent 42%),
+    var(--bg-color-container) !important;
+  box-shadow:
+    -18px 0 44px rgba(15, 23, 42, 0.12),
+    inset 1px 0 0 rgba(255, 255, 255, 0.64);
 }
 
-/* -- 外层容器 -- */
+:global(html[data-theme='dark'] .nginx-runtime-drawer-root .ant-drawer-content.nginx-runtime-drawer) {
+  box-shadow:
+    -18px 0 44px rgba(0, 0, 0, 0.34),
+    inset 1px 0 0 rgba(255, 255, 255, 0.08);
+}
+
+:global(.nginx-runtime-drawer-root .ant-drawer-wrapper-body) {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+:global(.nginx-runtime-drawer-root .ant-drawer-header) {
+  flex: 0 0 auto;
+  padding: 16px 24px 14px !important;
+  border-bottom: 1px solid var(--primary-color-light);
+  background: var(--glass-bg) !important;
+  backdrop-filter: blur(22px) saturate(1.2);
+  -webkit-backdrop-filter: blur(22px) saturate(1.2);
+}
+
+:global(.nginx-runtime-drawer-root .ant-drawer-title) {
+  color: var(--text-color);
+  font-size: 18px;
+  font-weight: 800;
+}
+
+:global(.nginx-runtime-drawer-root .ant-drawer-body) {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  background: transparent !important;
+}
+
+:global(.nginx-runtime-drawer-root .ant-drawer-footer) {
+  flex: 0 0 auto;
+  padding: 12px 24px 14px;
+  border-top: 1px solid var(--primary-color-light);
+  background: var(--glass-bg) !important;
+  backdrop-filter: blur(18px) saturate(1.12);
+  -webkit-backdrop-filter: blur(18px) saturate(1.12);
+}
+
 .nginx-runtime-shell {
   display: flex;
   flex-direction: column;
   gap: 14px;
-}
-
-/* -- 顶部概览条 -- */
-.nginx-runtime-summary {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  padding: 0px 16px;
-  background: var(--bg-color-container);
-  border-radius: 8px;
-}
-
-.nginx-runtime-summary__item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.nginx-runtime-summary__item--grow {
-  flex: 1;
-  min-width: 0;
-}
-
-.nginx-runtime-summary__label {
-  color: var(--text-color-secondary);
-  font-size: 12px;
-  line-height: 18px;
-  white-space: nowrap;
-}
-
-.nginx-runtime-summary__value {
-  min-width: 0;
-  overflow: hidden;
+  min-height: 100%;
+  padding: 16px 24px 20px;
   color: var(--text-color);
-  font-size: 14px;
-  font-weight: 500;
-  line-height: 22px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-/* -- 双栏布局主体 -- */
 .nginx-runtime-body {
   display: grid;
-  grid-template-columns: 420px minmax(0, 1fr);
+  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
   gap: 14px;
+  align-items: stretch;
 }
 
 .nginx-runtime-body__left,
 .nginx-runtime-body__right {
   display: flex;
+  min-width: 0;
   flex-direction: column;
   gap: 14px;
+}
+
+:deep(.nginx-runtime-empty) {
+  margin: 48px 0;
+  padding: 56px 0;
+  border: 1px solid var(--primary-color-light);
+  border-radius: 18px;
+  background: linear-gradient(135deg, var(--glass-bg-heavy), var(--glass-bg));
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+/* -- 顶部上下文条 -- */
+:deep(.nginx-runtime-context) {
+  display: grid;
+  grid-template-columns: minmax(280px, 1.4fr) minmax(240px, 1fr) auto auto minmax(88px, auto);
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--primary-color-light);
+  border-radius: 18px;
+  background:
+    linear-gradient(135deg, var(--glass-bg-heavy), var(--glass-bg)) padding-box,
+    linear-gradient(135deg, rgba(124, 58, 237, 0.24), rgba(20, 184, 166, 0.18)) border-box;
+  box-shadow:
+    var(--glass-shadow),
+    var(--glass-inset-shadow);
+  backdrop-filter: blur(18px) saturate(1.16);
+  -webkit-backdrop-filter: blur(18px) saturate(1.16);
+}
+
+:deep(.nginx-runtime-context__select) {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
   min-width: 0;
 }
 
-/* -- 通用卡片 -- */
-.nginx-runtime-card {
-  height: 100%;
-  padding: 16px;
-  border: 1px solid var(--border-color-split);
-  border-radius: 8px;
-  background: var(--bg-color-container);
-}
-
-.nginx-runtime-muted {
+:deep(.nginx-runtime-context__label),
+:deep(.nginx-runtime-context__pill > span),
+:deep(.nginx-runtime-context__version > span) {
   color: var(--text-color-secondary);
   font-size: 13px;
+  font-weight: 700;
+  line-height: 18px;
+  white-space: nowrap;
+
+  :global(html[data-theme='dark']) & {
+    color: rgba(255, 255, 255, 0.76) !important;
+  }
 }
 
-/* -- 区域标题 -- */
-.nginx-runtime-section-title {
-  display: flex;
+:deep(.nginx-runtime-context .ant-select) {
+  width: 100%;
+  min-width: 0 !important;
+}
+
+:deep(.nginx-runtime-context .ant-select-selector) {
+  border-color: var(--glass-border) !important;
+  border-radius: 12px !important;
+  background: var(--input-bg) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.7),
+    0 8px 18px rgba(15, 23, 42, 0.04) !important;
+}
+
+:deep(.nginx-runtime-context__pill),
+:deep(.nginx-runtime-context__version) {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 14px;
-
-  strong {
-    color: var(--text-color);
-    font-size: 15px;
-    line-height: 22px;
-  }
-
-  span {
-    color: var(--text-color-secondary);
-    font-size: 13px;
-    line-height: 20px;
-  }
+  justify-content: center;
+  gap: 7px;
+  min-height: 32px;
+  padding: 5px 10px;
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  background: var(--glass-bg);
 }
 
-.nginx-runtime-section-title__left {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+:deep(.nginx-runtime-context__version strong) {
+  max-width: 110px;
+  overflow: hidden;
+  color: var(--text-color);
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* -- 通用卡片与标题 -- */
+:deep(.nginx-runtime-card) {
+  position: relative;
   min-width: 0;
+  padding: 16px;
+  overflow: hidden;
+  border: 1px solid var(--primary-color-light);
+  border-radius: 18px;
+  background:
+    linear-gradient(135deg, var(--glass-bg-heavy), var(--glass-bg)) padding-box,
+    linear-gradient(135deg, rgba(255, 255, 255, 0.72), rgba(124, 58, 237, 0.24), rgba(20, 184, 166, 0.16)) border-box;
+  box-shadow:
+    var(--glass-shadow),
+    var(--glass-inset-shadow);
+  backdrop-filter: blur(18px) saturate(1.12);
+  -webkit-backdrop-filter: blur(18px) saturate(1.12);
 }
 
-/* -- 实例列表 -- */
-.nginx-instance-list {
+:deep(.nginx-runtime-card::before) {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.34), transparent 42%);
+  pointer-events: none;
+}
+
+:deep(.nginx-runtime-card > *) {
+  position: relative;
+  z-index: 1;
+}
+
+:deep(.nginx-runtime-card--navigation) {
+  height: 100%;
+}
+
+:deep(.nginx-runtime-section-title) {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+:deep(.nginx-runtime-section-title__left) {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+:deep(.nginx-runtime-section-title strong) {
+  color: var(--text-color);
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 22px;
+}
+
+:deep(.nginx-runtime-section-title span) {
+  color: rgba(0, 0, 0, 0.58);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 20px;
+
+  :global(html[data-theme='dark']) & {
+    color: rgba(255, 255, 255, 0.76) !important;
+  }
+}
+
+:deep(.nginx-runtime-card__badge) {
+  display: inline-flex;
+  height: 24px;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid var(--primary-color-light);
+  border-radius: 999px;
+  background: var(--primary-color-lighter);
+  color: var(--primary-color) !important;
+  font-size: 12px !important;
+  font-weight: 800 !important;
+  white-space: nowrap;
+}
+
+/* -- 实例导航 -- */
+:deep(.nginx-instance-list) {
   display: grid;
-  gap: 8px;
-  margin-top: 12px;
+  gap: 10px;
 }
 
-.nginx-instance-list__item {
+:deep(.nginx-instance-card) {
+  position: relative;
   display: grid;
   width: 100%;
-  gap: 6px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-color-split);
-  border-radius: 6px;
-  background: var(--bg-color-container);
+  gap: 10px;
+  min-width: 0;
+  padding: 13px;
+  overflow: hidden;
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  background: linear-gradient(135deg, var(--glass-bg-heavy), var(--glass-bg));
+  color: var(--text-color);
   text-align: left;
   cursor: pointer;
   user-select: none;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    0 8px 20px rgba(15, 23, 42, 0.04);
   transition:
     border-color 0.2s ease,
-    background 0.2s ease;
-
-  &:hover,
-  &--active {
-    border-color: var(--primary-color);
-    background: var(--primary-color-lighter);
-  }
-
-  code {
-    min-width: 0;
-    overflow: hidden;
-    color: #4b5563;
-    font-size: 12px;
-    line-height: 18px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
+    box-shadow 0.2s ease,
+    transform 0.2s ease;
 }
 
-.nginx-instance-list__bottom {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-
-  code {
-    flex: 1;
-  }
+:deep(.nginx-instance-card:hover),
+:deep(.nginx-instance-card--active) {
+  border-color: var(--primary-color);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.78),
+    0 14px 28px var(--primary-color-lighter);
+  transform: translateY(-1px);
 }
 
-.nginx-instance-list__actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
+:deep(.nginx-instance-card--active .nginx-instance-card__glow) {
+  opacity: 1;
 }
 
-.nginx-instance-list__main {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-
-  strong {
-    min-width: 0;
-    overflow: hidden;
-    color: var(--text-color);
-    font-size: 14px;
-    line-height: 22px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  span {
-    color: var(--text-color-secondary);
-    font-size: 12px;
-    line-height: 18px;
-  }
+:deep(.nginx-instance-card__glow) {
+  position: absolute;
+  inset: auto 0 0;
+  height: 4px;
+  background: linear-gradient(90deg, var(--primary-color), rgba(20, 184, 166, 0.72));
+  opacity: 0;
+  transition: opacity 0.2s ease;
 }
 
-/* -- 路径预览 -- */
-.nginx-runtime-paths {
+:deep(.nginx-instance-card__top) {
   display: grid;
-  gap: 8px;
-}
-
-.nginx-runtime-path-row {
-  display: grid;
-  grid-template-columns: 112px minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 10px;
   align-items: center;
-
-  span {
-    color: var(--text-color-secondary);
-    font-size: 13px;
-  }
-
-  code {
-    min-width: 0;
-    padding: 6px 8px;
-    overflow: hidden;
-    border: 1px solid var(--border-color-split);
-    border-radius: 6px;
-    background: var(--bg-color-elevated);
-    color: var(--text-color);
-    font-size: 12px;
-    line-height: 18px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
 }
 
-/* -- 状态输出 & 日志 Monaco 容器 -- */
-.nginx-runtime-progress-monaco {
-  border-radius: 6px;
-  overflow: hidden;
+:deep(.nginx-instance-card__icon) {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid var(--primary-color-light);
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--primary-color-lighter), var(--glass-bg-heavy));
+  color: var(--primary-color);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 8px 16px var(--primary-color-lighter);
 }
 
-/* -- 进度区域 -- */
-.nginx-runtime-progress-header {
+:deep(.nginx-instance-card__identity) {
   display: flex;
+  min-width: 0;
   flex-direction: column;
-  gap: 4px;
-  margin-bottom: 12px;
+  gap: 3px;
 }
 
-.nginx-runtime-progress-title {
-  font-weight: 600;
-  font-size: 14px;
+:deep(.nginx-instance-card__identity strong),
+:deep(.nginx-instance-card__identity small),
+:deep(.nginx-instance-card__bottom code) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:deep(.nginx-instance-card__identity strong) {
   color: var(--text-color);
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 18px;
+}
+
+:deep(.nginx-instance-card__identity small) {
+  color: var(--text-color-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+
+  :global(html[data-theme='dark']) & {
+    color: rgba(255, 255, 255, 0.65) !important;
+  }
+}
+
+:deep(.nginx-instance-card__meta) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+:deep(.nginx-instance-card__meta span) {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-color-secondary);
+  font-size: 12px;
+  font-weight: 700;
+
+  :global(html[data-theme='dark']) & {
+    color: rgba(255, 255, 255, 0.68) !important;
+  }
+}
+
+:deep(.nginx-instance-card__bottom) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+:deep(.nginx-instance-card__bottom code) {
+  display: block;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--border-color-split);
+  border-radius: 10px;
+  background: var(--code-bg);
+  color: var(--text-color);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 18px;
+}
+
+:deep(.nginx-instance-card__actions) {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+/* -- 配置与路径 -- */
+:deep(.nginx-runtime-config-card .ant-formily-item-label),
+:deep(.nginx-runtime-config-card .ant-formily-item-label label) {
+  color: var(--text-color-secondary);
+  font-weight: 700;
+}
+
+:deep(.nginx-runtime-path-card) {
+  flex: 1 1 auto;
+}
+
+:deep(.nginx-runtime-paths) {
+  display: grid;
+  gap: 9px;
+}
+
+:deep(.nginx-runtime-path-row) {
+  display: grid;
+  grid-template-columns: 118px minmax(0, 1fr) 32px;
+  gap: 10px;
+  align-items: center;
+}
+
+:deep(.nginx-runtime-path-row > span) {
+  min-width: 0;
+  color: var(--text-color);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 18px;
+}
+
+:deep(.nginx-runtime-path-row code) {
+  display: block;
+  min-width: 0;
+  padding: 8px 10px;
+  overflow: hidden;
+  border: 1px solid var(--border-color-split);
+  border-radius: 11px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.42), transparent),
+    var(--code-bg);
+  color: var(--text-color);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.58);
+}
+
+:deep(.nginx-runtime-copy-btn) {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  border-radius: 10px !important;
+}
+
+:deep(.nginx-runtime-download-group) {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+
+  .nginx-runtime-download-btn,
+  .nginx-runtime-download-arrow {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    height: 32px !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    line-height: 30px !important;
+    border: 1px solid var(--border-color-base, #e2e8f0) !important;
+    background-color: var(--component-background, #ffffff) !important;
+    font-size: 13px !important;
+    color: #000000 !important;
+    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.03) !important;
+    transition: all 0.2s ease;
+
+    span {
+      color: #000000 !important;
+      line-height: 1 !important;
+    }
+
+    .anticon {
+      color: #000000 !important;
+      font-size: 14px !important;
+      vertical-align: middle !important;
+      line-height: 1 !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      transition: all 0.2s ease;
+    }
+
+    &:not([disabled]):not(.ant-btn-disabled) {
+      font-weight: bold !important;
+      cursor: pointer;
+
+      &:hover {
+        color: var(--primary-color, #4f46e5) !important;
+        border-color: var(--primary-color, #4f46e5) !important;
+        z-index: 2;
+
+        span {
+          color: var(--primary-color, #4f46e5) !important;
+        }
+
+        .anticon {
+          color: var(--primary-color, #4f46e5) !important;
+        }
+      }
+      
+      &:active {
+        background-color: var(--primary-color-lighter, #f5f3ff) !important;
+      }
+    }
+
+    &[disabled],
+    &.ant-btn-disabled {
+      color: var(--text-color-placeholder, #cbd5e1) !important;
+      border-color: var(--border-color-disabled, #e2e8f0) !important;
+      background-color: var(--bg-color-disabled, #f8fafc) !important;
+      cursor: not-allowed;
+
+      span {
+        color: var(--text-color-placeholder, #cbd5e1) !important;
+      }
+
+      .anticon {
+        color: var(--text-color-placeholder, #cbd5e1) !important;
+      }
+    }
+  }
+
+  .nginx-runtime-download-btn {
+    border-top-right-radius: 0 !important;
+    border-bottom-right-radius: 0 !important;
+    margin-right: -1px;
+    z-index: 1;
+  }
+
+  .nginx-runtime-download-arrow {
+    min-width: 36px !important;
+    padding: 0 8px !important;
+    border-top-left-radius: 0 !important;
+    border-bottom-left-radius: 0 !important;
+    z-index: 1;
+  }
+}
+
+/* -- 进度日志 -- */
+:deep(.nginx-runtime-progress-card) {
+  flex: 0 0 auto;
+}
+
+:deep(.nginx-runtime-progress-header) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+:deep(.nginx-runtime-progress-header__title) {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+:deep(.nginx-runtime-progress-header__title strong) {
+  color: var(--text-color);
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 20px;
+}
+
+:deep(.nginx-runtime-progress-header__title span) {
+  overflow: hidden;
+  color: var(--text-color-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:deep(.nginx-runtime-progress-monaco) {
+  overflow: hidden;
+  border: 1px solid rgba(34, 41, 57, 0.18);
+  border-radius: 14px;
+  box-shadow:
+    0 18px 36px rgba(15, 23, 42, 0.14),
+    0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
 /* -- 底部操作栏 -- */
+:deep(.nginx-runtime-footer),
 .nginx-runtime-footer {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-/* -- 响应式：窄屏降级为单栏 -- */
-@media (max-width: 760px) {
-  .nginx-runtime-summary {
-    flex-wrap: wrap;
-    gap: 8px;
+:deep(.nginx-runtime-footer__group) {
+  flex-wrap: wrap;
+}
+
+:deep(.nginx-runtime-footer__group--end) {
+  justify-content: flex-end;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :deep(.nginx-instance-card),
+  :deep(.nginx-instance-card__glow),
+  :global(.nginx-runtime-drawer-root .ant-drawer-close) {
+    transition: none !important;
+  }
+
+  :deep(.nginx-instance-card:hover),
+  :deep(.nginx-instance-card--active) {
+    transform: none;
+  }
+}
+
+@media (max-width: 1120px) {
+  :deep(.nginx-runtime-context) {
+    grid-template-columns: minmax(260px, 1fr) minmax(220px, 1fr);
+  }
+
+  :deep(.nginx-runtime-context__pill),
+  :deep(.nginx-runtime-context__version) {
+    justify-content: flex-start;
   }
 
   .nginx-runtime-body {
+    grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 860px) {
+  .nginx-runtime-shell {
+    padding: 14px 16px 18px;
+  }
+
+  :global(.nginx-runtime-drawer-root .ant-drawer-header),
+  :global(.nginx-runtime-drawer-root .ant-drawer-footer) {
+    padding-right: 16px !important;
+    padding-left: 16px !important;
+  }
+
+  .nginx-runtime-body,
+  :deep(.nginx-runtime-context),
+  :deep(.nginx-runtime-progress-header) {
     grid-template-columns: 1fr;
   }
 
-  .nginx-runtime-section-title {
+  :deep(.nginx-runtime-context__select) {
+    grid-template-columns: 86px minmax(0, 1fr);
+  }
+
+  :deep(.nginx-runtime-section-title) {
     flex-wrap: wrap;
-    gap: 6px;
   }
 
+  :deep(.nginx-runtime-path-row) {
+    grid-template-columns: 1fr 32px;
+  }
+
+  :deep(.nginx-runtime-path-row > span) {
+    grid-column: 1 / -1;
+  }
+
+  :deep(.nginx-runtime-footer),
   .nginx-runtime-footer {
-    align-items: flex-end;
+    align-items: stretch;
     flex-direction: column;
   }
 
-  .nginx-instance-list__main {
-    align-items: flex-start;
-    flex-direction: column;
+  :deep(.nginx-runtime-footer__group),
+  :deep(.nginx-runtime-footer__group--end) {
+    justify-content: flex-end;
   }
 }
 
-/* -- 下载按钮组 -- */
-.nginx-runtime-download-group {
-  display: inline-flex;
-  align-items: center;
+@media (max-width: 560px) {
+  :deep(.nginx-instance-card__top),
+  :deep(.nginx-instance-card__bottom) {
+    grid-template-columns: 1fr;
+  }
 
-  :deep(.y-button) {
-    &:first-child {
-      border-top-right-radius: 0;
-      border-bottom-right-radius: 0;
-      border-right: 1px solid rgba(255, 255, 255, 0.15);
-    }
-    &.nginx-runtime-download-arrow {
-      border-top-left-radius: 0;
-      border-bottom-left-radius: 0;
-      padding: 0 8px;
-      min-width: unset;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-    }
+  :deep(.nginx-instance-card__icon) {
+    display: none;
+  }
+
+  :deep(.nginx-instance-card__actions) {
+    justify-content: flex-end;
   }
 }
+
+
