@@ -6,7 +6,7 @@ import {
   createNginxInstance,
   deleteNginxInstance,
   saveNginxInstanceArchiveToLocal,
-  downloadNginxInstanceArchive,
+  getNginxInstanceArchiveDownloadUrl,
   getNginxInstanceStatus,
   initNginxInstanceWithProgress,
   runNginxInstanceAction,
@@ -635,35 +635,18 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
           controller.signal
         );
       } else {
-        currentStage = 'writing';
-        currentStageMessage = '正在打包并下载运行包...';
-        triggerNotification();
+        currentStage = 'finished';
+        currentStageMessage = '已交给浏览器下载，请在浏览器下载完成后解压使用';
+        savedFileName = defaultFileName;
 
-        const result = await downloadNginxInstanceArchive(
-          instance.id,
-          type,
-          (loaded) => {
-            currentLoaded = loaded;
-            triggerNotification();
-          },
-          controller.signal
-        );
-
-        isFinished = true;
-        savedFileName = result.fileName || defaultFileName;
-
-        // 触发浏览器默认下载行为
-        const downloadUrl = URL.createObjectURL(result.blob);
+        const downloadUrl = getNginxInstanceArchiveDownloadUrl(instance.id, type);
         const a = document.createElement('a');
         a.href = downloadUrl;
         a.download = savedFileName;
+        a.style.display = 'none';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        // 延迟释放，防止某些浏览器在 Blob 还没完全读取时就被销毁导致文件损坏
-        setTimeout(() => {
-          URL.revokeObjectURL(downloadUrl);
-        }, 1000);
       }
 
       isFinished = true;
@@ -678,8 +661,8 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
         }
       }, '打开文件位置') : null;
 
-      const successText = isTauriClient ? '已成功直写保存' : '已成功下载保存';
-      const confSuccessText = isTauriClient ? 'Nginx 配置文件已直写完成' : 'Nginx 配置文件已下载完成';
+      const successText = isTauriClient ? '已成功直写保存' : '已交给浏览器下载';
+      const confSuccessText = isTauriClient ? 'Nginx 配置文件已直写完成' : 'Nginx 配置文件已交给浏览器下载';
 
       if (type === 'conf') {
         notification.success({
@@ -706,7 +689,7 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
         const scriptPath = instance.scriptPath || `${instance.baseRoot}/nginx/yuyan-nginx.sh`;
         const actionTip = isTauriClient
           ? `目标机执行：tar -xzf ${fileBaseName} -C / ；运行 ${scriptPath} start 启动服务。`
-          : '请将下载好的运行包上传至服务器目标路径后解压，并执行启动脚本。';
+          : '请在浏览器下载完成后，将运行包上传至服务器目标路径解压，并执行启动脚本。';
 
         notification.success({
           key: notificationKey,
