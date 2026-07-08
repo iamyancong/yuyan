@@ -115,3 +115,7 @@ const emit = defineEmits<{
     </a-form>
   </div>
 </template>
+
+<style scoped lang="less">
+@import '../style.less';
+</style>
