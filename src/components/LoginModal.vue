@@ -1151,4 +1151,57 @@ const handleCancel = () => {
     display: none;
   }
 }
+
+/* 深色模式适配 */
+:global(html[data-theme="dark"]) {
+  .premium-login-modal {
+    .modal-content-wrapper {
+      &::before {
+        background:
+          /* 左侧暗色区域 - 新拟态风格背景 */ radial-gradient(
+            ellipse 180% 100% at -30% 50%,
+            #1e1f22 0%,
+            #18191c 30%,
+            rgba(24, 25, 28, 0.9) 38%,
+            rgba(24, 25, 28, 0.3) 43%,
+            transparent 48%
+          ),
+          /* 右侧蓝色渐变背景 */ radial-gradient(ellipse 1400px 700px at 68% -12%, rgba(140, 160, 255, 0.25) 0%, transparent 58%),
+          radial-gradient(ellipse 800px 800px at 20% 110%, rgba(124, 58, 237, 0.15) 0%, transparent 65%),
+          linear-gradient(142deg, #3d52c6 0%, #2e3f9f 30%, #1a237e 100%);
+      }
+    }
+  }
+
+  .brand-header {
+    .logo-wrapper {
+      background: #1e1f22;
+      box-shadow: -4px -4px 8px rgba(255, 255, 255, 0.05), 4px 4px 8px rgba(0, 0, 0, 0.3);
+
+      &:hover {
+        box-shadow: -5px -5px 10px rgba(255, 255, 255, 0.08), 5px 5px 10px rgba(0, 0, 0, 0.4), 0 0 0 3px rgba(88, 118, 235, 0.2);
+      }
+    }
+  }
+
+  .login-form-wrapper {
+    :deep(.ant-input-affix-wrapper),
+    :deep(.ant-input) {
+      background: #141416;
+      box-shadow: inset 3px 3px 6px rgba(0, 0, 0, 0.4), inset -3px -3px 6px rgba(255, 255, 255, 0.03), 0 1px 2px rgba(0, 0, 0, 0.2);
+
+      &:hover {
+        background: #111214;
+        box-shadow: inset 4px 4px 8px rgba(0, 0, 0, 0.5), inset -4px -4px 8px rgba(255, 255, 255, 0.05), 0 2px 4px var(--primary-color-lighter);
+      }
+
+      &:focus,
+      &.ant-input-affix-wrapper-focused {
+        background: #111214;
+        box-shadow: inset 4px 4px 10px var(--primary-color-light), inset -4px -4px 10px rgba(255, 255, 255, 0.05),
+          0 0 0 3px var(--primary-color-lighter);
+      }
+    }
+  }
+}
 </style>

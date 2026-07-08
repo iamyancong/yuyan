@@ -5,10 +5,10 @@ export type MenuTheme = 'light' | 'dark';
 
 interface ThemeState {
   primaryColor: string;
-  menuTheme: MenuTheme;
   isDark: boolean;
   isCompact: boolean;
   borderRadius: number;
+  spacing: number;
 }
 
 const STORAGE_KEY = 'yuyan-ops-theme';
@@ -16,17 +16,17 @@ const STORAGE_KEY = 'yuyan-ops-theme';
 function loadFromStorage(): ThemeState {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { primaryColor: '#722ED1', menuTheme: 'light', isDark: false, isCompact: false, borderRadius: 6 };
+    if (!raw) return { primaryColor: '#722ED1', isDark: false, isCompact: false, borderRadius: 6, spacing: 12 };
     const parsed = JSON.parse(raw) as Partial<ThemeState>;
     return {
       primaryColor: parsed.primaryColor || '#722ED1',
-      menuTheme: (parsed.menuTheme as MenuTheme) || 'dark',
       isDark: typeof parsed.isDark === 'boolean' ? parsed.isDark : false,
       isCompact: typeof parsed.isCompact === 'boolean' ? parsed.isCompact : false,
       borderRadius: typeof parsed.borderRadius === 'number' ? parsed.borderRadius : 6,
+      spacing: typeof parsed.spacing === 'number' ? parsed.spacing : 12,
     };
   } catch {
-    return { primaryColor: '#722ED1', menuTheme: 'dark', isDark: false, isCompact: false, borderRadius: 6 };
+    return { primaryColor: '#722ED1', isDark: false, isCompact: false, borderRadius: 6, spacing: 12 };
   }
 }
 
@@ -61,6 +61,35 @@ function syncCssVariables() {
   const root = document.documentElement;
   const isDark = themeState.isDark;
   const primaryColor = themeState.primaryColor;
+  const spacing = themeState.spacing;
+
+  // 设置当前主题属性，供样式通过 html[data-theme="dark"] 选择器消费
+  root.setAttribute('data-theme', isDark ? 'dark' : 'light');
+
+  // Spacing 变量设置
+  root.style.setProperty('--spacing-xs', `${Math.round(spacing * 0.5)}px`);
+  root.style.setProperty('--spacing-sm', `${Math.round(spacing * 0.75)}px`);
+  root.style.setProperty('--spacing-md', `${spacing}px`);
+  root.style.setProperty('--spacing-lg', `${Math.round(spacing * 1.25)}px`);
+  root.style.setProperty('--spacing-xl', `${Math.round(spacing * 1.5)}px`);
+
+  // 玻璃拟态与暗色自适应变量设置
+  root.style.setProperty('--glass-bg', isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(255, 255, 255, 0.4)');
+  root.style.setProperty('--glass-bg-heavy', isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(255, 255, 255, 0.78)');
+  root.style.setProperty('--glass-border', isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(255, 255, 255, 0.6)');
+  root.style.setProperty('--glass-shadow', isDark ? '0 10px 30px rgba(0, 0, 0, 0.3)' : '0 10px 30px rgba(15, 23, 42, 0.06)');
+  root.style.setProperty('--glass-inset-shadow', isDark ? 'inset 0 1px 0 rgba(255, 255, 255, 0.08)' : 'inset 0 1px 1px rgba(255, 255, 255, 0.8)');
+  
+  root.style.setProperty('--input-bg', isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(255, 255, 255, 0.8)');
+  root.style.setProperty('--input-bg-hover', isDark ? 'rgba(255, 255, 255, 0.12)' : '#ffffff');
+  root.style.setProperty('--loading-mask-bg', isDark ? 'rgba(20, 20, 20, 0.6)' : 'rgba(245, 247, 250, 0.56)');
+  
+  root.style.setProperty('--card-bg', isDark ? '#1f1f1f' : 'rgba(255, 255, 255, 0.96)');
+  root.style.setProperty('--card-border', isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(15, 23, 42, 0.07)');
+
+  const heroGradientLight = 'radial-gradient(circle at 5% 5%, var(--primary-color-light), transparent 30%), radial-gradient(circle at 80% 10%, rgba(20, 184, 166, 0.1), transparent 30%), linear-gradient(135deg, #ffffff 0%, #f6f8ff 45%, #eff2ff 100%)';
+  const heroGradientDark = 'radial-gradient(circle at 5% 5%, var(--primary-color-light), transparent 30%), radial-gradient(circle at 80% 10%, rgba(20, 184, 166, 0.05), transparent 30%), linear-gradient(135deg, #141414 0%, #1c1c1f 45%, #18181c 100%)';
+  root.style.setProperty('--hero-gradient', isDark ? heroGradientDark : heroGradientLight);
 
   // 基础颜色
   const textColor = isDark ? '#e8e8e8' : 'rgba(0, 0, 0, 0.88)';
@@ -239,14 +268,6 @@ function setPrimaryColor(color: string) {
   themeState.primaryColor = color;
 }
 
-function setMenuTheme(theme: MenuTheme) {
-  themeState.menuTheme = theme;
-}
-
-function toggleMenuTheme() {
-  themeState.menuTheme = themeState.menuTheme === 'dark' ? 'light' : 'dark';
-}
-
 function setDarkMode(next: boolean) {
   themeState.isDark = next;
 }
@@ -259,24 +280,29 @@ function setBorderRadius(next: number) {
   themeState.borderRadius = next;
 }
 
+function setSpacing(next: number) {
+  themeState.spacing = next;
+}
+
 function resetTheme() {
   themeState.primaryColor = '#722ED1';
-  themeState.menuTheme = 'dark';
   themeState.isDark = false;
   themeState.isCompact = false;
   themeState.borderRadius = 6;
+  themeState.spacing = 12;
 }
 
 export function useTheme() {
+  const menuTheme = computed<MenuTheme>(() => themeState.isDark ? 'dark' : 'light');
   return {
     ...toRefs(themeState),
+    menuTheme,
     themeConfig,
     setPrimaryColor,
-    setMenuTheme,
-    toggleMenuTheme,
     setDarkMode,
     setCompact,
     setBorderRadius,
+    setSpacing,
     resetTheme,
   };
 }

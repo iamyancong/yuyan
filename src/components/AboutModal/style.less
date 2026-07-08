@@ -39,7 +39,7 @@
 
   .ant-modal-content {
     background: 
-      linear-gradient(135deg, rgba(255, 255, 255, 0.8) 0%, rgba(248, 250, 252, 0.6) 100%) padding-box,
+      linear-gradient(135deg, var(--glass-bg-heavy) 0%, var(--glass-bg) 100%) padding-box,
       linear-gradient(135deg, rgba(124, 58, 237, 0.45) 0%, rgba(236, 72, 153, 0.25) 50%, rgba(59, 130, 246, 0.35) 100%) border-box !important;
     border: 1.5px solid transparent !important;
     border-radius: 24px !important;
@@ -47,7 +47,7 @@
     -webkit-backdrop-filter: blur(24px) saturate(1.8) !important;
     box-shadow: 
       0 20px 60px rgba(31, 38, 135, 0.15),
-      inset 0 1px 1px rgba(255, 255, 255, 0.9),
+      var(--glass-inset-shadow),
       inset 0 -2px 4px rgba(124, 58, 237, 0.05) !important;
     overflow: hidden;
     position: relative;
@@ -61,7 +61,7 @@
       left: 0;
       right: 0;
       height: 35%;
-      background: linear-gradient(to bottom, rgba(255, 255, 255, 0.5) 0%, rgba(255, 255, 255, 0) 100%);
+      background: linear-gradient(to bottom, var(--glass-bg) 0%, transparent 100%);
       pointer-events: none;
       z-index: 1;
     }
@@ -96,11 +96,11 @@
     align-items: center;
     justify-content: center;
     border-radius: 20px;
-    background: linear-gradient(135deg, rgba(255, 255, 255, 0.75) 0%, rgba(255, 255, 255, 0.3) 100%);
-    border: 1.2px solid rgba(255, 255, 255, 0.5);
+    background: var(--glass-bg);
+    border: 1.2px solid var(--glass-border);
     box-shadow: 
       0 10px 25px rgba(124, 58, 237, 0.12),
-      inset 0 1px 1px rgba(255, 255, 255, 0.8);
+      var(--glass-inset-shadow);
     animation: about-logo-float 4s ease-in-out infinite;
 
     /* 后置极光炫彩发光背景 */
@@ -127,7 +127,7 @@
   .about-title {
     font-size: 20px;
     font-weight: 800;
-    background: linear-gradient(135deg, #1f2937 30%, #4b5563 100%);
+    background: linear-gradient(135deg, var(--text-color) 30%, var(--text-color-secondary) 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     margin-bottom: 6px;
@@ -136,7 +136,7 @@
 
   .about-desc {
     font-size: 13px;
-    color: #4b5563;
+    color: var(--text-color-secondary);
     font-weight: 500;
     margin-bottom: 24px;
     opacity: 0.85;
@@ -188,13 +188,13 @@
     }
 
     .diagnostic-code-box {
-      background: rgba(0, 0, 0, 0.04);
-      border: 1px solid rgba(0, 0, 0, 0.05);
+      background: var(--bg-color-elevated);
+      border: 1px solid var(--border-color-split);
       border-radius: 14px;
       padding: 12px 18px;
       font-family: 'Outfit', 'Inter', 'SFMono-Regular', Consolas, monospace;
       font-size: 12px;
-      color: #374151;
+      color: var(--text-color);
       line-height: 1.9;
       text-align: left;
       position: relative;
@@ -203,7 +203,7 @@
       .info-row {
         display: flex;
         justify-content: space-between;
-        border-bottom: 1px dashed rgba(0, 0, 0, 0.04);
+        border-bottom: 1px dashed var(--border-color-split);
         padding: 2px 0;
 
         &:last-child {
@@ -211,13 +211,13 @@
         }
 
         .label {
-          color: #6b7280;
+          color: var(--text-color-secondary);
           font-weight: 500;
         }
 
         .value {
           font-weight: 600;
-          color: #1f2937;
+          color: var(--text-color);
           word-break: break-all;
           text-align: right;
           padding-left: 12px;
@@ -229,7 +229,7 @@
   /* 恒生版权声名 */
   .about-copyright {
     font-size: 11px;
-    color: #9ca3af;
+    color: var(--text-color-tertiary);
     margin-bottom: 24px;
     line-height: 1.4;
   }

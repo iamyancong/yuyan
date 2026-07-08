@@ -326,13 +326,13 @@ const onSelect = async (keys: string[], info: any) => {
       display: flex;
       gap: 16px;
       min-height: 0;
-      border: 1px solid #f0f0f0;
+      border: 1px solid var(--border-color-split);
       border-radius: 4px;
-      background: #fff;
+      background: var(--bg-color-container);
 
       .tree-panel {
         flex: 0 0 300px;
-        border-right: 1px solid #f0f0f0;
+        border-right: 1px solid var(--border-color-split);
         display: flex;
         flex-direction: column;
 
@@ -370,15 +370,15 @@ const onSelect = async (keys: string[], info: any) => {
             display: flex;
             align-items: center;
             justify-content: center;
-            background: #fafafa;
+            background: var(--bg-color-elevated);
           }
         }
       }
 
       .panel-header {
         padding: 8px 12px;
-        border-bottom: 1px solid #f0f0f0;
-        background: #fafafa;
+        border-bottom: 1px solid var(--border-color-split);
+        background: var(--bg-color-elevated);
         display: flex;
         justify-content: space-between;
         align-items: center;
@@ -398,11 +398,11 @@ const onSelect = async (keys: string[], info: any) => {
       justify-content: space-between;
       align-items: center;
       padding-top: 16px;
-      border-top: 1px solid #f0f0f0;
+      border-top: 1px solid var(--border-color-split);
       flex-shrink: 0;
 
       .selected-info {
-        color: #666;
+        color: var(--text-color-secondary);
       }
     }
   }

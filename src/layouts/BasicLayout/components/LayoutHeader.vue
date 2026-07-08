@@ -180,13 +180,13 @@ const handleLogout = async () => {
   align-items: center;
   justify-content: center;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.45);
+  background: var(--glass-bg);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.6);
+  border: 1px solid var(--glass-border);
   box-shadow: 
     0 4px 10px rgba(0, 0, 0, 0.03), 
-    inset 0 1px 1px rgba(255, 255, 255, 0.8),
+    var(--glass-inset-shadow),
     inset 0 -1px 1px rgba(0, 0, 0, 0.02);
   transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
   cursor: pointer;
@@ -196,7 +196,7 @@ const handleLogout = async () => {
   // 内部 icon
   .action-icon {
     font-size: 16px;
-    color: #475569;
+    color: var(--text-color-secondary);
     transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
   }
 
@@ -284,13 +284,13 @@ const handleLogout = async () => {
     transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
     position: relative;
     padding: 0 10px 0 4px; /* 去除上下 padding，靠 align-items: center 精准居中对齐 */
-    background: rgba(255, 255, 255, 0.45);
+    background: var(--glass-bg);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
-    border: 1px solid rgba(255, 255, 255, 0.6);
+    border: 1px solid var(--glass-border);
     box-shadow: 
       0 4px 10px rgba(0, 0, 0, 0.02),
-      inset 0 1px 1px rgba(255, 255, 255, 0.8);
+      var(--glass-inset-shadow);
 
     .user-name {
       font-size: 13px;
@@ -390,7 +390,7 @@ const handleLogout = async () => {
 }
 
 /* 深色主题下的整体适配 */
-@media (prefers-color-scheme: dark) {
+:global(html[data-theme="dark"]) {
   .header-action-btn {
     background: rgba(15, 23, 42, 0.35);
     border-color: rgba(255, 255, 255, 0.1);

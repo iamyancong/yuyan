@@ -2,7 +2,7 @@
 
 :deep(.nginx-runtime-drawer .ant-drawer-body) {
   padding-top: 16px;
-  background: #f8fafc;
+  background: var(--bg-color-elevated);
 }
 
 /* -- 外层容器 -- */
@@ -18,7 +18,7 @@
   align-items: center;
   gap: 20px;
   padding: 0px 16px;
-  background: #fff;
+  background: var(--bg-color-container);
   border-radius: 8px;
 }
 
@@ -35,7 +35,7 @@
 }
 
 .nginx-runtime-summary__label {
-  color: #6b7280;
+  color: var(--text-color-secondary);
   font-size: 12px;
   line-height: 18px;
   white-space: nowrap;
@@ -44,7 +44,7 @@
 .nginx-runtime-summary__value {
   min-width: 0;
   overflow: hidden;
-  color: #111827;
+  color: var(--text-color);
   font-size: 14px;
   font-weight: 500;
   line-height: 22px;
@@ -71,13 +71,13 @@
 .nginx-runtime-card {
   height: 100%;
   padding: 16px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border-color-split);
   border-radius: 8px;
-  background: #fff;
+  background: var(--bg-color-container);
 }
 
 .nginx-runtime-muted {
-  color: #6b7280;
+  color: var(--text-color-secondary);
   font-size: 13px;
 }
 
@@ -90,13 +90,13 @@
   margin-bottom: 14px;
 
   strong {
-    color: #111827;
+    color: var(--text-color);
     font-size: 15px;
     line-height: 22px;
   }
 
   span {
-    color: #6b7280;
+    color: var(--text-color-secondary);
     font-size: 13px;
     line-height: 20px;
   }
@@ -121,9 +121,9 @@
   width: 100%;
   gap: 6px;
   padding: 10px 12px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border-color-split);
   border-radius: 6px;
-  background: #fff;
+  background: var(--bg-color-container);
   text-align: left;
   cursor: pointer;
   user-select: none;
@@ -176,7 +176,7 @@
   strong {
     min-width: 0;
     overflow: hidden;
-    color: #111827;
+    color: var(--text-color);
     font-size: 14px;
     line-height: 22px;
     text-overflow: ellipsis;
@@ -184,7 +184,7 @@
   }
 
   span {
-    color: #6b7280;
+    color: var(--text-color-secondary);
     font-size: 12px;
     line-height: 18px;
   }
@@ -203,7 +203,7 @@
   align-items: center;
 
   span {
-    color: #6b7280;
+    color: var(--text-color-secondary);
     font-size: 13px;
   }
 
@@ -211,10 +211,10 @@
     min-width: 0;
     padding: 6px 8px;
     overflow: hidden;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--border-color-split);
     border-radius: 6px;
-    background: #f9fafb;
-    color: #111827;
+    background: var(--bg-color-elevated);
+    color: var(--text-color);
     font-size: 12px;
     line-height: 18px;
     text-overflow: ellipsis;
@@ -239,7 +239,7 @@
 .nginx-runtime-progress-title {
   font-weight: 600;
   font-size: 14px;
-  color: #111827;
+  color: var(--text-color);
 }
 
 /* -- 底部操作栏 -- */

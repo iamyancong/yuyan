@@ -137,15 +137,15 @@ body,
  * ===================================================== */
 .ant-notification-notice.c4d-download-notification {
   background: 
-    linear-gradient(135deg, rgba(255, 255, 255, 0.78) 0%, rgba(248, 250, 252, 0.55) 100%) padding-box,
+    linear-gradient(135deg, var(--glass-bg-heavy) 0%, var(--glass-bg) 100%) padding-box,
     linear-gradient(135deg, rgba(124, 58, 237, 0.55) 0%, rgba(236, 72, 153, 0.35) 50%, rgba(59, 130, 246, 0.45) 100%) border-box !important;
   border: 1.5px solid transparent !important;
   border-radius: 20px !important;
   backdrop-filter: blur(20px) saturate(1.8) !important;
   -webkit-backdrop-filter: blur(20px) saturate(1.8) !important;
   box-shadow: 
-    0 12px 40px rgba(31, 38, 135, 0.18),
-    inset 0 1px 1px rgba(255, 255, 255, 0.8),
+    var(--glass-shadow),
+    var(--glass-inset-shadow),
     inset 0 -2px 4px rgba(124, 58, 237, 0.08) !important;
   overflow: hidden;
   position: relative;
@@ -159,7 +159,7 @@ body,
     left: 0;
     right: 0;
     height: 40%;
-    background: linear-gradient(to bottom, rgba(255, 255, 255, 0.45) 0%, rgba(255, 255, 255, 0) 100%);
+    background: linear-gradient(to bottom, var(--glass-bg) 0%, transparent 100%);
     border-radius: 20px 20px 0 0;
     pointer-events: none;
     z-index: 1;
@@ -180,25 +180,25 @@ body,
   .ant-notification-notice-message {
     font-size: 15px !important;
     font-weight: 700 !important;
-    color: #1f2937 !important;
+    color: var(--text-color) !important;
     margin-left: 0 !important; /* 移除侧边 margin 偏移，防止文字被推挤 */
     margin-bottom: 8px !important;
   }
 
   .ant-notification-notice-description {
     margin-left: 0 !important; /* 移除侧边 margin 偏移，对齐标题 */
-    color: #4b5563 !important;
+    color: var(--text-color-secondary) !important;
     font-size: 13px !important;
   }
 
   .ant-notification-notice-close {
-    color: rgba(0, 0, 0, 0.45) !important;
+    color: var(--text-color-tertiary) !important;
     top: 18px !important;
     right: 20px !important;
     transition: all 0.2s ease;
 
     &:hover {
-      color: #7c3aed !important;
+      color: var(--primary-color) !important;
       transform: scale(1.1) rotate(90deg);
     }
   }
@@ -226,7 +226,7 @@ body,
 
   .c4d-progress-track {
     height: 8px;
-    background: rgba(0, 0, 0, 0.06);
+    background: var(--border-color-split);
     border-radius: 6px;
     overflow: hidden;
     position: relative;

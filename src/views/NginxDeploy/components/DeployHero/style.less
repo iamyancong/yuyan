@@ -6,12 +6,14 @@
   background:
     radial-gradient(circle at 5% 5%, var(--primary-color-light), transparent 30%),
     radial-gradient(circle at 80% 10%, rgba(20, 184, 166, 0.1), transparent 30%),
-    linear-gradient(135deg, #ffffff 0%, #f6f8ff 45%, #eff2ff 100%);
+    var(--hero-gradient);
   border: 1px solid var(--primary-color-lighter);
   border-radius: 16px;
+  // 180-240ms 入场及悬浮过渡
   transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+// 动画及缩放降级支持 prefers-reduced-motion
 @media (prefers-reduced-motion: no-preference) {
   .deploy-hero {
     opacity: 0;
@@ -51,12 +53,12 @@
 }
 
 .deploy-hero__title {
-  margin: 0 0 8px;
-  color: #1e1b4b;
+  margin: 0 0 8px 0;
+  color: var(--text-color);
   font-size: 26px;
   font-weight: 800;
   line-height: 1.2;
-  letter-spacing: 0;
+  letter-spacing: -0.01em;
 }
 
 .deploy-hero__subtitle {
@@ -64,12 +66,12 @@
 
   .context-desc {
     margin: 0;
-    color: #4b5563;
+    color: var(--text-color-secondary);
     font-size: 13px;
     line-height: 20px;
 
     strong {
-      color: #1e1b4b;
+      color: var(--text-color);
       font-weight: 600;
     }
   }
@@ -93,21 +95,21 @@
   align-items: center;
   gap: 12px;
   margin-top: 4px;
-  color: #475569;
+  color: var(--text-color-secondary);
   font-size: 12px;
   font-weight: 600;
 
   .flow-step {
     padding: 4px 12px;
-    color: var(--primary-color);
-    background: rgba(255, 255, 255, 0.75);
+    background: var(--glass-bg);
     border: 1px solid var(--primary-color-lighter);
     border-radius: 999px;
+    color: var(--primary-color);
     box-shadow: 0 4px 10px var(--primary-color-lighter);
     transition: all 0.2s ease;
 
     &:hover {
-      background: rgba(255, 255, 255, 0.95);
+      background: var(--glass-bg-heavy);
       border-color: var(--primary-color-light);
     }
   }
@@ -120,39 +122,39 @@
 }
 
 .deploy-hero__right {
-  z-index: 2;
   flex-shrink: 0;
+  z-index: 2;
 }
 
 .hero-actions {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
+  flex-wrap: wrap;
   justify-content: flex-end;
 
   .hero-btn {
     min-height: 38px;
     padding: 0 16px;
-    color: #374151 !important;
-    font-weight: 600;
-    background: rgba(255, 255, 255, 0.85) !important;
-    border: 1px solid rgba(15, 23, 42, 0.12) !important;
     border-radius: 9px;
+    border: 1px solid rgba(15, 23, 42, 0.12) !important;
+    background: var(--glass-bg) !important;
     box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04);
+    font-weight: 600;
+    color: var(--text-color) !important;
     transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 
     &,
     :deep(span),
     :deep(.anticon) {
-      color: #374151 !important;
+      color: var(--text-color) !important;
     }
 
     &:hover {
       color: var(--primary-color) !important;
-      background: #ffffff !important;
       border-color: var(--primary-color-light) !important;
-      box-shadow: 0 6px 16px var(--primary-color-lighter) !important;
+      background: var(--glass-bg-heavy) !important;
       transform: translateY(-1px);
+      box-shadow: 0 6px 16px var(--primary-color-lighter) !important;
 
       &,
       :deep(span),
@@ -167,9 +169,9 @@
   }
 
   .primary-hero-btn {
-    color: #ffffff !important;
     background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-color-hover) 100%) !important;
     border: none !important;
+    color: #ffffff !important;
     box-shadow: 0 4px 14px var(--primary-color-light);
 
     &,
@@ -180,10 +182,10 @@
 
     &:hover {
       color: #ffffff !important;
-      background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-color-hover) 100%) !important;
-      box-shadow: 0 6px 20px var(--primary-color-light);
       opacity: 0.95;
+      background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-color-hover) 100%) !important;
       transform: translateY(-1px);
+      box-shadow: 0 6px 20px var(--primary-color-light);
 
       &,
       :deep(span),
@@ -198,6 +200,7 @@
   }
 }
 
+// 动画降级：当用户开启“减少动画”模式时，自动停用所有过渡与缩放效果
 @media (prefers-reduced-motion: reduce) {
   .deploy-hero {
     animation: none;
@@ -208,15 +211,15 @@
 
   .hero-btn {
     transition: none !important;
-
     &:hover {
-      box-shadow: none !important;
       transform: none !important;
+      box-shadow: none !important;
     }
   }
 }
 
 @media (max-width: 1280px) {
+  
   .deploy-hero__content {
     flex-direction: column;
     align-items: flex-start;
@@ -225,18 +228,17 @@
 
   .deploy-hero__right {
     width: 100%;
-
     .hero-actions {
       width: 100%;
-      flex-wrap: wrap;
       justify-content: flex-start;
+      flex-wrap: wrap;
     }
   }
 }
 
 @media (max-width: 768px) {
   .deploy-hero {
-    padding: 20px;
+    padding: 20px 20px;
     border-radius: 12px;
   }
 

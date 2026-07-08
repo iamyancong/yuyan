@@ -5,6 +5,172 @@
   overflow: hidden;
 }
 
+.nginx-deploy-page {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+
+  .nginx-deploy-header {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+    padding: 14px 16px;
+    background: var(--bg-color-container);
+    border: 1px solid var(--border-color-split);
+    border-radius: 6px;
+
+    h2 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 28px;
+    }
+
+    p {
+      margin: 4px 0 0;
+      color: var(--text-color-secondary);
+    }
+  }
+
+  :deep(.ant-tabs) {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  :deep(.ant-tabs-nav) {
+    flex: none;
+    margin-bottom: 12px;
+  }
+
+  :deep(.ant-tabs-content-holder) {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  :deep(.ant-tabs-content) {
+    height: 100%;
+    min-height: 0;
+  }
+
+  :deep(.ant-tabs-tabpane) {
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .nginx-deploy-tab-card {
+    height: 100%;
+    overflow: hidden;
+
+    :deep(.ant-card-body) {
+      display: flex;
+      height: 100%;
+      min-height: 0;
+      flex-direction: column;
+      overflow: hidden;
+    }
+  }
+
+  .nginx-deploy-table-area {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .target-filter-bar,
+  .record-filter-bar {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: flex-start;
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-color-split);
+
+    &__label {
+      color: var(--text-color-secondary);
+      font-weight: 500;
+    }
+
+    &__select {
+      width: min(560px, 62vw);
+    }
+
+    &__branch-select {
+      width: 180px;
+    }
+  }
+
+  .target-filter-bar {
+    :deep(.ant-form) {
+      gap: 8px 12px;
+    }
+
+    :deep(.ant-form-item) {
+      margin-right: 0;
+      margin-bottom: 0;
+    }
+
+    :deep(.ant-form-item-label > label) {
+      color: var(--text-color);
+      font-weight: 600;
+    }
+
+    &__project {
+      width: 260px;
+    }
+
+    &__branch {
+      width: 160px;
+    }
+
+    &__server {
+      width: 240px;
+    }
+  }
+
+  .branch-tag {
+    margin-right: 0;
+    border-radius: 999px;
+    font-weight: 600;
+  }
+
+  .visit-link {
+    color: var(--primary-color);
+    font-weight: 650;
+    text-decoration: none;
+    transition: opacity 0.2s;
+
+    &:hover {
+      opacity: 0.8;
+      text-decoration: none;
+    }
+  }
+
+  :deep(.project-select.ant-select-focused .ant-select-selector),
+  :deep(.project-select .ant-select-selector:hover) {
+    border-color: var(--primary-color) !important;
+    box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.14) !important;
+  }
+
+  :deep(.ant-btn-link),
+  :deep(.ant-btn-text) {
+    color: var(--primary-color);
+
+    &:hover {
+      color: var(--primary-color);
+      opacity: 0.8;
+    }
+  }
+}
+
 .server-config-drawer__footer {
   display: flex;
   justify-content: flex-end;
@@ -42,7 +208,7 @@
 .target-config-form {
   min-width: 0;
   border-radius: 8px;
-  background: #fff;
+  background: var(--bg-color-container);
 
   :deep(.ant-formily-item) {
     margin-bottom: 14px;
@@ -70,14 +236,14 @@
   background: linear-gradient(90deg, var(--primary-color-lighter) 0%, #ffffff 78%);
 
   strong {
-    color: #111827;
+    color: var(--text-color);
     font-size: 16px;
     font-weight: 800;
     line-height: 24px;
   }
 
   span {
-    color: #6b7280;
+    color: var(--text-color-secondary);
     font-size: 13px;
   }
 }
@@ -108,7 +274,7 @@
   min-height: 52px;
   padding: 8px 12px;
   border-radius: 10px;
-  color: #1d1d1f;
+  color: var(--text-color);
   margin-bottom: 4px;
 }
 
@@ -117,7 +283,7 @@
 }
 
 :global(.project-select-dropdown .ant-select-item-option-active:not(.ant-select-item-option-disabled)) {
-  background: #f5f5f7;
+  background: var(--bg-color-elevated);
 }
 
 :global(.project-select-dropdown .ant-select-item-option-selected:not(.ant-select-item-option-disabled)) {
@@ -141,7 +307,7 @@
 
 :global(.project-select-dropdown .project-select-option__title) {
   overflow: hidden;
-  color: #1d1d1f;
+  color: var(--text-color);
   font-size: 15px;
   font-weight: 600;
   letter-spacing: 0;
@@ -162,7 +328,7 @@
 :global(.project-select .ant-select-selection-item),
 :global(.project-select .ant-select-selection-placeholder),
 :global(.project-select .ant-select-selection-search-input) {
-  color: #1d1d1f;
+  color: var(--text-color);
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Helvetica Neue', Arial, sans-serif;
   font-weight: 500;
   letter-spacing: 0;
