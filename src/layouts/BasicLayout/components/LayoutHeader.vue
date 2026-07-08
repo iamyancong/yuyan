@@ -96,7 +96,7 @@ const handleLogout = async () => {
                   检查更新
                 </a-menu-item>
                 
-                <a-menu-item key="about" @click="$emit('openAbout')">
+                <a-menu-item key="about" @click="$emit('openAbout')" v-if="isTauriClient">
                   <template #icon>
                     <InfoCircleOutlined />
                   </template>
