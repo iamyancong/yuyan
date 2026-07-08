@@ -167,11 +167,11 @@ const isTauriMac = computed(() => isTauriClient && isMac);
 
 // 2. 暗色（Dark）侧边栏重构
 &.ant-layout-sider-dark {
-  background: #0f172a !important; /* 经典深蓝色 */
-  border-right: 1px solid #1e293b;
+  background: #141414 !important; /* 与右侧暗色背景完全一致的暗灰色 */
+  border-right: 1px solid var(--border-color-split);
 
   .brand {
-    border-bottom: 1px solid #1e293b;
+    border-bottom: 1px solid var(--border-color-split);
   }
 
   .brand-logo {
@@ -220,11 +220,11 @@ const isTauriMac = computed(() => isTauriClient && isMac);
 
   // 折叠触发器
   :deep(.ant-layout-sider-trigger) {
-    background: #0f172a !important;
-    border-top: 1px solid #1e293b;
+    background: #141414 !important;
+    border-top: 1px solid var(--border-color-split);
     color: #94a3b8 !important;
     &:hover {
-      background: #1e293b !important;
+      background: var(--bg-color-elevated) !important;
       color: #ffffff !important;
     }
   }

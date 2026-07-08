@@ -65,6 +65,7 @@ function syncCssVariables() {
 
   // 设置当前主题属性，供样式通过 html[data-theme="dark"] 选择器消费
   root.setAttribute('data-theme', isDark ? 'dark' : 'light');
+  root.setAttribute('data-prefers-color', isDark ? 'dark' : 'light');
 
   // Spacing 变量设置
   root.style.setProperty('--spacing-xs', `${Math.round(spacing * 0.5)}px`);
@@ -149,6 +150,40 @@ function syncCssVariables() {
   root.setAttribute('data-vxe-ui-theme', isDark ? 'dark' : 'light');
   root.style.setProperty('--vxe-primary-color', primaryColor);
   root.style.setProperty('--vxe-primary-lighten-color', vxePrimaryLighten);
+
+  // vxe-table & vxe-ui-table 适配暗黑模式基础背景与文字色变量
+  const vxeBg = isDark ? 'var(--bg-color-container)' : '#ffffff';
+  const vxeHeaderBg = isDark ? 'var(--bg-color-elevated)' : '#f8f8f9';
+  const vxeBorder = isDark ? 'var(--border-color-split)' : '#e8eaec';
+  const vxeFont = isDark ? 'var(--text-color)' : '#2c3e50';
+  const vxeMutedFont = isDark ? 'var(--text-color-secondary)' : '#606266';
+  const vxeTingeColor = isDark ? 'var(--bg-color-container)' : '#f3f3f3';
+
+  // vxe-ui layout & font variables (vxe-table 内部很多结构使用 --vxe-ui-layout-background-color 作为 body 的底色)
+  root.style.setProperty('--vxe-ui-layout-background-color', vxeBg);
+  root.style.setProperty('--vxe-ui-font-color', vxeFont);
+  root.style.setProperty('--vxe-ui-font-tinge-color', vxeTingeColor);
+  root.style.setProperty('--vxe-ui-font-lighten-color', vxeMutedFont);
+
+  // vxe-table 旧版变量
+  root.style.setProperty('--vxe-table-background-color', vxeBg);
+  root.style.setProperty('--vxe-table-body-background-color', vxeBg);
+  root.style.setProperty('--vxe-table-header-background-color', vxeHeaderBg);
+  root.style.setProperty('--vxe-table-border-color', vxeBorder);
+  root.style.setProperty('--vxe-table-font-color', vxeFont);
+  root.style.setProperty('--vxe-table-header-font-color', vxeFont);
+  root.style.setProperty('--vxe-table-row-hover-background-color', primaryColorLighter);
+
+  // vxe-ui-table 新版变量
+  root.style.setProperty('--vxe-ui-table-background-color', vxeBg);
+  root.style.setProperty('--vxe-ui-table-body-background-color', vxeBg);
+  root.style.setProperty('--vxe-ui-table-header-background-color', vxeHeaderBg);
+  root.style.setProperty('--vxe-ui-table-border-color', vxeBorder);
+  root.style.setProperty('--vxe-ui-table-font-color', vxeFont);
+  root.style.setProperty('--vxe-ui-table-header-font-color', vxeFont);
+  root.style.setProperty('--vxe-ui-table-row-hover-background-color', primaryColorLighter);
+  root.style.setProperty('--vxe-ui-table-row-striped-background-color', isDark ? '#1D1D1D' : '#fafafa');
+
   root.style.setProperty('--vxe-ui-font-primary-color', primaryColor);
   root.style.setProperty('--vxe-ui-font-primary-hover-color', primaryColorLighter);
   root.style.setProperty('--vxe-ui-font-primary-tinge-color', primaryColorLighter);
@@ -156,6 +191,8 @@ function syncCssVariables() {
   root.style.setProperty('--vxe-ui-font-primary-darken-color', vxePrimaryDarken);
   root.style.setProperty('--vxe-ui-font-primary-disabled-color', addOpacity(primaryColor, 0.45));
   root.style.setProperty('--vxe-ui-loading-color', primaryColor);
+  root.style.setProperty('--vxe-ui-loading-background-color', isDark ? 'rgba(20, 20, 20, 0.6)' : 'rgba(255, 255, 255, 0.5)');
+  root.style.setProperty('--vxe-loading-background-color', isDark ? 'rgba(20, 20, 20, 0.6)' : 'rgba(255, 255, 255, 0.5)');
   root.style.setProperty('--vxe-ui-table-resizable-drag-line-color', primaryColor);
   root.style.setProperty('--vxe-ui-toolbar-custom-active-background-color', primaryColorLight);
   root.style.setProperty('--vxe-ui-table-column-hover-background-color', primaryColorLighter);
