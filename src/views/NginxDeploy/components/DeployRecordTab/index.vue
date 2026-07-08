@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
-import { YTable } from '@yss-ui/components/lite';
+import { YTable, YButton } from '@yss-ui/components/lite';
 import { openExternal } from '@/utils/open';
 import { useTableHeight } from '@yss-ui/hooks';
 import { SyncOutlined } from '@ant-design/icons-vue';
