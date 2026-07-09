@@ -7,6 +7,9 @@ import { getErrorMessage, isNotFoundError } from '../utils';
 /** 部署目标运行态轮询间隔 */
 const TARGET_RUNTIME_POLL_INTERVAL = 8000;
 
+/** 判断当前页面是否处于后台隐藏状态 */
+const isPageHidden = () => typeof document !== 'undefined' && document.visibilityState === 'hidden';
+
 /**
  * 管理部署目标的实时运行态长轮询与快照控制。
  * @description 将复杂的轮询机制与状态快照管理从巨无霸 Hook 中解耦分离，符合单一职责原则。
@@ -21,6 +24,12 @@ export function useTargetRuntime(targets: Ref<DeployTarget[]>) {
 
   let runtimeRefreshSequence = 0;
   let targetRuntimeTimer: number | null = null;
+
+  /** 页面回到前台时立即刷新一次运行态 */
+  const handleVisibilityChange = () => {
+    if (isPageHidden() || targetRuntimeTimer === null || !targets.value.length) return;
+    void refreshTargetRuntimeSnapshots();
+  };
 
   /**
    * 获取部署目标运行态快照。
@@ -113,16 +122,23 @@ export function useTargetRuntime(targets: Ref<DeployTarget[]>) {
   const startTargetRuntimePolling = () => {
     if (targetRuntimeTimer !== null) return;
     targetRuntimeTimer = window.setInterval(() => {
-      if (!targets.value.length) return;
+      if (!targets.value.length || isPageHidden()) return;
       void refreshTargetRuntimeSnapshots();
     }, TARGET_RUNTIME_POLL_INTERVAL);
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+    }
   };
 
   /** 停止轮询部署目标运行态 */
   const stopTargetRuntimePolling = () => {
-    if (targetRuntimeTimer === null) return;
-    window.clearInterval(targetRuntimeTimer);
-    targetRuntimeTimer = null;
+    if (targetRuntimeTimer !== null) {
+      window.clearInterval(targetRuntimeTimer);
+      targetRuntimeTimer = null;
+    }
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    }
   };
 
   onUnmounted(() => {

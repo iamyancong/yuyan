@@ -849,52 +849,54 @@ export const backupDbFromServer = (serverUrl: string): Promise<ArrayBuffer> => {
   return axios.get(normalizedUrl, { responseType: 'arraybuffer' }).then((res) => res.data);
 };
 
-let activeLocalPort: number | null = null;
+let activeLocalServerUrl: string | null = null;
 
 /**
- * 动态检测并嗅探当前客户端本地服务监听的端口
- * @description 优先在 Tauri 环境下向 Rust 查询动态端口，兜底策略下通过 HTTP 健康检查探测 3101 和 3100 端口
+ * 获取显式配置的本地辅助服务地址。
+ * @returns 本地辅助服务基础地址
  */
-const getActiveLocalPort = async (): Promise<number> => {
-  if (activeLocalPort !== null) {
-    return activeLocalPort;
+const getConfiguredLocalServerUrl = () => {
+  const configuredUrl = String(import.meta.env.VITE_LOCAL_SERVER_URL || '').trim();
+  return configuredUrl.replace(/\/$/, '');
+};
+
+/**
+ * 动态解析当前客户端本地服务地址。
+ * @description Tauri 环境下向 Rust 查询动态端口；浏览器调试环境需显式配置 VITE_LOCAL_SERVER_URL
+ */
+const getActiveLocalServerUrl = async (): Promise<string> => {
+  if (activeLocalServerUrl) {
+    return activeLocalServerUrl;
   }
-  
-  // 1. 如果是在 Tauri 客户端环境中，首先向 Rust 主程序查询动态分配的本地端口
+
   const isTauri = typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__ !== undefined;
   if (isTauri) {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       const port = await invoke<number>('get_local_server_port');
       if (port) {
-        activeLocalPort = port;
+        activeLocalServerUrl = `http://127.0.0.1:${port}`;
         console.log(`[Port Detector] 从 Tauri 状态中获取到本地服务运行在端口: ${port}`);
-        return port;
+        return activeLocalServerUrl;
       }
     } catch (e) {
-      console.warn('[Port Detector] 从 Tauri 获取本地服务端口失败，回退到端口探测模式', e);
+      console.warn('[Port Detector] 从 Tauri 获取本地服务端口失败', e);
     }
   }
-  
-  // 2. 兜底/调试环境探测：优先尝试请求 3101（新端口）
-  try {
-    await axios.get('http://localhost:3101/deploy-api/app-update/status', { timeout: 1000 });
-    activeLocalPort = 3101;
-    console.log('[Port Detector] 探测到本地辅助服务运行在 3101 端口');
-    return 3101;
-  } catch (e) {
-    // 3. 3101 不通，尝试 3100（旧端口）
+
+  const configuredUrl = getConfiguredLocalServerUrl();
+  if (configuredUrl) {
     try {
-      await axios.get('http://localhost:3100/deploy-api/app-update/status', { timeout: 1000 });
-      activeLocalPort = 3100;
-      console.log('[Port Detector] 探测到本地辅助服务运行在 3100 端口 (旧版本客户端)');
-      return 3100;
-    } catch (e2) {
-      // 4. 均不通，默认为 3101
-      console.warn('[Port Detector] 未探测到本地辅助服务端口，默认使用 3101');
-      return 3101;
+      await axios.get(`${configuredUrl}/health`, { timeout: 1000 });
+      activeLocalServerUrl = configuredUrl;
+      console.log(`[Port Detector] 使用 VITE_LOCAL_SERVER_URL 配置的本地辅助服务: ${configuredUrl}`);
+      return activeLocalServerUrl;
+    } catch (e) {
+      console.warn('[Port Detector] VITE_LOCAL_SERVER_URL 配置的本地服务不可用', e);
     }
   }
+
+  throw new Error('未找到可用的本地辅助服务地址，请在桌面端内使用，或为浏览器调试配置 VITE_LOCAL_SERVER_URL');
 };
 
 /**
@@ -903,9 +905,9 @@ const getActiveLocalPort = async (): Promise<number> => {
  * @returns 本机辅助服务完整 URL
  */
 const getLocalDeployApiUrl = async (path: string): Promise<string> => {
-  const port = await getActiveLocalPort();
+  const baseUrl = await getActiveLocalServerUrl();
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-  return `http://localhost:${port}${normalizedPath}`;
+  return `${baseUrl}${normalizedPath}`;
 };
 
 /**
@@ -914,8 +916,7 @@ const getLocalDeployApiUrl = async (path: string): Promise<string> => {
  * @returns {Promise<{ success: boolean; message: string }>} 操作结果
  */
 export const restoreDbToLocal = async (data: ArrayBuffer): Promise<{ success: boolean; message: string }> => {
-  const port = await getActiveLocalPort();
-  return axios.post(`http://localhost:${port}/deploy-api/db/restore`, data, {
+  return axios.post(await getLocalDeployApiUrl('/deploy-api/db/restore'), data, {
     headers: {
       'Content-Type': 'application/octet-stream',
     },

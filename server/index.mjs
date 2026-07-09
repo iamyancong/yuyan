@@ -23,10 +23,15 @@ import { startCleanupScheduler } from './utils/cleanup-scheduler.mjs';
 import scaffoldRoutes from './routes/scaffold.mjs';
 import deployRoutes from './routes/deploy.mjs';
 import healthRoutes from './routes/health.mjs';
-import { getDeployDb } from './services/deploy-store.mjs';
+import { closeDeployDb, getDeployDb } from './services/deploy-store.mjs';
+import { abortAppUpdateTransfers } from './controllers/deploy-controller.mjs';
 
 // 创建 Express 应用
 const app = express();
+let httpServer = null;
+let stopCleanupScheduler = null;
+let shuttingDown = false;
+const activeSockets = new Set();
 
 // 中间件配置
 app.use(
@@ -143,7 +148,7 @@ function setupSelfDestruct() {
     process.stdin.resume();
     process.stdin.on('end', () => {
       console.log('[SelfDestruct] 检测到父进程已关闭标准输入管道，正在自毁退出 Node 服务...');
-      process.exit(0);
+      void shutdown('stdin end');
     });
   } catch (error) {
     console.warn('[SelfDestruct] 激活 stdin 监听失败:', error);
@@ -157,11 +162,99 @@ function setupSelfDestruct() {
         process.kill(process.ppid, 0);
       } catch {
         console.log(`[SelfDestruct] 检测到父进程 (PID: ${process.ppid}) 已不存在，正在自毁退出 Node 服务...`);
-        process.exit(0);
+        void shutdown('parent missing');
       }
     }, 5000).unref(); // 使用 unref 避免该定时器阻止进程因其他正常原因退出
   }
 }
+
+/**
+ * 初始化模板仓库。
+ * @returns {Promise<boolean>} 模板是否可用
+ */
+async function initializeTemplateRepository() {
+  console.log('[bootstrap] 正在初始化模板仓库...');
+  const success = await pullLatestTemplate();
+
+  if (!success) {
+    console.warn('[bootstrap] ⚠️ 模板初始化失败，服务将继续启动，但创建项目可能会失败');
+    console.warn('[bootstrap] 请检查：');
+    console.warn('[bootstrap]   1. GITLAB_TOKEN 环境变量是否正确设置');
+    console.warn('[bootstrap]   2. 模板仓库 URL 是否可访问');
+    console.warn('[bootstrap]   3. 网络连接是否正常');
+    return false;
+  }
+
+  const isValid = await validateTemplate();
+  if (isValid) {
+    console.log('[bootstrap] ✅ 模板初始化成功，脚本已就绪');
+  } else {
+    console.error('[bootstrap] ❌ 模板目录存在但脚本文件缺失');
+    console.error('[bootstrap] 请检查模板仓库结构是否正确');
+  }
+  return isValid;
+}
+
+/**
+ * 统一关闭 HTTP 服务、后台任务、下载流和 SQLite 连接。
+ * @param {string} reason - 关闭原因
+ */
+async function shutdown(reason = 'unknown') {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] 收到关闭信号: ${reason}`);
+
+  try {
+    abortAppUpdateTransfers(reason);
+  } catch (error) {
+    console.warn('[shutdown] 中断更新下载任务失败:', error);
+  }
+
+  try {
+    stopCleanupScheduler?.();
+    stopCleanupScheduler = null;
+  } catch (error) {
+    console.warn('[shutdown] 停止清理任务失败:', error);
+  }
+
+  await new Promise((resolve) => {
+    if (!httpServer) {
+      resolve();
+      return;
+    }
+
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    httpServer.close((error) => {
+      if (error) console.warn('[shutdown] HTTP 服务关闭异常:', error);
+      finish();
+    });
+    for (const socket of activeSockets) {
+      socket.end();
+    }
+    setTimeout(() => {
+      for (const socket of activeSockets) {
+        socket.destroy();
+      }
+      finish();
+    }, 3000).unref?.();
+  });
+
+  try {
+    closeDeployDb();
+  } catch (error) {
+    console.warn('[shutdown] 关闭 SQLite 连接失败:', error);
+  }
+
+  process.exit(0);
+}
+
+process.once('SIGTERM', () => void shutdown('SIGTERM'));
+process.once('SIGINT', () => void shutdown('SIGINT'));
 
 /**
  * 服务启动入口
@@ -178,29 +271,13 @@ async function bootstrap() {
     console.log(`🌿 模板分支: ${TEMPLATE_BRANCH}`);
     console.log('='.repeat(60));
 
-    // 启动时拉取最新模板
-    console.log('[bootstrap] 正在初始化模板仓库...');
-    const success = await pullLatestTemplate();
-
-    if (!success) {
-      console.warn('[bootstrap] ⚠️ 模板初始化失败，服务将继续启动，但创建项目可能会失败');
-      console.warn('[bootstrap] 请检查：');
-      console.warn('[bootstrap]   1. GITLAB_TOKEN 环境变量是否正确设置');
-      console.warn('[bootstrap]   2. 模板仓库 URL 是否可访问');
-      console.warn('[bootstrap]   3. 网络连接是否正常');
-    } else {
-      // 验证模板脚本是否存在
-      const isValid = await validateTemplate();
-      if (isValid) {
-        console.log('[bootstrap] ✅ 模板初始化成功，脚本已就绪');
-      } else {
-        console.error('[bootstrap] ❌ 模板目录存在但脚本文件缺失');
-        console.error('[bootstrap] 请检查模板仓库结构是否正确');
-      }
+    const isTauriSubprocess = process.env.IS_TAURI_SUBPROCESS === 'true';
+    if (!isTauriSubprocess) {
+      await initializeTemplateRepository();
     }
 
     // 启动定时清理任务
-    startCleanupScheduler();
+    stopCleanupScheduler = startCleanupScheduler();
 
     // 初始化独立服务器部署数据库
     await getDeployDb();
@@ -209,16 +286,26 @@ async function bootstrap() {
     // 根据运行环境动态选择监听地址：
     // - Tauri 桌面端：绑定 127.0.0.1 防止局域网外部访问并规避 Windows 防火墙弹窗
     // - Docker/服务器端：绑定 0.0.0.0 允许容器外部（反向代理/Docker 网络）正常访问
-    const BIND_HOST = process.env.IS_TAURI_SUBPROCESS === 'true' ? '127.0.0.1' : '0.0.0.0';
-    const server = app.listen(PORT, BIND_HOST, () => {
+    const BIND_HOST = isTauriSubprocess ? '127.0.0.1' : '0.0.0.0';
+    httpServer = app.listen(PORT, BIND_HOST, () => {
       console.log('='.repeat(60));
       console.log(`🚀 Scaffold 服务启动成功!`);
       console.log(`📍 服务地址: http://${BIND_HOST}:${PORT}`);
       console.log(`💚 健康检查: http://${BIND_HOST}:${PORT}/health`);
       console.log('='.repeat(60));
       console.log(`✨ 服务正在运行中，等待请求...`);
+
+      if (isTauriSubprocess) {
+        initializeTemplateRepository().catch((error) => {
+          console.warn('[bootstrap] 后台预热模板仓库失败:', error);
+        });
+      }
     });
-    server.on('error', (error) => {
+    httpServer.on('connection', (socket) => {
+      activeSockets.add(socket);
+      socket.on('close', () => activeSockets.delete(socket));
+    });
+    httpServer.on('error', (error) => {
       if (error?.code === 'EADDRINUSE') {
         console.error(`[bootstrap] ❌ 端口 ${PORT} 已被占用，请关闭旧的雨燕 Node 服务后重试`);
       } else {

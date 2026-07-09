@@ -5,13 +5,15 @@
 
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
 const downloadRegistry = new Map();
+const SCAFFOLD_DOWNLOAD_ROOT = path.join(os.tmpdir(), 'scaffold-downloads');
 
 export function getScaffoldArchivePath(appName, timestamp) {
-  return path.join('/tmp', 'scaffold-downloads', `${appName}-${timestamp}.zip`);
+  return path.join(SCAFFOLD_DOWNLOAD_ROOT, `${appName}-${timestamp}.zip`);
 }
 
 export function registerScaffoldDownload({ appName, timestamp, tempRoot, projectDir, archivePath, expiresAt }) {
@@ -63,14 +65,14 @@ export async function handleDownload(req, res) {
 
     // 兼容旧的临时目录扫描逻辑，避免升级过程中中断
     if (!projectDir || !tempRoot) {
-      const tempDirs = await fsp.readdir('/tmp');
+      const tempDirs = await fsp.readdir(os.tmpdir());
       projectDir = null;
       tempRoot = null;
 
       // 在所有 scaffold 目录中查找包含目标时间戳的项目
       for (const dir of tempDirs) {
         if (dir.startsWith('scaffold-')) {
-          tempRoot = path.join('/tmp', dir);
+          tempRoot = path.join(os.tmpdir(), dir);
           const potentialProjectDir = path.join(tempRoot, appName);
 
           try {

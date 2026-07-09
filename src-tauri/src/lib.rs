@@ -1,16 +1,20 @@
-use std::process::{Command, Stdio, Child};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{SocketAddr, TcpStream};
+use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::io::{BufRead, BufReader};
 use std::thread;
-use tauri::{Manager, Emitter};
-use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+use std::time::{Duration, Instant};
 use tauri::image::Image;
+use tauri::{Emitter, Manager};
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 mod app_update;
 
 const DARK_ICON: &[u8] = include_bytes!("../resources/yuyan_dark_clean.png");
 const LIGHT_ICON: &[u8] = include_bytes!("../resources/yuyan_light_clean.png");
-
+const DEFAULT_LOCAL_SERVER_PORT: u16 = 3101;
+const LOCAL_SERVER_STARTUP_TIMEOUT: Duration = Duration::from_secs(12);
+const LOCAL_SERVER_STOP_TIMEOUT: Duration = Duration::from_secs(3);
 
 // 检测本地端口是否可用
 fn is_port_free(port: u16) -> bool {
@@ -25,11 +29,140 @@ fn get_free_port() -> Option<u16> {
         .map(|addr| addr.port())
 }
 
-// 存储 Node 服务进程的全局状态
-#[allow(dead_code)]
-struct ServerState {
-    child: Arc<Mutex<Option<Child>>>,
+#[derive(Default)]
+struct LocalServerInner {
+    child: Option<Child>,
     port: u16,
+    last_error: Option<String>,
+}
+
+/** 管理内嵌 Node 服务生命周期。 */
+#[derive(Clone, Default)]
+pub(crate) struct LocalServerManager {
+    inner: Arc<Mutex<LocalServerInner>>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalServerStatus {
+    port: u16,
+    pid: Option<u32>,
+    running: bool,
+    last_error: Option<String>,
+}
+
+impl LocalServerManager {
+    /** 获取当前本地服务监听端口。 */
+    fn port(&self) -> u16 {
+        self.inner
+            .lock()
+            .map(|state| state.port)
+            .unwrap_or(DEFAULT_LOCAL_SERVER_PORT)
+    }
+
+    /** 获取当前本地服务诊断状态。 */
+    fn status(&self) -> LocalServerStatus {
+        let mut state = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let running = state
+            .child
+            .as_mut()
+            .map(|child| matches!(child.try_wait(), Ok(None)))
+            .unwrap_or(false);
+        let pid = state.child.as_ref().map(|child| child.id());
+        LocalServerStatus {
+            port: state.port,
+            pid,
+            running,
+            last_error: state.last_error.clone(),
+        }
+    }
+
+    /** 启动内嵌 Node 服务并记录端口和进程。 */
+    fn start(&self, app: &tauri::App, node_path: &std::path::Path) -> Result<u16, String> {
+        let mut retries = 0;
+        let mut last_err = String::new();
+
+        while retries < 3 {
+            let port = if retries == 0 && is_port_free(DEFAULT_LOCAL_SERVER_PORT) {
+                DEFAULT_LOCAL_SERVER_PORT
+            } else {
+                get_free_port().unwrap_or(DEFAULT_LOCAL_SERVER_PORT + 1 + retries)
+            };
+
+            println!(
+                "⏳ 正在尝试在端口 {} 启动 Node 服务（第 {} 次尝试）...",
+                port,
+                retries + 1
+            );
+
+            match start_node_server(app, node_path, port) {
+                Ok(child) => {
+                    let pid = child.id();
+                    let mut state = self
+                        .inner
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    state.child = Some(child);
+                    state.port = port;
+                    state.last_error = None;
+                    println!("✅ Node 服务启动成功！进程 PID: {pid}，监听端口: {port}");
+                    return Ok(port);
+                }
+                Err(err) => {
+                    println!(
+                        "⚠️ 在端口 {} 启动 Node 服务失败: {}，准备重试...",
+                        port, err
+                    );
+                    last_err = err;
+                    retries += 1;
+                }
+            }
+        }
+
+        let mut state = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.port = DEFAULT_LOCAL_SERVER_PORT;
+        state.last_error = Some(last_err.clone());
+        Err(last_err)
+    }
+
+    /** 停止内嵌 Node 服务，优先 graceful shutdown，超时后终止进程树。 */
+    pub(crate) fn stop(&self, reason: &str) {
+        let mut child = {
+            let mut state = self
+                .inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            state.child.take()
+        };
+
+        let Some(mut child) = child.take() else {
+            return;
+        };
+
+        println!(
+            "🛑 正在停止 Node 本地服务进程 (PID: {}, reason: {})...",
+            child.id(),
+            reason
+        );
+
+        let _ = child.stdin.take();
+        if wait_for_child_exit(&mut child, LOCAL_SERVER_STOP_TIMEOUT) {
+            println!("✅ Node 本地服务已正常退出");
+            return;
+        }
+
+        terminate_child_tree(&mut child, false);
+        if !wait_for_child_exit(&mut child, Duration::from_secs(2)) {
+            terminate_child_tree(&mut child, true);
+            let _ = child.wait();
+        }
+    }
 }
 
 // 获取 Node.js 可执行文件的路径
@@ -40,7 +173,11 @@ fn get_node_path(app_handle: &tauri::AppHandle) -> std::path::PathBuf {
         return std::path::PathBuf::from("node");
     }
 
-    let binary_name = if cfg!(target_os = "windows") { "node.exe" } else { "node" };
+    let binary_name = if cfg!(target_os = "windows") {
+        "node.exe"
+    } else {
+        "node"
+    };
 
     // 1. 尝试查找打包后（或开发模式）的标准资源目录
     if let Ok(resource_dir) = app_handle.path().resource_dir() {
@@ -52,7 +189,11 @@ fn get_node_path(app_handle: &tauri::AppHandle) -> std::path::PathBuf {
         }
 
         // 开发环境：项目根目录/src-tauri/resources/bin/node
-        let dev_node = resource_dir.join("src-tauri").join("resources").join("bin").join(binary_name);
+        let dev_node = resource_dir
+            .join("src-tauri")
+            .join("resources")
+            .join("bin")
+            .join(binary_name);
         if dev_node.exists() {
             println!("🔍 找到开发环境内嵌 Node 二进制文件: {:?}", dev_node);
             return dev_node;
@@ -76,10 +217,7 @@ fn get_node_path(app_handle: &tauri::AppHandle) -> std::path::PathBuf {
     // 3. 在 macOS 上，若是 GUI 双击启动，PATH 环境可能丢失，在此做常见路径补丁
     #[cfg(target_os = "macos")]
     {
-        let common_paths = [
-            "/opt/homebrew/bin/node",
-            "/usr/local/bin/node",
-        ];
+        let common_paths = ["/opt/homebrew/bin/node", "/usr/local/bin/node"];
         for path in common_paths {
             let path_buf = std::path::PathBuf::from(path);
             if path_buf.exists() {
@@ -88,7 +226,7 @@ fn get_node_path(app_handle: &tauri::AppHandle) -> std::path::PathBuf {
             }
         }
     }
-    
+
     // 4. 找不到内嵌的，则回退到系统环境变量中的 "node"
     std::path::PathBuf::from("node")
 }
@@ -114,8 +252,111 @@ fn pipe_output<R: std::io::Read + Send + 'static>(reader: R, prefix: &'static st
     });
 }
 
+/** 等待子进程退出，超时返回 false。 */
+fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> bool {
+    let started_at = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            Ok(None) if started_at.elapsed() < timeout => {
+                thread::sleep(Duration::from_millis(100));
+            }
+            Ok(None) => return false,
+            Err(_) => return true,
+        }
+    }
+}
+
+/** 请求终止 Node 子进程树。 */
+fn terminate_child_tree(child: &mut Child, force: bool) {
+    let pid = child.id();
+
+    #[cfg(target_os = "windows")]
+    {
+        let mut args = vec!["/PID".to_string(), pid.to_string(), "/T".to_string()];
+        if force {
+            args.push("/F".to_string());
+        }
+        let _ = Command::new("taskkill").args(args).output();
+        return;
+    }
+
+    #[cfg(unix)]
+    {
+        let signal = if force { "-KILL" } else { "-TERM" };
+        let group_pid = format!("-{}", pid);
+        if Command::new("kill")
+            .args([signal, &group_pid])
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+        {
+            return;
+        }
+    }
+
+    let _ = child.kill();
+}
+
+/** 使用 /health 探测本地 Node 服务是否已可用。 */
+fn is_local_server_healthy(port: u16) -> bool {
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_millis(250)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
+    if stream
+        .write_all(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        .is_err()
+    {
+        return false;
+    }
+    let mut response = [0_u8; 64];
+    match stream.read(&mut response) {
+        Ok(length) => {
+            String::from_utf8_lossy(&response[..length]).starts_with("HTTP/1.1 200")
+                || String::from_utf8_lossy(&response[..length]).starts_with("HTTP/1.0 200")
+        }
+        Err(_) => false,
+    }
+}
+
+/** 等待本地 Node 服务健康检查通过。 */
+fn wait_for_local_server_health(child: &mut Child, port: u16) -> Result<(), String> {
+    let started_at = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                return Err(format!(
+                    "Node 服务进程启动后立即退出，状态: {status}。可能是端口 {port} 已被旧服务占用，请先关闭旧的雨燕进程或释放该端口后重试。"
+                ));
+            }
+            Ok(None) => {}
+            Err(error) => return Err(format!("检查 Node 服务进程状态失败: {error}")),
+        }
+
+        if is_local_server_healthy(port) {
+            return Ok(());
+        }
+
+        if started_at.elapsed() >= LOCAL_SERVER_STARTUP_TIMEOUT {
+            return Err(format!(
+                "Node 服务启动超时，端口 {port} 在 {} 秒内未通过 /health 检查",
+                LOCAL_SERVER_STARTUP_TIMEOUT.as_secs()
+            ));
+        }
+
+        thread::sleep(Duration::from_millis(200));
+    }
+}
+
 // 启动 Express Node 服务
-fn start_node_server(app: &tauri::App, node_path: &std::path::Path, port: u16) -> Result<Child, String> {
+fn start_node_server(
+    app: &tauri::App,
+    node_path: &std::path::Path,
+    port: u16,
+) -> Result<Child, String> {
     let resource_path = if cfg!(dev) {
         let cwd = std::env::current_dir().unwrap();
         let path1 = cwd.join("server/index.mjs");
@@ -126,13 +367,16 @@ fn start_node_server(app: &tauri::App, node_path: &std::path::Path, port: u16) -
             if path2.exists() {
                 path2
             } else {
-                app.path().resource_dir()
+                app.path()
+                    .resource_dir()
                     .map_err(|e| format!("无法获取资源目录: {}", e))?
                     .join("server/index.mjs")
             }
         }
     } else {
-        let res_dir = app.path().resource_dir()
+        let res_dir = app
+            .path()
+            .resource_dir()
             .map_err(|e| format!("无法获取资源目录: {}", e))?;
         let path1 = res_dir.join("server/index.mjs");
         if path1.exists() {
@@ -141,40 +385,60 @@ fn start_node_server(app: &tauri::App, node_path: &std::path::Path, port: u16) -
             res_dir.join("_up_/server/index.mjs")
         }
     };
-        
-    let app_data_dir = app.path().app_data_dir()
+
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
         .map_err(|e| format!("无法获取应用数据目录: {}", e))?;
-        
+
     let deploy_data_dir = app_data_dir.join("deploy-data");
     let template_repo_path = app_data_dir.join("yuyan-template");
-    
+
     // 确保需要的目录存在
     std::fs::create_dir_all(&deploy_data_dir)
         .map_err(|e| format!("创建部署数据目录失败: {}", e))?;
     std::fs::create_dir_all(&template_repo_path)
         .map_err(|e| format!("创建模板缓存目录失败: {}", e))?;
-        
+
     println!("==================================================");
     println!("🚀 正在启动内嵌 Node 服务...");
     println!("📂 监听端口 (PORT): {}", port);
     println!("📂 脚本路径: {:?}", resource_path);
     println!("📂 部署数据目录 (DEPLOY_DATA_DIR): {:?}", deploy_data_dir);
-    println!("📂 模板缓存目录 (TEMPLATE_REPO_PATH): {:?}", template_repo_path);
+    println!(
+        "📂 模板缓存目录 (TEMPLATE_REPO_PATH): {:?}",
+        template_repo_path
+    );
     println!("==================================================");
-    
-    let mut child = Command::new(node_path)
+
+    let mut command = Command::new(node_path);
+    command
         .arg(resource_path)
         .env("DEPLOY_DATA_DIR", deploy_data_dir.to_str().unwrap_or(""))
-        .env("TEMPLATE_REPO_PATH", template_repo_path.to_str().unwrap_or(""))
-        .env("DEPLOY_SECRET_KEY", "15170bd388b349e5f3f40cb8080ba6d1e82c66f8d097ef7b18e6243ddbb655b6")
+        .env(
+            "TEMPLATE_REPO_PATH",
+            template_repo_path.to_str().unwrap_or(""),
+        )
+        .env(
+            "DEPLOY_SECRET_KEY",
+            "15170bd388b349e5f3f40cb8080ba6d1e82c66f8d097ef7b18e6243ddbb655b6",
+        )
         .env("PORT", port.to_string())
         .env("IS_TAURI_SUBPROCESS", "true")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+
+    let mut child = command
         .spawn()
         .map_err(|e| format!("启动 Node 服务进程失败: {}", e))?;
-        
+
     // 管道化标准输出和错误输出到终端以方便调试
     if let Some(stdout) = child.stdout.take() {
         pipe_output(stdout, "STDOUT");
@@ -183,38 +447,31 @@ fn start_node_server(app: &tauri::App, node_path: &std::path::Path, port: u16) -
         pipe_output(stderr, "STDERR");
     }
 
-    thread::sleep(std::time::Duration::from_millis(800));
-    match child.try_wait() {
-        Ok(Some(status)) => {
-            return Err(format!(
-                "Node 服务进程启动后立即退出，状态: {status}。可能是端口 {port} 已被旧服务占用，请先关闭旧的雨燕进程或释放该端口后重试。"
-            ));
-        }
-        Ok(None) => {}
-        Err(e) => {
-            return Err(format!("检查 Node 服务进程状态失败: {}", e));
-        }
+    if let Err(error) = wait_for_local_server_health(&mut child, port) {
+        terminate_child_tree(&mut child, true);
+        let _ = child.wait();
+        return Err(error);
     }
-    
+
     Ok(child)
 }
 
 #[cfg(target_os = "macos")]
 fn set_macos_dock_icon(png_bytes: &[u8]) {
-    use cocoa::base::{id, nil};
+    use cocoa::base::id;
     use objc::{msg_send, sel, sel_impl};
-    
+
     unsafe {
         // 1. 创建 NSData
         let ns_data: id = msg_send![objc::class!(NSData), dataWithBytes: png_bytes.as_ptr() length: png_bytes.len()];
-        
+
         // 2. 从 NSData 创建 NSImage
         let ns_image_alloc: id = msg_send![objc::class!(NSImage), alloc];
         let ns_image: id = msg_send![ns_image_alloc, initWithData: ns_data];
-        
+
         // 3. 获取 [NSApplication sharedApplication]
         let shared_app: id = msg_send![objc::class!(NSApplication), sharedApplication];
-        
+
         // 4. 设置 Dock 图标
         let _: () = msg_send![shared_app, setApplicationIconImage: ns_image];
     }
@@ -223,7 +480,7 @@ fn set_macos_dock_icon(png_bytes: &[u8]) {
 #[tauri::command]
 fn change_app_icon(app_handle: tauri::AppHandle, is_dark: bool) -> Result<(), String> {
     let icon_bytes = if is_dark { DARK_ICON } else { LIGHT_ICON };
-    
+
     #[cfg(target_os = "macos")]
     {
         set_macos_dock_icon(icon_bytes);
@@ -239,8 +496,14 @@ fn change_app_icon(app_handle: tauri::AppHandle, is_dark: bool) -> Result<(), St
 
 /** 获取当前运行的本地 Node 服务端口的命令。 */
 #[tauri::command]
-fn get_local_server_port(state: tauri::State<'_, ServerState>) -> u16 {
-    state.port
+fn get_local_server_port(state: tauri::State<'_, LocalServerManager>) -> u16 {
+    state.port()
+}
+
+/** 获取本地 Node 服务诊断状态。 */
+#[tauri::command]
+fn get_local_server_status(state: tauri::State<'_, LocalServerManager>) -> LocalServerStatus {
+    state.status()
 }
 
 #[derive(serde::Serialize)]
@@ -256,7 +519,7 @@ struct SystemInfo {
 #[tauri::command]
 fn get_system_info(app_handle: tauri::AppHandle) -> SystemInfo {
     let app_version = app_handle.package_info().version.to_string();
-    
+
     // 获取 Node 版本
     let node_path = get_node_path(&app_handle);
     let node_version = Command::new(&node_path)
@@ -270,7 +533,7 @@ fn get_system_info(app_handle: tauri::AppHandle) -> SystemInfo {
             }
         })
         .unwrap_or_else(|_| "Not Installed".to_string());
-        
+
     // 操作系统信息
     #[cfg(target_os = "macos")]
     let os_version = Command::new("sw_vers")
@@ -301,7 +564,12 @@ fn get_system_info(app_handle: tauri::AppHandle) -> SystemInfo {
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let os_version = "Unknown".to_string();
 
-    let os_info = format!("{} ({} {})", os_version, std::env::consts::OS, std::env::consts::ARCH);
+    let os_info = format!(
+        "{} ({} {})",
+        os_version,
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
 
     SystemInfo {
         app_version,
@@ -313,8 +581,9 @@ fn get_system_info(app_handle: tauri::AppHandle) -> SystemInfo {
 
 /** 安全退出整个应用并清理 Node 子进程的命令。 */
 #[tauri::command]
-fn exit_app(app: tauri::AppHandle) {
+fn exit_app(app: tauri::AppHandle, server_manager: tauri::State<'_, LocalServerManager>) {
     println!("🛑 收到强制退出指令，正在安全退出应用并清理子进程...");
+    server_manager.stop("exit_app");
     app.exit(0);
 }
 
@@ -356,14 +625,15 @@ fn reveal_in_file_manager(path: String) -> Result<(), String> {
     }
 }
 
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let child_state = Arc::new(Mutex::new(None));
-    let child_state_clone = Arc::clone(&child_state);
+    let local_server_manager = LocalServerManager::default();
+    let setup_server_manager = local_server_manager.clone();
+    let run_server_manager = local_server_manager.clone();
 
     tauri::Builder::default()
         .manage(app_update::AppUpdateManager::default())
+        .manage(local_server_manager)
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
@@ -384,7 +654,8 @@ pub fn run() {
             exit_app,
             reveal_in_file_manager,
             get_system_info,
-            get_local_server_port
+            get_local_server_port,
+            get_local_server_status
         ])
 
         .on_window_event(|window, event| {
@@ -455,39 +726,8 @@ pub fn run() {
                     .blocking_show();
             }
 
-            let mut final_port = 3101;
             if node_installed {
-                let mut retries = 0;
-                let mut success = false;
-                let mut last_err = String::new();
-
-                while retries < 3 {
-                    // 确定分配的端口：首次尝试 3101（若空闲），后续重试每次动态寻找全新空闲端口
-                    final_port = if retries == 0 && is_port_free(3101) {
-                        3101
-                    } else {
-                        get_free_port().unwrap_or(3102 + retries)
-                    };
-
-                    println!("⏳ 正在尝试在端口 {} 启动 Node 服务（第 {} 次尝试）...", final_port, retries + 1);
-
-                    match start_node_server(app, &node_path, final_port) {
-                        Ok(child) => {
-                            let mut lock = child_state.lock().unwrap();
-                            *lock = Some(child);
-                            println!("✅ Node 服务启动成功！进程监听端口: {final_port}");
-                            success = true;
-                            break;
-                        }
-                        Err(err) => {
-                            println!("⚠️ 在端口 {} 启动 Node 服务失败: {}，准备重试...", final_port, err);
-                            last_err = err;
-                            retries += 1;
-                        }
-                    }
-                }
-
-                if !success {
+                if let Err(last_err) = setup_server_manager.start(app, &node_path) {
                     let handle = app.handle().clone();
                     handle.dialog()
                         .message(&format!("Node 本地服务在重试 3 次后均启动失败：\n{}\n\n请检查端口占用或服务脚本完整性。\n\n当前您仍可点击“确定”继续使用连接远程测试环境的功能。", last_err))
@@ -497,12 +737,6 @@ pub fn run() {
                 }
             }
 
-            // 将进程状态托管到 Tauri State 中
-            app.manage(ServerState {
-                child: Arc::clone(&child_state),
-                port: final_port,
-            });
-
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -511,11 +745,7 @@ pub fn run() {
             match event {
                 // 3. 应用退出时杀死 Node.js 子进程
                 tauri::RunEvent::Exit => {
-                    let mut lock = child_state_clone.lock().unwrap();
-                    if let Some(mut child) = lock.take() {
-                        println!("🛑 正在停止 Node 本地服务进程 (PID: {})...", child.id());
-                        let _ = child.kill();
-                    }
+                    run_server_manager.stop("tauri exit");
                 }
                 // macOS 下点击 Dock 图标时重新显示主窗口
                 #[cfg(target_os = "macos")]
