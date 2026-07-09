@@ -407,15 +407,24 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
    */
   const runRollback = async (record: DeployRecord) => {
     if (!ensureLoggedIn()) return;
+    detachPublishProgressStream();
     progressMode.value = 'rollback';
+    const sessionId = ++progressSessionId;
+    const abortController = new AbortController();
+    deployAbortController = abortController;
     activeRecord.value = record;
     rollbackProgressOpen.value = true;
     Object.assign(progressState, { percent: 0, title: '准备回滚', detail: '', logs: [], running: true, stopped: false });
     try {
-      await rollbackRecordWithProgress(record.id, { operator: userName.value || '' }, { onEvent: handleProgressEvent });
+      await rollbackRecordWithProgress(record.id, { operator: userName.value || '' }, {
+        signal: abortController.signal,
+        onEvent: createScopedProgressHandler(sessionId),
+      });
+      if (sessionId !== progressSessionId || abortController.signal.aborted) return;
       message.success('回滚完成');
       await refreshActiveTab({ resetRecordsPage: true, force: true });
     } catch (error: any) {
+      if (isAbortError(error) || abortController.signal.aborted || sessionId !== progressSessionId) return;
       const errorMessage = getErrorMessage(error);
       if (isDeployConflictError(error)) {
         message.warning(errorMessage);
@@ -428,7 +437,10 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       progressState.detail = errorMessage;
       message.error(errorMessage);
     } finally {
-      progressState.running = false;
+      if (sessionId === progressSessionId) {
+        progressState.running = false;
+        if (deployAbortController === abortController) deployAbortController = null;
+      }
     }
   };
 
@@ -438,15 +450,24 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
    */
   const runUndoRollback = async (record: DeployRecord) => {
     if (!ensureLoggedIn()) return;
+    detachPublishProgressStream();
     progressMode.value = 'undoRollback';
+    const sessionId = ++progressSessionId;
+    const abortController = new AbortController();
+    deployAbortController = abortController;
     activeRecord.value = record;
     rollbackProgressOpen.value = true;
     Object.assign(progressState, { percent: 0, title: '准备撤销回滚', detail: '', logs: [], running: true, stopped: false });
     try {
-      await undoRollbackRecordWithProgress(record.id, { operator: userName.value || '' }, { onEvent: handleProgressEvent });
+      await undoRollbackRecordWithProgress(record.id, { operator: userName.value || '' }, {
+        signal: abortController.signal,
+        onEvent: createScopedProgressHandler(sessionId),
+      });
+      if (sessionId !== progressSessionId || abortController.signal.aborted) return;
       message.success('撤销回滚完成');
       await refreshActiveTab({ resetRecordsPage: true, force: true });
     } catch (error: any) {
+      if (isAbortError(error) || abortController.signal.aborted || sessionId !== progressSessionId) return;
       const errorMessage = getErrorMessage(error);
       if (isDeployConflictError(error)) {
         message.warning(errorMessage);
@@ -459,7 +480,10 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       progressState.detail = errorMessage;
       message.error(errorMessage);
     } finally {
-      progressState.running = false;
+      if (sessionId === progressSessionId) {
+        progressState.running = false;
+        if (deployAbortController === abortController) deployAbortController = null;
+      }
     }
   };
 

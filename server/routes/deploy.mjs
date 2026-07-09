@@ -41,12 +41,9 @@ import {
   handleUpdateNginxInstance,
   handleBackupDb,
   handleRestoreDb,
-  handleDownloadAppUpdate,
-  handleGetAppUpdateStatus,
   handleCheckAppUpdate,
   handleCheckTauriAppUpdate,
   handleDownloadAppUpdateAsset,
-  handleInstallAppUpdate,
 } from '../controllers/deploy-controller.mjs';
 
 const router = express.Router();
@@ -92,12 +89,9 @@ router.post('/records/:id/undo-rollback', handleUndoRollbackRecord);
 router.get('/db/backup', handleBackupDb);
 router.post('/db/restore', express.raw({ type: 'application/octet-stream', limit: '50mb' }), handleRestoreDb);
 
-// 自动更新检测与后台静默下载安装接口
-router.post('/app-update/download', handleDownloadAppUpdate);
-router.get('/app-update/status', handleGetAppUpdateStatus);
+// 自动更新检测与原生下载代理接口
 router.get('/app-update/check', handleCheckAppUpdate);
 router.get('/app-update/tauri/:target/:arch/:currentVersion', handleCheckTauriAppUpdate);
 router.get('/app-update/download-asset', handleDownloadAppUpdateAsset);
-router.post('/app-update/install', handleInstallAppUpdate);
 
 export default router;

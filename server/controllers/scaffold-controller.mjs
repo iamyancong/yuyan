@@ -4,6 +4,7 @@
  */
 
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { GITLAB_HOST, GITLAB_TOKEN, PORT } from '../config/constants.mjs';
@@ -307,7 +308,7 @@ export async function handleCreateScaffold(req, res) {
     emit.log('success', '模板仓库已同步完成', 'pull-template');
 
     // 5. 创建临时工作目录
-    const workRoot = path.join('/tmp', `scaffold-${Date.now()}`);
+    const workRoot = path.join(os.tmpdir(), `scaffold-${Date.now()}`);
     await ensureDir(workRoot);
     emit.log('info', `创建临时工作目录：${workRoot}`, 'generate');
 
@@ -366,7 +367,7 @@ export async function handleCreateScaffold(req, res) {
     } else {
       // 生成下载链接
       const timestamp = Date.now();
-      const archiveDir = path.join('/tmp', 'scaffold-downloads');
+      const archiveDir = path.dirname(getScaffoldArchivePath(appName, timestamp));
       const archivePath = getScaffoldArchivePath(appName, timestamp);
       await ensureDir(archiveDir);
       emit.stage('package-download', 92, '下载包准备', '正在打包下载归档');

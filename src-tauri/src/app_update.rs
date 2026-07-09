@@ -1,3 +1,4 @@
+use crate::LocalServerManager;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -497,20 +498,19 @@ async fn download_to_partial(
                 .get(reqwest::header::CONTENT_RANGE)
                 .and_then(|value| value.to_str().ok())
                 .and_then(parse_content_range);
-            let (write_offset, total_length, resumable) = if status
-                == reqwest::StatusCode::PARTIAL_CONTENT
-            {
-                let (range_start, total) =
-                    content_range.ok_or_else(|| "续传响应缺少有效 Content-Range".to_string())?;
-                if range_start != offset {
-                    return Err(format!(
+            let (write_offset, total_length, resumable) =
+                if status == reqwest::StatusCode::PARTIAL_CONTENT {
+                    let (range_start, total) = content_range
+                        .ok_or_else(|| "续传响应缺少有效 Content-Range".to_string())?;
+                    if range_start != offset {
+                        return Err(format!(
                         "续传位置不一致，期望从 {offset} 字节开始，服务器从 {range_start} 字节开始"
                     ));
-                }
-                (offset, Some(total), true)
-            } else {
-                (0, response.content_length().or(expected_size), false)
-            };
+                    }
+                    (offset, Some(total), true)
+                } else {
+                    (0, response.content_length().or(expected_size), false)
+                };
 
             let mut options = tokio::fs::OpenOptions::new();
             options.create(true).write(true);
@@ -675,6 +675,7 @@ pub fn get_app_update_target() -> AppUpdateTarget {
 pub async fn install_app_update(
     app: AppHandle,
     manager: State<'_, AppUpdateManager>,
+    server_manager: State<'_, LocalServerManager>,
 ) -> Result<AppUpdateCommandResult, String> {
     let snapshot = manager.snapshot();
     if snapshot.status != "completed" {
@@ -699,6 +700,7 @@ pub async fn install_app_update(
             .spawn()
             .map_err(|error| format!("拉起静默更新安装程序失败: {error}"))?;
         // 启动安装程序后，当前应用应该立即退出，以防文件被占用导致更新覆盖失败
+        server_manager.stop("app update install");
         app.exit(0);
     }
 
@@ -707,6 +709,8 @@ pub async fn install_app_update(
         app.opener()
             .open_path(local_path, None::<&str>)
             .map_err(|error| format!("拉起更新安装程序失败: {error}"))?;
+        server_manager.stop("app update install");
+        app.exit(0);
     }
 
     Ok(AppUpdateCommandResult {
@@ -734,16 +738,16 @@ mod tests {
             port
         );
         assert!(validate_download_url(&valid_url).is_ok());
-        
+
         let valid_static_url = format!(
             "http://{}:{}/app-updates/stable/1.2.3/darwin-aarch64/yuyan.dmg",
             super::UPDATE_SERVER_HOST,
             port
         );
         assert!(validate_download_url(&valid_static_url).is_ok());
-        
+
         assert!(validate_download_url("https://example.com/update?assetId=123").is_err());
-        
+
         let invalid_url = format!(
             "http://{}:{}/deploy-api/app-update/download-asset",
             super::UPDATE_SERVER_HOST,

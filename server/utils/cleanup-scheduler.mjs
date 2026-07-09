@@ -4,6 +4,7 @@
  */
 
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { CLEANUP_INTERVAL_MS, TEMP_FILE_MAX_AGE_MS } from '../config/constants.mjs';
 
@@ -11,14 +12,15 @@ import { CLEANUP_INTERVAL_MS, TEMP_FILE_MAX_AGE_MS } from '../config/constants.m
  * 启动定时清理任务
  */
 export function startCleanupScheduler() {
-  setInterval(async () => {
+  const timer = setInterval(async () => {
     try {
-      const tempDirs = await fs.readdir('/tmp');
+      const tempRoot = os.tmpdir();
+      const tempDirs = await fs.readdir(tempRoot);
       const now = Date.now();
 
       for (const dir of tempDirs) {
         if (dir.startsWith('scaffold-')) {
-          const dirPath = path.join('/tmp', dir);
+          const dirPath = path.join(tempRoot, dir);
           const stats = await fs.stat(dirPath);
           const age = now - stats.mtime.getTime();
 
@@ -32,6 +34,11 @@ export function startCleanupScheduler() {
       console.warn('[cleanup-scheduler] 清理任务执行失败:', error);
     }
   }, CLEANUP_INTERVAL_MS);
+  timer.unref?.();
 
   console.log(`[cleanup-scheduler] 定时清理任务已启动 (间隔: ${CLEANUP_INTERVAL_MS / 1000 / 60} 分钟)`);
+  return () => {
+    clearInterval(timer);
+    console.log('[cleanup-scheduler] 定时清理任务已停止');
+  };
 }

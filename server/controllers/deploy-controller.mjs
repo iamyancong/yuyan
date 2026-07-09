@@ -23,10 +23,8 @@ import {
   getDeployDb,
 } from '../services/deploy-store.mjs';
 import fs from 'node:fs/promises';
-import fsSync, { createWriteStream } from 'node:fs';
-import os from 'node:os';
+import fsSync from 'node:fs';
 import path from 'node:path';
-import { exec } from 'node:child_process';
 import axios from 'axios';
 import { DEPLOY_DB_PATH } from '../config/constants.mjs';
 
@@ -1112,169 +1110,31 @@ export async function handleRestoreDb(req, res) {
   }
 }
 
-// 自动更新后台任务状态与进度
-let appUpdateStatus = {
-  status: 'idle', // 'idle' | 'downloading' | 'completed' | 'error'
-  progress: 0,
-  error: null,
-  localPath: null
-};
-
-/**
- * 获取自动更新当前下载状态和进度
- */
-export async function handleGetAppUpdateStatus(req, res) {
-  res.json(appUpdateStatus);
-}
-
-/**
- * 触发后台静默下载并拉起更新程序（已加入防挂起超时保护）
- */
-export async function handleDownloadAppUpdate(req, res) {
-  const { url, filename } = req.body;
-  if (!url || !filename) {
-    return sendError(res, new Error('缺少必要参数 url 或 filename'), 400);
-  }
-
-  if (appUpdateStatus.status === 'downloading') {
-    return res.json({ success: true, message: '下载正在进行中' });
-  }
-
-  appUpdateStatus = {
-    status: 'downloading',
-    progress: 0,
-    error: null
-  };
-
-  // 异步下载，立即返回
-  res.json({ success: true, message: '开始后台下载更新包...' });
-
-  try {
-    const tempDir = os.tmpdir();
-    const destPath = path.join(tempDir, filename);
-
-    // Token 统一从服务端环境变量获取
-    const token = process.env.GITHUB_TOKEN || '';
-    const headers = {
-      'User-Agent': 'yuyan-app'
-    };
-
-    if (token && token.trim() !== '') {
-      headers['Authorization'] = `Bearer ${token.trim()}`;
-    }
-
-    // 自适应判断如果是 GitHub Release 资源下载
-    if (url.includes('api.github.com') && url.includes('/assets/')) {
-      headers['Accept'] = 'application/octet-stream';
-    }
-
-    console.log(`[bootstrap-update] 后台下载启动: ${url} -> ${destPath}`);
-
-    const response = await axios({
-      method: 'get',
-      url: url,
-      responseType: 'stream',
-      headers: headers
-    });
-
-    const totalLength = parseInt(response.headers['content-length'], 10) || 0;
-    let downloadedLength = 0;
-
-    const writer = createWriteStream(destPath);
-
-    // 防挂起超时保护：20 秒内未收到新数据则判定为连接中断
-    let stallTimer = null;
-    const STALL_TIMEOUT_MS = 20000;
-
-    const resetStallTimer = () => {
-      if (stallTimer) clearTimeout(stallTimer);
-      stallTimer = setTimeout(() => {
-        console.error(`[bootstrap-update] 下载超时中断：${STALL_TIMEOUT_MS / 1000} 秒内未收到新数据`);
-        response.data.destroy();
-        writer.destroy();
-        appUpdateStatus.status = 'error';
-        appUpdateStatus.error = `下载超时中断：${STALL_TIMEOUT_MS / 1000} 秒内未收到新数据，请检查网络连接后重试`;
-      }, STALL_TIMEOUT_MS);
-    };
-
-    resetStallTimer();
-    response.data.pipe(writer);
-
-    response.data.on('data', (chunk) => {
-      downloadedLength += chunk.length;
-      if (totalLength > 0) {
-        appUpdateStatus.progress = Math.round((downloadedLength / totalLength) * 100);
-      }
-      resetStallTimer();
-    });
-
-    writer.on('finish', () => {
-      if (stallTimer) clearTimeout(stallTimer);
-      console.log(`[bootstrap-update] 下载成功！更新包已暂存为: ${destPath}`);
-      appUpdateStatus.status = 'completed';
-      appUpdateStatus.progress = 100;
-      appUpdateStatus.localPath = destPath;
-    });
-
-    writer.on('error', (err) => {
-      if (stallTimer) clearTimeout(stallTimer);
-      console.error('[bootstrap-update] 文件写入失败:', err);
-      appUpdateStatus.status = 'error';
-      appUpdateStatus.error = `保存安装包时发生错误: ${err.message}`;
-    });
-
-    response.data.on('error', (err) => {
-      if (stallTimer) clearTimeout(stallTimer);
-      console.error('[bootstrap-update] 数据流接收异常:', err);
-      writer.destroy();
-      appUpdateStatus.status = 'error';
-      appUpdateStatus.error = `下载数据流中断: ${err.message}`;
-    });
-
-  } catch (err) {
-    console.error('[bootstrap-update] 下载时捕获到异常:', err);
-    appUpdateStatus.status = 'error';
-    appUpdateStatus.error = `下载异常: ${err.message}`;
-  }
-}
-
-/**
- * 触发执行已下载的更新包进行安装
- */
-export async function handleInstallAppUpdate(req, res) {
-  if (appUpdateStatus.status !== 'completed' || !appUpdateStatus.localPath) {
-    return sendError(res, new Error('更新包尚未下载完成，无法执行安装'), 400);
-  }
-
-  const destPath = appUpdateStatus.localPath;
-
-  try {
-    let command = '';
-    if (process.platform === 'win32') {
-      command = `start "" "${destPath}"`;
-    } else if (process.platform === 'darwin') {
-      command = `open "${destPath}"`;
-    } else {
-      command = `xdg-open "${destPath}"`;
-    }
-
-    console.log(`[bootstrap-update] 用户触发安装：拉起更新包 ${destPath}`);
-    exec(command, (err) => {
-      if (err) {
-        console.error('[bootstrap-update] 运行安装程序失败:', err);
-        return sendError(res, new Error(`拉起安装程序失败: ${err.message}`), 500);
-      }
-    });
-
-    res.json({ success: true, message: '已拉起安装程序，正在覆盖升级' });
-  } catch (err) {
-    console.error('[bootstrap-update] 拉起安装程序捕获到异常:', err);
-    sendError(res, err, 500);
-  }
-}
-
 // 预下载和缓存管理器，防止并发重复下载
 const activePreloads = new Set();
+const activeUpdateAbortControllers = new Set();
+
+/**
+ * 注册更新下载 AbortController。
+ * @param {AbortController} controller - 取消控制器
+ * @returns {() => void} 取消注册函数
+ */
+function trackUpdateAbortController(controller) {
+  activeUpdateAbortControllers.add(controller);
+  return () => activeUpdateAbortControllers.delete(controller);
+}
+
+/**
+ * 中断所有正在进行的更新下载、预下载和代理缓存写入。
+ * @param {string} reason - 中断原因
+ */
+export function abortAppUpdateTransfers(reason = 'shutdown') {
+  for (const controller of activeUpdateAbortControllers) {
+    controller.abort(reason);
+  }
+  activeUpdateAbortControllers.clear();
+  activePreloads.clear();
+}
 
 /**
  * 校验缓存文件是否为有效的系统安装包
@@ -1318,8 +1178,11 @@ async function preloadAndCacheAsset(assetId, filename) {
   const token = process.env.GITHUB_TOKEN || '';
   if (!token) return;
 
+  const safeFilename = path.basename(String(filename || 'update'));
+  if (!safeFilename) return;
+
   const cacheDir = path.join(process.env.DEPLOY_DATA_DIR || '/data/yuyan-ops/deploy-data', 'app-update-cache');
-  const cachePath = path.join(cacheDir, `${assetId}-${filename}`);
+  const cachePath = path.join(cacheDir, `${assetId}-${safeFilename}`);
 
   // 1. 确保缓存目录存在
   if (!fsSync.existsSync(cacheDir)) {
@@ -1333,7 +1196,7 @@ async function preloadAndCacheAsset(assetId, filename) {
 
   // 2. 如果已经存在且格式有效，则跳过；损坏缓存立即清理
   if (fsSync.existsSync(cachePath)) {
-    if (isValidUpdateAssetFile(cachePath, filename)) {
+    if (isValidUpdateAssetFile(cachePath, safeFilename)) {
       const stats = fsSync.statSync(cachePath);
       console.log(`[Update Cache] 缓存包已存在且格式有效: ${cachePath} (${(stats.size/1024/1024).toFixed(2)}MB)，无需预下载`);
       return;
@@ -1351,6 +1214,15 @@ async function preloadAndCacheAsset(assetId, filename) {
   console.log(`[Update Cache] 开始静默预下载 GitHub Release 资源: ${assetId} -> ${cachePath}`);
 
   const tempCachePath = `${cachePath}.preload-${process.pid}-${Date.now()}.tmp`;
+  const controller = new AbortController();
+  const untrack = trackUpdateAbortController(controller);
+  let source = null;
+  let writer = null;
+  const abortTransfer = () => {
+    source?.destroy?.(new Error('预下载已中断'));
+    writer?.destroy?.(new Error('预下载已中断'));
+  };
+  controller.signal.addEventListener('abort', abortTransfer, { once: true });
   try {
     const url = `https://api.github.com/repos/${GITHUB_REPO}/releases/assets/${assetId}`;
     const headers = {
@@ -1364,20 +1236,22 @@ async function preloadAndCacheAsset(assetId, filename) {
       url: url,
       responseType: 'stream',
       headers: headers,
-      timeout: 300000 // 5分钟超时
+      timeout: 300000, // 5分钟超时
+      signal: controller.signal,
     });
 
-    const writer = fsSync.createWriteStream(tempCachePath);
+    source = response.data;
+    writer = fsSync.createWriteStream(tempCachePath);
 
-    response.data.pipe(writer);
+    source.pipe(writer);
 
     await new Promise((resolve, reject) => {
       writer.on('finish', resolve);
       writer.on('error', reject);
-      response.data.on('error', reject);
+      source.on('error', reject);
     });
 
-    if (!isValidUpdateAssetFile(tempCachePath, filename)) {
+    if (!isValidUpdateAssetFile(tempCachePath, safeFilename)) {
       throw new Error('预下载文件格式校验失败，不是有效安装包');
     }
 
@@ -1385,11 +1259,17 @@ async function preloadAndCacheAsset(assetId, filename) {
     fsSync.renameSync(tempCachePath, cachePath);
     console.log(`[Update Cache] 资源预下载并缓存成功: ${cachePath}`);
   } catch (err) {
-    console.error(`[Update Cache] 资源预下载失败:`, err.message);
+    if (controller.signal.aborted) {
+      console.warn(`[Update Cache] 资源预下载已中断: ${assetId}`);
+    } else {
+      console.error(`[Update Cache] 资源预下载失败:`, err.message);
+    }
     if (fsSync.existsSync(tempCachePath)) {
       try { fsSync.unlinkSync(tempCachePath); } catch (e) {}
     }
   } finally {
+    controller.signal.removeEventListener('abort', abortTransfer);
+    untrack();
     activePreloads.delete(assetId);
   }
 }
@@ -1500,7 +1380,7 @@ export async function handleCheckAppUpdate(req, res) {
     if (isNewerAppVersion(currentVersion, remoteVersion)) {
       // 重写下载链接为内网服务器的免密中转链接（Token 由服务端环境变量管理，无需拼入 URL）
       const filename = targetAsset.name;
-      const downloadUrl = `/deploy-api/app-update/download-asset?assetId=${targetAsset.id}&filename=${filename}`;
+      const downloadUrl = `/deploy-api/app-update/download-asset?assetId=${encodeURIComponent(targetAsset.id)}&filename=${encodeURIComponent(filename)}`;
 
       // 触发后台预下载（静默执行，不阻塞 check 接口的响应）
       preloadAndCacheAsset(targetAsset.id, filename).catch(err => {
@@ -1589,14 +1469,47 @@ export async function handleDownloadAppUpdateAsset(req, res) {
   if (!assetId) {
     return sendError(res, new Error('缺少必要参数 assetId'), 400);
   }
+  const safeFilename = path.basename(String(filename || 'update'));
+  if (!safeFilename) {
+    return sendError(res, new Error('安装包文件名无效'), 400);
+  }
+
+  const controller = new AbortController();
+  const untrack = trackUpdateAbortController(controller);
+  let source = null;
+  let cacheWriter = null;
+  let tempCachePath = '';
+  let completed = false;
+  const cleanupTempCache = () => {
+    if (tempCachePath && fsSync.existsSync(tempCachePath)) {
+      try { fsSync.unlinkSync(tempCachePath); } catch (e) {}
+    }
+  };
+  const cleanupTransfer = () => {
+    req.off?.('aborted', abortTransfer);
+    res.off?.('close', abortTransfer);
+    untrack();
+  };
+  function abortTransfer() {
+    if (completed) return;
+    controller.abort('client closed');
+    source?.destroy?.(new Error('客户端下载已中断'));
+    if (cacheWriter && !cacheWriter.destroyed) cacheWriter.destroy();
+    cleanupTempCache();
+    cleanupTransfer();
+  }
+  req.on('aborted', abortTransfer);
+  res.on('close', abortTransfer);
 
   try {
     const cacheDir = path.join(process.env.DEPLOY_DATA_DIR || '/data/yuyan-ops/deploy-data', 'app-update-cache');
-    const cachePath = path.join(cacheDir, `${assetId}-${filename || 'update'}`);
+    const cachePath = path.join(cacheDir, `${assetId}-${safeFilename}`);
 
     // 1. 如果命中有效缓存则直接返回；损坏缓存先清理再回源
     if (fsSync.existsSync(cachePath)) {
-      if (isValidUpdateAssetFile(cachePath, filename)) {
+      if (isValidUpdateAssetFile(cachePath, safeFilename)) {
+        completed = true;
+        cleanupTransfer();
         const stats = fsSync.statSync(cachePath);
         console.log(`[Update Cache] 命中缓存，直接返回本地缓存包: ${cachePath} (${(stats.size/1024/1024).toFixed(2)}MB)`);
 
@@ -1604,9 +1517,7 @@ export async function handleDownloadAppUpdateAsset(req, res) {
         res.setHeader('Content-Type', 'application/octet-stream');
         res.setHeader('Accept-Ranges', 'bytes');
         res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-        if (filename) {
-          res.setHeader('Content-Disposition', `attachment; filename=${encodeURIComponent(filename)}`);
-        }
+        res.setHeader('Content-Disposition', `attachment; filename=${encodeURIComponent(safeFilename)}`);
 
         return res.sendFile(cachePath, {
           acceptRanges: true,
@@ -1638,13 +1549,14 @@ export async function handleDownloadAppUpdateAsset(req, res) {
     }
 
     const url = `https://api.github.com/repos/${GITHUB_REPO}/releases/assets/${assetId}`;
-    console.log(`[Update Proxy] 缓存未命中，内网服务器代理下载私有资源: ${assetId} (文件名: ${filename})`);
+    console.log(`[Update Proxy] 缓存未命中，内网服务器代理下载私有资源: ${assetId} (文件名: ${safeFilename})`);
 
     const response = await axios({
       method: 'get',
       url: url,
       responseType: 'stream',
       headers,
+      signal: controller.signal,
       validateStatus: (status) => status === 200 || status === 206,
     });
 
@@ -1656,13 +1568,10 @@ export async function handleDownloadAppUpdateAsset(req, res) {
         res.setHeader(headerName, response.headers[headerName]);
       }
     });
-    if (filename) {
-      res.setHeader('Content-Disposition', `attachment; filename=${encodeURIComponent(filename)}`);
-    }
+    res.setHeader('Content-Disposition', `attachment; filename=${encodeURIComponent(safeFilename)}`);
 
     // 尝试在本地保存一份缓存
-    let cacheWriter = null;
-    const tempCachePath = `${cachePath}.proxy-${process.pid}-${Date.now()}.tmp`;
+    tempCachePath = `${cachePath}.proxy-${process.pid}-${Date.now()}.tmp`;
     try {
       const isFullDownload = response.status === 200 && !req.headers.range;
       if (isFullDownload && !fsSync.existsSync(cacheDir)) {
@@ -1677,9 +1586,10 @@ export async function handleDownloadAppUpdateAsset(req, res) {
 
     // 手动分流：避免对同一 Readable 流执行两次 pipe() 导致背压死锁
     // 使用 data/end/error 事件手动将数据分发到 res 和 cacheWriter
-    const source = response.data;
+    source = response.data;
 
     source.on('data', (chunk) => {
+      if (controller.signal.aborted || res.destroyed) return;
       // 1. 写入 HTTP 响应流（优先保证客户端接收）
       const resOk = res.write(chunk);
       // 2. 写入本地缓存文件（非阻塞，忽略背压以避免影响主流程）
@@ -1694,12 +1604,14 @@ export async function handleDownloadAppUpdateAsset(req, res) {
     });
 
     source.on('end', () => {
+      completed = true;
+      cleanupTransfer();
       res.end();
       if (cacheWriter && !cacheWriter.destroyed) {
         cacheWriter.end(() => {
           // 下载完整并通过格式校验后，将独立临时文件重命名为正式缓存
           try {
-            if (!isValidUpdateAssetFile(tempCachePath, filename)) {
+            if (!isValidUpdateAssetFile(tempCachePath, safeFilename)) {
               throw new Error('代理下载文件格式校验失败，不写入缓存');
             }
             fsSync.renameSync(tempCachePath, cachePath);
@@ -1713,6 +1625,8 @@ export async function handleDownloadAppUpdateAsset(req, res) {
     });
 
     source.on('error', (err) => {
+      if (controller.signal.aborted) return;
+      cleanupTransfer();
       console.error('[Update Proxy] 源数据流错误:', err);
       res.destroy(err);
       if (cacheWriter && !cacheWriter.destroyed) {
@@ -1729,6 +1643,11 @@ export async function handleDownloadAppUpdateAsset(req, res) {
       });
     }
   } catch (error) {
+    cleanupTransfer();
+    if (controller.signal.aborted) {
+      cleanupTempCache();
+      return;
+    }
     console.error('[Update Proxy] 代理资源流失败:', error);
     let status = 500;
     let errMsg = error.message;

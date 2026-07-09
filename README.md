@@ -48,7 +48,7 @@
                                  └───────────────────────────┘
 ```
 
-- 前端构建产物（`dist/`）由 Express 静态托管，并以 `127.0.0.1:3100` 提供 API。
+- 前端构建产物（`dist/`）由 Express 静态托管；桌面端由 Tauri 注入本地服务端口，优先使用 `127.0.0.1:3101`，冲突时动态分配。
 - 打包时通过 `scripts/copy-node.js` 将本机 Node 二进制复制进 Tauri 资源目录（macOS 会执行 ad-hoc 签名），保证用户机器无需另装 Node 即可运行（开发模式直接使用系统 Node）。
 
 ### 技术栈
@@ -133,13 +133,15 @@ pnpm install
 pnpm dev
 ```
 
-该命令会：先执行 `copy-node.js --dev`（开发模式跳过二进制拷贝），再启动 `tauri dev`，前端运行在 `127.0.0.1:1420`，内嵌服务运行在 `:3100`。
+该命令会：先执行 `copy-node.js --dev`（开发模式跳过二进制拷贝），再启动 `tauri dev`，前端运行在 `127.0.0.1:1420`，内嵌服务优先运行在 `:3101`，端口冲突时由 Tauri 动态分配。
 
 仅调试前端（不启动桌面外壳）：
 
 ```bash
 pnpm frontend:dev
 ```
+
+如需在纯浏览器调试本地-only接口（例如数据库恢复到本机服务），显式配置 `VITE_LOCAL_SERVER_URL=http://127.0.0.1:<port>`；桌面端运行时不需要该配置。
 
 类型检查：
 
@@ -163,7 +165,7 @@ pnpm build
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `PORT` | `3100` | 内嵌服务端口 |
+| `PORT` | `3100` | 独立启动 Node 服务时的默认端口；桌面端由 Tauri 注入实际端口 |
 | `TEMPLATE_REPO_URL` | 内网模板仓库 | 脚手架模板仓库地址 |
 | `TEMPLATE_BRANCH` | `template` | 模板分支 |
 | `TEMPLATE_REPO_PATH` | `/opt/template` | 模板本地缓存路径（打包后由 Tauri 指向 appData） |
@@ -175,19 +177,20 @@ pnpm build
 | `DEPLOY_RECORD_KEEP_PER_PROJECT` | `20` | 每个项目保留的发布记录数 |
 | `DEPLOY_BACKUP_KEEP_PER_TARGET` | `8` | 每个目标保留的远端备份版本数 |
 
-> 打包运行时，Tauri 会自动把部署数据目录与模板缓存目录指向应用数据目录（appData），并注入 `DEPLOY_SECRET_KEY`、`PORT` 等环境变量（见 `src-tauri/src/lib.rs`）。
+> 打包运行时，Tauri 会自动把部署数据目录与模板缓存目录指向应用数据目录（appData），并注入 `DEPLOY_SECRET_KEY`、动态 `PORT` 等环境变量（见 `src-tauri/src/lib.rs`）。本地服务启动以 `/health` 作为健康检查，不依赖固定 sleep。
 
 ---
 
 ## 🔌 内嵌服务 API 概览
 
-服务以 `http://localhost:3100` 暴露，主要路由：
+独立 Node 服务默认以 `http://localhost:3100` 暴露；桌面端实际地址由 Tauri 命令返回。主要路由：
 
 - `GET  /health` —— 健康检查
 - `POST /scaffold-api/create` —— 创建微应用（`?stream=1` 走 NDJSON 流式进度）
 - `GET  /scaffold-api/download/:appName/:timestamp` —— 下载生成的项目压缩包
 - `POST /scaffold-api/ops/backfill-topics` —— 批量补打 `yuyan-ops` 标签
 - `/deploy-api/servers` · `/targets` · `/records` · `/nginx-instances` · `/nginx-runtime` 等 —— 服务器、部署目标、发布记录、Nginx 实例 / 运行时的增删改查与发布、回滚、Nginx 测试、数据库备份恢复等
+- `/deploy-api/app-update/check`、`/deploy-api/app-update/download-asset`、`/app-updates/*` —— 桌面端更新检测与安装包代理下载；安装和退出由 Tauri 原生层负责
 
 ---
 

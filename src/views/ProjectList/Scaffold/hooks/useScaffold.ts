@@ -61,6 +61,7 @@ export function useScaffold() {
   const result = ref<any>(null);
   const formRef = ref<FormInstance>();
   const progressTimer = ref<number | null>(null);
+  let createAbortController: AbortController | null = null;
 
   const progress = reactive<{
     visible: boolean;
@@ -123,6 +124,15 @@ export function useScaffold() {
       window.clearInterval(progressTimer.value);
       progressTimer.value = null;
     }
+  };
+
+  /**
+   * 中断当前脚手架创建请求。
+   */
+  const abortCreateRequest = () => {
+    if (!createAbortController) return;
+    createAbortController.abort();
+    createAbortController = null;
   };
 
   const startProgressTimer = () => {
@@ -323,6 +333,8 @@ export function useScaffold() {
 
   onUnmounted(() => {
     window.removeEventListener('auth-state-changed', handleAuthChange as unknown as EventListener);
+    abortCreateRequest();
+    stopProgressTimer();
   });
 
   const kebabCaseRe = /^[a-z]+(-[a-z0-9]+)*$/;
@@ -391,6 +403,7 @@ export function useScaffold() {
   );
 
   const handleReset = () => {
+    abortCreateRequest();
     // 重置时，如果用户已登录，保留认证信息
     const currentToken = isAuthenticated.value ? authState.value.token || '' : '';
     const currentHost = isAuthenticated.value ? authState.value.host || form.gitlabHost : form.gitlabHost;
@@ -439,12 +452,19 @@ export function useScaffold() {
       return;
     }
 
+    abortCreateRequest();
+    const controller = new AbortController();
+    createAbortController = controller;
+
     try {
       startProgress(Boolean(form.createRepo));
       appendLog('info', form.createRepo ? '将创建 GitLab 项目并推送代码' : '将仅生成项目下载包', 'validate');
       const responseData = await createMicroAppWithProgress(form, {
+        signal: controller.signal,
         onEvent: handleProgressEvent,
       });
+
+      if (controller.signal.aborted || createAbortController !== controller) return;
 
       if (responseData) {
         result.value = responseData;
@@ -461,6 +481,7 @@ export function useScaffold() {
       }
       message.success('创建成功');
     } catch (e: any) {
+      if (controller.signal.aborted) return;
       console.error('创建请求失败:', e);
       const errorMessage = e?.response?.data?.error || e?.message || '创建失败';
       failProgress(errorMessage);
@@ -469,6 +490,7 @@ export function useScaffold() {
       });
       result.value = null;
     } finally {
+      if (createAbortController === controller) createAbortController = null;
       stopProgressTimer();
     }
   };
