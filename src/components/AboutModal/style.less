@@ -202,7 +202,9 @@
 
       .info-row {
         display: flex;
+        align-items: flex-start;
         justify-content: space-between;
+        gap: 12px;
         border-bottom: 1px dashed var(--border-color-split);
         padding: 2px 0;
 
@@ -213,14 +215,18 @@
         .label {
           color: var(--text-color-secondary);
           font-weight: 500;
+          flex: 0 0 72px;
         }
 
         .value {
           font-weight: 600;
           color: var(--text-color);
-          word-break: break-all;
+          flex: 1;
+          min-width: 0;
+          overflow-wrap: anywhere;
+          word-break: normal;
+          white-space: normal;
           text-align: right;
-          padding-left: 12px;
         }
       }
     }

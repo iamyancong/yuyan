@@ -95,14 +95,15 @@ jobs:
           # 从 VITE_APP_SERVER_URL 提取 host 和 port 并传入 Rust 编译
           URL="${{ secrets.VITE_APP_SERVER_URL }}"
           if [ -n "$URL" ]; then
+            if [[ "$URL" == https://* ]]; then SCHEME=https; else SCHEME=http; fi
             HOST_PORT=${URL#*//}
             HOST=${HOST_PORT%:*}
             PORT=${HOST_PORT#*:}
             if [ "$PORT" = "$HOST" ]; then
-              if [[ "$URL" == https://* ]]; then PORT=443; else PORT=80; fi
+              if [ "$SCHEME" = "https" ]; then PORT=443; else PORT=80; fi
             fi
-            echo "Building with Rust UPDATE_SERVER_HOST=$HOST and UPDATE_SERVER_PORT=$PORT"
-            UPDATE_SERVER_HOST="$HOST" UPDATE_SERVER_PORT="$PORT" pnpm run build
+            echo "Building with Rust UPDATE_SERVER_SCHEME=$SCHEME UPDATE_SERVER_HOST=$HOST and UPDATE_SERVER_PORT=$PORT"
+            UPDATE_SERVER_SCHEME="$SCHEME" UPDATE_SERVER_HOST="$HOST" UPDATE_SERVER_PORT="$PORT" pnpm run build
           else
             echo "Warning: VITE_APP_SERVER_URL is empty, building with defaults"
             pnpm run build
@@ -174,4 +175,3 @@ jobs:
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-

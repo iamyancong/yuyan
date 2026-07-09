@@ -851,6 +851,39 @@ export const backupDbFromServer = (serverUrl: string): Promise<ArrayBuffer> => {
 
 let activeLocalServerUrl: string | null = null;
 
+/** 本地辅助服务状态。 */
+export interface LocalServerStatus {
+  port: number;
+  pid?: number | null;
+  running: boolean;
+  status: 'idle' | 'starting' | 'running' | 'error' | string;
+  nodePath?: string | null;
+  lastError?: string | null;
+  lastOutput?: string;
+}
+
+/** 本地辅助服务不可用错误。 */
+export class LocalServerUnavailableError extends Error {
+  /** Tauri 原生侧返回的本地服务状态 */
+  status?: LocalServerStatus;
+
+  /**
+   * 创建本地服务不可用错误。
+   * @param message 错误消息
+   * @param status 本地服务状态
+   */
+  constructor(message: string, status?: LocalServerStatus) {
+    super(message);
+    this.name = 'LocalServerUnavailableError';
+    this.status = status;
+  }
+}
+
+/** 判断是否为本地辅助服务不可用错误。 */
+export const isLocalServerUnavailableError = (error: unknown): error is LocalServerUnavailableError => {
+  return error instanceof LocalServerUnavailableError || (error as { name?: string })?.name === 'LocalServerUnavailableError';
+};
+
 /**
  * 获取显式配置的本地辅助服务地址。
  * @returns 本地辅助服务基础地址
@@ -870,17 +903,29 @@ const getActiveLocalServerUrl = async (): Promise<string> => {
   }
 
   const isTauri = typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__ !== undefined;
+  let localServerError: LocalServerUnavailableError | null = null;
   if (isTauri) {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      const port = await invoke<number>('get_local_server_port');
-      if (port) {
-        activeLocalServerUrl = `http://127.0.0.1:${port}`;
-        console.log(`[Port Detector] 从 Tauri 状态中获取到本地服务运行在端口: ${port}`);
+      const status = await invoke<LocalServerStatus>('get_local_server_status');
+      if (status?.running && status.port) {
+        const baseUrl = `http://127.0.0.1:${status.port}`;
+        await axios.get(`${baseUrl}/health`, { timeout: 1200 });
+        activeLocalServerUrl = baseUrl;
+        console.log(`[Port Detector] 本地辅助服务健康检查通过: ${baseUrl}`);
         return activeLocalServerUrl;
       }
+      const detail = status?.lastError || status?.lastOutput || '本地服务仍在启动或已进入降级模式';
+      localServerError = new LocalServerUnavailableError(`本地辅助服务未就绪：${detail}`, status);
     } catch (e) {
-      console.warn('[Port Detector] 从 Tauri 获取本地服务端口失败', e);
+      if (isLocalServerUnavailableError(e)) {
+        localServerError = e;
+      } else {
+        localServerError = new LocalServerUnavailableError(
+          `本地辅助服务健康检查失败：${e instanceof Error ? e.message : String(e || '未知错误')}`
+        );
+      }
+      console.warn('[Port Detector] 本地辅助服务不可用', e);
     }
   }
 
@@ -896,7 +941,10 @@ const getActiveLocalServerUrl = async (): Promise<string> => {
     }
   }
 
-  throw new Error('未找到可用的本地辅助服务地址，请在桌面端内使用，或为浏览器调试配置 VITE_LOCAL_SERVER_URL');
+  if (localServerError) {
+    throw localServerError;
+  }
+  throw new LocalServerUnavailableError('未找到可用的本地辅助服务地址，请在桌面端内使用，或为浏览器调试配置 VITE_LOCAL_SERVER_URL');
 };
 
 /**

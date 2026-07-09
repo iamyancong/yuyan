@@ -13,6 +13,10 @@ const UPDATE_SERVER_HOST: &str = match option_env!("UPDATE_SERVER_HOST") {
     Some(host) => host,
     None => "192.168.164.27",
 };
+const UPDATE_SERVER_SCHEME: &str = match option_env!("UPDATE_SERVER_SCHEME") {
+    Some(scheme) => scheme,
+    None => "http",
+};
 const UPDATE_SERVER_PORT_STR: Option<&str> = option_env!("UPDATE_SERVER_PORT");
 const UPDATE_DOWNLOAD_PATH: &str = "/deploy-api/app-update/download-asset";
 const UPDATE_STATIC_PATH_PREFIX: &str = "/app-updates/";
@@ -190,7 +194,7 @@ fn validate_download_url(url: &str) -> Result<reqwest::Url, String> {
     let port = UPDATE_SERVER_PORT_STR
         .and_then(|p| p.parse::<u16>().ok())
         .unwrap_or(3100);
-    let is_allowed_origin = parsed.scheme() == "http"
+    let is_allowed_origin = parsed.scheme() == UPDATE_SERVER_SCHEME
         && parsed.host_str() == Some(UPDATE_SERVER_HOST)
         && parsed.port_or_known_default() == Some(port);
     let is_allowed_path = parsed.path() == UPDATE_DOWNLOAD_PATH

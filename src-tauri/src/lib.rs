@@ -6,7 +6,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tauri::image::Image;
 use tauri::{Emitter, Manager};
-use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 mod app_update;
 
@@ -33,7 +32,10 @@ fn get_free_port() -> Option<u16> {
 struct LocalServerInner {
     child: Option<Child>,
     port: u16,
+    status: String,
+    node_path: Option<String>,
     last_error: Option<String>,
+    last_output: String,
 }
 
 /** 管理内嵌 Node 服务生命周期。 */
@@ -48,7 +50,10 @@ struct LocalServerStatus {
     port: u16,
     pid: Option<u32>,
     running: bool,
+    status: String,
+    node_path: Option<String>,
     last_error: Option<String>,
+    last_output: String,
 }
 
 impl LocalServerManager {
@@ -72,18 +77,72 @@ impl LocalServerManager {
             .map(|child| matches!(child.try_wait(), Ok(None)))
             .unwrap_or(false);
         let pid = state.child.as_ref().map(|child| child.id());
+        let status = if running {
+            "running".to_string()
+        } else if state.last_error.is_some() {
+            "error".to_string()
+        } else if state.status == "running" {
+            "stopped".to_string()
+        } else if state.status.is_empty() {
+            "idle".to_string()
+        } else {
+            state.status.clone()
+        };
         LocalServerStatus {
             port: state.port,
             pid,
             running,
+            status,
+            node_path: state.node_path.clone(),
             last_error: state.last_error.clone(),
+            last_output: state.last_output.clone(),
         }
     }
 
+    /** 记录本地服务启动不可用状态。 */
+    fn mark_error(&self, message: String, node_path: Option<&std::path::Path>) {
+        let mut state = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.status = "error".to_string();
+        state.child = None;
+        state.port = DEFAULT_LOCAL_SERVER_PORT;
+        state.node_path = node_path.map(|path| path.to_string_lossy().into_owned());
+        state.last_error = Some(message);
+    }
+
+    /** 记录 Node 子进程最近输出，便于前端诊断展示。 */
+    fn record_output(&self, prefix: &str, line: &str) {
+        let mut state = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let next_line = format!("[{prefix}] {line}");
+        let mut lines = state
+            .last_output
+            .lines()
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        lines.push(next_line);
+        let keep_from = lines.len().saturating_sub(20);
+        state.last_output = lines[keep_from..].join("\n");
+    }
+
     /** 启动内嵌 Node 服务并记录端口和进程。 */
-    fn start(&self, app: &tauri::App, node_path: &std::path::Path) -> Result<u16, String> {
+    fn start(&self, app: &tauri::AppHandle, node_path: &std::path::Path) -> Result<u16, String> {
         let mut retries = 0;
         let mut last_err = String::new();
+        {
+            let mut state = self
+                .inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            state.status = "starting".to_string();
+            state.node_path = Some(node_path.to_string_lossy().into_owned());
+            state.last_error = None;
+            state.last_output.clear();
+        }
 
         while retries < 3 {
             let port = if retries == 0 && is_port_free(DEFAULT_LOCAL_SERVER_PORT) {
@@ -98,7 +157,7 @@ impl LocalServerManager {
                 retries + 1
             );
 
-            match start_node_server(app, node_path, port) {
+            match start_node_server(app, node_path, port, self.clone()) {
                 Ok(child) => {
                     let pid = child.id();
                     let mut state = self
@@ -107,6 +166,7 @@ impl LocalServerManager {
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
                     state.child = Some(child);
                     state.port = port;
+                    state.status = "running".to_string();
                     state.last_error = None;
                     println!("✅ Node 服务启动成功！进程 PID: {pid}，监听端口: {port}");
                     return Ok(port);
@@ -127,6 +187,7 @@ impl LocalServerManager {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         state.port = DEFAULT_LOCAL_SERVER_PORT;
+        state.status = "error".to_string();
         state.last_error = Some(last_err.clone());
         Err(last_err)
     }
@@ -166,11 +227,11 @@ impl LocalServerManager {
 }
 
 // 获取 Node.js 可执行文件的路径
-fn get_node_path(app_handle: &tauri::AppHandle) -> std::path::PathBuf {
-    // 0. 开发环境：直接返回系统全局 Node 命令，避免本地代码签名导致的 137 挂起问题
+fn get_node_path(app_handle: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    // 0. 开发环境：直接返回系统全局 Node 命令，便于本地调试
     if cfg!(dev) {
         println!("🔧 开发模式：使用系统全局 Node 路径");
-        return std::path::PathBuf::from("node");
+        return Some(std::path::PathBuf::from("node"));
     }
 
     let binary_name = if cfg!(target_os = "windows") {
@@ -185,7 +246,7 @@ fn get_node_path(app_handle: &tauri::AppHandle) -> std::path::PathBuf {
         let embedded_node = resource_dir.join("resources").join("bin").join(binary_name);
         if embedded_node.exists() {
             println!("🔍 找到打包后内嵌 Node 二进制文件: {:?}", embedded_node);
-            return embedded_node;
+            return Some(embedded_node);
         }
 
         // 开发环境：项目根目录/src-tauri/resources/bin/node
@@ -196,7 +257,7 @@ fn get_node_path(app_handle: &tauri::AppHandle) -> std::path::PathBuf {
             .join(binary_name);
         if dev_node.exists() {
             println!("🔍 找到开发环境内嵌 Node 二进制文件: {:?}", dev_node);
-            return dev_node;
+            return Some(dev_node);
         }
     }
 
@@ -208,45 +269,82 @@ fn get_node_path(app_handle: &tauri::AppHandle) -> std::path::PathBuf {
                 let path1 = grandparent.join("resources").join("bin").join(binary_name);
                 if path1.exists() {
                     println!("🔍 追溯找到内嵌 Node 二进制文件: {:?}", path1);
-                    return path1;
+                    return Some(path1);
                 }
             }
         }
     }
 
-    // 3. 在 macOS 上，若是 GUI 双击启动，PATH 环境可能丢失，在此做常见路径补丁
-    #[cfg(target_os = "macos")]
-    {
-        let common_paths = ["/opt/homebrew/bin/node", "/usr/local/bin/node"];
-        for path in common_paths {
-            let path_buf = std::path::PathBuf::from(path);
-            if path_buf.exists() {
-                println!("🔍 找到 macOS 常见全局 Node 路径: {:?}", path_buf);
-                return path_buf;
-            }
-        }
-    }
-
-    // 4. 找不到内嵌的，则回退到系统环境变量中的 "node"
-    std::path::PathBuf::from("node")
+    // 生产环境不回退系统 Node，避免客户端 Node 缺失或版本不一致导致首启失败
+    None
 }
 
-// 检查系统中是否安装了 Node.js
-fn check_node_installed(node_path: &std::path::Path) -> bool {
-    Command::new(node_path)
+/** 解析 Node 主版本号。 */
+fn parse_node_major_version(version: &str) -> Option<u32> {
+    version
+        .trim()
+        .trim_start_matches('v')
+        .split('.')
+        .next()
+        .and_then(|value| value.parse::<u32>().ok())
+}
+
+/** 检查内嵌 Node 运行时是否满足本地服务要求。 */
+fn check_node_runtime(node_path: &std::path::Path) -> Result<String, String> {
+    let output = Command::new(node_path)
         .arg("--version")
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+        .map_err(|error| format!("执行 Node 版本检查失败: {error}"))?;
+    if !output.status.success() {
+        return Err("Node 版本检查命令退出失败".to_string());
+    }
+
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let major = parse_node_major_version(&version)
+        .ok_or_else(|| format!("无法解析 Node 版本号: {version}"))?;
+    if major < 22 {
+        return Err(format!(
+            "内嵌 Node 版本过低: {version}，本地服务要求 Node 22 或更高版本"
+        ));
+    }
+
+    let sqlite_check = Command::new(node_path)
+        .args([
+            "--input-type=module",
+            "-e",
+            "import('node:sqlite').then(() => {}).catch((error) => { console.error(error?.message || error); process.exit(1); })",
+        ])
+        .output()
+        .map_err(|error| format!("检查 node:sqlite 支持失败: {error}"))?;
+    if !sqlite_check.status.success() {
+        let stderr = String::from_utf8_lossy(&sqlite_check.stderr)
+            .trim()
+            .to_string();
+        return Err(format!(
+            "当前 Node 运行时不支持 node:sqlite{}",
+            if stderr.is_empty() {
+                String::new()
+            } else {
+                format!(": {stderr}")
+            }
+        ));
+    }
+
+    Ok(version)
 }
 
 // 管道日志输出辅助函数
-fn pipe_output<R: std::io::Read + Send + 'static>(reader: R, prefix: &'static str) {
+fn pipe_output<R: std::io::Read + Send + 'static>(
+    reader: R,
+    prefix: &'static str,
+    server_manager: LocalServerManager,
+) {
     thread::spawn(move || {
         let reader = BufReader::new(reader);
         for line in reader.lines() {
             if let Ok(l) = line {
                 println!("[Node Server {}] {}", prefix, l);
+                server_manager.record_output(prefix, &l);
             }
         }
     });
@@ -353,9 +451,10 @@ fn wait_for_local_server_health(child: &mut Child, port: u16) -> Result<(), Stri
 
 // 启动 Express Node 服务
 fn start_node_server(
-    app: &tauri::App,
+    app: &tauri::AppHandle,
     node_path: &std::path::Path,
     port: u16,
+    server_manager: LocalServerManager,
 ) -> Result<Child, String> {
     let resource_path = if cfg!(dev) {
         let cwd = std::env::current_dir().unwrap();
@@ -441,10 +540,10 @@ fn start_node_server(
 
     // 管道化标准输出和错误输出到终端以方便调试
     if let Some(stdout) = child.stdout.take() {
-        pipe_output(stdout, "STDOUT");
+        pipe_output(stdout, "STDOUT", server_manager.clone());
     }
     if let Some(stderr) = child.stderr.take() {
-        pipe_output(stderr, "STDERR");
+        pipe_output(stderr, "STDERR", server_manager);
     }
 
     if let Err(error) = wait_for_local_server_health(&mut child, port) {
@@ -515,24 +614,56 @@ struct SystemInfo {
     os_info: String,
 }
 
+#[cfg(target_os = "windows")]
+#[repr(C)]
+#[allow(non_snake_case)]
+struct RtlOsVersionInfoW {
+    dwOSVersionInfoSize: u32,
+    dwMajorVersion: u32,
+    dwMinorVersion: u32,
+    dwBuildNumber: u32,
+    dwPlatformId: u32,
+    szCSDVersion: [u16; 128],
+}
+
+#[cfg(target_os = "windows")]
+#[link(name = "ntdll")]
+extern "system" {
+    fn RtlGetVersion(version_info: *mut RtlOsVersionInfoW) -> i32;
+}
+
+/** 使用 Windows 原生 API 获取系统版本，避免 cmd 本地代码页导致乱码。 */
+#[cfg(target_os = "windows")]
+fn get_windows_version_label() -> String {
+    let mut version_info = RtlOsVersionInfoW {
+        dwOSVersionInfoSize: std::mem::size_of::<RtlOsVersionInfoW>() as u32,
+        dwMajorVersion: 0,
+        dwMinorVersion: 0,
+        dwBuildNumber: 0,
+        dwPlatformId: 0,
+        szCSDVersion: [0; 128],
+    };
+
+    let status = unsafe { RtlGetVersion(&mut version_info) };
+    if status >= 0 {
+        format!(
+            "Windows {}.{}.{}",
+            version_info.dwMajorVersion, version_info.dwMinorVersion, version_info.dwBuildNumber
+        )
+    } else {
+        "Windows Unknown".to_string()
+    }
+}
+
 /** 获取桌面端系统诊断信息的命令。 */
 #[tauri::command]
 fn get_system_info(app_handle: tauri::AppHandle) -> SystemInfo {
     let app_version = app_handle.package_info().version.to_string();
 
     // 获取 Node 版本
-    let node_path = get_node_path(&app_handle);
-    let node_version = Command::new(&node_path)
-        .arg("--version")
-        .output()
-        .map(|o| {
-            if o.status.success() {
-                String::from_utf8_lossy(&o.stdout).trim().to_string()
-            } else {
-                "Unknown".to_string()
-            }
-        })
-        .unwrap_or_else(|_| "Not Installed".to_string());
+    let node_version = get_node_path(&app_handle)
+        .and_then(|node_path| check_node_runtime(&node_path).ok())
+        .unwrap_or_else(|| "Not Bundled".to_string());
 
     // 操作系统信息
     #[cfg(target_os = "macos")]
@@ -543,23 +674,7 @@ fn get_system_info(app_handle: tauri::AppHandle) -> SystemInfo {
         .unwrap_or_else(|_| "Unknown".to_string());
 
     #[cfg(target_os = "windows")]
-    let os_version = Command::new("cmd")
-        .args(&["/c", "ver"])
-        .output()
-        .map(|o| {
-            let ver_str = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if let Some(start) = ver_str.find("Version ") {
-                let temp = &ver_str[start + 8..];
-                if let Some(end) = temp.find(']') {
-                    temp[..end].to_string()
-                } else {
-                    ver_str
-                }
-            } else {
-                ver_str
-            }
-        })
-        .unwrap_or_else(|_| "Unknown".to_string());
+    let os_version = get_windows_version_label();
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let os_version = "Unknown".to_string();
@@ -709,31 +824,32 @@ pub fn run() {
             }
 
             let app_handle = app.handle();
-            let node_path = get_node_path(app_handle);
-
-
-
-
-            // 1. 检查 Node.js 环境
-            let node_installed = check_node_installed(&node_path);
-            if !node_installed {
-                let handle = app.handle().clone();
-                // 弹出提示弹窗，告知用户缺失 Node.js，但不退出程序
-                handle.dialog()
-                    .message("未检测到本地 Node.js 环境。\n\n雨燕平台需要依赖 Node.js 来启动本地数据库和辅助服务。请先安装 Node.js（推荐 LTS 版本）后重启应用。\n\n当前您仍可点击“确定”继续使用连接远程测试环境的功能。")
-                    .title("本地环境缺失")
-                    .kind(MessageDialogKind::Warning)
-                    .blocking_show();
-            }
-
-            if node_installed {
-                if let Err(last_err) = setup_server_manager.start(app, &node_path) {
-                    let handle = app.handle().clone();
-                    handle.dialog()
-                        .message(&format!("Node 本地服务在重试 3 次后均启动失败：\n{}\n\n请检查端口占用或服务脚本完整性。\n\n当前您仍可点击“确定”继续使用连接远程测试环境的功能。", last_err))
-                        .title("本地服务启动错误")
-                        .kind(MessageDialogKind::Warning)
-                        .blocking_show();
+            match get_node_path(app_handle) {
+                Some(node_path) => match check_node_runtime(&node_path) {
+                    Ok(version) => {
+                        println!("✅ 内嵌 Node 运行时检查通过: {version}");
+                        let start_app_handle = app.handle().clone();
+                        let start_server_manager = setup_server_manager.clone();
+                        thread::spawn(move || {
+                            if let Err(last_err) =
+                                start_server_manager.start(&start_app_handle, &node_path)
+                            {
+                                eprintln!(
+                                    "[Local Server] 本地服务启动失败，应用将以降级模式继续运行: {last_err}"
+                                );
+                            }
+                        });
+                    }
+                    Err(error) => {
+                        let message = format!("内嵌 Node 运行时不可用：{error}");
+                        eprintln!("[Local Server] {message}");
+                        setup_server_manager.mark_error(message, Some(&node_path));
+                    }
+                },
+                None => {
+                    let message = "生产包未找到内嵌 Node 运行时，应用将以降级模式继续运行".to_string();
+                    eprintln!("[Local Server] {message}");
+                    setup_server_manager.mark_error(message, None);
                 }
             }
 

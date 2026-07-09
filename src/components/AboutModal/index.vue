@@ -27,6 +27,16 @@ const visible = computed({
   set: (val) => emit('update:open', val)
 });
 
+/** 本地辅助服务展示文案 */
+const localServerLabel = computed(() => {
+  const status = systemInfo.value.localServerStatus;
+  if (!status) return '未读取';
+  if (status.running) {
+    return `运行中 · 端口 ${status.port}`;
+  }
+  return status.lastError || status.status || '未就绪';
+});
+
 // 引入 Composable 业务逻辑
 const {
   systemInfo,
@@ -94,6 +104,14 @@ const handleClose = () => {
               <span class="label">Node.js 环境</span>
               <span class="value">{{ systemInfo.nodeVersion }}</span>
             </div> -->
+            <div class="info-row">
+              <span class="label">Node.js 环境</span>
+              <span class="value">{{ systemInfo.nodeVersion }}</span>
+            </div>
+            <div class="info-row">
+              <span class="label">本地服务</span>
+              <span class="value">{{ localServerLabel }}</span>
+            </div>
             <div class="info-row">
               <span class="label">操作系统</span>
               <span class="value">{{ systemInfo.osInfo }}</span>

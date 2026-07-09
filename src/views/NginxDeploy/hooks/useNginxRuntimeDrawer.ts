@@ -9,6 +9,7 @@ import {
   getNginxInstanceArchiveDownloadUrl,
   getNginxInstanceStatus,
   initNginxInstanceWithProgress,
+  isLocalServerUnavailableError,
   runNginxInstanceAction,
   updateNginxInstance,
   type DeployProgressEvent,
@@ -513,6 +514,18 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
       defaultFileName = `${serverPart}-${instancePart}${suffix}-${ts}.tar.gz`;
     }
 
+    /** 触发普通浏览器下载，作为本地直写不可用时的降级方案。 */
+    const triggerBrowserDownload = () => {
+      const downloadUrl = getNginxInstanceArchiveDownloadUrl(instance.id, type);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = defaultFileName;
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    };
+
     const isTauriClient = isTauri();
     let filePath = '';
     if (isTauriClient) {
@@ -527,14 +540,7 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
     }
 
     if (!isTauriClient) {
-      const downloadUrl = getNginxInstanceArchiveDownloadUrl(instance.id, type);
-      const link = document.createElement('a');
-      link.href = downloadUrl;
-      link.download = defaultFileName;
-      link.style.display = 'none';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+      triggerBrowserDownload();
       return;
     }
 
@@ -577,6 +583,50 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
           triggerNotification();
         }
       });
+    };
+
+    /** 打开关于弹窗查看本地服务诊断信息。 */
+    const openDiagnosticModal = () => {
+      window.dispatchEvent(new CustomEvent('show-about-modal'));
+    };
+
+    /**
+     * 创建下载失败后的操作按钮组。
+     * @param includeFallback 是否展示普通下载按钮
+     */
+    const createFailureActions = (includeFallback = false) => h('div', { style: 'display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px;' }, [
+      h('button', {
+        class: 'ant-btn ant-btn-primary ant-btn-sm',
+        onClick: () => {
+          notification.close(notificationKey);
+          void downloadActiveNginxArchive(type);
+        }
+      }, '重试'),
+      includeFallback
+        ? h('button', {
+            class: 'ant-btn ant-btn-sm',
+            onClick: () => {
+              triggerBrowserDownload();
+              message.info('已切换为普通下载');
+            }
+          }, '普通下载')
+        : null,
+      h('button', {
+        class: 'ant-btn ant-btn-sm',
+        onClick: openDiagnosticModal,
+      }, '打开诊断信息')
+    ].filter(Boolean));
+
+    /** 将下载错误转成用户可理解的中文文案。 */
+    const formatDownloadErrorMessage = (error: any) => {
+      if (isLocalServerUnavailableError(error)) {
+        return error.message || '本地辅助服务未就绪，已切换为普通下载';
+      }
+      const raw = getErrorMessage(error);
+      if (raw === 'Failed to fetch') {
+        return '网络请求失败，请检查本地辅助服务、内网服务地址或网络连接';
+      }
+      return raw;
     };
 
     /** 统一渲染下载进度通知。 */
@@ -715,18 +765,36 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
         notification.close(notificationKey);
         return;
       }
+      if (isLocalServerUnavailableError(error)) {
+        triggerBrowserDownload();
+        notification.warning({
+          key: notificationKey,
+          class: 'c4d-download-notification',
+          icon: h('span', { class: 'c4d-status-led is-error' }),
+          message: '已切换为普通下载',
+          description: h('div', null, [
+            h('p', { style: 'margin-bottom: 8px;' }, formatDownloadErrorMessage(error)),
+            h('p', { style: 'font-size: 12px; color: rgba(0,0,0,0.45); margin-bottom: 8px;' }, '本地直写依赖内嵌 Node 辅助服务；当前服务不可用时，文件仍会通过浏览器下载。'),
+            createFailureActions(true)
+          ]),
+          duration: 8,
+          onClose: () => {},
+        });
+        return;
+      }
       notification.error({
         key: notificationKey,
         class: 'c4d-download-notification',
         icon: h('span', { class: 'c4d-status-led is-error' }),
         message: '下载失败',
         description: h('div', null, [
-          h('p', { style: 'margin-bottom: 8px;' }, getErrorMessage(error)),
+          h('p', { style: 'margin-bottom: 8px;' }, formatDownloadErrorMessage(error)),
           h('div', { class: 'c4d-progress-wrapper' }, [
             h('div', { class: 'c4d-progress-track' }, [
               h('div', { class: 'c4d-progress-bar is-error', style: 'width: 100%' })
             ])
-          ])
+          ]),
+          createFailureActions(false)
         ]),
         duration: 5,
         onClose: () => {},

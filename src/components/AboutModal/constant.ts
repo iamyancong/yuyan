@@ -1,6 +1,7 @@
 /**
  * 关于雨燕组件 - 常量与类型定义
  */
+import type { LocalServerStatus } from '@/api/deploy';
 
 /** 桌面端系统诊断信息接口 */
 export interface SystemInfo {
@@ -14,6 +15,8 @@ export interface SystemInfo {
   osInfo: string;
   /** 前端渲染内核/浏览器引擎版本 */
   renderEngine: string;
+  /** 本地辅助服务诊断状态 */
+  localServerStatus: LocalServerStatus | null;
 }
 
 /** 静态文本与版权配置 */
@@ -33,5 +36,6 @@ export const ABOUT_CONFIG = {
     nodeVersion: 'Unknown',
     osInfo: 'Unknown',
     renderEngine: 'Unknown',
+    localServerStatus: null,
   })
 };
