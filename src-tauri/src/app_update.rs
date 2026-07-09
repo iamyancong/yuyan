@@ -9,8 +9,15 @@ use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
-const UPDATE_SERVER_HOST: &str = "192.168.164.27";
-const UPDATE_SERVER_PORT: u16 = 3100;
+const UPDATE_SERVER_HOST: &str = match option_env!("UPDATE_SERVER_HOST") {
+    Some(host) => host,
+    None => "192.168.164.27",
+};
+const UPDATE_SERVER_SCHEME: &str = match option_env!("UPDATE_SERVER_SCHEME") {
+    Some(scheme) => scheme,
+    None => "http",
+};
+const UPDATE_SERVER_PORT_STR: Option<&str> = option_env!("UPDATE_SERVER_PORT");
 const UPDATE_DOWNLOAD_PATH: &str = "/deploy-api/app-update/download-asset";
 const UPDATE_STATIC_PATH_PREFIX: &str = "/app-updates/";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -184,9 +191,12 @@ fn calculate_progress(downloaded_bytes: u64, total_bytes: Option<u64>) -> u8 {
 /** 校验更新下载地址仅指向受信任的内网代理。 */
 fn validate_download_url(url: &str) -> Result<reqwest::Url, String> {
     let parsed = reqwest::Url::parse(url).map_err(|error| format!("更新下载地址无效: {error}"))?;
-    let is_allowed_origin = parsed.scheme() == "http"
+    let port = UPDATE_SERVER_PORT_STR
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(3100);
+    let is_allowed_origin = parsed.scheme() == UPDATE_SERVER_SCHEME
         && parsed.host_str() == Some(UPDATE_SERVER_HOST)
-        && parsed.port_or_known_default() == Some(UPDATE_SERVER_PORT);
+        && parsed.port_or_known_default() == Some(port);
     let is_allowed_path = parsed.path() == UPDATE_DOWNLOAD_PATH
         || parsed.path().starts_with(UPDATE_STATIC_PATH_PREFIX);
     if !is_allowed_origin || !is_allowed_path {

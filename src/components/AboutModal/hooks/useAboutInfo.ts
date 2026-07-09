@@ -46,6 +46,7 @@ export const useAboutInfo = () => {
         nodeVersion: 'N/A',
         osInfo: `${navigator.platform || 'Unknown OS'} (${navigator.language})`,
         renderEngine: getRenderEngineInfo(),
+        localServerStatus: null,
       };
       return;
     }
@@ -53,13 +54,20 @@ export const useAboutInfo = () => {
     infoLoading.value = true;
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      const rustInfo = await invoke<any>('get_system_info');
+      const [rustInfo, localServerStatus] = await Promise.all([
+        invoke<any>('get_system_info'),
+        invoke<any>('get_local_server_status').catch((error) => {
+          console.warn('读取本地服务诊断状态失败:', error);
+          return null;
+        }),
+      ]);
       systemInfo.value = {
         appVersion: rustInfo.appVersion || 'Unknown',
-        tauriVersion: `v${rustInfo.tauriVersion}` || 'Unknown',
+        tauriVersion: rustInfo.tauriVersion ? `v${rustInfo.tauriVersion}` : 'Unknown',
         nodeVersion: rustInfo.nodeVersion || 'Unknown',
         osInfo: rustInfo.osInfo || 'Unknown',
         renderEngine: getRenderEngineInfo(),
+        localServerStatus,
       };
     } catch (error) {
       console.error('获取关于系统诊断信息失败:', error);
@@ -76,7 +84,8 @@ export const useAboutInfo = () => {
       `版本 (Version): v${systemInfo.value.appVersion}`,
       // `渲染内核 (Engine): ${systemInfo.value.renderEngine}`,
       // `Tauri 版本 (Tauri): ${systemInfo.value.tauriVersion}`,
-      // `Node.js 版本 (Node): ${systemInfo.value.nodeVersion}`,
+      `Node.js 版本 (Node): ${systemInfo.value.nodeVersion}`,
+      `本地服务 (Local Server): ${systemInfo.value.localServerStatus?.status || 'unknown'} / ${systemInfo.value.localServerStatus?.lastError || 'no error'}`,
       `操作系统 (OS): ${systemInfo.value.osInfo}`,
     ].join('\n');
 

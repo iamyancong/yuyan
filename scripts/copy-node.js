@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,11 +27,61 @@ const sourceNode = process.execPath;
 const binaryName = path.basename(sourceNode); // windows上是 node.exe, mac/linux上是 node
 const targetNode = path.join(targetDir, binaryName);
 
+/**
+ * 解析 Node 主版本号。
+ * @param {string} version Node 版本字符串
+ * @returns {number} 主版本号
+ */
+const parseNodeMajorVersion = (version) => {
+  const major = String(version || '').trim().replace(/^v/, '').split('.')[0];
+  return Number.parseInt(major, 10);
+};
+
+/**
+ * 校验当前构建使用的 Node 运行时满足桌面端本地服务要求。
+ * @param {string} nodePath Node 可执行文件路径
+ */
+const assertNodeRuntime = (nodePath) => {
+  const version = execFileSync(nodePath, ['--version'], { encoding: 'utf8' }).trim();
+  const major = parseNodeMajorVersion(version);
+  if (!Number.isFinite(major) || major < 22) {
+    throw new Error(`构建 Node 版本过低：${version}。雨燕本地服务使用 node:sqlite，要求 Node 22 或更高版本。`);
+  }
+
+  execFileSync(
+    nodePath,
+    [
+      '--input-type=module',
+      '-e',
+      "import('node:sqlite').then(() => {}).catch((error) => { console.error(error?.message || error); process.exit(1); })",
+    ],
+    { stdio: 'pipe' }
+  );
+
+  console.log(`✅ Node 运行时检查通过: ${version}，node:sqlite 可用`);
+};
+
+/**
+ * 清理其他平台遗留的 Node 二进制，避免跨平台构建资源污染。
+ */
+const cleanupStaleNodeBinaries = () => {
+  for (const name of ['node', 'node.exe']) {
+    const candidate = path.join(targetDir, name);
+    if (candidate !== targetNode && fs.existsSync(candidate)) {
+      fs.unlinkSync(candidate);
+      console.log(`🧹 已清理旧平台 Node 二进制: ${candidate}`);
+    }
+  }
+};
+
 console.log(`🚀 准备将本地 Node.js 写入 Tauri 资源目录...`);
 console.log(`📂 源 Node.js 路径: ${sourceNode}`);
 console.log(`📂 目标路径: ${targetNode}`);
 
 try {
+  assertNodeRuntime(sourceNode);
+  cleanupStaleNodeBinaries();
+
   let needCopy = true;
   if (fs.existsSync(targetNode)) {
     const sourceStats = fs.statSync(sourceNode);
