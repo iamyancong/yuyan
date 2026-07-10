@@ -40,5 +40,6 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/server ./server
 COPY --from=builder /app/dist ./dist
 ENV PORT=3100
+ENV HOST=0.0.0.0
 EXPOSE 3100
 ENTRYPOINT ["node","server/index.mjs"]
