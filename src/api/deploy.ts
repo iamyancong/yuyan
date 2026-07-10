@@ -15,6 +15,15 @@ export type DeployProjectSource = 'ops' | 'gitlab';
 /** 静态资源上传策略 */
 export type DeployUploadStrategy = 'cleanReplace' | 'overlayKeepAssets';
 
+/** 后端服务角色 */
+export type BackendServiceRole = 'application' | 'gateway';
+
+/** 后端进程管理模式 */
+export type BackendProcessMode = 'pid' | 'systemd' | 'legacy';
+
+/** 后端服务状态 */
+export type BackendServiceStatus = 'online' | 'offline' | 'starting' | 'stopping' | 'deploying' | 'error' | 'unknown';
+
 /** Nginx 实例类型 */
 export type NginxInstanceType = 'external' | 'managed';
 
@@ -28,6 +37,7 @@ export interface DeployServer {
   authType: DeployAuthType;
   useSudo: boolean;
   defaultDeployRoot: string;
+  defaultBackendRoot: string;
   defaultNginxConfPath: string;
   nginxWorkDir: string;
   nginxTestCommand: string;
@@ -53,6 +63,7 @@ export interface DeployServerPayload {
   passphrase?: string;
   useSudo?: boolean;
   defaultDeployRoot?: string;
+  defaultBackendRoot?: string;
   defaultNginxConfPath?: string;
   nginxWorkDir?: string;
   nginxTestCommand?: string;
@@ -93,6 +104,43 @@ export interface DeployTarget {
   remark?: string;
   createdAt: string;
   updatedAt: string;
+  projectType: 'frontend' | 'backend';
+  jdkId?: number;
+  stopCommand?: string;
+  startCommand?: string;
+  healthCheckUrl?: string;
+  serviceRole: BackendServiceRole;
+  environmentId: number;
+  environmentName: string;
+  serviceName: string;
+  buildJdkId: number;
+  runtimeJavaHome: string;
+  runtimeJavaVersion: string;
+  serverPort: number;
+  springProfiles: string;
+  externalConfigPath: string;
+  jvmOptions: string;
+  appArgs: string;
+  processMode: BackendProcessMode;
+  stopTimeoutSeconds: number;
+  startupTimeoutSeconds: number;
+  healthCheckPath: string;
+  nacosServerAddr: string;
+  nacosConsoleUrl: string;
+  nacosNamespace: string;
+  nacosGroup: string;
+  nacosStatus: 'online' | 'offline' | 'unknown' | 'unconfigured';
+  requireNacosRegistration: boolean;
+  gatewayUrl: string;
+  gatewayProbePath: string;
+  artifactPattern: string;
+  openapiCommand: string;
+  openapiOutputPath: string;
+  needsReview: boolean;
+  serviceStatus: BackendServiceStatus;
+  serviceStatusOutput: string;
+  serviceStatusAt: string;
+  directUrl: string;
 }
 
 /** 部署目标保存参数 */
@@ -121,6 +169,132 @@ export interface DeployTargetPayload {
   uploadStrategy?: DeployUploadStrategy;
   visitUrl?: string;
   remark?: string;
+  projectType?: 'frontend' | 'backend';
+  jdkId?: number;
+  stopCommand?: string;
+  startCommand?: string;
+  healthCheckUrl?: string;
+  serviceRole?: BackendServiceRole;
+  environmentId?: number;
+  serviceName?: string;
+  buildJdkId?: number;
+  runtimeJavaHome?: string;
+  runtimeJavaVersion?: string;
+  serverPort?: number;
+  springProfiles?: string;
+  externalConfigPath?: string;
+  jvmOptions?: string;
+  appArgs?: string;
+  processMode?: BackendProcessMode;
+  stopTimeoutSeconds?: number;
+  startupTimeoutSeconds?: number;
+  healthCheckPath?: string;
+  nacosServerAddr?: string;
+  nacosConsoleUrl?: string;
+  nacosNamespace?: string;
+  nacosGroup?: string;
+  requireNacosRegistration?: boolean;
+  gatewayUrl?: string;
+  gatewayProbePath?: string;
+  artifactPattern?: string;
+  openapiCommand?: string;
+  openapiOutputPath?: string;
+  needsReview?: boolean;
+}
+
+/** OpenAPI 产物元数据 */
+export interface OpenApiArtifact {
+  id: number;
+  targetId: number;
+  projectName: string;
+  branch: string;
+  commitSha: string;
+  fileName: string;
+  sha256: string;
+  sizeBytes: number;
+  status: 'success';
+  generatedAt: string;
+}
+
+/** 后端项目检测结果 */
+export interface BackendProjectInspection {
+  javaVersion: string;
+  javaMajorVersion: number;
+  starterPom: string;
+  starterModule: string;
+  applicationName: string;
+  serverPort: number;
+  springProfiles: string;
+  bootstrapFiles: string[];
+  healthCheckPath: string;
+  buildCommand: string;
+  artifactPattern: string;
+  openapiCommand: string;
+  openapiOutputPath: string;
+  branch: string;
+  commitSha: string;
+}
+
+/** 后端服务状态响应 */
+export interface BackendServiceRuntimeStatus {
+  targetId: number;
+  status: BackendServiceStatus;
+  output: string;
+  processMode: Exclude<BackendProcessMode, 'legacy'>;
+  directUrl?: string;
+  gatewayUrl?: string;
+  nacosConsoleUrl?: string;
+  nacosStatus?: 'online' | 'offline' | 'unknown' | 'unconfigured';
+  checkedAt: string;
+}
+
+/** 服务器 Java 运行时 */
+export interface ServerJavaRuntime {
+  id: number;
+  serverId: number;
+  name: string;
+  homePath: string;
+  javaVersion: string;
+  majorVersion: number;
+  vendor: string;
+  arch: string;
+  status: 'unknown' | 'available' | 'unavailable';
+  statusOutput: string;
+  lastCheckedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 后端共享环境依赖配置 */
+export interface DeployEnvironment {
+  id: number;
+  name: string;
+  nacosServerAddr: string;
+  nacosConsoleUrl: string;
+  nacosNamespace: string;
+  nacosGroup: string;
+  gatewayTargetId: number;
+  gatewayPublicUrl: string;
+  status: 'unknown' | 'online' | 'offline' | 'error';
+  statusOutput: string;
+  lastCheckedAt: string;
+  hasCredential: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 后端共享环境保存参数 */
+export interface DeployEnvironmentPayload {
+  name: string;
+  nacosServerAddr?: string;
+  nacosConsoleUrl?: string;
+  nacosNamespace?: string;
+  nacosGroup?: string;
+  username?: string;
+  password?: string;
+  token?: string;
+  gatewayTargetId?: number;
+  gatewayPublicUrl?: string;
 }
 
 /** 发布日志项 */
@@ -187,13 +361,16 @@ export interface DeployTargetQuery {
   projectKeyword?: string;
   branch?: string;
   serverId?: number;
+  projectType?: string;
 }
 
 /** 流式发布事件 */
+export type DeployTaskResult = DeployRecord | OpenApiArtifact | BackendServiceRuntimeStatus;
+
 export type DeployProgressEvent =
   | { type: 'stage'; stage: string; percent: number; message: string; detail?: string; timestamp: string }
   | { type: 'log'; level: DeployLogItem['level']; stage?: string; message: string; timestamp: string }
-  | { type: 'result'; data: DeployRecord; timestamp: string }
+  | { type: 'result'; data: DeployTaskResult; timestamp: string }
   | { type: 'error'; stage?: string; message: string; timestamp: string };
 
 /** 流式发布配置 */
@@ -211,12 +388,12 @@ export interface NginxRuntimeProgressOptions {
 /** 运行中的发布任务快照 */
 export interface DeployProgressSnapshot {
   targetId: number;
-  action: 'deploy' | 'rollback' | 'undoRollback';
+  action: 'deploy' | 'rollback' | 'undoRollback' | 'openapi' | 'start' | 'stop' | 'restart';
   operator: string;
   startedAt: string;
   currentStage: string;
   running: boolean;
-  result: DeployRecord | null;
+  result: DeployTaskResult | null;
   error: string | null;
   events: DeployProgressEvent[];
   maxConcurrent: number;
@@ -379,6 +556,24 @@ import { getApiBase } from '@/utils/env';
 
 const client = axios.create({ baseURL: getApiBase('/deploy-api') });
 
+/**
+ * 获取服务器模式部署 API 鉴权头；Tauri/本机模式通常为空。
+ * @returns 部署 API 鉴权头
+ */
+export const getDeployApiAuthHeaders = (): Record<string, string> => {
+  let token = String(import.meta.env.VITE_DEPLOY_API_TOKEN || '').trim();
+  try {
+    token = String(window.localStorage.getItem('yuyan_deploy_api_token') || token).trim();
+  } catch {
+  }
+  return token ? { 'X-Deploy-Token': token } : {};
+};
+
+client.interceptors.request.use((config) => {
+  Object.assign(config.headers, getDeployApiAuthHeaders());
+  return config;
+});
+
 /** 提取 API 数据 */
 const unwrap = <T>(response: { data: { data: T } }) => response.data.data;
 
@@ -424,7 +619,7 @@ export const initNginxRuntime = (serverId: number, payload: NginxRuntimePayload)
 export async function initNginxRuntimeWithProgress(serverId: number, payload: NginxRuntimePayload, options: NginxRuntimeProgressOptions = {}) {
   const response = await fetch(getApiBase(`/deploy-api/servers/${serverId}/nginx-runtime/init?stream=1`), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
+    headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson', ...getDeployApiAuthHeaders() },
     body: JSON.stringify(payload),
     signal: options.signal,
   });
@@ -473,7 +668,7 @@ export async function initNginxRuntimeWithProgress(serverId: number, payload: Ng
 export async function initNginxInstanceWithProgress(instanceId: number, payload: NginxRuntimePayload, options: NginxRuntimeProgressOptions = {}) {
   const response = await fetch(getApiBase(`/deploy-api/nginx-instances/${instanceId}/init?stream=1`), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
+    headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson', ...getDeployApiAuthHeaders() },
     body: JSON.stringify(payload),
     signal: options.signal,
   });
@@ -550,7 +745,10 @@ export async function downloadNginxInstanceArchive(
   onProgress?: (loaded: number) => void,
   signal?: AbortSignal
 ): Promise<NginxInstanceArchiveDownload> {
-  const response = await fetch(getApiBase(`/deploy-api/nginx-instances/${instanceId}/archive?type=${type}`), { signal });
+  const response = await fetch(getApiBase(`/deploy-api/nginx-instances/${instanceId}/archive?type=${type}`), {
+    signal,
+    headers: getDeployApiAuthHeaders(),
+  });
   if (!response.ok) {
     const data = await parseJsonOrText(response);
     throw new Error(typeof data === 'string' ? data : data?.error || data?.message || '下载运行包失败');
@@ -707,6 +905,35 @@ export const getTargetDeployProgress = (targetId: number) => client.get(`/target
 /** 停止部署目标运行中的发布任务 */
 export const stopTargetDeploy = (targetId: number) => client.post(`/targets/${targetId}/deploy/stop`).then(unwrap<DeployProgressSnapshot>);
 
+/** 检测后端项目配置 */
+export const inspectBackendTarget = (targetId: number, branch?: string, gitlabToken = '') =>
+  client
+    .post(`/targets/${targetId}/inspect`, { branch }, { headers: gitlabToken ? { 'X-GitLab-Token': gitlabToken } : undefined })
+    .then(unwrap<BackendProjectInspection>);
+
+/** 获取后端服务真实状态 */
+export const getBackendServiceStatus = (targetId: number) =>
+  client.get(`/targets/${targetId}/service-status`).then(unwrap<BackendServiceRuntimeStatus>);
+
+/** 执行后端服务启停 */
+export const runBackendServiceAction = (targetId: number, action: 'start' | 'stop' | 'restart') =>
+  client.post(`/targets/${targetId}/service-actions/${action}`).then(unwrap<BackendServiceRuntimeStatus>);
+
+/** 获取后端服务日志 */
+export const getBackendServiceLogs = (targetId: number, lines = 500) =>
+  client.get(`/targets/${targetId}/service-logs`, { params: { lines } }).then(unwrap<{ content: string; lines: number; path: string }>);
+
+/** 获取目标最新 OpenAPI 元数据 */
+export const getLatestTargetOpenApi = (targetId: number, branch?: string) =>
+  client.get(`/targets/${targetId}/openapi/latest`, { params: branch ? { branch } : undefined }).then(unwrap<OpenApiArtifact>);
+
+/** 读取 OpenAPI 内容 */
+export const getOpenApiArtifactContent = (artifactId: number) =>
+  client.get(`/openapi-artifacts/${artifactId}/content`, { responseType: 'text' }).then((response) => String(response.data || ''));
+
+/** 获取 OpenAPI 下载地址 */
+export const getOpenApiArtifactDownloadUrl = (artifactId: number) => getApiBase(`/deploy-api/openapi-artifacts/${artifactId}/download`);
+
 /** 解析 JSON 或文本响应 */
 const parseJsonOrText = async (response: Response) => {
   const text = await response.text();
@@ -747,7 +974,7 @@ function decodeResponseHeader(value: string | null) {
 }
 
 /** 消费 NDJSON 流 */
-async function consumeProgressStream(response: Response, options: DeployProgressOptions) {
+async function consumeProgressStream<T extends DeployTaskResult = DeployRecord>(response: Response, options: DeployProgressOptions): Promise<T> {
   if (!response.ok) {
     const data = await parseJsonOrText(response);
     const error = new Error(typeof data === 'string' ? data : data?.error || data?.message || '请求失败') as Error & {
@@ -761,20 +988,20 @@ async function consumeProgressStream(response: Response, options: DeployProgress
 
   if (!response.body) {
     const data = await parseJsonOrText(response);
-    return data?.data as DeployRecord;
+    return data?.data as T;
   }
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
-  let result: DeployRecord | null = null;
+  let result: T | null = null;
 
   const consumeLine = (rawLine: string) => {
     const line = rawLine.trim();
     if (!line) return;
     const event = JSON.parse(line) as DeployProgressEvent;
     options.onEvent?.(event);
-    if (event.type === 'result') result = event.data;
+    if (event.type === 'result') result = event.data as T;
     if (event.type === 'error') throw new Error(event.message || '操作失败');
   };
 
@@ -796,11 +1023,31 @@ async function consumeProgressStream(response: Response, options: DeployProgress
   return result;
 }
 
+/** 生成 OpenAPI 并订阅进度 */
+export async function generateTargetOpenApiWithProgress(
+  targetId: number,
+  payload: { branch?: string; force?: boolean; gitlabToken?: string },
+  options: DeployProgressOptions = {}
+): Promise<OpenApiArtifact> {
+  const response = await fetch(getApiBase(`/deploy-api/targets/${targetId}/openapi/generate?stream=1`), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/x-ndjson',
+      ...getDeployApiAuthHeaders(),
+      ...(payload.gitlabToken ? { 'X-GitLab-Token': payload.gitlabToken } : {}),
+    },
+    body: JSON.stringify({ branch: payload.branch, force: payload.force }),
+    signal: options.signal,
+  });
+  return consumeProgressStream<OpenApiArtifact>(response, options);
+}
+
 /** 执行发布 */
 export async function deployTargetWithProgress(targetId: number, payload: DeployTargetPublishPayload, options: DeployProgressOptions = {}) {
   const response = await fetch(getApiBase(`/deploy-api/targets/${targetId}/deploy?stream=1`), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
+    headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson', ...getDeployApiAuthHeaders() },
     body: JSON.stringify(payload),
     signal: options.signal,
   });
@@ -811,7 +1058,7 @@ export async function deployTargetWithProgress(targetId: number, payload: Deploy
 export async function subscribeTargetDeployProgress(targetId: number, options: DeployProgressOptions = {}) {
   const response = await fetch(getApiBase(`/deploy-api/targets/${targetId}/deploy-progress?stream=1`), {
     method: 'GET',
-    headers: { Accept: 'application/x-ndjson' },
+    headers: { Accept: 'application/x-ndjson', ...getDeployApiAuthHeaders() },
     signal: options.signal,
   });
   return consumeProgressStream(response, options);
@@ -821,7 +1068,7 @@ export async function subscribeTargetDeployProgress(targetId: number, options: D
 export async function rollbackRecordWithProgress(recordId: number, payload: { operator?: string }, options: DeployProgressOptions = {}) {
   const response = await fetch(getApiBase(`/deploy-api/records/${recordId}/rollback?stream=1`), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
+    headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson', ...getDeployApiAuthHeaders() },
     body: JSON.stringify(payload),
     signal: options.signal,
   });
@@ -832,7 +1079,7 @@ export async function rollbackRecordWithProgress(recordId: number, payload: { op
 export async function undoRollbackRecordWithProgress(recordId: number, payload: { operator?: string }, options: DeployProgressOptions = {}) {
   const response = await fetch(getApiBase(`/deploy-api/records/${recordId}/undo-rollback?stream=1`), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
+    headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson', ...getDeployApiAuthHeaders() },
     body: JSON.stringify(payload),
     signal: options.signal,
   });
@@ -846,7 +1093,7 @@ export async function undoRollbackRecordWithProgress(recordId: number, payload: 
  */
 export const backupDbFromServer = (serverUrl: string): Promise<ArrayBuffer> => {
   const normalizedUrl = serverUrl.replace(/\/$/, '') + '/deploy-api/db/backup';
-  return axios.get(normalizedUrl, { responseType: 'arraybuffer' }).then((res) => res.data);
+  return axios.get(normalizedUrl, { responseType: 'arraybuffer', headers: getDeployApiAuthHeaders() }).then((res) => res.data);
 };
 
 let activeLocalServerUrl: string | null = null;
@@ -1006,7 +1253,8 @@ export const checkAppUpdateFromServer = (
   channel = 'stable'
 ): Promise<AppUpdateCheckResult> => {
   return axios.get(getApiBase('/deploy-api/app-update/check'), {
-    params: { currentVersion, platform, arch, channel }
+    params: { currentVersion, platform, arch, channel },
+    headers: getDeployApiAuthHeaders(),
   }).then((res) => {
     const data = res.data as AppUpdateCheckResult;
     if (data && data.downloadUrl && !data.downloadUrl.startsWith('http')) {
@@ -1018,3 +1266,84 @@ export const checkAppUpdateFromServer = (
     return data;
   });
 };
+
+/** JDK 配置 */
+export interface BuildJdk {
+  id: number;
+  name: string;
+  homePath: string;
+  javaVersion: string;
+  majorVersion: number;
+  vendor: string;
+  arch: string;
+  status: 'unknown' | 'available' | 'unavailable';
+  statusOutput: string;
+  lastCheckedAt: string;
+  remark?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** JDK 保存参数 */
+export interface BuildJdkPayload {
+  name: string;
+  homePath: string;
+  remark?: string;
+}
+
+/** 获取 JDK 列表 */
+export const listDeployJdks = (): Promise<BuildJdk[]> => {
+  return client.get('/jdks').then(unwrap<BuildJdk[]>);
+};
+
+/** 新增 JDK 配置 */
+export const createDeployJdk = (payload: BuildJdkPayload): Promise<BuildJdk> => {
+  return client.post('/jdks', payload).then(unwrap<BuildJdk>);
+};
+
+/** 更新 JDK 配置 */
+export const updateDeployJdk = (id: number, payload: BuildJdkPayload): Promise<BuildJdk> => {
+  return client.put(`/jdks/${id}`, payload).then(unwrap<BuildJdk>);
+};
+
+/** 删除 JDK 配置 */
+export const deleteDeployJdk = (id: number): Promise<{ deletedJdks: number }> => {
+  return client.delete(`/jdks/${id}`).then(unwrap<{ deletedJdks: number }>);
+};
+
+/** 检测本机构建 JDK */
+export const testDeployJdk = (id: number): Promise<BuildJdk> => {
+  return client.post(`/jdks/${id}/test`).then(unwrap<BuildJdk>);
+};
+
+/** 获取服务器 Java 运行时 */
+export const listServerJavaRuntimes = (serverId: number): Promise<ServerJavaRuntime[]> =>
+  client.get(`/servers/${serverId}/java-runtimes`).then(unwrap<ServerJavaRuntime[]>);
+
+/** 新增服务器 Java 运行时 */
+export const createServerJavaRuntime = (serverId: number, payload: { name: string; homePath: string }): Promise<ServerJavaRuntime> =>
+  client.post(`/servers/${serverId}/java-runtimes`, payload).then(unwrap<ServerJavaRuntime>);
+
+/** 扫描服务器 Java 运行时 */
+export const scanServerJavaRuntimes = (serverId: number): Promise<ServerJavaRuntime[]> =>
+  client.post(`/servers/${serverId}/java-runtimes/scan`).then(unwrap<ServerJavaRuntime[]>);
+
+/** 检测服务器 Java 运行时 */
+export const testServerJavaRuntime = (id: number): Promise<ServerJavaRuntime> =>
+  client.post(`/java-runtimes/${id}/test`).then(unwrap<ServerJavaRuntime>);
+
+/** 获取共享环境依赖配置 */
+export const listDeployEnvironments = (): Promise<DeployEnvironment[]> =>
+  client.get('/environments').then(unwrap<DeployEnvironment[]>);
+
+/** 新增共享环境依赖配置 */
+export const createDeployEnvironment = (payload: DeployEnvironmentPayload): Promise<DeployEnvironment> =>
+  client.post('/environments', payload).then(unwrap<DeployEnvironment>);
+
+/** 更新共享环境依赖配置 */
+export const updateDeployEnvironment = (id: number, payload: DeployEnvironmentPayload): Promise<DeployEnvironment> =>
+  client.put(`/environments/${id}`, payload).then(unwrap<DeployEnvironment>);
+
+/** 删除共享环境依赖配置 */
+export const deleteDeployEnvironment = (id: number): Promise<{ deletedEnvironments: number }> =>
+  client.delete(`/environments/${id}`).then(unwrap<{ deletedEnvironments: number }>);
