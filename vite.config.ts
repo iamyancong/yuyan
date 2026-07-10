@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import Components from 'unplugin-vue-components/vite';
 import { AntDesignVueResolver } from 'unplugin-vue-components/resolvers';
@@ -48,61 +48,75 @@ const resolveManualChunk = (id: string) => {
 };
 
 // https://vite.dev/config/
-export default defineConfig({
-  plugins: [
-    vue(),
-    Components({
-      dirs: [],
-      dts: false,
-      resolvers: [
-        AntDesignVueResolver({
-          importStyle: false,
-        }),
-      ],
-    }),
-  ],
-  // 解决 Babel 在浏览器运行时依赖 process 的问题
-  define: {
-    'process.env': {},
-    __APP_VERSION__: JSON.stringify(pkg.version),
-  },
-  server: {
-    port: 1420,
-    strictPort: true,
-    host: '127.0.0.1',
-    proxy: {
-      '/deploy-api': {
-        target: 'http://192.168.164.27:3100',
-        changeOrigin: true,
-      },
-      '/scaffold-api': {
-        target: 'http://192.168.164.27:3100',
-        changeOrigin: true,
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '');
+  const appServerUrl = env.VITE_APP_SERVER_URL || 'http://127.0.0.1:3100';
+  const gitlabHostDefault = env.VITE_GITLAB_HOST || 'http://192.168.167.142:8081';
+
+  return {
+    plugins: [
+      vue(),
+      Components({
+        dirs: [],
+        dts: false,
+        resolvers: [
+          AntDesignVueResolver({
+            importStyle: false,
+          }),
+        ],
+      }),
+    ],
+    // 解决 Babel 在浏览器运行时依赖 process 的问题
+    define: {
+      'process.env': {},
+      __APP_VERSION__: JSON.stringify(pkg.version),
+    },
+    server: {
+      port: 1420,
+      strictPort: true,
+      host: '127.0.0.1',
+      proxy: {
+        '/deploy-api': {
+          target: appServerUrl,
+          changeOrigin: true,
+        },
+        '/scaffold-api': {
+          target: appServerUrl,
+          changeOrigin: true,
+        },
+        '/api': {
+          target: gitlabHostDefault,
+          changeOrigin: true,
+          router: (req) => {
+            const gitlabHost = req.headers['x-gitlab-host'];
+            return typeof gitlabHost === 'string' ? gitlabHost : undefined;
+          },
+        },
       },
     },
-  },
-  resolve: {
-    alias: {
-      '@': path.resolve(__dirname, 'src'),
-      '@yss-ui/components': path.resolve(__dirname, 'node_modules/@ycwang-dev/components'),
-      '@yss-ui/hooks': path.resolve(__dirname, 'node_modules/@ycwang-dev/hooks'),
-      '@yss-ui/utils': path.resolve(__dirname, 'node_modules/@ycwang-dev/utils'),
-    },
-  },
-  build: {
-    modulePreload: false,
-    chunkSizeWarningLimit: 1200,
-    rollupOptions: {
-      onwarn(warning, warn) {
-        if (warning.code === 'MODULE_LEVEL_DIRECTIVE' && warning.message.includes('"use client"')) {
-          return;
-        }
-        warn(warning);
-      },
-      output: {
-        hoistTransitiveImports: false,
-        manualChunks: resolveManualChunk,
+    resolve: {
+      alias: {
+        '@': path.resolve(__dirname, 'src'),
+        '@yss-ui/components': path.resolve(__dirname, 'node_modules/@ycwang-dev/components'),
+        '@yss-ui/hooks': path.resolve(__dirname, 'node_modules/@ycwang-dev/hooks'),
+        '@yss-ui/utils': path.resolve(__dirname, 'node_modules/@ycwang-dev/utils'),
       },
     },
-  },
+    build: {
+      modulePreload: false,
+      chunkSizeWarningLimit: 1200,
+      rollupOptions: {
+        onwarn(warning, warn) {
+          if (warning.code === 'MODULE_LEVEL_DIRECTIVE' && warning.message.includes('"use client"')) {
+            return;
+          }
+          warn(warning);
+        },
+        output: {
+          hoistTransitiveImports: false,
+          manualChunks: resolveManualChunk,
+        },
+      },
+    },
+  };
 });
