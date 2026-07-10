@@ -73,6 +73,14 @@ deploy:dev-local:
         echo "DEPLOY_SECRET_KEY is required for encrypted deploy credentials"
         exit 1
       fi
+      if [ -z "$DEPLOY_API_TOKEN" ]; then
+        echo "DEPLOY_API_TOKEN is required when binding to 0.0.0.0"
+        exit 1
+      fi
+      if [ -z "$DEPLOY_ALLOWED_ORIGINS" ]; then
+        echo "DEPLOY_ALLOWED_ORIGINS is required when binding to 0.0.0.0"
+        exit 1
+      fi
       docker volume create yuyan-ops-deploy-data >/dev/null
       docker run -d --name yuyan-ops -p 3100:3100 \
         -e TEMPLATE_REPO_PATH=/opt/template \
@@ -83,6 +91,8 @@ deploy:dev-local:
         -e GIT_USER_EMAIL="${GIT_USER_EMAIL:-yuyan-ops@ysstech.com}" \
         -e DEPLOY_DATA_DIR=/data/yuyan-ops/deploy-data \
         -e DEPLOY_SECRET_KEY="$DEPLOY_SECRET_KEY" \
+        -e DEPLOY_API_TOKEN="$DEPLOY_API_TOKEN" \
+        -e DEPLOY_ALLOWED_ORIGINS="$DEPLOY_ALLOWED_ORIGINS" \
         -v yuyan-ops-deploy-data:/data/yuyan-ops/deploy-data \
         $ENV_ARGS \
         --restart unless-stopped \
