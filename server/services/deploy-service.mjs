@@ -21,6 +21,7 @@ import {
   pruneTargetBackupReferences,
   updateRecord,
   getManagedNginxInstanceByServerId,
+  getJdk,
 } from './deploy-store.mjs';
 import { DEPLOY_BACKUP_KEEP_PER_TARGET, DEPLOY_DATA_DIR, DEPLOY_RECORD_KEEP_PER_PROJECT } from '../config/constants.mjs';
 import {
@@ -31,6 +32,7 @@ import {
   withSsh,
   writeRemoteTextWithBackup,
 } from './ssh-service.mjs';
+import { deployBackendTarget, restoreBackendRecord } from './backend-runtime-service.mjs';
 
 /** 发布任务停止错误 */
 class DeployStoppedError extends Error {
@@ -1132,7 +1134,8 @@ async function getTargetContext(targetId) {
   const server = await getServerWithCredential(target.serverId);
   if (!server) throw new Error('部署服务器不存在');
   let nginxInstance = target.nginxInstanceId ? await getNginxInstance(target.nginxInstanceId) : null;
-  if (!nginxInstance) throw new Error('部署目标未绑定 Nginx 实例，请编辑部署目标后重试');
+  if (!nginxInstance && target.projectType !== 'backend') throw new Error('部署目标未绑定 Nginx 实例，请编辑部署目标后重试');
+  if (!nginxInstance) return { target, server, nginxInstance: null };
 
   // 如果绑定的不是托管实例，但配置文件的路径位于托管路径下（例如以 /opt/yuyan 开头），
   // 则自动路由到同一服务器下的托管实例以兼容并确保配置热重载能够正确生效。
@@ -1605,6 +1608,7 @@ export async function testTargetNginx(targetId) {
  */
 export async function deployTarget(targetId, payload, emit) {
   const { target, server, nginxInstance } = await getTargetContext(targetId);
+  if (target.projectType === 'backend') return deployBackendTarget(targetId, payload, emit);
   const protectedSubDirs = await resolveProtectedSubDirs(target);
   const uploadStrategy = normalizeUploadStrategy(target.uploadStrategy);
   const isOverlayUpload = uploadStrategy === DEPLOY_UPLOAD_STRATEGIES.overlayKeepAssets;
@@ -1683,145 +1687,202 @@ export async function deployTarget(targetId, payload, emit) {
     commitMessage = gitlabCommitMeta?.message || commitMessage;
     commitAuthor = gitlabCommitMeta?.author || commitAuthor;
     log('success', `代码拉取完成：${commitSha.slice(0, 8)}${commitMessage ? ` ${commitMessage}` : ''}`, 'clone');
-    const npmConfigEnv = await prepareRuntimeNpmConfig(repoDir, log);
+    const isBackend = target.projectType === 'backend';
+    const jdkEnv = {};
+    if (isBackend && target.jdkId) {
+      log('info', `正在获取绑定的 JDK (ID: ${target.jdkId}) 配置...`, 'validate');
+      const jdk = await getJdk(target.jdkId);
+      if (jdk && jdk.homePath) {
+        log('info', `已绑定 JDK: ${jdk.name} -> ${jdk.homePath}`, 'validate');
+        jdkEnv.JAVA_HOME = jdk.homePath;
+        jdkEnv.PATH = `${jdk.homePath}/bin:${process.env.PATH}`;
+      } else {
+        log('warn', `未找到绑定的 JDK (ID: ${target.jdkId}) 配置，将沿用宿主机默认 Java 环境`, 'validate');
+      }
+    }
 
-    throwIfDeployStopped(signal);
-    const installPlan = await resolveDependencyInstallPlan({
-      repoDir,
-      metaPath,
-      target,
-      branch,
-      commitSha,
-      forceInstallDependencies: Boolean(payload.forceInstallDependencies),
-      signal,
-    });
-    stage(
-      'install',
-      30,
-      '安装依赖',
-      installPlan.shouldInstall ? installPlan.reasons.join('；') || target.installCommand : '依赖缓存命中，跳过安装依赖'
-    );
-    if (installPlan.shouldInstall) {
-      log('info', `依赖缓存未命中：${installPlan.reasons.join('；')}`, 'install');
-      await removeDependencyInstallArtifacts(repoDir);
-      log('info', '已清理旧依赖目录，准备重新安装依赖', 'install');
-      await ensureLegacyHuskyPreparePlaceholder(repoDir, log);
+    let npmConfigEnv = {};
+    if (!isBackend) {
+      npmConfigEnv = await prepareRuntimeNpmConfig(repoDir, log);
+
+      throwIfDeployStopped(signal);
+      const installPlan = await resolveDependencyInstallPlan({
+        repoDir,
+        metaPath,
+        target,
+        branch,
+        commitSha,
+        forceInstallDependencies: Boolean(payload.forceInstallDependencies),
+        signal,
+      });
+      stage(
+        'install',
+        30,
+        '安装依赖',
+        installPlan.shouldInstall ? installPlan.reasons.join('；') || target.installCommand : '依赖缓存命中，跳过安装依赖'
+      );
+      if (installPlan.shouldInstall) {
+        log('info', `依赖缓存未命中：${installPlan.reasons.join('；')}`, 'install');
+        await removeDependencyInstallArtifacts(repoDir);
+        log('info', '已清理旧依赖目录，准备重新安装依赖', 'install');
+        await ensureLegacyHuskyPreparePlaceholder(repoDir, log);
+        await runLocalCommandList(target.installCommand, {
+          cwd: repoDir,
+          env: npmConfigEnv,
+          label: '安装依赖',
+          onLog: (level, message) => log(level, message, 'install'),
+          signal,
+        });
+        if (installPlan.cacheable) {
+          await writeDependencyCacheMeta(metaPath, {
+            targetId: target.id,
+            projectId: target.projectId,
+            projectName: target.projectName,
+            branch,
+            commitSha,
+            dependencyCacheKey: installPlan.dependencyCacheKey,
+            installCommand: normalizeInstallCommand(target.installCommand),
+            packageManager: installPlan.packageManager,
+            packageManagerVersion: installPlan.packageManagerVersion,
+            nodeVersion: installPlan.nodeVersion,
+            platform: installPlan.platform,
+            arch: installPlan.arch,
+            inputFileCount: installPlan.inputFileCount,
+            updatedAt: new Date().toISOString(),
+          });
+          log('success', `依赖安装完成，已更新依赖缓存指纹：${installPlan.dependencyCacheKey.slice(0, 12)}`, 'install');
+        } else {
+          log('success', '依赖安装完成；当前安装命令或锁文件不满足跳过安装条件，本次不写入跳过安装缓存', 'install');
+        }
+      } else {
+        log('success', `依赖缓存命中，跳过安装依赖：${installPlan.dependencyCacheKey.slice(0, 12)}`, 'install');
+      }
+    } else if (target.installCommand) {
+      stage('install', 30, '下载依赖', target.installCommand);
       await runLocalCommandList(target.installCommand, {
         cwd: repoDir,
-        env: npmConfigEnv,
-        label: '安装依赖',
+        env: { ...process.env, ...jdkEnv },
+        label: '下载依赖',
         onLog: (level, message) => log(level, message, 'install'),
         signal,
       });
-      if (installPlan.cacheable) {
-        await writeDependencyCacheMeta(metaPath, {
-          targetId: target.id,
-          projectId: target.projectId,
-          projectName: target.projectName,
-          branch,
-          commitSha,
-          dependencyCacheKey: installPlan.dependencyCacheKey,
-          installCommand: normalizeInstallCommand(target.installCommand),
-          packageManager: installPlan.packageManager,
-          packageManagerVersion: installPlan.packageManagerVersion,
-          nodeVersion: installPlan.nodeVersion,
-          platform: installPlan.platform,
-          arch: installPlan.arch,
-          inputFileCount: installPlan.inputFileCount,
-          updatedAt: new Date().toISOString(),
-        });
-        log('success', `依赖安装完成，已更新依赖缓存指纹：${installPlan.dependencyCacheKey.slice(0, 12)}`, 'install');
-      } else {
-        log('success', '依赖安装完成；当前安装命令或锁文件不满足跳过安装条件，本次不写入跳过安装缓存', 'install');
-      }
     } else {
-      log('success', `依赖缓存命中，跳过安装依赖：${installPlan.dependencyCacheKey.slice(0, 12)}`, 'install');
+      stage('install', 30, '跳过依赖安装', '未配置依赖安装命令，依赖将通过打包命令自动下载');
     }
 
     throwIfDeployStopped(signal);
     stage('build', 48, '构建产物', target.buildCommand);
     await runLocalCommandList(target.buildCommand, {
       cwd: repoDir,
-      env: npmConfigEnv,
+      env: isBackend ? { ...process.env, ...jdkEnv } : npmConfigEnv,
       label: '构建产物',
       onLog: (level, message) => log(level, message, 'build'),
       signal,
     });
 
-    log(
-      'info',
-      target.artifactDir
-        ? `产物目录配置：${normalizeArtifactDir(target.artifactDir)}。该路径按仓库根目录计算，不按构建命令 cd 后的目录计算`
-        : '产物目录配置为空，将自动识别本次构建生成的静态产物目录',
-      'build'
-    );
-    const { artifactPath, artifactDir } = await resolveArtifactPath(repoDir, target.artifactDir);
-    log('success', `识别到构建产物目录：${artifactDir}`, 'build');
-    const uploadableFiles = await collectUploadableArtifactFiles(artifactPath, protectedSubDirs);
-    artifactManifestPath = await createArtifactManifestFile(workspaceRoot, releaseName, uploadableFiles);
-    log('info', `本次发布产物清单：${uploadableFiles.length} 个文件`, 'build');
+    let localJarPath = '';
+    let jarFileName = '';
+    let artifactPath = '';
+    let artifactDir = '';
+
+    if (isBackend) {
+      const configured = String(target.artifactDir || '').trim();
+      if (!configured) {
+        throw new Error('未配置 Jar 产物路径，请检查部署目标的“产物目录”配置项（如： valuation-outsourced-starter/target/valuation-outsourced-starter-3.0.0-SNAPSHOT.jar）');
+      }
+      localJarPath = path.resolve(repoDir, configured);
+      const fileStat = await fs.stat(localJarPath).catch(() => null);
+      if (!fileStat) {
+        throw new Error(`未找到 Jar 产物文件，请确认打包命令是否正确执行。检查路径：${localJarPath}`);
+      }
+      if (!fileStat.isFile()) {
+        throw new Error(`配置的产物路径不是文件，必须直接指向 jar 包文件：${localJarPath}`);
+      }
+      jarFileName = path.basename(localJarPath);
+      log('success', `识别到后端构建产物 Jar 包：${jarFileName}`, 'build');
+    } else {
+      log(
+        'info',
+        target.artifactDir
+          ? `产物目录配置：${normalizeArtifactDir(target.artifactDir)}。该路径按仓库根目录计算，不按构建命令 cd 后的目录计算`
+          : '产物目录配置为空，将自动识别本次构建生成的静态产物目录',
+        'build'
+      );
+      const resolved = await resolveArtifactPath(repoDir, target.artifactDir);
+      artifactPath = resolved.artifactPath;
+      artifactDir = resolved.artifactDir;
+      log('success', `识别到构建产物目录：${artifactDir}`, 'build');
+      const uploadableFiles = await collectUploadableArtifactFiles(artifactPath, protectedSubDirs);
+      artifactManifestPath = await createArtifactManifestFile(workspaceRoot, releaseName, uploadableFiles);
+      log('info', `本次发布产物清单：${uploadableFiles.length} 个文件`, 'build');
+    }
 
     throwIfDeployStopped(signal);
     uploadStarted = true;
-    stage('upload', 66, '上传产物', `上传到 ${server.name}:${target.deployRoot}`);
+    stage('upload', 66, '上传产物', isBackend ? `上传 Jar 包到 ${server.name}:${target.deployRoot}` : `上传到 ${server.name}:${target.deployRoot}`);
     await withSsh(server, async (conn) => {
       await execSsh(conn, buildRemoteMkdirCommand(target.deployRoot, deployUseSudo), {
         label: '创建部署目录',
       });
-      backupPath = path.posix.join(target.deployRoot, '.yuyan-backups', releaseName);
-      const backupCommands = [buildRemoteMkdirCommand(backupPath, deployUseSudo), buildBackupDeployRootCommand(target, backupPath, protectedSubDirs, deployUseSudo)];
-      if (!isOverlayUpload) backupCommands.push(buildClearDeployRootCommand(target, protectedSubDirs, deployUseSudo));
-      await execSsh(conn, backupCommands.join(' && '), {
-        label: isOverlayUpload ? '备份部署目录' : '备份并清空部署目录',
-      });
-      backupCreated = true;
-      if (isOverlayUpload) {
-        log('info', '覆盖上传模式已跳过清空部署目录，旧 hash 静态资源将暂时保留', 'upload');
-      }
 
-      let uploaded = 0;
-      if (deployAccess.uploadMode === 'sudoTar') {
-        uploaded = await uploadDirectoryWithSudoTar(conn, artifactPath, target.deployRoot, {
-          archivePath: path.join(workspaceRoot, `artifact-${releaseName}.tar.gz`),
-          releaseName,
-          protectedSubDirs,
-          signal,
-          log,
-        });
+      if (isBackend) {
+        throw new Error('后端目标必须使用版本化后端发布流程');
       } else {
-        await uploadDirectory(conn, artifactPath, target.deployRoot, ({ remotePath }) => {
-          uploaded += 1;
-          if (uploaded <= 5 || uploaded % 30 === 0) {
-            log('info', `已上传：${remotePath}`, 'upload');
-          }
-        }, { excludeTopLevelNames: protectedSubDirs });
-      }
-      log('success', `产物上传完成，共 ${uploaded} 个文件`, 'upload');
-
-      if (target.enableNginxTest) {
-        stage('nginx', 82, '校验 Nginx', `执行 ${getNginxCommandLabel(server, nginxInstance, 'test')}`);
-        try {
-          const testResult = await runNginxTest(conn, server, nginxInstance);
-          log('success', `${testResult.stderr || testResult.stdout}`.trim() || 'nginx -t 校验通过', 'nginx');
-        } catch (error) {
-          deployRootRestored = await restoreDeployRootFromBackup(conn, target, backupPath, '恢复部署目录备份', protectedSubDirs, deployUseSudo);
-          throw error;
+        backupPath = path.posix.join(target.deployRoot, '.yuyan-backups', releaseName);
+        const backupCommands = [buildRemoteMkdirCommand(backupPath, deployUseSudo), buildBackupDeployRootCommand(target, backupPath, protectedSubDirs, deployUseSudo)];
+        if (!isOverlayUpload) backupCommands.push(buildClearDeployRootCommand(target, protectedSubDirs, deployUseSudo));
+        await execSsh(conn, backupCommands.join(' && '), {
+          label: isOverlayUpload ? '备份部署目录' : '备份并清空部署目录',
+        });
+        backupCreated = true;
+        if (isOverlayUpload) {
+          log('info', '覆盖上传模式已跳过清空部署目录，旧 hash 静态资源将暂时保留', 'upload');
         }
-      }
 
-      if (target.enableNginxReload) {
-        stage('reload', 92, '重载 Nginx', `执行 ${getNginxCommandLabel(server, nginxInstance, 'reload')}`);
-        await reloadNginx(conn, server, nginxInstance);
-        log('success', 'Nginx 重载完成', 'reload');
-      }
+        let uploaded = 0;
+        if (deployAccess.uploadMode === 'sudoTar') {
+          uploaded = await uploadDirectoryWithSudoTar(conn, artifactPath, target.deployRoot, {
+            archivePath: path.join(workspaceRoot, `artifact-${releaseName}.tar.gz`),
+            releaseName,
+            protectedSubDirs,
+            signal,
+            log,
+          });
+        } else {
+          await uploadDirectory(conn, artifactPath, target.deployRoot, ({ remotePath }) => {
+            uploaded += 1;
+            if (uploaded <= 5 || uploaded % 30 === 0) {
+              log('info', `已上传：${remotePath}`, 'upload');
+            }
+          }, { excludeTopLevelNames: protectedSubDirs });
+        }
+        log('success', `产物上传完成，共 ${uploaded} 个文件`, 'upload');
 
-      if (artifactManifestPath) {
-        try {
-          const remoteManifestPath = await uploadArtifactManifest(conn, artifactManifestPath, target, releaseName, deployUseSudo);
-          log('info', `已写入发布产物清单：${remoteManifestPath}`, 'cleanup');
-          await pruneRemoteArtifactManifests(conn, target, log, deployUseSudo);
-        } catch (manifestError) {
-          log('warn', `发布产物清单写入或旧资源清理失败，本次发布不回滚：${manifestError.message || manifestError}`, 'cleanup');
+        if (target.enableNginxTest) {
+          stage('nginx', 82, '校验 Nginx', `执行 ${getNginxCommandLabel(server, nginxInstance, 'test')}`);
+          try {
+            const testResult = await runNginxTest(conn, server, nginxInstance);
+            log('success', `${testResult.stderr || testResult.stdout}`.trim() || 'nginx -t 校验通过', 'nginx');
+          } catch (error) {
+            deployRootRestored = await restoreDeployRootFromBackup(conn, target, backupPath, '恢复部署目录备份', protectedSubDirs, deployUseSudo);
+            throw error;
+          }
+        }
+
+        if (target.enableNginxReload) {
+          stage('reload', 92, '重载 Nginx', `执行 ${getNginxCommandLabel(server, nginxInstance, 'reload')}`);
+          await reloadNginx(conn, server, nginxInstance);
+          log('success', 'Nginx 重载完成', 'reload');
+        }
+
+        if (artifactManifestPath) {
+          try {
+            const remoteManifestPath = await uploadArtifactManifest(conn, artifactManifestPath, target, releaseName, deployUseSudo);
+            log('info', `已写入发布产物清单：${remoteManifestPath}`, 'cleanup');
+            await pruneRemoteArtifactManifests(conn, target, log, deployUseSudo);
+          } catch (manifestError) {
+            log('warn', `发布产物清单写入或旧资源清理失败，本次发布不回滚：${manifestError.message || manifestError}`, 'cleanup');
+          }
         }
       }
 
@@ -2085,6 +2146,9 @@ async function restoreRecordVersion(recordId, payload, emit, action) {
  * @returns {Promise<Object>} 回滚记录
  */
 export async function rollbackRecord(recordId, payload, emit) {
+  const sourceRecord = await getRecord(recordId);
+  const target = sourceRecord ? await getTarget(sourceRecord.targetId) : null;
+  if (target?.projectType === 'backend') return restoreBackendRecord(recordId, payload, emit, 'rollback');
   return restoreRecordVersion(recordId, payload, emit, 'rollback');
 }
 
@@ -2096,5 +2160,8 @@ export async function rollbackRecord(recordId, payload, emit) {
  * @returns {Promise<Object>} 撤销回滚记录
  */
 export async function undoRollbackRecord(recordId, payload, emit) {
+  const sourceRecord = await getRecord(recordId);
+  const target = sourceRecord ? await getTarget(sourceRecord.targetId) : null;
+  if (target?.projectType === 'backend') return restoreBackendRecord(recordId, payload, emit, 'undoRollback');
   return restoreRecordVersion(recordId, payload, emit, 'undoRollback');
 }
