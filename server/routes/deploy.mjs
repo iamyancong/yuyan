@@ -39,20 +39,55 @@ import {
   handleUpdateServer,
   handleUpdateTarget,
   handleUpdateNginxInstance,
+  handleListJdks,
+  handleCreateJdk,
+  handleUpdateJdk,
+  handleDeleteJdk,
   handleBackupDb,
   handleRestoreDb,
   handleCheckAppUpdate,
   handleCheckTauriAppUpdate,
   handleDownloadAppUpdateAsset,
+  handleTestJdk,
+  handleListServerJavaRuntimes,
+  handleCreateServerJavaRuntime,
+  handleScanServerJavaRuntimes,
+  handleTestServerJavaRuntime,
+  handleInspectBackendTarget,
+  handleGetBackendServiceStatus,
+  handleRunBackendServiceAction,
+  handleReadBackendServiceLogs,
+  handleGenerateTargetOpenApi,
+  handleGetLatestTargetOpenApi,
+  handleReadOpenApiArtifact,
+  handleDownloadOpenApiArtifact,
+  handleListDeployEnvironments,
+  handleCreateDeployEnvironment,
+  handleUpdateDeployEnvironment,
+  handleDeleteDeployEnvironment,
 } from '../controllers/deploy-controller.mjs';
 
 const router = express.Router();
+
+router.get('/jdks', handleListJdks);
+router.post('/jdks', handleCreateJdk);
+router.put('/jdks/:id', handleUpdateJdk);
+router.delete('/jdks/:id', handleDeleteJdk);
+router.post('/jdks/:id/test', handleTestJdk);
 
 router.get('/servers', handleListServers);
 router.post('/servers', handleCreateServer);
 router.put('/servers/:id', handleUpdateServer);
 router.delete('/servers/:id', handleDeleteServer);
 router.post('/servers/:id/test', handleTestServer);
+router.get('/servers/:id/java-runtimes', handleListServerJavaRuntimes);
+router.post('/servers/:id/java-runtimes', handleCreateServerJavaRuntime);
+router.post('/servers/:id/java-runtimes/scan', handleScanServerJavaRuntimes);
+router.post('/java-runtimes/:id/test', handleTestServerJavaRuntime);
+router.get('/environments', handleListDeployEnvironments);
+router.post('/environments', handleCreateDeployEnvironment);
+router.put('/environments/:id', handleUpdateDeployEnvironment);
+router.delete('/environments/:id', handleDeleteDeployEnvironment);
 router.get('/servers/:id/nginx-instances', handleListNginxInstances);
 router.post('/servers/:id/nginx-instances', handleCreateNginxInstance);
 router.get('/servers/:id/nginx-runtime', handleGetNginxRuntime);
@@ -79,6 +114,14 @@ router.post('/targets/:id/nginx-test', handleTestNginx);
 router.get('/targets/:id/deploy-progress', handleGetTargetDeployProgress);
 router.post('/targets/:id/deploy', handleDeployTarget);
 router.post('/targets/:id/deploy/stop', handleStopDeployTarget);
+router.post('/targets/:id/inspect', handleInspectBackendTarget);
+router.get('/targets/:id/service-status', handleGetBackendServiceStatus);
+router.post('/targets/:id/service-actions/:action', handleRunBackendServiceAction);
+router.get('/targets/:id/service-logs', handleReadBackendServiceLogs);
+router.post('/targets/:id/openapi/generate', handleGenerateTargetOpenApi);
+router.get('/targets/:id/openapi/latest', handleGetLatestTargetOpenApi);
+router.get('/openapi-artifacts/:id/content', handleReadOpenApiArtifact);
+router.get('/openapi-artifacts/:id/download', handleDownloadOpenApiArtifact);
 
 router.get('/records', handleListRecords);
 router.get('/records/:id', handleGetRecord);

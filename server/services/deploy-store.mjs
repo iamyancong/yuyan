@@ -7,7 +7,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import { execSync } from 'node:child_process';
 import { DEPLOY_DATA_DIR, DEPLOY_DB_PATH, DEPLOY_LOG_DIR, DEPLOY_RECORD_KEEP_PER_PROJECT, DEPLOY_SECRET_KEY, GITLAB_HOST, GITLAB_TOKEN } from '../config/constants.mjs';
+import { normalizeBackendConfig, normalizeBackendServiceName, normalizeHealthCheckPath, parseJavaMajorVersion, validateBackendDeployRoot } from './backend-domain.mjs';
 
 let dbInstance = null;
 
@@ -172,6 +174,16 @@ function resolveNginxInstanceCommand(row, type) {
  */
 function getTableColumns(db, tableName) {
   return db.prepare(`PRAGMA table_info(${tableName})`).all().map((item) => item.name);
+}
+
+/**
+ * 判断数据表是否存在。
+ * @param {DatabaseSync} db 数据库实例
+ * @param {string} tableName 表名
+ * @returns {boolean} 是否存在
+ */
+function hasTable(db, tableName) {
+  return Boolean(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName));
 }
 
 /**
@@ -609,6 +621,7 @@ function mapServer(row) {
     authType: row.auth_type,
     useSudo: Boolean(row.use_sudo),
     defaultDeployRoot: row.default_deploy_root || '',
+    defaultBackendRoot: row.default_backend_root || '',
     defaultNginxConfPath: row.default_nginx_conf_path || '',
     nginxWorkDir: row.nginx_work_dir || '',
     nginxTestCommand: row.nginx_test_command || 'nginx -t',
@@ -786,6 +799,8 @@ function hydrateServer(db, row) {
  */
 function mapTarget(row) {
   if (!row) return null;
+  const serverHost = row.deploy_server_host || '';
+  const backendPort = Number(row.server_port || 0);
   return {
     id: row.id,
     projectId: row.project_id,
@@ -798,7 +813,7 @@ function mapTarget(row) {
     envName: row.env_name,
     serverId: row.server_id,
     serverName: row.deploy_server_name || '',
-    serverHost: row.deploy_server_host || '',
+    serverHost,
     deployRoot: row.deploy_root,
     nginxConfPath: row.nginx_conf_path,
     nginxSiteManaged: Boolean(row.nginx_site_managed),
@@ -819,6 +834,45 @@ function mapTarget(row) {
     createdBy: row.created_by || '',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    projectType: row.project_type || 'frontend',
+    jdkId: Number(row.jdk_id || 0),
+    stopCommand: row.stop_command || '',
+    startCommand: row.start_command || '',
+    healthCheckUrl: row.health_check_url || '',
+    serviceRole: row.service_role || 'application',
+    environmentId: Number(row.environment_id || 0),
+    environmentName: row.environment_name || '',
+    serviceName: row.service_name || normalizeBackendServiceName(row.project_name),
+    buildJdkId: Number(row.build_jdk_id || row.jdk_id || 0),
+    runtimeJavaHome: row.runtime_java_home || '',
+    runtimeJavaVersion: row.runtime_java_version || '',
+    serverPort: backendPort,
+    springProfiles: row.spring_profiles || '',
+    externalConfigPath: row.external_config_path || '',
+    jvmOptions: row.jvm_options || '',
+    appArgs: row.app_args || '',
+    processMode: row.process_mode || 'pid',
+    stopTimeoutSeconds: Number(row.stop_timeout_seconds || 30),
+    startupTimeoutSeconds: Number(row.startup_timeout_seconds || 120),
+    healthCheckPath: row.health_check_path || normalizeHealthCheckPath(row.health_check_url || '/actuator/health'),
+    nacosServerAddr: row.nacos_server_addr || row.environment_nacos_server_addr || '',
+    nacosConsoleUrl: row.nacos_console_url || row.environment_nacos_console_url || '',
+    nacosNamespace: row.nacos_namespace || row.environment_nacos_namespace || '',
+    nacosGroup: row.nacos_group || row.environment_nacos_group || '',
+    nacosStatus: row.environment_status || (row.nacos_server_addr ? 'unknown' : 'unconfigured'),
+    requireNacosRegistration: Boolean(row.require_nacos_registration),
+    gatewayUrl: row.gateway_url || row.environment_gateway_public_url || '',
+    gatewayProbePath: row.gateway_probe_path || '',
+    artifactPattern: row.artifact_pattern || row.artifact_dir || '',
+    openapiCommand: row.openapi_command || '',
+    openapiOutputPath: row.openapi_output_path || '',
+    legacyStartCommand: row.legacy_start_command || row.start_command || '',
+    legacyStopCommand: row.legacy_stop_command || row.stop_command || '',
+    needsReview: Boolean(row.needs_review),
+    serviceStatus: row.service_status || 'unknown',
+    serviceStatusOutput: row.last_status_output || '',
+    serviceStatusAt: row.last_status_at || '',
+    directUrl: serverHost && backendPort ? `http://${serverHost}:${backendPort}` : '',
   };
 }
 
@@ -1011,6 +1065,245 @@ function migrateLegacyNginxInstances(db) {
 }
 
 /**
+ * 在首次后端架构迁移前备份 SQLite 文件。
+ * @param {DatabaseSync} db 数据库实例
+ * @returns {Promise<string>} 备份文件路径，无需备份时为空
+ */
+async function backupDeployDbBeforeBackendMigration(db) {
+  const migrated = hasTable(db, 'schema_migrations')
+    ? Boolean(db.prepare("SELECT version FROM schema_migrations WHERE version = 2").get())
+    : false;
+  if (migrated) return '';
+  const stat = await fs.stat(DEPLOY_DB_PATH).catch(() => null);
+  if (!stat?.isFile() || stat.size === 0) return '';
+  const timestamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+  const backupPath = `${DEPLOY_DB_PATH}.pre-backend-v2-${timestamp}.bak`;
+  await fs.copyFile(DEPLOY_DB_PATH, backupPath);
+  return backupPath;
+}
+
+/**
+ * 将已存在的后端部署目标迁入一对一配置表。
+ * @param {DatabaseSync} db 数据库实例
+ */
+function migrateLegacyBackendTargets(db) {
+  const targets = db.prepare("SELECT * FROM deploy_targets WHERE project_type = 'backend'").all();
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO backend_target_configs
+     (target_id, service_role, service_name, build_jdk_id, runtime_java_home, runtime_java_version, server_port,
+      spring_profiles, external_config_path, jvm_options, app_args, process_mode, stop_timeout_seconds,
+      startup_timeout_seconds, health_check_path, nacos_server_addr, nacos_console_url, nacos_namespace,
+      nacos_group, gateway_url, gateway_probe_path, artifact_pattern, openapi_command, openapi_output_path,
+      legacy_start_command, legacy_stop_command, needs_review, service_status, last_status_output,
+      last_status_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  for (const target of targets) {
+    let port = 0;
+    try {
+      port = Number(new URL(String(target.health_check_url || '')).port || 0);
+    } catch {}
+    const legacyStart = String(target.start_command || '').trim();
+    const legacyStop = String(target.stop_command || '').trim();
+    const ts = target.updated_at || target.created_at || now();
+    insert.run(
+      target.id,
+      'application',
+      normalizeBackendServiceName(target.project_name),
+      Number(target.jdk_id || 0) || null,
+      '',
+      '',
+      port || null,
+      '',
+      '',
+      '',
+      '',
+      legacyStart || legacyStop ? 'legacy' : 'pid',
+      30,
+      120,
+      normalizeHealthCheckPath(target.health_check_url || '/actuator/health'),
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      target.artifact_dir || '',
+      '',
+      '',
+      legacyStart,
+      legacyStop,
+      legacyStart || legacyStop ? 1 : 0,
+      'unknown',
+      '',
+      '',
+      ts,
+      ts
+    );
+  }
+}
+
+/**
+ * 应用后端部署架构 v1 数据迁移。
+ * @param {DatabaseSync} db 数据库实例
+ */
+function applyBackendSchemaMigration(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      applied_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS backend_target_configs (
+      target_id INTEGER PRIMARY KEY,
+      environment_id INTEGER,
+      service_role TEXT NOT NULL DEFAULT 'application',
+      service_name TEXT NOT NULL,
+      build_jdk_id INTEGER,
+      runtime_java_home TEXT,
+      runtime_java_version TEXT,
+      server_port INTEGER,
+      spring_profiles TEXT,
+      external_config_path TEXT,
+      jvm_options TEXT,
+      app_args TEXT,
+      process_mode TEXT NOT NULL DEFAULT 'pid',
+      stop_timeout_seconds INTEGER NOT NULL DEFAULT 30,
+      startup_timeout_seconds INTEGER NOT NULL DEFAULT 120,
+      health_check_path TEXT NOT NULL DEFAULT '/actuator/health',
+      nacos_server_addr TEXT,
+      nacos_console_url TEXT,
+      nacos_namespace TEXT,
+      nacos_group TEXT,
+      require_nacos_registration INTEGER NOT NULL DEFAULT 0,
+      gateway_url TEXT,
+      gateway_probe_path TEXT,
+      artifact_pattern TEXT NOT NULL,
+      openapi_command TEXT,
+      openapi_output_path TEXT,
+      legacy_start_command TEXT,
+      legacy_stop_command TEXT,
+      needs_review INTEGER NOT NULL DEFAULT 0,
+      service_status TEXT NOT NULL DEFAULT 'unknown',
+      last_status_output TEXT,
+      last_status_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(target_id) REFERENCES deploy_targets(id),
+      FOREIGN KEY(build_jdk_id) REFERENCES build_jdks(id),
+      FOREIGN KEY(environment_id) REFERENCES deploy_environments(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS server_java_runtimes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      server_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      home_path TEXT NOT NULL,
+      java_version TEXT,
+      major_version INTEGER,
+      vendor TEXT,
+      arch TEXT,
+      status TEXT NOT NULL DEFAULT 'unknown',
+      status_output TEXT,
+      last_checked_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(server_id, home_path),
+      FOREIGN KEY(server_id) REFERENCES deploy_servers(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS deploy_environments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      nacos_server_addr TEXT,
+      nacos_console_url TEXT,
+      nacos_namespace TEXT,
+      nacos_group TEXT,
+      encrypted_nacos_secret TEXT,
+      gateway_target_id INTEGER,
+      gateway_public_url TEXT,
+      status TEXT NOT NULL DEFAULT 'unknown',
+      status_output TEXT,
+      last_checked_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS backend_releases (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      target_id INTEGER NOT NULL,
+      record_id INTEGER,
+      release_name TEXT NOT NULL,
+      release_dir TEXT NOT NULL,
+      jar_name TEXT NOT NULL,
+      artifact_sha256 TEXT NOT NULL,
+      commit_sha TEXT,
+      status TEXT NOT NULL DEFAULT 'uploaded',
+      is_current INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      activated_at TEXT,
+      FOREIGN KEY(target_id) REFERENCES deploy_targets(id),
+      FOREIGN KEY(record_id) REFERENCES deploy_records(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS openapi_artifacts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      target_id INTEGER NOT NULL,
+      branch TEXT NOT NULL,
+      commit_sha TEXT NOT NULL,
+      file_name TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      sha256 TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'success',
+      generated_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(target_id) REFERENCES deploy_targets(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS deploy_tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      target_id INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      status TEXT NOT NULL,
+      stage TEXT,
+      percent INTEGER NOT NULL DEFAULT 0,
+      operator TEXT,
+      log_path TEXT,
+      result_ref TEXT,
+      error TEXT,
+      started_at TEXT NOT NULL,
+      heartbeat_at TEXT NOT NULL,
+      finished_at TEXT,
+      FOREIGN KEY(target_id) REFERENCES deploy_targets(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_backend_releases_target_created ON backend_releases(target_id, created_at DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_openapi_target_commit ON openapi_artifacts(target_id, branch, commit_sha, generated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_deploy_tasks_target_started ON deploy_tasks(target_id, started_at DESC, id DESC);
+  `);
+
+  const jdkColumns = getTableColumns(db, 'build_jdks');
+  if (!jdkColumns.includes('java_version')) db.exec('ALTER TABLE build_jdks ADD COLUMN java_version TEXT');
+  if (!jdkColumns.includes('major_version')) db.exec('ALTER TABLE build_jdks ADD COLUMN major_version INTEGER');
+  if (!jdkColumns.includes('vendor')) db.exec('ALTER TABLE build_jdks ADD COLUMN vendor TEXT');
+  if (!jdkColumns.includes('arch')) db.exec('ALTER TABLE build_jdks ADD COLUMN arch TEXT');
+  if (!jdkColumns.includes('status')) db.exec("ALTER TABLE build_jdks ADD COLUMN status TEXT NOT NULL DEFAULT 'unknown'");
+  if (!jdkColumns.includes('status_output')) db.exec('ALTER TABLE build_jdks ADD COLUMN status_output TEXT');
+  if (!jdkColumns.includes('last_checked_at')) db.exec('ALTER TABLE build_jdks ADD COLUMN last_checked_at TEXT');
+
+  const backendColumns = getTableColumns(db, 'backend_target_configs');
+  if (!backendColumns.includes('environment_id')) db.exec('ALTER TABLE backend_target_configs ADD COLUMN environment_id INTEGER');
+  if (!backendColumns.includes('require_nacos_registration')) db.exec('ALTER TABLE backend_target_configs ADD COLUMN require_nacos_registration INTEGER NOT NULL DEFAULT 0');
+
+  migrateLegacyBackendTargets(db);
+  db.prepare("UPDATE deploy_tasks SET status = 'interrupted', error = '雨燕服务重启，任务已中断', finished_at = ? WHERE status = 'running'").run(now());
+  db.prepare('INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (1, ?, ?)').run('backend-deployment-v1', now());
+  db.prepare('INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (2, ?, ?)').run('backend-environments-and-server-root-v2', now());
+}
+
+/**
  * 获取数据库实例
  * @returns {DatabaseSync} SQLite 数据库实例
  */
@@ -1018,6 +1311,7 @@ export async function getDeployDb() {
   if (dbInstance) return dbInstance;
   await fs.mkdir(DEPLOY_DATA_DIR, { recursive: true });
   dbInstance = new DatabaseSync(DEPLOY_DB_PATH);
+  await backupDeployDbBeforeBackendMigration(dbInstance);
   dbInstance.exec(`
     CREATE TABLE IF NOT EXISTS deploy_servers (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1029,6 +1323,7 @@ export async function getDeployDb() {
       encrypted_secret TEXT NOT NULL,
       use_sudo INTEGER NOT NULL DEFAULT 0,
       default_deploy_root TEXT,
+      default_backend_root TEXT,
       default_nginx_conf_path TEXT,
       nginx_work_dir TEXT,
       nginx_test_command TEXT,
@@ -1090,6 +1385,22 @@ export async function getDeployDb() {
       FOREIGN KEY(server_id) REFERENCES deploy_servers(id)
     );
 
+    CREATE TABLE IF NOT EXISTS build_jdks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      home_path TEXT NOT NULL,
+      java_version TEXT,
+      major_version INTEGER,
+      vendor TEXT,
+      arch TEXT,
+      status TEXT NOT NULL DEFAULT 'unknown',
+      status_output TEXT,
+      last_checked_at TEXT,
+      remark TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS deploy_targets (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       project_id INTEGER NOT NULL,
@@ -1119,6 +1430,11 @@ export async function getDeployDb() {
       created_by TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
+      project_type TEXT NOT NULL DEFAULT 'frontend',
+      jdk_id INTEGER,
+      stop_command TEXT,
+      start_command TEXT,
+      health_check_url TEXT,
       FOREIGN KEY(server_id) REFERENCES deploy_servers(id)
     );
 
@@ -1154,6 +1470,9 @@ export async function getDeployDb() {
   const serverColumns = getTableColumns(dbInstance, 'deploy_servers');
   if (!serverColumns.includes('default_deploy_root')) {
     dbInstance.exec('ALTER TABLE deploy_servers ADD COLUMN default_deploy_root TEXT');
+  }
+  if (!serverColumns.includes('default_backend_root')) {
+    dbInstance.exec('ALTER TABLE deploy_servers ADD COLUMN default_backend_root TEXT');
   }
   if (!serverColumns.includes('default_nginx_conf_path')) {
     dbInstance.exec('ALTER TABLE deploy_servers ADD COLUMN default_nginx_conf_path TEXT');
@@ -1204,6 +1523,21 @@ export async function getDeployDb() {
   if (!targetColumns.includes('remark')) {
     dbInstance.exec('ALTER TABLE deploy_targets ADD COLUMN remark TEXT');
   }
+  if (!targetColumns.includes('project_type')) {
+    dbInstance.exec("ALTER TABLE deploy_targets ADD COLUMN project_type TEXT NOT NULL DEFAULT 'frontend'");
+  }
+  if (!targetColumns.includes('jdk_id')) {
+    dbInstance.exec('ALTER TABLE deploy_targets ADD COLUMN jdk_id INTEGER');
+  }
+  if (!targetColumns.includes('stop_command')) {
+    dbInstance.exec('ALTER TABLE deploy_targets ADD COLUMN stop_command TEXT');
+  }
+  if (!targetColumns.includes('start_command')) {
+    dbInstance.exec('ALTER TABLE deploy_targets ADD COLUMN start_command TEXT');
+  }
+  if (!targetColumns.includes('health_check_url')) {
+    dbInstance.exec('ALTER TABLE deploy_targets ADD COLUMN health_check_url TEXT');
+  }
   const runtimeColumns = getTableColumns(dbInstance, 'nginx_runtimes');
   if (!runtimeColumns.includes('package_variant')) {
     dbInstance.exec('ALTER TABLE nginx_runtimes ADD COLUMN package_variant TEXT');
@@ -1233,7 +1567,83 @@ export async function getDeployDb() {
     dbInstance.exec('ALTER TABLE deploy_records ADD COLUMN backup_record_id INTEGER');
   }
   normalizeDeployRecordVersionFields(dbInstance, { inferLegacyAction: !hadRecordActionColumn });
+  applyBackendSchemaMigration(dbInstance);
+  initializeDefaultJdks(dbInstance);
   return dbInstance;
+}
+
+/**
+ * 在 JDK 表为空时，自动扫描并填充当前操作系统的 JDK 配置
+ * @param {any} db - 数据库实例
+ */
+function initializeDefaultJdks(db) {
+  try {
+    const jdksCount = db.prepare('SELECT count(*) as count FROM build_jdks').get().count;
+    if (jdksCount > 0) return;
+
+    const paths = [];
+    if (process.platform === 'darwin') {
+      try {
+        const output = execSync('/usr/libexec/java_home -V 2>&1', { encoding: 'utf8' });
+        const lines = output.split('\n');
+        const seen = new Set();
+        for (const line of lines) {
+          const trimmed = line.trim();
+          const homeMatch = trimmed.match(/(\/[^\s]+\/Contents\/Home)$/);
+          const homePath = homeMatch?.[1] || '';
+          if (!homePath || seen.has(homePath)) continue;
+          seen.add(homePath);
+          const versionText = trimmed.match(/^(\d+(?:[._]\d+)*)/)?.[1] || '';
+          const majorVersion = parseJavaMajorVersion(versionText);
+          const vendor = trimmed.match(/"([^"]+)"/)?.[1] || '';
+          paths.push({
+            name: `${vendor || 'JDK'}${majorVersion ? ` ${majorVersion}` : ''}`,
+            homePath,
+            javaVersion: versionText,
+            majorVersion,
+            vendor,
+          });
+        }
+      } catch (err) {
+        // 忽略执行错误
+      }
+    }
+
+    if (!paths.length && process.env.JAVA_HOME) {
+      paths.push({
+        name: 'Default JAVA_HOME',
+        homePath: process.env.JAVA_HOME,
+        javaVersion: '',
+        majorVersion: 0,
+        vendor: '',
+      });
+    }
+
+    const nowStr = new Date().toISOString();
+    const insertStmt = db.prepare(
+      `INSERT INTO build_jdks
+       (name, home_path, java_version, major_version, vendor, arch, status, status_output, last_checked_at, remark, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    for (const item of paths) {
+      insertStmt.run(
+        item.name,
+        item.homePath,
+        item.javaVersion || '',
+        item.majorVersion || null,
+        item.vendor || '',
+        process.arch,
+        item.majorVersion ? 'available' : 'unknown',
+        '',
+        item.majorVersion ? nowStr : '',
+        '自动探测',
+        nowStr,
+        nowStr
+      );
+    }
+  } catch (err) {
+    console.error('Failed to initialize default JDKs:', err);
+  }
 }
 
 /**
@@ -1395,9 +1805,9 @@ export async function createServer(payload) {
   const result = db
     .prepare(
       `INSERT INTO deploy_servers
-       (name, host, port, username, auth_type, encrypted_secret, use_sudo, default_deploy_root,
+       (name, host, port, username, auth_type, encrypted_secret, use_sudo, default_deploy_root, default_backend_root,
         default_nginx_conf_path, nginx_work_dir, nginx_test_command, nginx_reload_command, remark, created_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       payload.name,
@@ -1408,6 +1818,7 @@ export async function createServer(payload) {
       credential,
       payload.useSudo ? 1 : 0,
       payload.defaultDeployRoot || '',
+      payload.defaultBackendRoot || '',
       payload.defaultNginxConfPath || '',
       payload.nginxWorkDir || '',
       payload.nginxTestCommand || 'nginx -t',
@@ -1442,7 +1853,7 @@ export async function updateServer(id, payload) {
   db.prepare(
     `UPDATE deploy_servers
      SET name = ?, host = ?, port = ?, username = ?, auth_type = ?, encrypted_secret = ?, use_sudo = ?,
-         default_deploy_root = ?, default_nginx_conf_path = ?, nginx_work_dir = ?, nginx_test_command = ?,
+         default_deploy_root = ?, default_backend_root = ?, default_nginx_conf_path = ?, nginx_work_dir = ?, nginx_test_command = ?,
          nginx_reload_command = ?, remark = ?, updated_at = ?
      WHERE id = ?`
   ).run(
@@ -1454,6 +1865,7 @@ export async function updateServer(id, payload) {
     credential,
     payload.useSudo ? 1 : 0,
     payload.defaultDeployRoot || current.default_deploy_root || '',
+    payload.defaultBackendRoot || current.default_backend_root || '',
     payload.defaultNginxConfPath || current.default_nginx_conf_path || '',
     payload.nginxWorkDir || current.nginx_work_dir || '',
     payload.nginxTestCommand || current.nginx_test_command || 'nginx -t',
@@ -1865,13 +2277,22 @@ export async function listTargets(query = {}) {
   const branch = String(query.branch || query.defaultBranch || '').trim();
   const serverId = Number(query.serverId || 0);
   let sql = `
-    SELECT t.*, s.name AS deploy_server_name,
+    SELECT t.*, b.*, s.name AS deploy_server_name,
            s.host AS deploy_server_host,
+           e.name AS environment_name,
+           e.nacos_server_addr AS environment_nacos_server_addr,
+           e.nacos_console_url AS environment_nacos_console_url,
+           e.nacos_namespace AS environment_nacos_namespace,
+           e.nacos_group AS environment_nacos_group,
+           e.gateway_public_url AS environment_gateway_public_url,
+           e.status AS environment_status,
            i.name AS nginx_instance_name,
            i.instance_type AS nginx_instance_type
     FROM deploy_targets t
     LEFT JOIN deploy_servers s ON s.id = t.server_id
     LEFT JOIN nginx_instances i ON i.id = t.nginx_instance_id
+    LEFT JOIN backend_target_configs b ON b.target_id = t.id
+    LEFT JOIN deploy_environments e ON e.id = b.environment_id
   `;
   if (conditions.length) {
     whereParts.push(`(${conditions.join(' OR ')})`);
@@ -1887,6 +2308,11 @@ export async function listTargets(query = {}) {
   if (serverId) {
     whereParts.push('t.server_id = ?');
     queryParams.push(serverId);
+  }
+  const projectType = String(query.projectType || '').trim();
+  if (projectType && projectType !== 'all') {
+    whereParts.push('t.project_type = ?');
+    queryParams.push(projectType);
   }
   if (whereParts.length) sql += ` WHERE ${whereParts.join(' AND ')}`;
   sql += ' ORDER BY t.updated_at DESC, t.id DESC';
@@ -1969,16 +2395,154 @@ export async function getTarget(id) {
   return mapTarget(
     db
       .prepare(
-        `SELECT t.*, s.name AS deploy_server_name,
+        `SELECT t.*, b.*, s.name AS deploy_server_name,
                 s.host AS deploy_server_host,
+                e.name AS environment_name,
+                e.nacos_server_addr AS environment_nacos_server_addr,
+                e.nacos_console_url AS environment_nacos_console_url,
+                e.nacos_namespace AS environment_nacos_namespace,
+                e.nacos_group AS environment_nacos_group,
+                e.gateway_public_url AS environment_gateway_public_url,
+                e.status AS environment_status,
                 i.name AS nginx_instance_name,
                 i.instance_type AS nginx_instance_type
          FROM deploy_targets t
          LEFT JOIN deploy_servers s ON s.id = t.server_id
          LEFT JOIN nginx_instances i ON i.id = t.nginx_instance_id
+         LEFT JOIN backend_target_configs b ON b.target_id = t.id
+         LEFT JOIN deploy_environments e ON e.id = b.environment_id
          WHERE t.id = ?`
       )
       .get(Number(id))
+  );
+}
+
+/**
+ * 查询同一服务器上的后端端口冲突。
+ * @param {DatabaseSync} db 数据库实例
+ * @param {Object} payload 部署目标参数
+ * @param {number} excludeTargetId 排除的目标 ID
+ * @returns {Object|null} 冲突目标
+ */
+function getDuplicateBackendPort(db, payload, excludeTargetId = 0) {
+  if (payload.projectType !== 'backend') return null;
+  const serverPort = Number(payload.serverPort || 0);
+  if (!serverPort) return null;
+  const params = [Number(payload.serverId), serverPort];
+  if (excludeTargetId) params.push(Number(excludeTargetId));
+  return db
+    .prepare(
+      `SELECT t.id, t.project_name
+       FROM deploy_targets t
+       INNER JOIN backend_target_configs b ON b.target_id = t.id
+       WHERE t.server_id = ? AND b.server_port = ? ${excludeTargetId ? 'AND t.id != ?' : ''}
+       LIMIT 1`
+    )
+    .get(...params);
+}
+
+/**
+ * 在写入目标前校验后端根目录和全部后端配置，避免部分写入。
+ * @param {DatabaseSync} db 数据库实例
+ * @param {Object} payload 目标参数
+ */
+function validateBackendTargetBeforeWrite(db, payload) {
+  if (payload.projectType !== 'backend') return;
+  const server = db.prepare('SELECT use_sudo, default_backend_root FROM deploy_servers WHERE id = ?').get(Number(payload.serverId)) || {};
+  const backendRoot = String(server.default_backend_root || '').trim();
+  if (!backendRoot) throw new Error('请先在服务器配置中设置后端项目根目录');
+  validateBackendDeployRoot(payload.deployRoot, backendRoot);
+  normalizeBackendConfig(payload, { useSudo: Boolean(server.use_sudo) });
+}
+
+/**
+ * 新增或更新后端目标的一对一配置。
+ * @param {DatabaseSync} db 数据库实例
+ * @param {number} targetId 部署目标 ID
+ * @param {Object} payload 部署目标参数
+ */
+function upsertBackendTargetConfig(db, targetId, payload) {
+  if (payload.projectType !== 'backend') {
+    db.prepare('DELETE FROM backend_target_configs WHERE target_id = ?').run(Number(targetId));
+    return;
+  }
+  const server = db.prepare('SELECT use_sudo FROM deploy_servers WHERE id = ?').get(Number(payload.serverId)) || {};
+  const config = normalizeBackendConfig(payload, { useSudo: Boolean(server.use_sudo) });
+  const ts = now();
+  db.prepare(
+    `INSERT INTO backend_target_configs
+     (target_id, environment_id, service_role, service_name, build_jdk_id, runtime_java_home, runtime_java_version, server_port,
+      spring_profiles, external_config_path, jvm_options, app_args, process_mode, stop_timeout_seconds,
+      startup_timeout_seconds, health_check_path, nacos_server_addr, nacos_console_url, nacos_namespace,
+      nacos_group, require_nacos_registration, gateway_url, gateway_probe_path, artifact_pattern, openapi_command, openapi_output_path,
+      legacy_start_command, legacy_stop_command, needs_review, service_status, last_status_output,
+      last_status_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(target_id) DO UPDATE SET
+       environment_id = excluded.environment_id,
+       service_role = excluded.service_role,
+       service_name = excluded.service_name,
+       build_jdk_id = excluded.build_jdk_id,
+       runtime_java_home = excluded.runtime_java_home,
+       runtime_java_version = excluded.runtime_java_version,
+       server_port = excluded.server_port,
+       spring_profiles = excluded.spring_profiles,
+       external_config_path = excluded.external_config_path,
+       jvm_options = excluded.jvm_options,
+       app_args = excluded.app_args,
+       process_mode = excluded.process_mode,
+       stop_timeout_seconds = excluded.stop_timeout_seconds,
+       startup_timeout_seconds = excluded.startup_timeout_seconds,
+       health_check_path = excluded.health_check_path,
+       nacos_server_addr = excluded.nacos_server_addr,
+       nacos_console_url = excluded.nacos_console_url,
+       nacos_namespace = excluded.nacos_namespace,
+       nacos_group = excluded.nacos_group,
+       require_nacos_registration = excluded.require_nacos_registration,
+       gateway_url = excluded.gateway_url,
+       gateway_probe_path = excluded.gateway_probe_path,
+       artifact_pattern = excluded.artifact_pattern,
+       openapi_command = excluded.openapi_command,
+       openapi_output_path = excluded.openapi_output_path,
+       legacy_start_command = excluded.legacy_start_command,
+       legacy_stop_command = excluded.legacy_stop_command,
+       needs_review = excluded.needs_review,
+       updated_at = excluded.updated_at`
+  ).run(
+    Number(targetId),
+    config.environmentId || null,
+    config.serviceRole,
+    config.serviceName,
+    config.buildJdkId || null,
+    config.runtimeJavaHome,
+    config.runtimeJavaVersion,
+    config.serverPort,
+    config.springProfiles,
+    config.externalConfigPath,
+    config.jvmOptions,
+    config.appArgs,
+    config.processMode,
+    config.stopTimeoutSeconds,
+    config.startupTimeoutSeconds,
+    config.healthCheckPath,
+    config.nacosServerAddr,
+    config.nacosConsoleUrl,
+    config.nacosNamespace,
+    config.nacosGroup,
+    config.requireNacosRegistration ? 1 : 0,
+    config.gatewayUrl,
+    config.gatewayProbePath,
+    config.artifactPattern,
+    config.openapiCommand,
+    config.openapiOutputPath,
+    config.legacyStartCommand,
+    config.legacyStopCommand,
+    config.needsReview ? 1 : 0,
+    'unknown',
+    '',
+    '',
+    ts,
+    ts
   );
 }
 
@@ -1992,26 +2556,31 @@ export async function createTarget(payload) {
   if (!hasServer(db, payload.serverId)) {
     throw new Error('部署服务器不存在，请先新增独立服务器');
   }
-  if (!hasNginxInstanceForServer(db, payload.serverId, payload.nginxInstanceId)) {
+  const isBackend = payload.projectType === 'backend';
+  validateBackendTargetBeforeWrite(db, payload);
+  if (!isBackend && !hasNginxInstanceForServer(db, payload.serverId, payload.nginxInstanceId)) {
     throw new Error('Nginx 实例不存在，请重新选择部署服务器和 Nginx 实例');
   }
   if (getDuplicateTarget(db, payload)) {
     throw new Error('该项目在当前服务器和部署根目录下已存在部署目标，请编辑已有目标或更换部署根目录');
   }
-  if (getDuplicateListenPortTarget(db, payload)) {
+  if (!isBackend && getDuplicateListenPortTarget(db, payload)) {
     throw new Error(`当前服务器已存在监听端口 ${payload.listenPort} 的托管站点，请更换端口`);
   }
-  if (isRuntimeDefaultListenPort(db, payload)) {
+  if (!isBackend && isRuntimeDefaultListenPort(db, payload)) {
     throw new Error(`端口 ${payload.listenPort} 已被托管 Nginx 默认 server 占用，请更换端口`);
   }
+  const duplicateBackendPort = getDuplicateBackendPort(db, payload);
+  if (duplicateBackendPort) throw new Error(`端口 ${payload.serverPort} 已被后端项目 ${duplicateBackendPort.project_name} 占用`);
   const ts = now();
   const result = db
     .prepare(
       `INSERT INTO deploy_targets
        (project_id, project_source, project_name, project_description, project_path, repository_url, default_branch, env_name, server_id, deploy_root,
         nginx_instance_id, nginx_conf_path, nginx_site_managed, listen_port, server_name, enable_nginx_test, enable_nginx_reload, install_command, build_command, artifact_dir,
-        preserve_sub_dirs, upload_strategy, visit_url, remark, created_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        preserve_sub_dirs, upload_strategy, visit_url, remark, created_by, created_at, updated_at,
+        project_type, jdk_id, stop_command, start_command, health_check_url)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       Number(payload.projectId),
@@ -2024,15 +2593,15 @@ export async function createTarget(payload) {
       payload.envName,
       Number(payload.serverId),
       payload.deployRoot,
-      Number(payload.nginxInstanceId),
-      payload.nginxConfPath,
+      payload.nginxInstanceId ? Number(payload.nginxInstanceId) : null,
+      payload.nginxConfPath || '',
       payload.nginxSiteManaged ? 1 : 0,
       payload.listenPort ? Number(payload.listenPort) : null,
       payload.serverName || '',
       payload.enableNginxTest ? 1 : 0,
       payload.enableNginxReload ? 1 : 0,
-      payload.installCommand || 'pnpm install --frozen-lockfile',
-      payload.buildCommand || 'pnpm build',
+      payload.installCommand || '',
+      payload.buildCommand || '',
       payload.artifactDir || '',
       payload.preserveSubDirs || '',
       payload.uploadStrategy || 'cleanReplace',
@@ -2040,9 +2609,16 @@ export async function createTarget(payload) {
       payload.remark || '',
       payload.createdBy || '',
       ts,
-      ts
+      ts,
+      payload.projectType || 'frontend',
+      payload.jdkId ? Number(payload.jdkId) : null,
+      payload.stopCommand || '',
+      payload.startCommand || '',
+      payload.healthCheckUrl || ''
     );
-  return getTarget(Number(result.lastInsertRowid));
+  const targetId = Number(result.lastInsertRowid);
+  upsertBackendTargetConfig(db, targetId, payload);
+  return getTarget(targetId);
 }
 
 /**
@@ -2057,24 +2633,29 @@ export async function updateTarget(id, payload) {
   if (!hasServer(db, payload.serverId)) {
     throw new Error('部署服务器不存在，请先新增独立服务器');
   }
-  if (!hasNginxInstanceForServer(db, payload.serverId, payload.nginxInstanceId)) {
+  const isBackend = payload.projectType === 'backend';
+  validateBackendTargetBeforeWrite(db, payload);
+  if (!isBackend && !hasNginxInstanceForServer(db, payload.serverId, payload.nginxInstanceId)) {
     throw new Error('Nginx 实例不存在，请重新选择部署服务器和 Nginx 实例');
   }
   if (getDuplicateTarget(db, payload, Number(id))) {
     throw new Error('该项目在当前服务器和部署根目录下已存在部署目标，请编辑已有目标或更换部署根目录');
   }
-  if (getDuplicateListenPortTarget(db, payload, Number(id))) {
+  if (!isBackend && getDuplicateListenPortTarget(db, payload, Number(id))) {
     throw new Error(`当前服务器已存在监听端口 ${payload.listenPort} 的托管站点，请更换端口`);
   }
-  if (isRuntimeDefaultListenPort(db, payload)) {
+  if (!isBackend && isRuntimeDefaultListenPort(db, payload)) {
     throw new Error(`端口 ${payload.listenPort} 已被托管 Nginx 默认 server 占用，请更换端口`);
   }
+  const duplicateBackendPort = getDuplicateBackendPort(db, payload, Number(id));
+  if (duplicateBackendPort) throw new Error(`端口 ${payload.serverPort} 已被后端项目 ${duplicateBackendPort.project_name} 占用`);
   db.prepare(
     `UPDATE deploy_targets
      SET project_id = ?, project_source = ?, project_name = ?, project_description = ?, project_path = ?, repository_url = ?, default_branch = ?, env_name = ?,
          server_id = ?, nginx_instance_id = ?, deploy_root = ?, nginx_conf_path = ?, nginx_site_managed = ?, listen_port = ?, server_name = ?,
          enable_nginx_test = ?, enable_nginx_reload = ?, install_command = ?, build_command = ?,
-         artifact_dir = ?, preserve_sub_dirs = ?, upload_strategy = ?, visit_url = ?, remark = ?, updated_at = ?
+         artifact_dir = ?, preserve_sub_dirs = ?, upload_strategy = ?, visit_url = ?, remark = ?, updated_at = ?,
+         project_type = ?, jdk_id = ?, stop_command = ?, start_command = ?, health_check_url = ?
      WHERE id = ?`
   ).run(
     Number(payload.projectId),
@@ -2086,24 +2667,30 @@ export async function updateTarget(id, payload) {
     payload.defaultBranch || 'dev',
     payload.envName,
     Number(payload.serverId),
-    Number(payload.nginxInstanceId),
+    payload.nginxInstanceId ? Number(payload.nginxInstanceId) : null,
     payload.deployRoot,
-    payload.nginxConfPath,
+    payload.nginxConfPath || '',
     payload.nginxSiteManaged ? 1 : 0,
     payload.listenPort ? Number(payload.listenPort) : null,
     payload.serverName || '',
     payload.enableNginxTest ? 1 : 0,
     payload.enableNginxReload ? 1 : 0,
-    payload.installCommand || 'pnpm install --frozen-lockfile',
-    payload.buildCommand || 'pnpm build',
+    payload.installCommand || '',
+    payload.buildCommand || '',
     payload.artifactDir || '',
     payload.preserveSubDirs || '',
     payload.uploadStrategy || 'cleanReplace',
     payload.visitUrl || '',
     payload.remark || '',
     now(),
+    payload.projectType || 'frontend',
+    payload.jdkId ? Number(payload.jdkId) : null,
+    payload.stopCommand || '',
+    payload.startCommand || '',
+    payload.healthCheckUrl || '',
     Number(id)
   );
+  upsertBackendTargetConfig(db, Number(id), payload);
   return getTarget(id);
 }
 
@@ -2118,6 +2705,10 @@ export async function deleteTarget(id) {
   const recordRows = db.prepare('SELECT log_path FROM deploy_records WHERE target_id = ?').all(targetId);
   db.exec('BEGIN');
   try {
+    db.prepare('DELETE FROM openapi_artifacts WHERE target_id = ?').run(targetId);
+    db.prepare('DELETE FROM deploy_tasks WHERE target_id = ?').run(targetId);
+    db.prepare('DELETE FROM backend_releases WHERE target_id = ?').run(targetId);
+    db.prepare('DELETE FROM backend_target_configs WHERE target_id = ?').run(targetId);
     const recordResult = db.prepare('DELETE FROM deploy_records WHERE target_id = ?').run(targetId);
     const targetResult = db.prepare('DELETE FROM deploy_targets WHERE id = ?').run(targetId);
     db.exec('COMMIT');
@@ -2402,3 +2993,668 @@ export function closeDeployDb() {
   }
 }
 
+/**
+ * 获取 JDK 列表
+ * @returns {Promise<Object[]>} JDK 列表
+ */
+export async function listJdks() {
+  const db = await getDeployDb();
+  return db
+    .prepare('SELECT * FROM build_jdks ORDER BY name ASC, id DESC')
+    .all()
+    .map(mapJdk);
+}
+
+/**
+ * 转换本机构建 JDK 数据。
+ * @param {Object} row 数据库行
+ * @returns {Object|null} JDK 配置
+ */
+function mapJdk(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    homePath: row.home_path,
+    javaVersion: row.java_version || '',
+    majorVersion: Number(row.major_version || 0),
+    vendor: row.vendor || '',
+    arch: row.arch || '',
+    status: row.status || 'unknown',
+    statusOutput: row.status_output || '',
+    lastCheckedAt: row.last_checked_at || '',
+    remark: row.remark || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+/**
+ * 获取 JDK 详情
+ * @param {number} id - JDK ID
+ * @returns {Promise<Object|null>} JDK 详情
+ */
+export async function getJdk(id) {
+  const db = await getDeployDb();
+  const row = db.prepare('SELECT * FROM build_jdks WHERE id = ?').get(Number(id));
+  return mapJdk(row);
+}
+
+/**
+ * 新增 JDK 配置
+ * @param {Object} payload - JDK 参数
+ * @returns {Promise<Object>} 新增后的 JDK 配置
+ */
+export async function createJdk(payload) {
+  if (!payload.name || !payload.homePath) {
+    throw new Error('JDK 名称和路径不能为空');
+  }
+  const db = await getDeployDb();
+  const ts = now();
+  const result = db
+    .prepare(
+      `INSERT INTO build_jdks
+       (name, home_path, java_version, major_version, vendor, arch, status, status_output, last_checked_at, remark, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      payload.name.trim(),
+      payload.homePath.trim(),
+      payload.javaVersion || '',
+      Number(payload.majorVersion || 0) || null,
+      payload.vendor || '',
+      payload.arch || '',
+      payload.status || 'unknown',
+      payload.statusOutput || '',
+      payload.lastCheckedAt || '',
+      payload.remark || '',
+      ts,
+      ts
+    );
+  return getJdk(Number(result.lastInsertRowid));
+}
+
+/**
+ * 更新 JDK 配置
+ * @param {number} id - JDK ID
+ * @param {Object} payload - JDK 参数
+ * @returns {Promise<Object|null>} 更新后的 JDK 配置
+ */
+export async function updateJdk(id, payload) {
+  if (!payload.name || !payload.homePath) {
+    throw new Error('JDK 名称和路径不能为空');
+  }
+  const db = await getDeployDb();
+  const row = db.prepare('SELECT id FROM build_jdks WHERE id = ?').get(Number(id));
+  if (!row) return null;
+  db.prepare(
+    `UPDATE build_jdks
+     SET name = ?, home_path = ?, status = 'unknown', status_output = '', last_checked_at = '', remark = ?, updated_at = ?
+     WHERE id = ?`
+  ).run(
+    payload.name.trim(),
+    payload.homePath.trim(),
+    payload.remark || '',
+    now(),
+    Number(id)
+  );
+  return getJdk(id);
+}
+
+/**
+ * 删除 JDK 配置
+ * @param {number} id - JDK ID
+ * @returns {Promise<Object>} 删除结果
+ */
+export async function deleteJdk(id) {
+  const db = await getDeployDb();
+  const jdkId = Number(id);
+  // 检查是否有部署目标在使用此 JDK
+  const target = db
+    .prepare(
+      `SELECT t.id, t.project_name
+       FROM deploy_targets t
+       LEFT JOIN backend_target_configs b ON b.target_id = t.id
+       WHERE t.jdk_id = ? OR b.build_jdk_id = ? LIMIT 1`
+    )
+    .get(jdkId, jdkId);
+  if (target) {
+    throw new Error(`无法删除：部署目标 "${target.project_name}" 正在使用此 JDK 配置`);
+  }
+  const result = db.prepare('DELETE FROM build_jdks WHERE id = ?').run(jdkId);
+  return { deletedJdks: result.changes || 0 };
+}
+
+/**
+ * 更新本机构建 JDK 检测结果。
+ * @param {number} id JDK ID
+ * @param {Object} detection 检测结果
+ * @returns {Promise<Object|null>} 更新后的 JDK
+ */
+export async function updateJdkDetection(id, detection) {
+  const db = await getDeployDb();
+  const checkedAt = now();
+  const result = db
+    .prepare(
+      `UPDATE build_jdks
+       SET java_version = ?, major_version = ?, vendor = ?, arch = ?, status = ?, status_output = ?, last_checked_at = ?, updated_at = ?
+       WHERE id = ?`
+    )
+    .run(
+      detection.javaVersion || '',
+      Number(detection.majorVersion || 0) || null,
+      detection.vendor || '',
+      detection.arch || process.arch,
+      detection.status || 'unknown',
+      detection.statusOutput || '',
+      checkedAt,
+      checkedAt,
+      Number(id)
+    );
+  return result.changes ? getJdk(id) : null;
+}
+
+/**
+ * 更新后端服务运行状态缓存。
+ * @param {number} targetId 部署目标 ID
+ * @param {Object} status 状态信息
+ * @returns {Promise<Object|null>} 更新后的目标
+ */
+export async function updateBackendServiceStatus(targetId, status) {
+  const db = await getDeployDb();
+  db.prepare(
+    `UPDATE backend_target_configs
+     SET service_status = ?, last_status_output = ?, last_status_at = ?, updated_at = ?
+     WHERE target_id = ?`
+  ).run(status.status || 'unknown', status.output || '', now(), now(), Number(targetId));
+  return getTarget(targetId);
+}
+
+/**
+ * 获取服务器 Java 运行时列表。
+ * @param {number} serverId 服务器 ID
+ * @returns {Promise<Object[]>} 运行时列表
+ */
+export async function listServerJavaRuntimes(serverId) {
+  const db = await getDeployDb();
+  return db
+    .prepare('SELECT * FROM server_java_runtimes WHERE server_id = ? ORDER BY major_version ASC, name ASC, id ASC')
+    .all(Number(serverId))
+    .map(mapServerJavaRuntime);
+}
+
+/**
+ * 转换服务器 Java 运行时。
+ * @param {Object} row 数据库行
+ * @returns {Object|null} 运行时
+ */
+function mapServerJavaRuntime(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    serverId: row.server_id,
+    name: row.name,
+    homePath: row.home_path,
+    javaVersion: row.java_version || '',
+    majorVersion: Number(row.major_version || 0),
+    vendor: row.vendor || '',
+    arch: row.arch || '',
+    status: row.status || 'unknown',
+    statusOutput: row.status_output || '',
+    lastCheckedAt: row.last_checked_at || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+/**
+ * 获取服务器 Java 运行时。
+ * @param {number} id 运行时 ID
+ * @returns {Promise<Object|null>} 运行时
+ */
+export async function getServerJavaRuntime(id) {
+  const db = await getDeployDb();
+  return mapServerJavaRuntime(db.prepare('SELECT * FROM server_java_runtimes WHERE id = ?').get(Number(id)));
+}
+
+/**
+ * 保存服务器 Java 运行时。
+ * @param {number} serverId 服务器 ID
+ * @param {Object} payload 保存参数
+ * @returns {Promise<Object>} 运行时
+ */
+export async function createServerJavaRuntime(serverId, payload) {
+  const db = await getDeployDb();
+  if (!hasServer(db, serverId)) throw new Error('部署服务器不存在');
+  if (!String(payload.name || '').trim() || !String(payload.homePath || '').trim()) throw new Error('运行时名称和 JAVA_HOME 必填');
+  const ts = now();
+  const result = db
+    .prepare(
+      `INSERT INTO server_java_runtimes
+       (server_id, name, home_path, java_version, major_version, vendor, arch, status, status_output, last_checked_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(Number(serverId), payload.name.trim(), payload.homePath.trim(), '', null, '', '', 'unknown', '', '', ts, ts);
+  return getServerJavaRuntime(Number(result.lastInsertRowid));
+}
+
+/**
+ * 更新服务器 Java 运行时检测结果。
+ * @param {number} id 运行时 ID
+ * @param {Object} detection 检测结果
+ * @returns {Promise<Object|null>} 运行时
+ */
+export async function updateServerJavaRuntimeDetection(id, detection) {
+  const db = await getDeployDb();
+  const ts = now();
+  const result = db
+    .prepare(
+      `UPDATE server_java_runtimes
+       SET java_version = ?, major_version = ?, vendor = ?, arch = ?, status = ?, status_output = ?, last_checked_at = ?, updated_at = ?
+       WHERE id = ?`
+    )
+    .run(
+      detection.javaVersion || '',
+      Number(detection.majorVersion || 0) || null,
+      detection.vendor || '',
+      detection.arch || '',
+      detection.status || 'unknown',
+      detection.statusOutput || '',
+      ts,
+      ts,
+      Number(id)
+    );
+  return result.changes ? getServerJavaRuntime(id) : null;
+}
+
+/** 转换部署环境配置，不返回明文凭据。 */
+function mapDeployEnvironment(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    nacosServerAddr: row.nacos_server_addr || '',
+    nacosConsoleUrl: row.nacos_console_url || '',
+    nacosNamespace: row.nacos_namespace || '',
+    nacosGroup: row.nacos_group || '',
+    gatewayTargetId: Number(row.gateway_target_id || 0),
+    gatewayPublicUrl: row.gateway_public_url || '',
+    status: row.status || 'unknown',
+    statusOutput: row.status_output || '',
+    lastCheckedAt: row.last_checked_at || '',
+    hasCredential: Boolean(row.encrypted_nacos_secret),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+/** 获取环境依赖配置列表。 */
+export async function listDeployEnvironments() {
+  const db = await getDeployDb();
+  return db.prepare('SELECT * FROM deploy_environments ORDER BY name ASC, id ASC').all().map(mapDeployEnvironment);
+}
+
+/** 获取包含解密凭据的环境依赖配置，仅供服务端内部使用。 */
+export async function getDeployEnvironmentWithCredential(id) {
+  const db = await getDeployDb();
+  const row = db.prepare('SELECT * FROM deploy_environments WHERE id = ?').get(Number(id));
+  if (!row) return null;
+  return { ...mapDeployEnvironment(row), credential: decryptCredential(row.encrypted_nacos_secret) };
+}
+
+/** 新增环境依赖配置。 */
+export async function createDeployEnvironment(payload) {
+  const db = await getDeployDb();
+  const name = String(payload.name || '').trim();
+  if (!name) throw new Error('环境名称必填');
+  const ts = now();
+  const secret = encryptCredential({
+    username: String(payload.username || ''),
+    password: String(payload.password || ''),
+    token: String(payload.token || ''),
+  });
+  const result = db.prepare(
+    `INSERT INTO deploy_environments
+     (name, nacos_server_addr, nacos_console_url, nacos_namespace, nacos_group, encrypted_nacos_secret,
+      gateway_target_id, gateway_public_url, status, status_output, last_checked_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'unknown', '', '', ?, ?)`
+  ).run(
+    name,
+    String(payload.nacosServerAddr || '').trim(),
+    String(payload.nacosConsoleUrl || '').trim(),
+    String(payload.nacosNamespace || '').trim(),
+    String(payload.nacosGroup || 'DEFAULT_GROUP').trim(),
+    secret,
+    Number(payload.gatewayTargetId || 0) || null,
+    String(payload.gatewayPublicUrl || '').trim(),
+    ts,
+    ts
+  );
+  return mapDeployEnvironment(db.prepare('SELECT * FROM deploy_environments WHERE id = ?').get(Number(result.lastInsertRowid)));
+}
+
+/** 更新环境依赖配置。 */
+export async function updateDeployEnvironment(id, payload) {
+  const db = await getDeployDb();
+  const current = db.prepare('SELECT * FROM deploy_environments WHERE id = ?').get(Number(id));
+  if (!current) return null;
+  const shouldUpdateSecret = ['username', 'password', 'token'].some((key) => String(payload[key] || '').trim());
+  const secret = shouldUpdateSecret
+    ? encryptCredential({ username: payload.username || '', password: payload.password || '', token: payload.token || '' })
+    : current.encrypted_nacos_secret;
+  db.prepare(
+    `UPDATE deploy_environments
+     SET name = ?, nacos_server_addr = ?, nacos_console_url = ?, nacos_namespace = ?, nacos_group = ?,
+         encrypted_nacos_secret = ?, gateway_target_id = ?, gateway_public_url = ?, updated_at = ?
+     WHERE id = ?`
+  ).run(
+    String(payload.name || current.name).trim(),
+    String(payload.nacosServerAddr ?? current.nacos_server_addr ?? '').trim(),
+    String(payload.nacosConsoleUrl ?? current.nacos_console_url ?? '').trim(),
+    String(payload.nacosNamespace ?? current.nacos_namespace ?? '').trim(),
+    String(payload.nacosGroup ?? current.nacos_group ?? 'DEFAULT_GROUP').trim(),
+    secret,
+    Number(payload.gatewayTargetId ?? current.gateway_target_id ?? 0) || null,
+    String(payload.gatewayPublicUrl ?? current.gateway_public_url ?? '').trim(),
+    now(),
+    Number(id)
+  );
+  return mapDeployEnvironment(db.prepare('SELECT * FROM deploy_environments WHERE id = ?').get(Number(id)));
+}
+
+/** 删除未被后端目标引用的环境依赖配置。 */
+export async function deleteDeployEnvironment(id) {
+  const db = await getDeployDb();
+  const target = db.prepare(
+    `SELECT t.project_name FROM backend_target_configs b
+     INNER JOIN deploy_targets t ON t.id = b.target_id
+     WHERE b.environment_id = ? LIMIT 1`
+  ).get(Number(id));
+  if (target) throw new Error(`环境正在被后端项目 ${target.project_name} 使用，无法删除`);
+  const result = db.prepare('DELETE FROM deploy_environments WHERE id = ?').run(Number(id));
+  return { deletedEnvironments: result.changes || 0 };
+}
+
+/** 更新共享环境在线状态。 */
+export async function updateDeployEnvironmentStatus(id, status, output = '') {
+  const db = await getDeployDb();
+  db.prepare(
+    `UPDATE deploy_environments SET status = ?, status_output = ?, last_checked_at = ?, updated_at = ? WHERE id = ?`
+  ).run(status || 'unknown', output || '', now(), now(), Number(id));
+}
+
+/**
+ * 创建部署任务持久化记录。
+ * @param {Object} payload 任务参数
+ * @returns {Promise<Object>} 任务记录
+ */
+export async function createPersistentDeployTask(payload) {
+  const db = await getDeployDb();
+  const ts = payload.startedAt || now();
+  const result = db
+    .prepare(
+      `INSERT INTO deploy_tasks
+       (target_id, action, status, stage, percent, operator, log_path, result_ref, error, started_at, heartbeat_at, finished_at)
+       VALUES (?, ?, 'running', ?, 0, ?, '', '', '', ?, ?, '')`
+    )
+    .run(Number(payload.targetId), payload.action, payload.stage || 'validate', payload.operator || '', ts, ts);
+  return getPersistentDeployTask(Number(result.lastInsertRowid));
+}
+
+/**
+ * 获取持久化部署任务。
+ * @param {number} id 任务 ID
+ * @returns {Promise<Object|null>} 任务记录
+ */
+export async function getPersistentDeployTask(id) {
+  const db = await getDeployDb();
+  const row = db.prepare('SELECT * FROM deploy_tasks WHERE id = ?').get(Number(id));
+  if (!row) return null;
+  return {
+    id: row.id,
+    targetId: row.target_id,
+    action: row.action,
+    status: row.status,
+    stage: row.stage || '',
+    percent: Number(row.percent || 0),
+    operator: row.operator || '',
+    resultRef: row.result_ref || '',
+    error: row.error || '',
+    startedAt: row.started_at,
+    heartbeatAt: row.heartbeat_at,
+    finishedAt: row.finished_at || '',
+  };
+}
+
+/**
+ * 更新持久化部署任务。
+ * @param {number} id 任务 ID
+ * @param {Object} patch 更新字段
+ * @returns {Promise<Object|null>} 任务记录
+ */
+export async function updatePersistentDeployTask(id, patch) {
+  const db = await getDeployDb();
+  const current = await getPersistentDeployTask(id);
+  if (!current) return null;
+  const status = patch.status ?? current.status;
+  const finishedAt = patch.finishedAt ?? (['success', 'failed', 'stopped', 'interrupted'].includes(status) ? now() : current.finishedAt);
+  db.prepare(
+    `UPDATE deploy_tasks
+     SET status = ?, stage = ?, percent = ?, result_ref = ?, error = ?, heartbeat_at = ?, finished_at = ?
+     WHERE id = ?`
+  ).run(
+    status,
+    patch.stage ?? current.stage,
+    Number(patch.percent ?? current.percent),
+    patch.resultRef ?? current.resultRef,
+    patch.error ?? current.error,
+    now(),
+    finishedAt || '',
+    Number(id)
+  );
+  return getPersistentDeployTask(id);
+}
+
+/**
+ * 创建后端版本记录。
+ * @param {Object} payload 版本参数
+ * @returns {Promise<Object>} 版本记录
+ */
+export async function createBackendRelease(payload) {
+  const db = await getDeployDb();
+  const ts = now();
+  const result = db
+    .prepare(
+      `INSERT INTO backend_releases
+       (target_id, record_id, release_name, release_dir, jar_name, artifact_sha256, commit_sha, status, is_current, created_at, activated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, '')`
+    )
+    .run(
+      Number(payload.targetId),
+      Number(payload.recordId || 0) || null,
+      payload.releaseName,
+      payload.releaseDir,
+      payload.jarName,
+      payload.artifactSha256,
+      payload.commitSha || '',
+      payload.status || 'uploaded',
+      ts
+    );
+  return getBackendRelease(Number(result.lastInsertRowid));
+}
+
+/**
+ * 获取后端版本记录。
+ * @param {number} id 版本 ID
+ * @returns {Promise<Object|null>} 版本记录
+ */
+export async function getBackendRelease(id) {
+  const db = await getDeployDb();
+  const row = db.prepare('SELECT * FROM backend_releases WHERE id = ?').get(Number(id));
+  if (!row) return null;
+  return {
+    id: row.id,
+    targetId: row.target_id,
+    recordId: Number(row.record_id || 0),
+    releaseName: row.release_name,
+    releaseDir: row.release_dir,
+    jarName: row.jar_name,
+    artifactSha256: row.artifact_sha256,
+    commitSha: row.commit_sha || '',
+    status: row.status,
+    isCurrent: Boolean(row.is_current),
+    createdAt: row.created_at,
+    activatedAt: row.activated_at || '',
+  };
+}
+
+/**
+ * 按发布记录获取后端版本。
+ * @param {number} recordId 发布记录 ID
+ * @returns {Promise<Object|null>} 后端版本
+ */
+export async function getBackendReleaseByRecordId(recordId) {
+  const db = await getDeployDb();
+  const row = db.prepare('SELECT id FROM backend_releases WHERE record_id = ? ORDER BY id DESC LIMIT 1').get(Number(recordId));
+  return row ? getBackendRelease(row.id) : null;
+}
+
+/**
+ * 更新后端版本状态。
+ * @param {number} id 版本 ID
+ * @param {string} status 状态
+ * @returns {Promise<Object|null>} 后端版本
+ */
+export async function updateBackendReleaseStatus(id, status) {
+  const db = await getDeployDb();
+  const result = db.prepare('UPDATE backend_releases SET status = ? WHERE id = ?').run(status, Number(id));
+  return result.changes ? getBackendRelease(id) : null;
+}
+
+/**
+ * 获取目标的当前后端版本。
+ * @param {number} targetId 目标 ID
+ * @returns {Promise<Object|null>} 当前版本
+ */
+export async function getCurrentBackendRelease(targetId) {
+  const db = await getDeployDb();
+  const row = db
+    .prepare('SELECT id FROM backend_releases WHERE target_id = ? AND is_current = 1 ORDER BY activated_at DESC, id DESC LIMIT 1')
+    .get(Number(targetId));
+  return row ? getBackendRelease(row.id) : null;
+}
+
+/**
+ * 激活后端版本。
+ * @param {number} releaseId 版本 ID
+ * @returns {Promise<Object|null>} 激活版本
+ */
+export async function activateBackendRelease(releaseId) {
+  const db = await getDeployDb();
+  const release = await getBackendRelease(releaseId);
+  if (!release) return null;
+  db.exec('BEGIN');
+  try {
+    db.prepare("UPDATE backend_releases SET is_current = 0, status = CASE WHEN status = 'active' THEN 'inactive' ELSE status END WHERE target_id = ?").run(release.targetId);
+    db.prepare("UPDATE backend_releases SET is_current = 1, status = 'active', activated_at = ? WHERE id = ?").run(now(), Number(releaseId));
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+  return getBackendRelease(releaseId);
+}
+
+/**
+ * 列出目标后端版本。
+ * @param {number} targetId 目标 ID
+ * @returns {Promise<Object[]>} 版本列表
+ */
+export async function listBackendReleases(targetId) {
+  const db = await getDeployDb();
+  const rows = db.prepare('SELECT id FROM backend_releases WHERE target_id = ? ORDER BY created_at DESC, id DESC').all(Number(targetId));
+  return Promise.all(rows.map((row) => getBackendRelease(row.id)));
+}
+
+/**
+ * 创建 OpenAPI 产物元数据。
+ * @param {Object} payload 产物参数
+ * @returns {Promise<Object>} 产物元数据
+ */
+export async function createOpenApiArtifact(payload) {
+  const db = await getDeployDb();
+  const ts = payload.generatedAt || now();
+  const result = db
+    .prepare(
+      `INSERT INTO openapi_artifacts
+       (target_id, branch, commit_sha, file_name, file_path, sha256, size_bytes, status, generated_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'success', ?, ?)`
+    )
+    .run(
+      Number(payload.targetId),
+      payload.branch,
+      payload.commitSha,
+      payload.fileName,
+      payload.filePath,
+      payload.sha256,
+      Number(payload.sizeBytes),
+      ts,
+      ts
+    );
+  return getOpenApiArtifact(Number(result.lastInsertRowid));
+}
+
+/**
+ * 获取 OpenAPI 产物元数据。
+ * @param {number} id 产物 ID
+ * @returns {Promise<Object|null>} 产物元数据
+ */
+export async function getOpenApiArtifact(id) {
+  const db = await getDeployDb();
+  const row = db
+    .prepare(
+      `SELECT a.*, t.project_name
+       FROM openapi_artifacts a LEFT JOIN deploy_targets t ON t.id = a.target_id
+       WHERE a.id = ?`
+    )
+    .get(Number(id));
+  if (!row) return null;
+  return {
+    id: row.id,
+    targetId: row.target_id,
+    projectName: row.project_name || '',
+    branch: row.branch,
+    commitSha: row.commit_sha,
+    fileName: row.file_name,
+    filePath: row.file_path,
+    sha256: row.sha256,
+    sizeBytes: Number(row.size_bytes || 0),
+    status: row.status,
+    generatedAt: row.generated_at,
+  };
+}
+
+/**
+ * 获取目标最新 OpenAPI 产物。
+ * @param {number} targetId 目标 ID
+ * @param {string} branch 分支
+ * @param {string} commitSha 可选提交 SHA
+ * @returns {Promise<Object|null>} 最新产物
+ */
+export async function getLatestOpenApiArtifact(targetId, branch = '', commitSha = '') {
+  const db = await getDeployDb();
+  const conditions = ['target_id = ?', "status = 'success'"];
+  const params = [Number(targetId)];
+  if (branch) {
+    conditions.push('branch = ?');
+    params.push(branch);
+  }
+  if (commitSha) {
+    conditions.push('commit_sha = ?');
+    params.push(commitSha);
+  }
+  const row = db
+    .prepare(`SELECT id FROM openapi_artifacts WHERE ${conditions.join(' AND ')} ORDER BY generated_at DESC, id DESC LIMIT 1`)
+    .get(...params);
+  return row ? getOpenApiArtifact(row.id) : null;
+}

@@ -69,11 +69,27 @@ export const DEPLOY_DB_PATH = process.env.DEPLOY_DB_PATH || path.join(DEPLOY_DAT
 /** 独立服务器部署日志目录 */
 export const DEPLOY_LOG_DIR = process.env.DEPLOY_LOG_DIR || path.join(DEPLOY_DATA_DIR, 'logs');
 
+/** OpenAPI 生成产物目录 */
+export const DEPLOY_OPENAPI_DIR = process.env.DEPLOY_OPENAPI_DIR || path.join(DEPLOY_DATA_DIR, 'openapi');
+
 /** 桌面端更新静态资源根目录。 */
 export const APP_UPDATE_DIR = process.env.APP_UPDATE_DIR || path.join(DEPLOY_DATA_DIR, 'app-updates');
 
 /** 部署凭据加密密钥，生产环境必须显式配置 */
-export const DEPLOY_SECRET_KEY = process.env.DEPLOY_SECRET_KEY || 'yuyan-ops-local-deploy-secret';
+export const DEFAULT_DEPLOY_SECRET_KEY = 'yuyan-ops-local-deploy-secret';
+export const DEPLOY_SECRET_KEY = process.env.DEPLOY_SECRET_KEY || DEFAULT_DEPLOY_SECRET_KEY;
+
+/** 非本机部署 API 访问令牌 */
+export const DEPLOY_API_TOKEN = String(process.env.DEPLOY_API_TOKEN || '').trim();
+
+/** 非本机模式允许的跨域来源 */
+export const DEPLOY_ALLOWED_ORIGINS = String(process.env.DEPLOY_ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((item) => item.trim())
+  .filter(Boolean);
+
+/** 服务监听地址，默认仅本机；服务器部署必须显式配置 HOST=0.0.0.0 */
+export const DEPLOY_BIND_HOST = String(process.env.HOST || '127.0.0.1').trim();
 
 /** 每个项目保留的发布记录数 */
 export const DEPLOY_RECORD_KEEP_PER_PROJECT = process.env.DEPLOY_RECORD_KEEP_PER_PROJECT ? Number(process.env.DEPLOY_RECORD_KEEP_PER_PROJECT) : 20;

@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "node scripts/copy-node.js --dev && tauri dev",
     "build": "node scripts/copy-node.js && tauri build",
-    "frontend:dev": "vite --host 127.0.0.1 --port 1420",
+    "frontend:dev": "concurrently -n \"api,web\" -c \"green,blue\" \"node server/index.mjs\" \"vite --host 127.0.0.1 --port 1420\"",
     "frontend:build": "node --input-type=commonjs -e \"if(!process.env.CI){require('child_process').execSync('npx vue-tsc --noEmit',{stdio:'inherit'})}\" && vite build",
     "frontend:build:ci": "vite build",
     "typecheck": "vue-tsc --noEmit",
@@ -46,6 +46,7 @@
     "@types/babel__traverse": "^7.28.0",
     "@vitejs/plugin-vue": "^6.0.1",
     "@vue/tsconfig": "^0.7.0",
+    "concurrently": "^10.0.3",
     "typescript": "~5.8.3",
     "unplugin-vue-components": "^32.1.0",
     "vite": "^7.1.2",

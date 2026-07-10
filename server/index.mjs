@@ -6,6 +6,7 @@
 
 import express from 'express';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import cors from 'cors';
 import history from 'connect-history-api-fallback';
 import compression from 'compression';
@@ -17,6 +18,11 @@ import {
   TEMPLATE_BRANCH,
   DEPLOY_DB_PATH,
   APP_UPDATE_DIR,
+  DEFAULT_DEPLOY_SECRET_KEY,
+  DEPLOY_ALLOWED_ORIGINS,
+  DEPLOY_API_TOKEN,
+  DEPLOY_BIND_HOST,
+  DEPLOY_SECRET_KEY,
 } from './config/constants.mjs';
 import { pullLatestTemplate, validateTemplate } from './services/template-service.mjs';
 import { startCleanupScheduler } from './utils/cleanup-scheduler.mjs';
@@ -32,14 +38,47 @@ let httpServer = null;
 let stopCleanupScheduler = null;
 let shuttingDown = false;
 const activeSockets = new Set();
+const isTauriSubprocess = process.env.IS_TAURI_SUBPROCESS === 'true';
+const isLoopbackBind = ['127.0.0.1', '::1', 'localhost'].includes(DEPLOY_BIND_HOST);
+
+/** 比较部署 API 令牌，避免普通字符串比较泄露时序差异。 */
+function isValidDeployToken(value) {
+  const actual = Buffer.from(String(value || ''));
+  const expected = Buffer.from(DEPLOY_API_TOKEN);
+  return actual.length === expected.length && actual.length > 0 && crypto.timingSafeEqual(actual, expected);
+}
+
+/** 非本机部署 API 鉴权中间件。 */
+function authorizeDeployApi(req, res, next) {
+  if (isLoopbackBind || isTauriSubprocess) return next();
+  const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  const token = String(req.headers['x-deploy-token'] || bearer);
+  if (!isValidDeployToken(token)) {
+    res.status(401).json({ success: false, error: '部署 API 鉴权失败' });
+    return;
+  }
+  next();
+}
 
 // 中间件配置
 app.use(
   cors({
-    origin: true,
+    origin(origin, callback) {
+      if (!origin) return callback(null, true);
+      const localOrigin = /^(?:https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?|https?:\/\/tauri\.localhost|tauri:\/\/localhost)$/i.test(origin);
+      const allowed = isLoopbackBind || isTauriSubprocess ? localOrigin : DEPLOY_ALLOWED_ORIGINS.includes(origin);
+      callback(allowed ? null : new Error('当前来源不允许调用雨燕服务'), allowed);
+    },
     credentials: true,
   })
 );
+app.use((error, _req, res, next) => {
+  if (error?.message === '当前来源不允许调用雨燕服务') {
+    res.status(403).json({ success: false, error: error.message });
+    return;
+  }
+  next(error);
+});
 app.use(express.json({ limit: '2mb' }));
 
 // 健康检查路由
@@ -72,7 +111,7 @@ app.use(
 app.use('/scaffold-api', scaffoldRoutes);
 
 // 独立服务器部署 API 路由
-app.use('/deploy-api', deployRoutes);
+app.use('/deploy-api', authorizeDeployApi, deployRoutes);
 
 // SPA history 回退（Express 5 兼容），排除接口与健康检查
 try {
@@ -271,7 +310,11 @@ async function bootstrap() {
     console.log(`🌿 模板分支: ${TEMPLATE_BRANCH}`);
     console.log('='.repeat(60));
 
-    const isTauriSubprocess = process.env.IS_TAURI_SUBPROCESS === 'true';
+    if (!isLoopbackBind && !isTauriSubprocess) {
+      if (!DEPLOY_API_TOKEN) throw new Error('服务绑定非本机地址时必须配置 DEPLOY_API_TOKEN');
+      if (DEPLOY_SECRET_KEY === DEFAULT_DEPLOY_SECRET_KEY) throw new Error('服务绑定非本机地址时禁止使用默认 DEPLOY_SECRET_KEY');
+      if (!DEPLOY_ALLOWED_ORIGINS.length) throw new Error('服务绑定非本机地址时必须配置 DEPLOY_ALLOWED_ORIGINS');
+    }
     if (!isTauriSubprocess) {
       await initializeTemplateRepository();
     }
@@ -286,7 +329,7 @@ async function bootstrap() {
     // 根据运行环境动态选择监听地址：
     // - Tauri 桌面端：绑定 127.0.0.1 防止局域网外部访问并规避 Windows 防火墙弹窗
     // - Docker/服务器端：绑定 0.0.0.0 允许容器外部（反向代理/Docker 网络）正常访问
-    const BIND_HOST = isTauriSubprocess ? '127.0.0.1' : '0.0.0.0';
+    const BIND_HOST = isTauriSubprocess ? '127.0.0.1' : DEPLOY_BIND_HOST;
     httpServer = app.listen(PORT, BIND_HOST, () => {
       console.log('='.repeat(60));
       console.log(`🚀 Scaffold 服务启动成功!`);

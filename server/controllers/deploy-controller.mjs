@@ -21,6 +21,21 @@ import {
   updateTarget,
   closeDeployDb,
   getDeployDb,
+  listJdks,
+  getJdk,
+  createJdk,
+  updateJdk,
+  deleteJdk,
+  createPersistentDeployTask,
+  updatePersistentDeployTask,
+  getLatestOpenApiArtifact,
+  getOpenApiArtifact,
+  listServerJavaRuntimes,
+  createServerJavaRuntime,
+  listDeployEnvironments,
+  createDeployEnvironment,
+  updateDeployEnvironment,
+  deleteDeployEnvironment,
 } from '../services/deploy-store.mjs';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
@@ -61,6 +76,17 @@ import {
   selectLatestCompatibleRelease,
   validateManifestAsset,
 } from '../services/app-update-service.mjs';
+import { generateTargetOpenApi, inspectBackendTarget } from '../services/backend-project-service.mjs';
+import {
+  getBackendServiceStatus,
+  readBackendServiceLogs,
+  runBackendServiceAction,
+} from '../services/backend-runtime-service.mjs';
+import {
+  scanServerJavaRuntimes,
+  testBuildJdk,
+  testServerJavaRuntime,
+} from '../services/backend-toolchain-service.mjs';
 
 /** GitHub 托管仓库名（主库或 Fork 库） */
 const GITHUB_REPO = process.env.GITHUB_REPOSITORY || 'ycwang-dev/yuyan';
@@ -82,7 +108,7 @@ class DeployStoppedError extends Error {
 const MAX_RUNNING_DEPLOY_TASKS = 5;
 
 /** 发布停止前允许中断的阶段 */
-const STOPPABLE_DEPLOY_STAGE_KEYS = new Set(['validate', 'clone', 'install', 'build']);
+const STOPPABLE_DEPLOY_STAGE_KEYS = new Set(['validate', 'clone', 'install', 'build', 'openapi']);
 
 /** 当前进程内正在执行的部署目标任务 */
 const deployTasksByTargetId = new Map();
@@ -90,16 +116,20 @@ const deployTasksByTargetId = new Map();
 /**
  * 创建部署目标任务。
  * @param {number} targetId - 部署目标 ID
- * @param {'deploy'|'rollback'|'undoRollback'} action - 任务类型
+ * @param {'deploy'|'rollback'|'undoRollback'|'openapi'|'start'|'stop'|'restart'} action - 任务类型
  * @param {Object} body - 请求体
  * @returns {Object} 任务上下文
  */
-function createDeployTask(targetId, action, body = {}) {
+async function createDeployTask(targetId, action, body = {}) {
+  const operator = String(body?.operator || '').trim() || '未知操作人';
+  const startedAt = new Date().toISOString();
+  const persistent = await createPersistentDeployTask({ targetId, action, operator, startedAt });
   return {
     targetId: Number(targetId),
     action,
-    operator: String(body?.operator || '').trim() || '未知操作人',
-    startedAt: new Date().toISOString(),
+    operator,
+    startedAt,
+    persistentId: persistent.id,
     controller: new AbortController(),
     events: [],
     subscribers: new Set(),
@@ -173,6 +203,14 @@ function createProgressEmitter(task) {
     if (event.type === 'error') task.error = event.message;
     task.events.push(event);
     task.subscribers.forEach((res) => writeProgressEvent(res, event));
+    if (event.type === 'stage') {
+      void updatePersistentDeployTask(task.persistentId, { stage: event.stage, percent: event.percent });
+    } else if (event.type === 'result') {
+      const resultRef = event.data?.id ? String(event.data.id) : '';
+      void updatePersistentDeployTask(task.persistentId, { resultRef, percent: 100 });
+    } else if (event.type === 'error') {
+      void updatePersistentDeployTask(task.persistentId, { error: event.message, stage: event.stage || task.currentStage });
+    }
     return event;
   };
 
@@ -224,13 +262,20 @@ function completeDeployTask(task) {
 function startDeployTask(task, runner, emit) {
   const promise = Promise.resolve()
     .then(runner)
-    .then((result) => {
+    .then(async (result) => {
       task.result = result;
+      const status = result?.status === 'stopped' ? 'stopped' : 'success';
+      await updatePersistentDeployTask(task.persistentId, {
+        status,
+        percent: 100,
+        resultRef: result?.id ? String(result.id) : '',
+      });
       return result;
     })
-    .catch((error) => {
+    .catch(async (error) => {
       task.error = error instanceof Error ? error.message : String(error);
       if (!hasTaskErrorEvent(task)) emit.error(task.error, task.currentStage);
+      await updatePersistentDeployTask(task.persistentId, { status: 'failed', error: task.error, stage: task.currentStage });
       throw error;
     })
     .finally(() => {
@@ -356,6 +401,9 @@ function validateServerPayload(body) {
   if (!body?.id && body?.authType === 'privateKey' && !body?.privateKey) throw new Error('SSH Key 认证必须填写私钥');
   if (String(body?.nginxTestCommand || 'nginx -t').includes('\n')) throw new Error('Nginx 校验命令不能包含换行');
   if (String(body?.nginxReloadCommand || 'nginx -s reload').includes('\n')) throw new Error('Nginx 重载命令不能包含换行');
+  if (String(body?.defaultBackendRoot || '').trim() && !String(body.defaultBackendRoot).trim().startsWith('/')) {
+    throw new Error('后端项目根目录必须使用服务器绝对路径');
+  }
 }
 
 /**
@@ -397,24 +445,38 @@ function validateNginxInstancePayload(body = {}) {
  */
 function validateTargetPayload(body) {
   if (body?.projectSource && !['ops', 'gitlab'].includes(String(body.projectSource))) throw new Error('项目来源不合法');
+  if (body?.projectType && !['frontend', 'backend'].includes(String(body.projectType))) throw new Error('项目类型不合法');
   if (!body?.projectId) throw new Error('项目 ID 必填');
   if (!body?.projectName) throw new Error('项目名称必填');
   if (!body?.repositoryUrl) throw new Error('仓库地址必填');
   if (!String(body?.defaultBranch || '').trim()) throw new Error('部署分支必填');
   if (!body?.serverId) throw new Error('部署服务器必填');
-  if (!body?.nginxInstanceId) throw new Error('Nginx 实例必填');
+  const isBackend = body?.projectType === 'backend';
+  if (!isBackend) {
+    if (!body?.nginxInstanceId) throw new Error('Nginx 实例必填');
+    if (!String(body?.nginxConfPath || '').trim()) throw new Error('Nginx 配置文件路径必填');
+    if (!String(body.nginxConfPath).trim().startsWith('/')) throw new Error('Nginx 配置文件路径必须使用服务器绝对路径');
+  }
   if (!String(body?.deployRoot || '').trim()) throw new Error('部署根目录必填');
-  if (!String(body?.nginxConfPath || '').trim()) throw new Error('Nginx 配置文件路径必填');
   if (!String(body.deployRoot).trim().startsWith('/')) throw new Error('部署根目录必须使用服务器绝对路径');
-  if (!String(body.nginxConfPath).trim().startsWith('/')) throw new Error('Nginx 配置文件路径必须使用服务器绝对路径');
   if (String(body.defaultBranch || '').includes('\n')) throw new Error('部署分支不能包含换行');
   if (String(body.artifactDir || '').includes('\n')) throw new Error('产物目录不能包含换行');
   if (String(body.preserveSubDirs || '').includes('\n')) throw new Error('保留子目录请使用逗号分隔，不能包含换行');
   if (body.uploadStrategy && !['cleanReplace', 'overlayKeepAssets'].includes(String(body.uploadStrategy))) throw new Error('资源上传策略不合法');
-  if (body.nginxSiteManaged) {
+  if (!isBackend && body.nginxSiteManaged) {
     const listenPort = Number(body.listenPort || 0);
     if (!Number.isInteger(listenPort) || listenPort < 1 || listenPort > 65535) throw new Error('托管站点监听端口必须在 1-65535 之间');
     if (String(body.serverName || '').includes('\n')) throw new Error('server_name 不能包含换行');
+  }
+  if (isBackend) {
+    const serverPort = Number(body.serverPort || 0);
+    if (!Number.isInteger(serverPort) || serverPort < 1 || serverPort > 65535) throw new Error('后端服务端口必须在 1-65535 之间');
+    if (!Number(body.buildJdkId || body.jdkId || 0)) throw new Error('本机构建 JDK 必填');
+    if (!String(body.runtimeJavaHome || '').trim().startsWith('/')) throw new Error('服务器运行 JAVA_HOME 必须使用绝对路径');
+    if (!normalizeCommandText(body.buildCommand)) throw new Error('Maven 构建命令必填');
+    if (!String(body.artifactPattern || body.artifactDir || '').trim()) throw new Error('Jar 产物路径必填');
+    if (body.processMode && !['pid', 'systemd', 'legacy'].includes(String(body.processMode))) throw new Error('进程管理模式不合法');
+    if (body.serviceRole && !['application', 'gateway'].includes(String(body.serviceRole))) throw new Error('后端服务角色不合法');
   }
 }
 
@@ -803,14 +865,15 @@ export async function handleListTargets(req, res) {
 export async function handleCreateTarget(req, res) {
   try {
     validateTargetPayload(req.body);
+    const isBackend = req.body.projectType === 'backend';
     res.json({
       success: true,
       data: await createTarget({
         ...req.body,
         projectSource: req.body.projectSource === 'gitlab' ? 'gitlab' : 'ops',
         envName: req.body.envName || '测试',
-        installCommand: normalizeCommandText(req.body.installCommand) || 'pnpm install',
-        buildCommand: normalizeCommandText(req.body.buildCommand) || 'pnpm build',
+        installCommand: normalizeCommandText(req.body.installCommand) || (isBackend ? '' : 'pnpm install'),
+        buildCommand: normalizeCommandText(req.body.buildCommand) || (isBackend ? '' : 'pnpm build'),
         artifactDir: req.body.artifactDir || '',
         preserveSubDirs: req.body.preserveSubDirs || '',
         nginxSiteManaged: Boolean(req.body.nginxSiteManaged),
@@ -831,12 +894,13 @@ export async function handleCreateTarget(req, res) {
 export async function handleUpdateTarget(req, res) {
   try {
     validateTargetPayload(req.body);
+    const isBackend = req.body.projectType === 'backend';
     const target = await updateTarget(Number(req.params.id), {
       ...req.body,
       projectSource: req.body.projectSource === 'gitlab' ? 'gitlab' : 'ops',
       envName: req.body.envName || '测试',
-      installCommand: normalizeCommandText(req.body.installCommand) || 'pnpm install',
-      buildCommand: normalizeCommandText(req.body.buildCommand) || 'pnpm build',
+      installCommand: normalizeCommandText(req.body.installCommand) || (isBackend ? '' : 'pnpm install'),
+      buildCommand: normalizeCommandText(req.body.buildCommand) || (isBackend ? '' : 'pnpm build'),
       artifactDir: req.body.artifactDir || '',
       preserveSubDirs: req.body.preserveSubDirs || '',
       nginxSiteManaged: Boolean(req.body.nginxSiteManaged),
@@ -956,7 +1020,7 @@ export async function handleDeployTarget(req, res) {
     return;
   }
 
-  const task = createDeployTask(targetId, 'deploy', req.body || {});
+  const task = await createDeployTask(targetId, 'deploy', req.body || {});
   const emit = createProgressEmitter(task);
   deployTasksByTargetId.set(targetId, task);
   startDeployTask(task, () => deployTarget(targetId, { ...(req.body || {}), signal: task.controller.signal }, emit), emit);
@@ -994,7 +1058,7 @@ export async function handleStopDeployTarget(req, res) {
     sendError(res, new Error('该部署目标当前没有运行中的发布任务'), 404);
     return;
   }
-  if (task.action !== 'deploy') {
+  if (!['deploy', 'openapi'].includes(task.action)) {
     sendError(res, new Error('当前任务不支持停止'), 400);
     return;
   }
@@ -1041,7 +1105,7 @@ async function handleRestoreRecordTask(req, res, action, runner) {
   }
 
   const streamMode = isStreamRequest(req);
-  const task = createDeployTask(sourceRecord.targetId, action, req.body || {});
+  const task = await createDeployTask(sourceRecord.targetId, action, req.body || {});
   const emit = createProgressEmitter(task);
   deployTasksByTargetId.set(sourceRecord.targetId, task);
   startDeployTask(task, () => runner(recordId, req.body || {}, emit), emit);
@@ -1660,5 +1724,288 @@ export async function handleDownloadAppUpdateAsset(req, res) {
       errMsg = '中转下载失败，连接 GitHub 网络超时';
     }
     sendError(res, new Error(errMsg), status);
+  }
+}
+
+/**
+ * 执行目标级通用任务并复用发布进度协议。
+ * @param {Object} req 请求
+ * @param {Object} res 响应
+ * @param {number} targetId 目标 ID
+ * @param {string} action 任务动作
+ * @param {(task: Object, emit: Object) => Promise<Object>} runner 执行器
+ */
+async function handleTargetOperationTask(req, res, targetId, action, runner) {
+  if (!targetId) {
+    sendError(res, new Error('部署目标 ID 无效'), 400);
+    return;
+  }
+  const runningTask = deployTasksByTargetId.get(targetId);
+  const streamMode = isStreamRequest(req);
+  if (runningTask) {
+    if (runningTask.action !== action) {
+      sendDeployTargetBusy(res, runningTask);
+      return;
+    }
+    await sendDeployTaskProgress(req, res, runningTask, streamMode);
+    return;
+  }
+  if (deployTasksByTargetId.size >= MAX_RUNNING_DEPLOY_TASKS) {
+    sendDeployLimitConflict(res);
+    return;
+  }
+  const task = await createDeployTask(targetId, action, req.body || {});
+  const emit = createProgressEmitter(task);
+  deployTasksByTargetId.set(targetId, task);
+  startDeployTask(task, async () => {
+    const result = await runner(task, emit);
+    emit.result(result);
+    return result;
+  }, emit);
+  if (!streamMode) {
+    try {
+      res.json({ success: true, data: await task.promise });
+    } catch (error) {
+      sendError(res, error, 400);
+    }
+    return;
+  }
+  await sendDeployTaskProgress(req, res, task, true);
+}
+
+/** 检测后端项目配置。 */
+export async function handleInspectBackendTarget(req, res) {
+  try {
+    const targetId = Number(req.params.id);
+    const data = await inspectBackendTarget(targetId, {
+      branch: req.body?.branch,
+      gitlabToken: getGitlabTokenFromRequest(req),
+      log: () => {},
+    });
+    res.json({ success: true, data });
+  } catch (error) {
+    sendError(res, error, 400);
+  }
+}
+
+/** 生成目标 OpenAPI。 */
+export async function handleGenerateTargetOpenApi(req, res) {
+  const targetId = Number(req.params.id);
+  await handleTargetOperationTask(req, res, targetId, 'openapi', async (task, emit) => {
+    emit.stage('clone', 10, '同步 OpenAPI 工作区', req.body?.branch || '目标默认分支');
+    const artifact = await generateTargetOpenApi(targetId, {
+      branch: req.body?.branch,
+      force: Boolean(req.body?.force),
+      gitlabToken: getGitlabTokenFromRequest(req),
+      signal: task.controller.signal,
+      log: (level, message, stage) => emit.log(level, message, stage),
+    });
+    emit.stage('finish', 100, 'OpenAPI 生成完成', artifact.fileName);
+    return artifact;
+  });
+}
+
+/** 获取目标最新 OpenAPI。 */
+export async function handleGetLatestTargetOpenApi(req, res) {
+  try {
+    const artifact = await getLatestOpenApiArtifact(Number(req.params.id), String(req.query?.branch || ''), String(req.query?.commitSha || ''));
+    if (!artifact) return sendError(res, new Error('当前目标暂无 OpenAPI 产物'), 404);
+    res.json({ success: true, data: artifact });
+  } catch (error) {
+    sendError(res, error, 400);
+  }
+}
+
+/** 读取 OpenAPI 内容。 */
+export async function handleReadOpenApiArtifact(req, res) {
+  try {
+    const artifact = await getOpenApiArtifact(Number(req.params.id));
+    if (!artifact) return sendError(res, new Error('OpenAPI 产物不存在'), 404);
+    const content = await fs.readFile(artifact.filePath, 'utf8');
+    res.type('application/json').send(content);
+  } catch (error) {
+    sendError(res, error, 404);
+  }
+}
+
+/** 下载 OpenAPI 文件。 */
+export async function handleDownloadOpenApiArtifact(req, res) {
+  try {
+    const artifact = await getOpenApiArtifact(Number(req.params.id));
+    if (!artifact) return sendError(res, new Error('OpenAPI 产物不存在'), 404);
+    res.download(artifact.filePath, artifact.fileName);
+  } catch (error) {
+    sendError(res, error, 404);
+  }
+}
+
+/** 获取后端服务真实状态。 */
+export async function handleGetBackendServiceStatus(req, res) {
+  try {
+    res.json({ success: true, data: await getBackendServiceStatus(Number(req.params.id)) });
+  } catch (error) {
+    sendError(res, error, 400);
+  }
+}
+
+/** 执行后端服务启停动作。 */
+export async function handleRunBackendServiceAction(req, res) {
+  const targetId = Number(req.params.id);
+  const action = String(req.params.action || '');
+  if (!['start', 'stop', 'restart'].includes(action)) {
+    sendError(res, new Error('不支持的服务操作'), 400);
+    return;
+  }
+  await handleTargetOperationTask(req, res, targetId, action, async (task, emit) => {
+    emit.stage(action, 30, `${action} 后端服务`, '执行受控进程操作');
+    const result = await runBackendServiceAction(targetId, action, {
+      signal: task.controller.signal,
+      log: (level, message, stage) => emit.log(level, message, stage),
+    });
+    emit.stage('finish', 100, '服务操作完成', result.status);
+    return result;
+  });
+}
+
+/** 读取后端服务日志。 */
+export async function handleReadBackendServiceLogs(req, res) {
+  try {
+    res.json({ success: true, data: await readBackendServiceLogs(Number(req.params.id), Number(req.query?.lines || 500)) });
+  } catch (error) {
+    sendError(res, error, 400);
+  }
+}
+
+/** 检测本机构建 JDK。 */
+export async function handleTestJdk(req, res) {
+  try {
+    res.json({ success: true, data: await testBuildJdk(Number(req.params.id)) });
+  } catch (error) {
+    sendError(res, error, 400);
+  }
+}
+
+/** 获取服务器 Java 运行时。 */
+export async function handleListServerJavaRuntimes(req, res) {
+  try {
+    res.json({ success: true, data: await listServerJavaRuntimes(Number(req.params.id)) });
+  } catch (error) {
+    sendError(res, error, 400);
+  }
+}
+
+/** 新增服务器 Java 运行时。 */
+export async function handleCreateServerJavaRuntime(req, res) {
+  try {
+    res.json({ success: true, data: await createServerJavaRuntime(Number(req.params.id), req.body || {}) });
+  } catch (error) {
+    sendError(res, error, 400);
+  }
+}
+
+/** 扫描服务器 Java 运行时。 */
+export async function handleScanServerJavaRuntimes(req, res) {
+  try {
+    res.json({ success: true, data: await scanServerJavaRuntimes(Number(req.params.id)) });
+  } catch (error) {
+    sendError(res, error, 400);
+  }
+}
+
+/** 检测服务器 Java 运行时。 */
+export async function handleTestServerJavaRuntime(req, res) {
+  try {
+    res.json({ success: true, data: await testServerJavaRuntime(Number(req.params.id)) });
+  } catch (error) {
+    sendError(res, error, 400);
+  }
+}
+
+/** 获取环境依赖配置列表。 */
+export async function handleListDeployEnvironments(_req, res) {
+  try {
+    res.json({ success: true, data: await listDeployEnvironments() });
+  } catch (error) {
+    sendError(res, error, 400);
+  }
+}
+
+/** 新增环境依赖配置。 */
+export async function handleCreateDeployEnvironment(req, res) {
+  try {
+    res.json({ success: true, data: await createDeployEnvironment(req.body || {}) });
+  } catch (error) {
+    sendError(res, error, 400);
+  }
+}
+
+/** 更新环境依赖配置。 */
+export async function handleUpdateDeployEnvironment(req, res) {
+  try {
+    const data = await updateDeployEnvironment(Number(req.params.id), req.body || {});
+    if (!data) return sendError(res, new Error('环境依赖配置不存在'), 404);
+    res.json({ success: true, data });
+  } catch (error) {
+    sendError(res, error, 400);
+  }
+}
+
+/** 删除环境依赖配置。 */
+export async function handleDeleteDeployEnvironment(req, res) {
+  try {
+    res.json({ success: true, data: await deleteDeployEnvironment(Number(req.params.id)) });
+  } catch (error) {
+    sendError(res, error, 400);
+  }
+}
+
+/**
+ * 获取 JDK 列表
+ */
+export async function handleListJdks(req, res) {
+  try {
+    res.json({ success: true, data: await listJdks() });
+  } catch (error) {
+    sendError(res, error);
+  }
+}
+
+/**
+ * 新增 JDK 配置
+ */
+export async function handleCreateJdk(req, res) {
+  try {
+    const data = await createJdk(req.body || {});
+    res.json({ success: true, data });
+  } catch (error) {
+    sendError(res, error, 400);
+  }
+}
+
+/**
+ * 更新 JDK 配置
+ */
+export async function handleUpdateJdk(req, res) {
+  try {
+    const id = Number(req.params.id);
+    if (!id) throw new Error('无效的 JDK ID');
+    const data = await updateJdk(id, req.body || {});
+    res.json({ success: true, data });
+  } catch (error) {
+    sendError(res, error, 400);
+  }
+}
+
+/**
+ * 删除 JDK 配置
+ */
+export async function handleDeleteJdk(req, res) {
+  try {
+    const id = Number(req.params.id);
+    if (!id) throw new Error('无效的 JDK ID');
+    const data = await deleteJdk(id);
+    res.json({ success: true, data });
+  } catch (error) {
+    sendError(res, error, 400);
   }
 }
