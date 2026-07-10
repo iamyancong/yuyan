@@ -66,7 +66,7 @@ app.use(
     origin(origin, callback) {
       if (!origin) return callback(null, true);
       const localOrigin = /^(?:https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?|https?:\/\/tauri\.localhost|tauri:\/\/localhost)$/i.test(origin);
-      const allowed = isLoopbackBind || isTauriSubprocess ? localOrigin : DEPLOY_ALLOWED_ORIGINS.includes(origin);
+      const allowed = localOrigin || DEPLOY_ALLOWED_ORIGINS.includes(origin);
       callback(allowed ? null : new Error('当前来源不允许调用雨燕服务'), allowed);
     },
     credentials: true,
