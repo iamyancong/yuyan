@@ -82,6 +82,7 @@ jobs:
           echo "VITE_APP_SERVER_URL=${{ secrets.VITE_APP_SERVER_URL }}" > .env
           echo "VITE_TEST_DB_SERVER_URL=${{ secrets.VITE_TEST_DB_SERVER_URL }}" >> .env
           echo "VITE_GITLAB_HOST=${{ secrets.VITE_GITLAB_HOST }}" >> .env
+          echo "VITE_DEPLOY_API_TOKEN=${{ secrets.VITE_DEPLOY_API_TOKEN }}" >> .env
         shell: bash
 
       - name: Install Frontend Dependencies
