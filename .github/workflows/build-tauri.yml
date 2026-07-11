@@ -1,0 +1,178 @@
+name: Build Tauri App
+
+on:
+  push:
+    branches:
+      - feat/github-actions-build
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  packages: read
+
+jobs:
+  prep-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.calc.outputs.version }}
+      tag: ${{ steps.calc.outputs.tag }}
+      prerelease: ${{ steps.calc.outputs.prerelease }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Calculate Version
+        id: calc
+        run: node scripts/bump-version.js
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    needs: prep-version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            artifact: yuyan-windows-x86_64
+            update_target: windows-x86_64
+            bundle_path: src-tauri/target/release/bundle/nsis/*.exe
+          - platform: macos-15
+            artifact: yuyan-macos-aarch64
+            update_target: darwin-aarch64
+            bundle_path: src-tauri/target/release/bundle/dmg/*.dmg
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Install Pnpm
+        run: npm install -g pnpm@9
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Apply Bumped Version
+        run: node scripts/apply-version.js ${{ needs.prep-version.outputs.version }}
+
+      - name: Create Env File
+        run: |
+          echo "VITE_APP_SERVER_URL=${{ secrets.VITE_APP_SERVER_URL }}" > .env
+          echo "VITE_TEST_DB_SERVER_URL=${{ secrets.VITE_TEST_DB_SERVER_URL }}" >> .env
+          echo "VITE_GITLAB_HOST=${{ secrets.VITE_GITLAB_HOST }}" >> .env
+          echo "VITE_DEPLOY_API_TOKEN=${{ secrets.VITE_DEPLOY_API_TOKEN }}" >> .env
+        shell: bash
+
+      - name: Install Frontend Dependencies
+        run: pnpm install --no-frozen-lockfile
+        env:
+          GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+
+      - name: Build Tauri App
+        shell: bash
+        run: |
+          # 从 VITE_APP_SERVER_URL 提取 host 和 port 并传入 Rust 编译
+          URL="${{ secrets.VITE_APP_SERVER_URL }}"
+          if [ -n "$URL" ]; then
+            if [[ "$URL" == https://* ]]; then SCHEME=https; else SCHEME=http; fi
+            HOST_PORT=${URL#*//}
+            HOST=${HOST_PORT%:*}
+            PORT=${HOST_PORT#*:}
+            if [ "$PORT" = "$HOST" ]; then
+              if [ "$SCHEME" = "https" ]; then PORT=443; else PORT=80; fi
+            fi
+            echo "Building with Rust UPDATE_SERVER_SCHEME=$SCHEME UPDATE_SERVER_HOST=$HOST and UPDATE_SERVER_PORT=$PORT"
+            UPDATE_SERVER_SCHEME="$SCHEME" UPDATE_SERVER_HOST="$HOST" UPDATE_SERVER_PORT="$PORT" pnpm run build
+          else
+            echo "Warning: VITE_APP_SERVER_URL is empty, building with defaults"
+            pnpm run build
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          NODE_OPTIONS: '--max-old-space-size=4096'
+
+      - name: Prepare Update Artifact
+        shell: bash
+        run: |
+          mkdir -p "update-artifact/${{ matrix.update_target }}"
+          cp ${{ matrix.bundle_path }} "update-artifact/${{ matrix.update_target }}/"
+
+      - name: Upload Update Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: update-artifact
+
+  release:
+    needs: [prep-version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Download Windows Artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: yuyan-windows-x86_64
+          path: ./dist-release
+
+      - name: Download macOS ARM Artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: yuyan-macos-aarch64
+          path: ./dist-release
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.prep-version.outputs.tag }}
+          name: yuyan ${{ needs.prep-version.outputs.tag }}
+          draft: false
+          prerelease: ${{ needs.prep-version.outputs.prerelease == 'true' }}
+          files: |
+            ./dist-release/**/*.exe
+            ./dist-release/**/*.dmg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Commit and Push version bump
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          node scripts/apply-version.js ${{ needs.prep-version.outputs.version }}
+          git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
+          if git diff --cached --quiet; then
+            echo "No version changes to commit."
+          else
+            git commit -m "chore(release): bump version to ${{ needs.prep-version.outputs.version }} [skip ci]"
+            git push origin HEAD:feat/github-actions-build
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

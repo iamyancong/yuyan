@@ -1,0 +1,15 @@
+{
+  "extends": "@vue/tsconfig/tsconfig.dom.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "@yss-ui/components": ["node_modules/@ycwang-dev/components"],
+      "@yss-ui/hooks": ["node_modules/@ycwang-dev/hooks"],
+      "@yss-ui/utils": ["node_modules/@ycwang-dev/utils"]
+    }
+  },
+  "include": ["src/**/*", "src/**/*.vue"],
+  "exclude": ["node_modules", "dist"],
+  "files": []
+}

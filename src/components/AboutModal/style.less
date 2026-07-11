@@ -1,0 +1,294 @@
+/**
+ * 关于雨燕组件 - 3D C4D 玻璃拟态炫光样式
+ */
+
+/* 极光呼吸灯关键帧 */
+@keyframes about-glow-pulse {
+  0%, 100% {
+    opacity: 0.35;
+    transform: scale(0.96) rotate(0deg);
+    filter: blur(12px);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(1.05) rotate(180deg);
+    filter: blur(16px);
+  }
+}
+
+/* 3D 图标浮动微动效 */
+@keyframes about-logo-float {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-4px) rotate(1.5deg);
+  }
+}
+
+/* 用外层包围类名，安全覆盖 AntDV Modal 默认样式，不污染全局 */
+.yuyan-about-modal-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  .ant-modal {
+    padding-bottom: 0 !important;
+    top: 0 !important;
+  }
+
+  .ant-modal-content {
+    background: 
+      linear-gradient(135deg, var(--glass-bg-heavy) 0%, var(--glass-bg) 100%) padding-box,
+      linear-gradient(135deg, rgba(124, 58, 237, 0.45) 0%, rgba(236, 72, 153, 0.25) 50%, rgba(59, 130, 246, 0.35) 100%) border-box !important;
+    border: 1.5px solid transparent !important;
+    border-radius: 24px !important;
+    backdrop-filter: blur(24px) saturate(1.8) !important;
+    -webkit-backdrop-filter: blur(24px) saturate(1.8) !important;
+    box-shadow: 
+      0 20px 60px rgba(31, 38, 135, 0.15),
+      var(--glass-inset-shadow),
+      inset 0 -2px 4px rgba(124, 58, 237, 0.05) !important;
+    overflow: hidden;
+    position: relative;
+    padding: 24px 32px !important;
+
+    /* 顶部高光微反射面 */
+    &::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 35%;
+      background: linear-gradient(to bottom, var(--glass-bg) 0%, transparent 100%);
+      pointer-events: none;
+      z-index: 1;
+    }
+  }
+
+  /* 隐藏自带关闭按钮，采用我们设计的底部及卡片内精美关闭逻辑 */
+  .ant-modal-close {
+    display: none !important;
+  }
+
+  .ant-modal-body {
+    padding: 0 !important;
+  }
+}
+
+/* 亮暗色适配通用背景和文字色 */
+.about-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  position: relative;
+  z-index: 2;
+
+  /* C4D 3D 浮雕 Logo 容器 */
+  .about-logo-wrapper {
+    position: relative;
+    width: 76px;
+    height: 76px;
+    margin: 16px auto 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 20px;
+    background: var(--glass-bg);
+    border: 1.2px solid var(--glass-border);
+    box-shadow: 
+      0 10px 25px rgba(124, 58, 237, 0.12),
+      var(--glass-inset-shadow);
+    animation: about-logo-float 4s ease-in-out infinite;
+
+    /* 后置极光炫彩发光背景 */
+    &::before {
+      content: '';
+      position: absolute;
+      inset: -6px;
+      border-radius: 26px;
+      background: linear-gradient(135deg, #7c3aed 0%, #ec4899 50%, #3b82f6 100%);
+      filter: blur(12px);
+      z-index: -1;
+      animation: about-glow-pulse 5s ease-in-out infinite;
+    }
+
+    .about-logo-img {
+      width: 48px;
+      height: 48px;
+      object-fit: contain;
+      filter: drop-shadow(0 4px 8px rgba(124, 58, 237, 0.25));
+    }
+  }
+
+  /* 标题与描述信息 */
+  .about-title {
+    font-size: 20px;
+    font-weight: 800;
+    background: linear-gradient(135deg, var(--text-color) 30%, var(--text-color-secondary) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 6px;
+    letter-spacing: 0.5px;
+  }
+
+  .about-desc {
+    font-size: 13px;
+    color: var(--text-color-secondary);
+    font-weight: 500;
+    margin-bottom: 24px;
+    opacity: 0.85;
+  }
+
+  /* 诊断信息面板切换按钮 */
+  .diagnostic-trigger-wrapper {
+    margin-bottom: 12px;
+    
+    .diagnostic-btn {
+      font-size: 12px;
+      font-weight: 600;
+      color: #7c3aed;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      cursor: pointer;
+      padding: 4px 10px;
+      border-radius: 6px;
+      transition: all 0.2s ease;
+      background: rgba(124, 58, 237, 0.05);
+
+      &:hover {
+        background: rgba(124, 58, 237, 0.1);
+        color: #6d28d9;
+      }
+      
+      .arrow-icon {
+        font-size: 10px;
+        transition: transform 0.2s ease;
+        
+        &.is-expanded {
+          transform: rotate(90deg);
+        }
+      }
+    }
+  }
+
+  /* 可折叠诊断面板 */
+  .diagnostic-panel {
+    width: 100%;
+    overflow: hidden;
+    transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1), margin-bottom 0.3s ease;
+    max-height: 0;
+    
+    &.is-expanded {
+      max-height: 220px;
+      margin-bottom: 20px;
+    }
+
+    .diagnostic-code-box {
+      background: var(--bg-color-elevated);
+      border: 1px solid var(--border-color-split);
+      border-radius: 14px;
+      padding: 12px 18px;
+      font-family: 'Outfit', 'Inter', 'SFMono-Regular', Consolas, monospace;
+      font-size: 12px;
+      color: var(--text-color);
+      line-height: 1.9;
+      text-align: left;
+      position: relative;
+      box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.02);
+
+      .info-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        border-bottom: 1px dashed var(--border-color-split);
+        padding: 2px 0;
+
+        &:last-child {
+          border-bottom: none;
+        }
+
+        .label {
+          color: var(--text-color-secondary);
+          font-weight: 500;
+          flex: 0 0 72px;
+        }
+
+        .value {
+          font-weight: 600;
+          color: var(--text-color);
+          flex: 1;
+          min-width: 0;
+          overflow-wrap: anywhere;
+          word-break: normal;
+          white-space: normal;
+          text-align: right;
+        }
+      }
+    }
+  }
+
+  /* 恒生版权声名 */
+  .about-copyright {
+    font-size: 11px;
+    color: var(--text-color-tertiary);
+    margin-bottom: 24px;
+    line-height: 1.4;
+  }
+
+  /* 底部操作按钮栏 */
+  .about-actions {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    width: 100%;
+
+    .btn-copy {
+      border: 1px solid rgba(124, 58, 237, 0.3);
+      background: rgba(124, 58, 237, 0.05);
+      color: #7c3aed;
+      border-radius: 12px;
+      font-weight: 600;
+      height: 36px;
+      padding: 0 18px;
+      transition: all 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
+
+      &:hover {
+        background: rgba(124, 58, 237, 0.1);
+        border-color: #7c3aed;
+        transform: translateY(-1px);
+      }
+      
+      &:active {
+        transform: translateY(0.5px);
+      }
+    }
+
+    .btn-close {
+      background: linear-gradient(135deg, #7c3aed 0%, #a855f7 100%);
+      color: #ffffff !important;
+      border: none;
+      border-radius: 12px;
+      font-weight: 600;
+      height: 36px;
+      padding: 0 24px;
+      box-shadow: 0 4px 12px rgba(124, 58, 237, 0.2);
+      transition: all 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
+
+      &:hover {
+        background: linear-gradient(135deg, #8b5cf6 0%, #c084fc 100%);
+        box-shadow: 0 6px 16px rgba(124, 58, 237, 0.3);
+        transform: translateY(-1px);
+      }
+
+      &:active {
+        transform: translateY(0.5px);
+        box-shadow: 0 2px 4px rgba(124, 58, 237, 0.1);
+      }
+    }
+  }
+}

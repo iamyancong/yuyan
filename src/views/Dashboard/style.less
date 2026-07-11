@@ -1,0 +1,262 @@
+.dashboard-container {
+  padding: 24px;
+  height: 100%;
+  overflow-y: auto;
+  background: var(--bg-color-base, #0f172a);
+  color: var(--text-color, #f8fafc);
+}
+
+.dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+
+  h1 {
+    font-size: 24px;
+    font-weight: 700;
+    margin: 0;
+    background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 50%, #ec4899 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+}
+
+.global-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.vpn-cards-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-bottom: 24px;
+
+  @media (max-width: 768px) {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* =====================================================
+ * 🔮 C4D风格高级 3D 玻璃拟态 (Glassmorphism) 卡片
+ * ===================================================== */
+.vpn-glass-card {
+  background: linear-gradient(135deg, rgba(30, 41, 59, 0.45) 0%, rgba(15, 23, 42, 0.3) 100%) padding-box,
+              linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.03) 100%) border-box;
+  border: 1px solid transparent;
+  border-radius: 24px;
+  padding: 28px;
+  backdrop-filter: blur(20px) saturate(1.6);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25),
+              inset 0 1px 1px rgba(255, 255, 255, 0.05);
+  position: relative;
+  overflow: hidden;
+  transition: all 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
+
+  &.status-connecting {
+    background: linear-gradient(135deg, rgba(30, 41, 59, 0.5) 0%, rgba(15, 23, 42, 0.35) 100%) padding-box,
+                linear-gradient(90deg, #3b82f6, #8b5cf6, #3b82f6) border-box;
+    border-width: 1.5px;
+    animation: border-glow-flow 3s linear infinite;
+  }
+
+  &.status-connected {
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3),
+                0 0 30px rgba(99, 102, 241, 0.15);
+  }
+
+  &.type-fortinet.status-connected {
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.06) 0%, rgba(30, 41, 59, 0.5) 100%) padding-box,
+                linear-gradient(135deg, rgba(16, 185, 129, 0.4) 0%, rgba(255, 255, 255, 0.05) 100%) border-box;
+  }
+
+  &.type-atrust.status-connected {
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.06) 0%, rgba(30, 41, 59, 0.5) 100%) padding-box,
+                linear-gradient(135deg, rgba(59, 130, 246, 0.4) 0%, rgba(255, 255, 255, 0.05) 100%) border-box;
+  }
+}
+
+@keyframes border-glow-flow {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.card-header-area {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.card-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+
+  h2 {
+    font-size: 20px;
+    font-weight: 700;
+    margin: 0;
+    color: #ffffff;
+  }
+}
+
+.card-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+  color: #94a3b8;
+
+  .vpn-glass-card.type-fortinet & {
+    color: #10b981;
+    background: rgba(16, 185, 129, 0.1);
+  }
+
+  .vpn-glass-card.type-atrust & {
+    color: #3b82f6;
+    background: rgba(59, 130, 246, 0.1);
+  }
+}
+
+.status-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 20px;
+  background: rgba(0, 0, 0, 0.15);
+  color: #94a3b8;
+
+  &.connected {
+    color: #10b981;
+    background: rgba(16, 185, 129, 0.12);
+  }
+
+  &.connecting {
+    color: #fbbf24;
+    background: rgba(251, 191, 36, 0.12);
+  }
+
+  &.error {
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.12);
+  }
+}
+
+/* 呼吸 LED 灯 */
+.led-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #94a3b8;
+  display: inline-block;
+
+  &.connected {
+    background: #10b981;
+    box-shadow: 0 0 10px #10b981;
+    animation: led-glow 2s ease-in-out infinite;
+  }
+
+  &.connecting {
+    background: #fbbf24;
+    box-shadow: 0 0 10px #fbbf24;
+    animation: led-glow 1s ease-in-out infinite;
+  }
+
+  &.error {
+    background: #ef4444;
+    box-shadow: 0 0 10px #ef4444;
+  }
+}
+
+@keyframes led-glow {
+  0%, 100% {
+    opacity: 0.5;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+
+.card-body-area {
+  margin-bottom: 24px;
+}
+
+.stat-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  font-size: 14px;
+
+  &:last-child {
+    border-bottom: none;
+  }
+
+  .stat-label {
+    color: #94a3b8;
+  }
+
+  .stat-value {
+    font-weight: 600;
+    color: #f1f5f9;
+
+    &.mono {
+      font-family: 'Outfit', 'Inter', monospace;
+    }
+  }
+}
+
+.card-actions-area {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* 极光背景流体微光 */
+.card-aurora-glow {
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: radial-gradient(circle, rgba(99, 102, 241, 0.08) 0%, transparent 60%);
+  pointer-events: none;
+  z-index: 0;
+
+  .type-fortinet.status-connected & {
+    background: radial-gradient(circle, rgba(16, 185, 129, 0.08) 0%, transparent 60%);
+  }
+
+  .type-atrust.status-connected & {
+    background: radial-gradient(circle, rgba(59, 130, 246, 0.08) 0%, transparent 60%);
+  }
+}
+
+/* Sudo 校验输入框弹窗 */
+.sudo-dialog-body {
+  padding: 12px 0;
+
+  .alert-tip {
+    margin-bottom: 16px;
+  }
+}

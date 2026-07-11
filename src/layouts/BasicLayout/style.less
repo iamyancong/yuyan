@@ -1,0 +1,23 @@
+.yuyan-layout-content {
+  position: relative;
+  margin: var(--spacing-md);
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.route-loading-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 96px;
+  background: var(--loading-mask-bg);
+  backdrop-filter: blur(2px);
+}
+
+:deep(.ant-layout-header) {
+  height: 56px;
+}

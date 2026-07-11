@@ -1,0 +1,399 @@
+/* =====================================================
+ * 🔮 C4D风格高级 3D 玻璃拟态 (Glassmorphism) 更新胶囊
+ * 设计语言: C4D 三维质感、水晶玻璃、晶莹剔透、温润细腻
+ * ===================================================== */
+
+// 定义调色板，改为使用全局主题色 CSS 变量
+@purple-primary: var(--primary-color);
+@purple-light: var(--primary-color-hover);
+@purple-dark: var(--primary-color);
+@purple-shadow: var(--primary-color-light);
+
+/* ---------- 根容器 ---------- */
+.update-capsule {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 14px;
+  border-radius: 14px; // 胶囊圆角
+  font-size: 12px;
+  font-weight: 600;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  letter-spacing: 0.2px;
+  cursor: pointer;
+  user-select: none;
+  overflow: hidden;
+  transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  
+  // 🔮 3D 玻璃拟态核心：双背景层实现渐变边框与毛玻璃本体
+  background: 
+    linear-gradient(135deg, rgba(255, 255, 255, 0.82) 0%, rgba(245, 243, 255, 0.5) 100%) padding-box,
+    linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, var(--primary-color-light) 50%, var(--primary-color-light) 100%) border-box;
+  border: 1.5px solid transparent;
+  
+  // 毛玻璃模糊
+  backdrop-filter: blur(12px) saturate(1.8);
+  -webkit-backdrop-filter: blur(12px) saturate(1.8);
+
+  // 3D 阴影：多重阴影塑造立体厚度
+  box-shadow:
+    0 4px 10px var(--primary-color-lighter),      // 外层软投影
+    0 1px 2px rgba(0, 0, 0, 0.04),             // 边缘硬投影
+    inset 0 1px 1px rgba(255, 255, 255, 0.9),  // 顶部内高光（塑造玻璃厚度）
+    inset 0 -2px 3px var(--primary-color-lighter); // 底部阴影
+
+  // 🔮 玻璃表面光泽层
+  .glass-glare {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 50%;
+    background: linear-gradient(to bottom, rgba(255, 255, 255, 0.45) 0%, rgba(255, 255, 255, 0) 100%);
+    border-radius: 14px 14px 0 0;
+    pointer-events: none;
+    z-index: 3;
+  }
+
+  // 🔮 Hover 时斜切光效掠过
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 60%;
+    height: 100%;
+    background: linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0) 0%,
+      rgba(255, 255, 255, 0.55) 50%,
+      rgba(255, 255, 255, 0) 100%
+    );
+    transform: skewX(-25deg);
+    z-index: 4;
+    pointer-events: none;
+  }
+
+  // 物理状态 LED 呼吸灯（3D果冻发光体）
+  .capsule-led {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    margin-right: 8px;
+    position: relative;
+    z-index: 4;
+    transition: all 0.3s ease;
+    box-shadow: 
+      inset 0 1px 1px rgba(255, 255, 255, 0.6),
+      0 0 6px var(--primary-color-light);
+  }
+
+  .capsule-icon {
+    margin-right: 6px;
+    font-size: 13px;
+    position: relative;
+    z-index: 4;
+    transition: transform 0.3s ease;
+  }
+
+  .capsule-label,
+  .progress-text {
+    position: relative;
+    z-index: 4;
+    white-space: nowrap;
+    transition: color 0.3s ease;
+  }
+
+  .pause-download {
+    position: relative;
+    z-index: 5;
+    display: inline-flex;
+    margin-left: 8px;
+    color: inherit;
+    opacity: 0.85;
+    cursor: pointer;
+    transition: transform 0.2s ease, color 0.2s ease, opacity 0.2s ease;
+
+    &:hover {
+      color: #dc2626;
+      opacity: 1;
+      transform: scale(1.12);
+    }
+  }
+
+  /* ---------- Hover & Active 3D 浮动反馈 ---------- */
+  &:hover {
+    transform: translateY(-2px);
+    
+    // 触发斜切光效
+    &::before {
+      animation: glass-shine-sweep 1s cubic-bezier(0.19, 1, 0.22, 1) forwards;
+    }
+  }
+
+  &:active {
+    transform: translateY(1px);
+    box-shadow:
+      0 2px 5px var(--primary-color-lighter),
+      inset 0 1px 1px rgba(255, 255, 255, 0.7),
+      inset 0 -1px 2px var(--primary-color-lighter);
+  }
+
+  /* ========== idle：有可用更新 / 就绪状态 ========== */
+  &.status-idle {
+    color: @purple-dark;
+    
+    // 3D 幻彩渐变边框 (紫-粉-蓝渐变)
+    background: 
+      linear-gradient(135deg, rgba(255, 255, 255, 0.85) 0%, rgba(245, 243, 255, 0.65) 100%) padding-box,
+      linear-gradient(135deg, var(--primary-color-light) 0%, rgba(236, 72, 153, 0.25) 50%, var(--primary-color-light) 100%) border-box;
+
+    .capsule-led {
+      background: linear-gradient(135deg, #a78bfa 0%, #ec4899 100%);
+      box-shadow: 
+        inset 0 1px 1px rgba(255, 255, 255, 0.6),
+        0 0 6px var(--primary-color-light);
+      animation: led-breath 2s ease-in-out infinite;
+    }
+
+    &:hover {
+      color: @purple-primary;
+      background: 
+        linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(245, 243, 255, 0.7) 100%) padding-box,
+        linear-gradient(135deg, var(--primary-color-light) 0%, rgba(236, 72, 153, 0.35) 50%, var(--primary-color-light) 100%) border-box;
+      
+      box-shadow:
+        0 6px 16px var(--primary-color-light),
+        0 2px 4px rgba(0, 0, 0, 0.04),
+        inset 0 1px 1px rgba(255, 255, 255, 0.95),
+        inset 0 -3px 4px var(--primary-color-lighter);
+
+      .capsule-icon {
+        transform: translateY(-1px);
+        filter: drop-shadow(0 0 2px var(--primary-color-light));
+      }
+    }
+  }
+
+  /* ========== downloading：能量下载中 ========== */
+  &.status-downloading {
+    color: var(--primary-color);
+    cursor: default;
+    
+    background: 
+      linear-gradient(135deg, rgba(255, 255, 255, 0.88) 0%, rgba(255, 255, 255, 0.65) 100%) padding-box,
+      linear-gradient(135deg, var(--primary-color-light) 0%, var(--primary-color) 100%) border-box;
+
+    .capsule-led {
+      background: linear-gradient(135deg, var(--primary-color-light) 0%, var(--primary-color) 100%);
+      box-shadow: 
+        inset 0 1px 1px rgba(255, 255, 255, 0.6),
+        0 0 6px var(--primary-color-light);
+      animation: led-fast-flash 0.8s ease-in-out infinite;
+    }
+
+    .progress-text {
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: var(--primary-color);
+    }
+
+    // 🔮 3D 水珠感进度背景（液态果冻填充）
+    .progress-bar-bg {
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      z-index: 1;
+      transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      background: linear-gradient(
+        to bottom,
+        var(--primary-color-lighter) 0%,
+        var(--primary-color-light) 100%
+      );
+      opacity: 0.22;
+      
+      // 进度条的右侧 3D 霓虹边缘
+      &::after {
+        content: '';
+        position: absolute;
+        right: 0;
+        top: 0;
+        bottom: 0;
+        width: 2px;
+        background: linear-gradient(to bottom, var(--primary-color-light), var(--primary-color));
+        box-shadow: 0 0 6px var(--primary-color-light);
+      }
+    }
+  }
+
+  /* ========== completed：超频就绪，待安装 ========== */
+  &.status-completed {
+    color: #e11d48; // 玫瑰红文本
+    
+    background: 
+      linear-gradient(135deg, rgba(255, 255, 255, 0.85) 0%, rgba(254, 242, 242, 0.6) 100%) padding-box,
+      linear-gradient(135deg, rgba(244, 63, 94, 0.4) 0%, rgba(249, 115, 22, 0.3) 100%) border-box;
+
+    // 自带 3D 悬浮脉冲呼吸动画
+    animation: completed-pulse-breath 2.5s ease-in-out infinite;
+
+    .capsule-led {
+      background: linear-gradient(135deg, #fb7185 0%, #f43f5e 100%);
+      box-shadow: 
+        inset 0 1px 1px rgba(255, 255, 255, 0.6),
+        0 0 8px rgba(244, 63, 94, 0.8);
+      animation: led-breath 1.2s ease-in-out infinite;
+    }
+
+    .capsule-icon {
+      animation: icon-float-bounce 1.5s ease-in-out infinite;
+    }
+
+    &:hover {
+      color: #be123c;
+      animation: none; // hover 时暂停默认脉冲，使用 hover 的大发光
+      transform: translateY(-3px) scale(1.03);
+      
+      background: 
+        linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(254, 242, 242, 0.7) 100%) padding-box,
+        linear-gradient(135deg, rgba(244, 63, 94, 0.5) 0%, rgba(249, 115, 22, 0.45) 100%) border-box;
+
+      box-shadow:
+        0 8px 24px rgba(244, 63, 94, 0.2),
+        0 2px 4px rgba(0, 0, 0, 0.04),
+        inset 0 1px 1px rgba(255, 255, 255, 0.95),
+        inset 0 -3px 4px rgba(244, 63, 94, 0.15);
+    }
+  }
+
+  /* ========== installing：覆盖安装中 ========== */
+  &.status-installing {
+    color: @purple-dark;
+    cursor: default;
+    
+    background: 
+      linear-gradient(135deg, rgba(255, 255, 255, 0.88) 0%, rgba(245, 243, 255, 0.65) 100%) padding-box,
+      linear-gradient(135deg, var(--primary-color-light) 0%, rgba(217, 70, 239, 0.3) 100%) border-box;
+
+    animation: installing-pulse 1.8s ease-in-out infinite;
+
+    .capsule-led {
+      background: linear-gradient(135deg, #a78bfa 0%, #d946ef 100%);
+      box-shadow: 
+        inset 0 1px 1px rgba(255, 255, 255, 0.6),
+        0 0 6px rgba(217, 70, 239, 0.6);
+      animation: led-fast-flash 0.5s ease-in-out infinite;
+    }
+
+    .capsule-icon {
+      animation: spin-smooth 1.2s linear infinite;
+    }
+  }
+
+  /* ========== error：系统故障 ========== */
+  &.status-error {
+    color: #dc2626; // 鲜红文本
+    
+    background: 
+      linear-gradient(135deg, rgba(255, 255, 255, 0.88) 0%, rgba(254, 242, 242, 0.65) 100%) padding-box,
+      linear-gradient(135deg, rgba(239, 68, 68, 0.35) 0%, rgba(248, 113, 113, 0.2) 100%) border-box;
+
+    .capsule-led {
+      background: #ef4444;
+      box-shadow: 
+        inset 0 1px 1px rgba(255, 255, 255, 0.6),
+        0 0 8px rgba(239, 68, 68, 0.7);
+      animation: led-error-double-blink 1.4s ease-in-out infinite;
+    }
+
+    &:hover {
+      color: #b91c1c;
+      background: 
+        linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(254, 242, 242, 0.7) 100%) padding-box,
+        linear-gradient(135deg, rgba(239, 68, 68, 0.45) 0%, rgba(248, 113, 113, 0.3) 100%) border-box;
+      
+      box-shadow:
+        0 6px 16px rgba(239, 68, 68, 0.14),
+        0 2px 4px rgba(0, 0, 0, 0.04),
+        inset 0 1px 1px rgba(255, 255, 255, 0.95),
+        inset 0 -3px 4px rgba(239, 68, 68, 0.12);
+    }
+  }
+}
+
+// ===================== Keyframes =====================
+
+// LED 呼吸动画
+@keyframes led-breath {
+  0%, 100% { opacity: 0.5; box-shadow: 0 0 3px currentColor; }
+  50% { opacity: 1; box-shadow: 0 0 8px currentColor; }
+}
+
+// LED 快速闪烁
+@keyframes led-fast-flash {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
+// LED 错误双闪
+@keyframes led-error-double-blink {
+  0%, 100% { opacity: 0.35; }
+  10%, 30% { opacity: 1; }
+  20% { opacity: 0.35; }
+}
+
+// 玻璃光泽掠过动画
+@keyframes glass-shine-sweep {
+  0% { left: -100%; }
+  100% { left: 200%; }
+}
+
+// 图标悬浮浮动
+@keyframes icon-float-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
+}
+
+// 就绪状态悬浮与阴影脉冲动画
+@keyframes completed-pulse-breath {
+  0%, 100% {
+    transform: translateY(0);
+    box-shadow:
+      0 4px 10px rgba(244, 63, 94, 0.06),
+      0 1px 2px rgba(0, 0, 0, 0.03),
+      inset 0 1px 1px rgba(255, 255, 255, 0.85),
+      inset 0 -2px 3px rgba(244, 63, 94, 0.08);
+  }
+  50% {
+    transform: translateY(-2px);
+    box-shadow:
+      0 8px 18px rgba(244, 63, 94, 0.16),
+      0 2px 4px rgba(0, 0, 0, 0.04),
+      inset 0 1.2px 1.2px rgba(255, 255, 255, 0.9),
+      inset 0 -3px 4px rgba(244, 63, 94, 0.12);
+  }
+}
+
+// 安装中渐变脉冲
+@keyframes installing-pulse {
+  0%, 100% {
+    box-shadow:
+      0 4px 10px rgba(124, 58, 237, 0.06),
+      inset 0 1px 1px rgba(255, 255, 255, 0.85),
+      inset 0 -2px 3px rgba(124, 58, 237, 0.08);
+  }
+  50% {
+    box-shadow:
+      0 8px 16px var(--primary-color-light),
+      inset 0 1.2px 1.2px rgba(255, 255, 255, 0.9),
+      inset 0 -3px 4px var(--primary-color-lighter);
+  }
+}
+
+// 旋转动画
+@keyframes spin-smooth {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}

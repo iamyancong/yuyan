@@ -1,0 +1,16 @@
+---
+description: 雨燕 GitHub/GitLab 双分支提交、推送、cherry-pick 和 CI 职责规范
+globs:
+alwaysApply: true
+---
+
+处理分支、提交、推送、cherry-pick 或 CI 职责时，必须读取并遵循：
+
+@.claude/skills/yuyan-dual-branch-workflow/SKILL.md
+
+特别注意：
+
+- 用户说“提交代码”“发布 Branch”“推送”“同步网页端”“部署 Web 端”时，默认必须完成 `feat/github-actions-build` → `yuyan-3.0` 的双分支闭环。
+- “提交代码”默认包含本地 commit 和远端 push；不要只 commit 不 push。
+- 不要只在 `feat/github-actions-build` commit 就结束，除非用户明确说“只提交 App 分支”或“不要同步 yuyan-3.0”。
+- 最终回复必须说明两个分支的提交结果；如跳过同步，必须说明用户给出的跳过依据。

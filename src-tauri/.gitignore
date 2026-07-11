@@ -1,0 +1,6 @@
+# Ignore local compiled target
+target/
+gen/
+
+# Ignore embedded node binaries to prevent tauri dev loop rebuilding
+resources/bin/
