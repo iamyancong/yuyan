@@ -453,7 +453,7 @@ async fn download_to_partial(
 ) -> Result<(), String> {
     let client = reqwest::Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
-        .user_agent("yuyan-app")
+        .user_agent("yuyan-swift-vpn")
         .build()
         .map_err(|error| format!("创建更新下载客户端失败: {error}"))?;
 

@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "雨燕平台桌面端 - VPN 分流连接工具",
+  "description": "雨燕 SwiftVPN 桌面端 - VPN 分流连接工具",
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",

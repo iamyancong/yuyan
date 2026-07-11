@@ -92,15 +92,6 @@ const handleClose = () => {
               <span class="label">渲染引擎</span>
               <span class="value">{{ systemInfo.renderEngine }}</span>
             </div> -->
-            <!-- <div class="info-row">
-              <span class="label">Node.js 环境</span>
-              <span class="value">{{ systemInfo.nodeVersion }}</span>
-            </div> -->
-            <div class="info-row">
-              <span class="label">Node.js 环境</span>
-              <span class="value">{{ systemInfo.nodeVersion }}</span>
-            </div>
-
             <div class="info-row">
               <span class="label">操作系统</span>
               <span class="value">{{ systemInfo.osInfo }}</span>

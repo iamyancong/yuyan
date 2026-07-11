@@ -38,9 +38,9 @@ const isTauriMac = computed(() => isTauriClient && isMac);
     <div class="brand" :class="{ 'is-tauri-mac-brand': isTauriMac }" data-tauri-drag-region>
       <div class="brand-content" @click="goHome">
         <div class="brand-logo">
-          <LogoSwift :size="24" />
+          <LogoSwift :size="28" />
         </div>
-        <div class="brand-name" v-show="!collapsed">雨燕平台</div>
+        <div class="brand-name" v-show="!collapsed">雨燕 SwiftVPN</div>
       </div>
     </div>
     
@@ -93,14 +93,16 @@ const isTauriMac = computed(() => isTauriClient && isMac);
   align-items: center;
   justify-content: center;
   font-weight: 700;
-  background: rgba(255, 255, 255, 0.18);
+  background: transparent;
   color: #0f172a;
 }
 
 .brand-name {
   font-weight: 700;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.2px;
   color: var(--text-color);
+  font-size: 15px;
+  white-space: nowrap;
 }
 
 // 1. 亮色（Light）侧边栏进化
@@ -113,7 +115,7 @@ const isTauriMac = computed(() => isTauriClient && isMac);
   }
 
   .brand-logo {
-    background: rgba(0, 0, 0, 0.05);
+    background: transparent !important;
     color: var(--primary-color);
   }
 
@@ -175,7 +177,7 @@ const isTauriMac = computed(() => isTauriClient && isMac);
   }
 
   .brand-logo {
-    background: rgba(255, 255, 255, 0.15);
+    background: transparent !important;
     color: #ffffff;
   }
 

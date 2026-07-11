@@ -39,14 +39,27 @@ defineEmits<{
         </a-button>
       </a-tooltip>
 
-      <!-- 关于平台 -->
-      <a-tooltip title="关于平台" overlayClassName="header-tooltip">
-        <a-button type="text" @click="$emit('openAbout')" class="header-action-btn btn-about">
-          <template #icon>
-            <InfoCircleOutlined class="action-icon" />
+      <!-- 用户头像下拉菜单 -->
+      <div class="user-section">
+        <a-dropdown :trigger="['hover']" placement="bottomRight" overlayClassName="header-user-dropdown">
+          <div class="user-dropdown-trigger">
+            <div class="user-avatar">
+              <img src="@/assets/avatar.png" alt="Avatar" />
+            </div>
+            <span class="user-name">管理员</span>
+          </div>
+          <template #overlay>
+            <a-menu class="user-dropdown-menu">
+              <a-menu-item key="about" @click="$emit('openAbout')">
+                <template #icon>
+                  <InfoCircleOutlined />
+                </template>
+                关于平台
+              </a-menu-item>
+            </a-menu>
           </template>
-        </a-button>
-      </a-tooltip>
+        </a-dropdown>
+      </div>
     </div>
   </a-layout-header>
 </template>
@@ -220,6 +233,8 @@ defineEmits<{
       display: inline-flex;
       align-items: center;
       justify-content: center;
+      width: 26px;
+      height: 26px;
       border: 1.5px solid rgba(255, 255, 255, 0.6);
       background: linear-gradient(135deg, var(--theme-primary-light) 0%, rgba(255, 255, 255, 0.9) 100%);
       color: var(--theme-primary);
@@ -233,37 +248,40 @@ defineEmits<{
         inset 0 1px 1px rgba(255, 255, 255, 0.4);
 
       :deep(img) {
+        width: 100%;
+        height: 100%;
         border-radius: 50%;
         display: block;
         object-fit: cover;
       }
     }
 
-    &:hover {
-      transform: translateY(-2px);
-      background: linear-gradient(
-        135deg, 
-        color-mix(in srgb, var(--theme-primary), transparent 90%) 0%, 
-        rgba(255, 255, 255, 0.7) 100%
-      );
-      border-color: color-mix(in srgb, var(--theme-primary), transparent 60%);
-      box-shadow: 
-        0 8px 24px var(--theme-primary-shadow),
-        inset 0 1px 1px rgba(255, 255, 255, 0.9);
-
-      .user-name {
-        color: var(--theme-primary);
-      }
-
-      .user-avatar {
-        border-color: transparent;
-        transform: scale(1.08) rotate(5deg);
+      &:hover,
+      &.ant-dropdown-open {
+        transform: translateY(-2px);
+        background: linear-gradient(
+          135deg, 
+          color-mix(in srgb, var(--theme-primary), transparent 90%) 0%, 
+          rgba(255, 255, 255, 0.7) 100%
+        );
+        border-color: color-mix(in srgb, var(--theme-primary), transparent 60%);
         box-shadow: 
-          0 0 0 2px color-mix(in srgb, var(--theme-primary), transparent 75%),
-          0 0 14px color-mix(in srgb, var(--theme-primary), transparent 40%),
-          0 4px 12px var(--theme-primary-shadow-light);
+          0 8px 24px var(--theme-primary-shadow),
+          inset 0 1px 1px rgba(255, 255, 255, 0.9);
+
+        .user-name {
+          color: var(--theme-primary);
+        }
+
+        .user-avatar {
+          border-color: transparent;
+          transform: scale(1.08) rotate(5deg);
+          box-shadow: 
+            0 0 0 2px color-mix(in srgb, var(--theme-primary), transparent 75%),
+            0 0 14px color-mix(in srgb, var(--theme-primary), transparent 40%),
+            0 4px 12px var(--theme-primary-shadow-light);
+        }
       }
-    }
   }
 
   .login-button {
@@ -349,7 +367,8 @@ defineEmits<{
         background: linear-gradient(135deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.02) 100%);
       }
 
-      &:hover {
+      &:hover,
+      &.ant-dropdown-open {
         background: linear-gradient(
           135deg,
           color-mix(in srgb, var(--theme-primary), transparent 85%) 0%,
@@ -405,6 +424,61 @@ defineEmits<{
 
       .ant-skeleton-input {
         width: 80px !important;
+      }
+    }
+  }
+}
+</style>
+
+<style lang="less">
+/* 全局覆盖：定制用户下拉菜单为 C4D 磨砂玻璃拟态风格 */
+.header-user-dropdown {
+  .user-dropdown-menu {
+    background: rgba(255, 255, 255, 0.75) !important;
+    backdrop-filter: blur(14px) !important;
+    -webkit-backdrop-filter: blur(14px) !important;
+    border: 1px solid rgba(255, 255, 255, 0.4) !important;
+    border-radius: 12px !important;
+    padding: 6px !important;
+    box-shadow: 
+      0 10px 30px rgba(0, 0, 0, 0.06), 
+      inset 0 1px 0 rgba(255, 255, 255, 0.9) !important;
+    
+    .ant-dropdown-menu-item {
+      border-radius: 8px !important;
+      padding: 8px 16px !important;
+      font-size: 13px !important;
+      font-weight: 500 !important;
+      color: var(--text-color) !important;
+      transition: all 0.2s ease !important;
+
+      &:hover {
+        background-color: var(--primary-color-lighter) !important;
+        color: var(--primary-color) !important;
+      }
+    }
+  }
+}
+
+/* 暗色主题下的下拉菜单适配 */
+html[data-theme="dark"] {
+  .header-user-dropdown {
+    .user-dropdown-menu {
+      background: rgba(20, 20, 20, 0.75) !important;
+      backdrop-filter: blur(14px) !important;
+      -webkit-backdrop-filter: blur(14px) !important;
+      border: 1px solid rgba(255, 255, 255, 0.08) !important;
+      box-shadow: 
+        0 10px 30px rgba(0, 0, 0, 0.3), 
+        inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+      
+      .ant-dropdown-menu-item {
+        color: var(--text-color) !important;
+
+        &:hover {
+          background-color: var(--primary-color-lighter) !important;
+          color: #ffffff !important;
+        }
       }
     }
   }

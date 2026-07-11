@@ -5,7 +5,9 @@ use tauri::{Emitter, Manager};
 mod app_update;
 mod vpn;
 
+/** 暗色主题下的 App Dock 图标字节（已更新为全新的 C4D 液态玻璃图标且优化尺寸边距） */
 const DARK_ICON: &[u8] = include_bytes!("../resources/yuyan_dark_clean.png");
+/** 亮色主题下的 App Dock 图标字节（已更新为全新的 C4D 液态玻璃图标且优化尺寸边距） */
 const LIGHT_ICON: &[u8] = include_bytes!("../resources/yuyan_light_clean.png");
 
 #[tauri::command]
@@ -226,7 +228,7 @@ pub fn run() {
                         if let Some(first_item) = items.first() {
                             if let Some(app_submenu) = first_item.as_submenu() {
                                 let _ = app_submenu.remove_at(0);
-                                if let Ok(about_item) = MenuItemBuilder::new("关于雨燕VPN")
+                                if let Ok(about_item) = MenuItemBuilder::new("关于雨燕 SwiftVPN")
                                     .id("about-yuyan")
                                     .build(app_handle)
                                 {

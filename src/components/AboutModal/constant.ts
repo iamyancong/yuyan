@@ -19,13 +19,13 @@ export interface SystemInfo {
 /** 静态文本与版权配置 */
 export const ABOUT_CONFIG = {
   /** 应用显示名称 */
-  appName: '雨燕平台',
+  appName: '雨燕 SwiftVPN',
   /** 应用简称/英文标识 */
-  appKey: 'yuyan-app',
+  appKey: 'yuyan-swift-vpn',
   /** 描述文字 */
-  description: '雨燕平台桌面端 · 运维及部署工具',
+  description: '雨燕 SwiftVPN 桌面端 · 运维及部署工具',
   /** 版权所有声明 */
-  copyright: '© 2026 雨燕平台团队. All Rights Reserved.',
+  copyright: '© 2026 雨燕 SwiftVPN 团队. All Rights Reserved.',
   /** 默认系统信息占位 */
   defaultInfo: (): SystemInfo => ({
     appVersion: 'Unknown',

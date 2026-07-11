@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "雨燕平台基础权限配置",
+  "description": "雨燕 SwiftVPN 基础权限配置",
   "windows": [
     "main"
   ],

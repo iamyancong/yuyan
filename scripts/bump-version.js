@@ -26,7 +26,7 @@ async function getNextVersion() {
   const token = process.env.GITHUB_TOKEN;
   const headers = {
     'Accept': 'application/vnd.github+json',
-    'User-Agent': 'yuyan-app',
+    'User-Agent': 'yuyan-swift-vpn',
     'X-GitHub-Api-Version': '2022-11-28'
   };
   if (token && token.trim() !== '') {

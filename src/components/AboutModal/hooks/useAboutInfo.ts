@@ -72,9 +72,8 @@ export const useAboutInfo = () => {
   /** 一键复制诊断信息至剪切板 */
   const handleCopyInfo = async () => {
     const infoText = [
-      `雨燕平台 (${ABOUT_CONFIG.appKey})`,
+      `${ABOUT_CONFIG.appName} (${ABOUT_CONFIG.appKey})`,
       `版本 (Version): v${systemInfo.value.appVersion}`,
-      `Node.js 版本 (Node): ${systemInfo.value.nodeVersion}`,
       `操作系统 (OS): ${systemInfo.value.osInfo}`,
     ].join('\n');
 

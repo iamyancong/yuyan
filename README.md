@@ -1,213 +1,189 @@
-# 雨燕（Yuyan）桌面端
+# 雨燕 SwiftVPN 桌面端 (yuyan-vpn)
 
-> 雨燕平台桌面端 —— 面向前端团队的一站式「微应用脚手架 + 运维部署」工具。
+> 雨燕 SwiftVPN 桌面端 —— 基于 Tauri 2 + Vue 3 的多 VPN 并行连接与智能分流网络管理工具。
 
-雨燕是一款基于 **Tauri 2 + Vue 3 + 内嵌 Node.js（Express）服务** 构建的跨平台桌面应用。它把「创建微应用」「管理 GitLab 仓库」「向独立服务器发布静态站点 / 管理 Nginx」这些日常前端工程化与运维动作整合到一个本地客户端中，无需在浏览器、终端、SSH 工具之间来回切换。
+雨燕 SwiftVPN 旨在解决企业多云或异地混合办公环境下，需要同时连接多个不同类型 VPN（如 Fortinet 与 aTrust）并进行精细化分流的痛点。通过对底层网络接口、路由表和 DNS 的动态守护，雨燕能够保障在双 VPN 并行连接时，流量智能按需分流，避免默认网关冲突导致的断网与网络死锁。
 
 ---
 
 ## ✨ 核心功能
 
-| 模块 | 路由 | 说明 |
-| --- | --- | --- |
-| 🚀 创建微应用 | `/scaffold` | 基于远程模板仓库一键生成标准化微应用（Vue3 / React），自动完成变量替换、初始化 Git、推送并在 GitLab 创建仓库，全程流式进度展示。 |
-| 📋 平台应用列表 | `/ops-projects` | 查看由雨燕创建并打了 `yuyan-ops` 标签的平台微应用，支持查看代码、配置等运维信息。 |
-| 🌐 独立服务器部署 | `/nginx-deploy` | 通过 SSH 将前端产物发布到独立服务器，内置构建、上传、Nginx 站点配置管理、版本备份与一键回滚，并支持「托管式 Nginx 运行时」自动下发。 |
-| 📦 GitLab 仓库列表 | `/projects` | 浏览、搜索 GitLab 仓库，进行仓库相关的批量运维操作。 |
+### 1. 双 VPN 并行管理
+* **Fortinet (SSL VPN) 支持**：集成对 Fortinet 网络协议的连接控制。
+* **aTrust (安全接入网关) 支持**：集成对 aTrust 客户端及守护进程的连接与管道控制。
+* **双通道独立启停**：支持两路 VPN 的同时连接、独立断开或一键全部断开。
 
-### 功能亮点
+### 2. 智能分流与路由注入
+* **自定义网段分流**：支持在配置中为每个 VPN 独立指定分流网段（如 `192.168.100.0/24`），连接建立后自动向系统注入路由规则。
+* **断网与路由守护**：实时监控默认网关和主 DNS 变动。自动摘除 PPP 默认服务网关，当系统代理或 DNS 遭到 VPN 意外篡改或死锁时，能够秒级自动重置恢复，确保公网与内网同时畅通。
 
-- **脚手架流式创建**：通过 NDJSON 流实时回传创建进度（拉取模板 → 变量替换 → Git 初始化 → 推送 → GitLab 建仓），失败可定位到具体阶段。
-- **一键发布到独立服务器**：本地构建 → SSH 上传 → 写入/更新 Nginx 配置 → 测试并 reload，支持 `cleanReplace` / `overlayKeepAssets` 两种上传策略与依赖缓存加速。
-- **版本备份与回滚**：每次发布在远端保留历史版本，支持回滚与「撤销回滚」，回滚记录可追溯。
-- **托管式 Nginx 运行时**：内置多平台 Nginx 运行时资源（`server/assets/nginx-runtime`），可在目标服务器上自动初始化、启动 / 停止 / 重载，无需服务器预装 Nginx。
-- **凭据加密存储**：服务器 SSH 密码 / 私钥使用密钥加密后存入本地 SQLite，数据库支持备份与恢复同步。
-- **明暗主题**：内置主题切换，macOS 下同步切换 Dock 图标。
+### 3. 特权操作与凭证保护
+* **Sudo 安全提权**：部分底层路由修改及网络接口操作需 root 权限。本客户端支持在本地会话中通过 `sudo -S id` 提权验证，且仅在内存中暂存凭证，绝不持久化到磁盘，确保账户安全。
+* **二次身份认证 (MFA)**：内置 stdin 管道交互。当 VPN 服务端触发二次验证时，客户端可弹出图形化 MFA 验证码输入框，并实时回传给子进程。
+
+### 4. 极致交互与系统适配
+* **Dock 图标跟随主题**：在 macOS 下通过 Cocoa API 动态刷新 Dock 栏图标，提供亮色/暗色两套高精度 C4D 液态玻璃图标。
+* **实时日志终端**：内嵌控制台，流式输出 VPN 进程的标准输出与标准错误，便于快速排查连接与协议错误。
+* **软件自动更新**：内置版本更新检测服务，支持多线程异步包下载、原生断点续传及热重启更新。
 
 ---
 
 ## 🏗️ 技术架构
 
-雨燕采用「Tauri 外壳 + 前端 SPA + 内嵌 Node 服务」三层结构：
+雨燕 SwiftVPN 采用「Tauri 2 (Rust) 外壳 + Vue 3 前端 + 外部子进程管道通信」的架构：
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  Tauri (Rust, src-tauri/)                                 │
-│  · 创建窗口、托盘、主题图标                                  │
-│  · 启动时拉起内嵌 Node 二进制，运行 Express 服务            │
-│  · 退出时回收 Node 子进程                                   │
-└───────────────┬──────────────────────────┬───────────────┘
+┌────────────────────────────────────────────────────────┐
+│           Tauri 2 (Rust, src-tauri/)                   │
+│  · 主进程生命周期与窗口管理、网络状态监控与路由表控制       │
+│  · 托盘菜单、macOS Dock 明暗图标 (Cocoa API 调用)         │
+│  · 提权密码暂存、多线程 VPN 子进程管道管道通信             │
+└───────────────┬──────────────────────────┬─────────────┘
                 │ WebView                   │ spawn child process
                 ▼                           ▼
 ┌───────────────────────────┐   ┌───────────────────────────┐
-│  前端 SPA (Vue 3, src/)    │   │  Node 服务 (Express, server/) │
-│  · Vue Router / 组件        │──▶│  · /scaffold-api  脚手架      │
-│  · Ant Design Vue / vxe-ui │HTTP│  · /deploy-api    部署        │
-│  · @ycwang-dev/*  业务组件  │   │  · /health        健康检查    │
-└───────────────────────────┘   │  · SQLite 持久化 / SSH 操作   │
-                                 └───────────────────────────┘
+│    前端 SPA (Vue 3, src/) │   │     外部 VPN 客户端依赖    │
+│  · 状态轮询/并行交互展示  │   │  · openfortivpn (Fortinet)│
+│  · 路由与分流配置管理面板 │   │  · aTrust-client/daemons  │
+│  · 实时日志与终端面板    │   │  · 动态路由注入/系统 DNS   │
+└───────────────────────────┘   └───────────────────────────┘
 ```
 
-- 前端构建产物（`dist/`）由 Express 静态托管；桌面端由 Tauri 注入本地服务端口，优先使用 `127.0.0.1:3101`，冲突时动态分配。
-- 打包时通过 `scripts/copy-node.js` 将本机 Node 二进制复制进 Tauri 资源目录（macOS 会执行 ad-hoc 签名），保证用户机器无需另装 Node 即可运行（开发模式直接使用系统 Node）。
-
 ### 技术栈
-
-**前端**
-- Vue 3.5（`<script setup>` + TypeScript）
-- Vite 7 + vue-tsc
-- Vue Router 4（Hash 模式）
-- Ant Design Vue 4 / vxe-pc-ui 4
-- `@ycwang-dev/components`、`@ycwang-dev/hooks`、`@ycwang-dev/utils`（私有业务组件库）
-- Less
-
-**桌面端**
-- Tauri 2（Rust 2021）
-- `tauri-plugin-opener`、`tauri-plugin-dialog`
-
-**内嵌服务**
-- Node.js（ESM）+ Express 5
-- `ssh2`（SSH / SFTP）、SQLite（部署数据持久化）
-- `compression`、`cors`、`connect-history-api-fallback`
+* **前端 (Frontend)**
+  * Vue 3.5 (Setup Script + TypeScript)
+  * Vite 7 + vue-tsc (构建工具与类型检查)
+  * Vue Router 4 (Hash 模式)
+  * Ant Design Vue 4 + vxe-pc-ui 4 (UI 组件库)
+  * `@ycwang-dev/components`、`@ycwang-dev/hooks`、`@ycwang-dev/utils` (企业级封装库)
+  * Less (样式预处理)
+* **桌面后端 (Desktop Backend)**
+  * Tauri 2 (Rust 2021)
+  * `tokio` (异步任务与子进程管理)
+  * `cocoa` & `objc` (macOS 原生 Dock API 绑定)
+  * `tauri-plugin-opener` & `tauri-plugin-dialog`
 
 ---
 
 ## 📁 目录结构
 
 ```
-yuyan-app/
-├── src/                     # 前端 SPA
-│   ├── api/                 # 后端接口封装（scaffold / deploy / gitlab）
-│   ├── views/               # 业务页面
-│   │   ├── ProjectList/Scaffold/   # 创建微应用
-│   │   ├── OpsProjects/            # 平台应用列表
-│   │   ├── NginxDeploy/            # 独立服务器部署
-│   │   └── ProjectList/            # GitLab 仓库列表
-│   ├── components/          # 通用组件
-│   ├── composables/ hooks/  # 组合式逻辑、主题、鉴权
-│   └── router/              # 路由表
-├── server/                  # 内嵌 Express 服务
-│   ├── index.mjs            # 服务入口（中间件 / 路由 / 启动）
-│   ├── config/constants.mjs # 配置与环境变量
-│   ├── routes/              # scaffold / deploy / health 路由
-│   ├── controllers/         # 控制器
-│   ├── services/            # Git / GitLab / SSH / 部署 / 模板 等服务
-│   ├── assets/nginx-runtime/# 内置多平台 Nginx 运行时
-│   └── utils/               # 文件、清理、错误解析等工具
-├── src-tauri/               # Tauri（Rust）外壳
-│   ├── src/lib.rs           # 启动内嵌 Node、托盘图标、生命周期
-│   ├── tauri.conf.json      # Tauri 配置（窗口 / 打包资源）
-│   └── Cargo.toml
-├── scripts/copy-node.js     # 打包前复制本机 Node 二进制
-├── .github/workflows/       # GitHub Actions（Windows / macOS 构建）
-└── package.json
+yuyan-vpn/
+├── src/                     # 前端 Vue3 SPA 源码
+│   ├── views/               # 核心视图页面
+│   │   ├── Dashboard/       # 控制中心（连接状态展示与独立启停交互）
+│   │   ├── Settings/        # 分流配置（VPN 节点、账号、自定义路由网段）
+│   │   └── Console/         # 日志终端（实时流式查看 VPN 日志）
+│   ├── layouts/             # 框架布局组件
+│   ├── api/                 # 与 Tauri Command 交互的接口封装
+│   ├── components/          # 公共组件
+│   ├── hooks/ & composables/# 组合式逻辑与主题管理
+│   ├── router/              # 路由配置
+│   └── main.ts              # 应用入口
+├── src-tauri/               # Tauri Rust 后端
+│   ├── src/
+│   │   ├── vpn/             # VPN 业务领域
+│   │   │   ├── fortinet.rs  # Fortinet 状态机、守护进程与网络监测
+│   │   │   ├── atrust.rs    # aTrust 启动控制与 stdin MFA 管道交互
+│   │   │   └── mod.rs       # 统一 we VpnManager 状态和配置管理
+│   │   ├── app_update.rs    # 自动检查更新与多线程下载模块
+│   │   ├── lib.rs           # Tauri Command 注册及 macOS 窗口事件绑定
+│   │   └── main.rs          # Rust 程序入口
+│   ├── resources/           # 暗色/亮色高精度客户端图标等资源
+│   ├── tauri.conf.json      # Tauri 配置文件（打包、特权插件配置）
+│   └── Cargo.toml           # Rust 依赖包管理
+└── package.json             # Node.js 依赖与脚本配置
 ```
 
 ---
 
 ## 🚀 快速开始
 
-### 环境要求
+### 1. 环境准备
+* **Node.js**：建议使用 Node.js ≥ 20.0.0 (推荐 22 LTS)
+* **pnpm**：包管理器建议使用 pnpm ≥ 9
+* **Rust**：确保已安装 Rust 稳定版工具链 (含 `rustc`, `cargo` 1.75+)
+* **VPN 外部底座依赖**：
+  * Fortinet VPN 连接依赖系统内配置好 `openfortivpn`（macOS 用户建议通过 `brew install openfortivpn` 安装）。
+  * aTrust 连接依赖本地已安装官方 `aTrust` 客户端软件（部分 API 需在本地服务可用）。
 
-- **Node.js** ≥ 20（推荐 22 LTS）
-- **pnpm** ≥ 9
-- **Rust** 稳定版工具链（含 Cargo）
-- 各平台 Tauri 系统依赖（参考 [Tauri 官方前置条件](https://tauri.app/start/prerequisites/)）
-
-### 安装依赖
-
-项目使用了私有 npm 包 `@ycwang-dev/*`（托管在 GitHub Packages），安装前需配置可访问的 Token：
+### 2. 配置 NPM 私有源
+本项目使用了托管于 GitHub Packages 的 `@ycwang-dev/*` 企业级私有包。安装依赖前请配置您的 GitHub Token：
 
 ```bash
-# 设置 GitHub Packages 访问 Token（用于 @ycwang-dev 私有包）
+# 设置您的 GitHub 访问 Token（需要有 read:packages 权限）
 export GITHUB_TOKEN=<your_github_token>
 
+# 安装依赖
 pnpm install
 ```
 
-> `.npmrc` 已将默认源指向 npmmirror 镜像，并把 `@ycwang-dev` 作用域指向 `npm.pkg.github.com`，因此必须提供 `GITHUB_TOKEN`。
+> **提示**：项目根目录下的 `.npmrc` 会自动读取此环境变量，并将 `@ycwang-dev` 作用域下的请求重定向到 `npm.pkg.github.com`。
 
-### 开发调试
+### 3. 常用开发与构建命令
 
+#### 开发调试 (Tauri)
+运行以下命令会以开发模式启动 Tauri，它将启动 Rust 后端并拉起本地窗口，前端热重载运行在 `localhost:1420`。
 ```bash
 pnpm dev
 ```
 
-该命令会：先执行 `copy-node.js --dev`（开发模式跳过二进制拷贝），再启动 `tauri dev`，前端运行在 `127.0.0.1:1420`，内嵌服务优先运行在 `:3101`，端口冲突时由 Tauri 动态分配。
-
-仅调试前端（不启动桌面外壳）：
-
+#### 仅调试前端 (无原生外壳)
+若只需在普通浏览器中调试前端 UI，可直接运行：
 ```bash
 pnpm frontend:dev
 ```
 
-如需在纯浏览器调试本地-only接口（例如数据库恢复到本机服务），显式配置 `VITE_LOCAL_SERVER_URL=http://127.0.0.1:<port>`；桌面端运行时不需要该配置。
-
-类型检查：
-
+#### TypeScript 类型检查
 ```bash
 pnpm typecheck
 ```
 
-### 打包构建
-
+#### 编译打包
+执行以下命令将编译前端静态资源，并在 `src-tauri` 中完成 Rust 编译与签名。
 ```bash
 pnpm build
 ```
-
-将依次复制本机 Node 二进制 → 构建前端 → 执行 `tauri build`，产物位于 `src-tauri/target/release/bundle/`（macOS `.dmg`/`.app`、Windows `.exe`/`.msi`）。
+打包成功后，编译产物输出在 `src-tauri/target/release/bundle/` 中（如 macOS 下的 `.dmg` / `.app`，Windows 下的 `.exe` / `.msi`）。
 
 ---
 
 ## ⚙️ 配置说明
 
-服务端配置集中在 `server/config/constants.mjs`，支持通过系统环境变量或项目根目录的 `.env` / `.env.local` 覆盖（系统环境变量优先级最高）。常用项：
+客户端配置持久化于用户的系统数据目录。配置文件为 `vpn_config.json`，路径如下：
+* **macOS**: `~/Library/Application Support/yuyan-vpn/vpn_config.json`
+* **Windows**: `%APPDATA%\yuyan-vpn\vpn_config.json`
 
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `PORT` | `3100` | 独立启动 Node 服务时的默认端口；桌面端由 Tauri 注入实际端口 |
-| `TEMPLATE_REPO_URL` | 内网模板仓库 | 脚手架模板仓库地址 |
-| `TEMPLATE_BRANCH` | `template` | 模板分支 |
-| `TEMPLATE_REPO_PATH` | `/opt/template` | 模板本地缓存路径（打包后由 Tauri 指向 appData） |
-| `GITLAB_HOST` | 内网 GitLab | GitLab 服务地址 |
-| `GITLAB_TOKEN` | 空 | GitLab 访问 Token（创建仓库 / 推送所需） |
-| `GIT_USER_NAME` / `GIT_USER_EMAIL` | `yuyan-ops` / … | Git 提交身份 |
-| `DEPLOY_DATA_DIR` | `.yuyan-deploy` | 部署数据目录（SQLite / 日志 / 备份） |
-| `DEPLOY_SECRET_KEY` | 本地默认值 | **部署凭据加密密钥，生产务必显式配置** |
-| `DEPLOY_RECORD_KEEP_PER_PROJECT` | `20` | 每个项目保留的发布记录数 |
-| `DEPLOY_BACKUP_KEEP_PER_TARGET` | `8` | 每个目标保留的远端备份版本数 |
+### 配置文件结构示例
 
-> 打包运行时，Tauri 会自动把部署数据目录与模板缓存目录指向应用数据目录（appData），并注入 `DEPLOY_SECRET_KEY`、动态 `PORT` 等环境变量（见 `src-tauri/src/lib.rs`）。本地服务启动以 `/health` 作为健康检查，不依赖固定 sleep。
-
----
-
-## 🔌 内嵌服务 API 概览
-
-独立 Node 服务默认以 `http://localhost:3100` 暴露；桌面端实际地址由 Tauri 命令返回。主要路由：
-
-- `GET  /health` —— 健康检查
-- `POST /scaffold-api/create` —— 创建微应用（`?stream=1` 走 NDJSON 流式进度）
-- `GET  /scaffold-api/download/:appName/:timestamp` —— 下载生成的项目压缩包
-- `POST /scaffold-api/ops/backfill-topics` —— 批量补打 `yuyan-ops` 标签
-- `/deploy-api/servers` · `/targets` · `/records` · `/nginx-instances` · `/nginx-runtime` 等 —— 服务器、部署目标、发布记录、Nginx 实例 / 运行时的增删改查与发布、回滚、Nginx 测试、数据库备份恢复等
-- `/deploy-api/app-update/check`、`/deploy-api/app-update/download-asset`、`/app-updates/*` —— 桌面端更新检测与安装包代理下载；安装和退出由 Tauri 原生层负责
-
----
-
-## 🤖 持续集成
-
-`.github/workflows/build-tauri.yml` 在指定分支推送或手动触发时，于 `windows-latest` 与 `macos-latest` 上完成 Rust / Node 环境准备、依赖安装与 `pnpm run build`，并上传各平台安装包产物。CI 通过 `PERSONAL_ACCESS_TOKEN` 拉取私有包。
-
----
-
-## ❓ 常见问题
-
-- **启动提示「未检测到本地 Node.js 环境」**：开发模式下应用使用系统 Node，请确保 `node` 在 PATH 中；打包版本会内置 Node 二进制，一般无需额外安装。
-- **`pnpm install` 报 401 / 找不到 `@ycwang-dev/*`**：未配置 `GITHUB_TOKEN`，或 Token 无 `read:packages` 权限。
-- **创建微应用失败**：检查 `GITLAB_TOKEN`、模板仓库地址与网络连通性（启动日志会给出对应提示）。
+```json
+{
+  "fortinet": {
+    "enabled": true,
+    "host": "vpn.yourcompany.com",
+    "port": 443,
+    "username": "employee_name",
+    "password": "encrypted_or_plain_password",
+    "savePassword": true,
+    "customRoutes": [
+      "192.168.10.0/24",
+      "10.200.0.0/16"
+    ]
+  },
+  "atrust": {
+    "enabled": false,
+    "host": "atrust.yourcompany.com",
+    "port": 60201,
+    "username": "employee_name",
+    "password": null,
+    "savePassword": false,
+    "customRoutes": []
+  }
+}
+```
 
 ---
 
 ## 📄 许可
 
-私有项目，仅供内部使用。
+私有项目，仅供内部及团队授权使用。

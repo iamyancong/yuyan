@@ -1,22 +1,17 @@
 <template>
-  <svg
-    :width="sizePx"
-    :height="sizePx"
-    viewBox="0 0 48 48"
-    fill="none"
-    xmlns="http://www.w3.org/2000/svg"
+  <div 
+    class="logo-swift-wrapper" 
+    :style="wrapperStyle"
     role="img"
-    aria-label="雨燕 Logo"
-    :style="{ color: iconColor }"
+    aria-label="雨燕 SwiftVPN Logo"
   >
-    <!-- 抽象雨燕剪影，使用当前颜色填充，随主题色变化 -->
-    <path
-      fill="currentColor"
-      d="M6 30c7-10 17-18 32-20-7 6-12 12-16 18 5 2 11 3 18 2-8 3-14 3-20 2-4 3-10 6-18 6 6-3 10-6 12-8-2-3-4-5-8-8 4 1 7 2 10 3z"
-      fill-opacity=".95"
+    <img 
+      src="@/assets/logo.png" 
+      alt="Logo" 
+      class="logo-image" 
+      :class="[menuTheme]"
     />
-    <path fill="currentColor" d="M8 31c6-5 14-10 22-13-5 5-9 10-11 14 3 1 7 2 12 2-8 2-14 2-20 1 0 0 0 0 0 0z" fill-opacity=".65" />
-  </svg>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -25,35 +20,67 @@ import { useTheme } from '@/hooks/useTheme';
 
 interface Props {
   size?: number | string;
-  color?: string;
-  autoContrast?: boolean; // 暗色菜单下自动使用浅色以增强对比
-  darkColor?: string; // 暗色菜单时使用的颜色，默认 #fff
-  lightColor?: string; // 亮色菜单时使用的颜色，默认使用主题主色
+  color?: string; // 保留接口兼容性
+  autoContrast?: boolean; // 保留接口兼容性
+  darkColor?: string; // 保留接口兼容性
+  lightColor?: string; // 保留接口兼容性
 }
 
 defineOptions({ name: 'LogoSwift' });
 
 const props = withDefaults(defineProps<Props>(), {
-  size: 22,
+  size: 24,
   autoContrast: true,
   darkColor: '#ffffff',
 });
 
-const { primaryColor, menuTheme } = useTheme();
+const { menuTheme } = useTheme();
 
 const sizePx = computed(() => (typeof props.size === 'number' ? `${props.size}px` : props.size));
-const iconColor = computed(() => {
-  if (props.color) return props.color;
-  if (props.autoContrast) {
-    return menuTheme.value === 'dark' ? props.darkColor : props.lightColor || primaryColor.value;
-  }
-  return primaryColor.value;
-});
+
+const wrapperStyle = computed(() => ({
+  width: sizePx.value,
+  height: sizePx.value,
+}));
 </script>
 
-<style scoped>
-svg {
-  display: block;
-  pointer-events: none;
+<style scoped lang="less">
+.logo-swift-wrapper {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+  user-select: none;
+}
+
+.logo-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), filter 0.3s ease;
+  will-change: transform, filter;
+
+  // 亮色主题侧边栏：柔和立体浮雕阴影
+  &.light {
+    filter: drop-shadow(0 2px 4px rgba(15, 23, 42, 0.15)) drop-shadow(0 1px 2px rgba(15, 23, 42, 0.1));
+  }
+
+  // 暗色主题侧边栏：多层次液态霓虹光晕
+  &.dark {
+    filter: drop-shadow(0 0 6px rgba(147, 51, 234, 0.4)) drop-shadow(0 2px 8px rgba(6, 182, 212, 0.25));
+  }
+
+  // hover 触发流畅的 3D 浮动与光晕加强效果
+  .logo-swift-wrapper:hover & {
+    transform: scale(1.15) translateY(-1px) rotate(4deg);
+    
+    &.light {
+      filter: drop-shadow(0 4px 8px rgba(15, 23, 42, 0.22)) drop-shadow(0 2px 4px rgba(15, 23, 42, 0.15));
+    }
+    
+    &.dark {
+      filter: drop-shadow(0 0 10px rgba(147, 51, 234, 0.65)) drop-shadow(0 4px 12px rgba(6, 182, 212, 0.5));
+    }
+  }
 }
 </style>
