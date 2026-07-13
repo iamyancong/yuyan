@@ -10,7 +10,7 @@ import { useNginxDeployContext } from './useNginxDeployContext';
  * @returns Nginx 当前目标 ID、打开、保存与测试方法
  */
 export function useTargetNginxConf(
-  ensureTargetIdle: (target: Pick<DeployTarget, 'id' | 'projectName'>, operationLabel: string) => Promise<boolean>,
+  ensureTargetIdle: (target: Pick<DeployTarget, 'id' | 'projectName' | 'projectType'>, operationLabel: string) => Promise<boolean>,
   ensureLoggedIn?: () => boolean
 ) {
   // 安全的鉴权判断方法

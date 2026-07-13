@@ -12,6 +12,9 @@ export type DeployRecordAction = 'deploy' | 'rollback' | 'undoRollback';
 /** 部署项目来源 */
 export type DeployProjectSource = 'ops' | 'gitlab';
 
+/** 发布任务执行环境 */
+export type DeployExecutionScope = 'server' | 'local';
+
 /** 静态资源上传策略 */
 export type DeployUploadStrategy = 'cleanReplace' | 'overlayKeepAssets';
 
@@ -913,11 +916,27 @@ export const testNginxConf = (targetId: number) => client.post(`/targets/${targe
 /** 同步托管 Nginx 站点配置 */
 export const syncNginxSite = (targetId: number) => client.post(`/targets/${targetId}/nginx-site/sync`).then(unwrap<NginxSiteSyncResult>);
 
-/** 获取部署目标运行中的发布进度快照 */
-export const getTargetDeployProgress = (targetId: number) => client.get(`/targets/${targetId}/deploy-progress`).then(unwrap<DeployProgressSnapshot>);
+/**
+ * 获取部署目标运行中的发布进度快照。
+ * @param targetId 部署目标 ID
+ * @param projectType 项目类型
+ * @returns 发布任务进度快照
+ */
+export async function getTargetDeployProgress(targetId: number, projectType: DeployTarget['projectType']) {
+  const url = await getTargetExecutionApiUrl(`/targets/${targetId}/deploy-progress`, projectType);
+  return axios.get(url, { headers: getDeployApiAuthHeaders() }).then(unwrap<DeployProgressSnapshot>);
+}
 
-/** 停止部署目标运行中的发布任务 */
-export const stopTargetDeploy = (targetId: number) => client.post(`/targets/${targetId}/deploy/stop`).then(unwrap<DeployProgressSnapshot>);
+/**
+ * 停止部署目标运行中的发布任务。
+ * @param targetId 部署目标 ID
+ * @param projectType 项目类型
+ * @returns 停止后的发布任务快照
+ */
+export async function stopTargetDeploy(targetId: number, projectType: DeployTarget['projectType']) {
+  const url = await getTargetExecutionApiUrl(`/targets/${targetId}/deploy/stop`, projectType);
+  return axios.post(url, undefined, { headers: getDeployApiAuthHeaders() }).then(unwrap<DeployProgressSnapshot>);
+}
 
 /** 检测后端项目配置 */
 export const inspectBackendTarget = (targetId: number, branch?: string, gitlabToken = '') =>
@@ -1072,9 +1091,21 @@ export async function generateTargetOpenApiWithProgress(
   return consumeProgressStream<OpenApiArtifact>(response, options);
 }
 
-/** 执行发布 */
-export async function deployTargetWithProgress(targetId: number, payload: DeployTargetPublishPayload, options: DeployProgressOptions = {}) {
-  const response = await fetch(await getActiveDeployApiUrl(`/targets/${targetId}/deploy?stream=1`), {
+/**
+ * 执行发布。
+ * @param targetId 部署目标 ID
+ * @param projectType 项目类型
+ * @param payload 发布参数
+ * @param options 流式进度配置
+ * @returns 发布记录
+ */
+export async function deployTargetWithProgress(
+  targetId: number,
+  projectType: DeployTarget['projectType'],
+  payload: DeployTargetPublishPayload,
+  options: DeployProgressOptions = {}
+) {
+  const response = await fetch(await getTargetExecutionApiUrl(`/targets/${targetId}/deploy?stream=1`, projectType), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson', ...getDeployApiAuthHeaders() },
     body: JSON.stringify(payload),
@@ -1083,9 +1114,19 @@ export async function deployTargetWithProgress(targetId: number, payload: Deploy
   return consumeProgressStream(response, options);
 }
 
-/** 订阅部署目标运行中的发布进度 */
-export async function subscribeTargetDeployProgress(targetId: number, options: DeployProgressOptions = {}) {
-  const response = await fetch(await getActiveDeployApiUrl(`/targets/${targetId}/deploy-progress?stream=1`), {
+/**
+ * 订阅部署目标运行中的发布进度。
+ * @param targetId 部署目标 ID
+ * @param projectType 项目类型
+ * @param options 流式进度配置
+ * @returns 发布任务结果
+ */
+export async function subscribeTargetDeployProgress(
+  targetId: number,
+  projectType: DeployTarget['projectType'],
+  options: DeployProgressOptions = {}
+) {
+  const response = await fetch(await getTargetExecutionApiUrl(`/targets/${targetId}/deploy-progress?stream=1`, projectType), {
     method: 'GET',
     headers: { Accept: 'application/x-ndjson', ...getDeployApiAuthHeaders() },
     signal: options.signal,
@@ -1093,9 +1134,21 @@ export async function subscribeTargetDeployProgress(targetId: number, options: D
   return consumeProgressStream(response, options);
 }
 
-/** 执行回滚 */
-export async function rollbackRecordWithProgress(recordId: number, payload: { operator?: string }, options: DeployProgressOptions = {}) {
-  const response = await fetch(await getActiveDeployApiUrl(`/records/${recordId}/rollback?stream=1`), {
+/**
+ * 执行回滚。
+ * @param recordId 发布记录 ID
+ * @param projectType 项目类型
+ * @param payload 回滚参数
+ * @param options 流式进度配置
+ * @returns 回滚后的发布记录
+ */
+export async function rollbackRecordWithProgress(
+  recordId: number,
+  projectType: DeployTarget['projectType'],
+  payload: { operator?: string },
+  options: DeployProgressOptions = {}
+) {
+  const response = await fetch(await getTargetExecutionApiUrl(`/records/${recordId}/rollback?stream=1`, projectType), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson', ...getDeployApiAuthHeaders() },
     body: JSON.stringify(payload),
@@ -1104,9 +1157,21 @@ export async function rollbackRecordWithProgress(recordId: number, payload: { op
   return consumeProgressStream(response, options);
 }
 
-/** 执行撤销回滚 */
-export async function undoRollbackRecordWithProgress(recordId: number, payload: { operator?: string }, options: DeployProgressOptions = {}) {
-  const response = await fetch(await getActiveDeployApiUrl(`/records/${recordId}/undo-rollback?stream=1`), {
+/**
+ * 执行撤销回滚。
+ * @param recordId 发布记录 ID
+ * @param projectType 项目类型
+ * @param payload 撤销回滚参数
+ * @param options 流式进度配置
+ * @returns 撤销回滚后的发布记录
+ */
+export async function undoRollbackRecordWithProgress(
+  recordId: number,
+  projectType: DeployTarget['projectType'],
+  payload: { operator?: string },
+  options: DeployProgressOptions = {}
+) {
+  const response = await fetch(await getTargetExecutionApiUrl(`/records/${recordId}/undo-rollback?stream=1`, projectType), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson', ...getDeployApiAuthHeaders() },
     body: JSON.stringify(payload),
@@ -1256,11 +1321,12 @@ export function isLocalExecuteApi(url: string): boolean {
  * 获取当前模式实际执行部署任务的 API 根地址。
  * @description 桌面端默认使用内嵌服务以在用户机器构建；网页端和显式自定义模式使用中央 API。
  * @param {string} url - 请求 URL 相对路径
+ * @param executionScope 显式指定的执行环境
  * @returns {Promise<string>} 部署 API 根地址
  */
-async function getActiveDeployApiBase(url = ''): Promise<string> {
+async function getActiveDeployApiBase(url = '', executionScope?: DeployExecutionScope): Promise<string> {
   if (isTauri() && !hasCustomDeployApiBase()) {
-    if (isLocalExecuteApi(url)) {
+    if (executionScope === 'local' || (!executionScope && isLocalExecuteApi(url))) {
       return `${await getActiveLocalServerUrl()}/deploy-api`;
     }
   }
@@ -1270,12 +1336,25 @@ async function getActiveDeployApiBase(url = ''): Promise<string> {
 /**
  * 构建当前模式的部署 API 完整地址。
  * @param path 部署 API 内部路径
+ * @param executionScope 显式指定的执行环境
  * @returns 完整请求地址
  */
-async function getActiveDeployApiUrl(path: string): Promise<string> {
+async function getActiveDeployApiUrl(path: string, executionScope?: DeployExecutionScope): Promise<string> {
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-  const base = await getActiveDeployApiBase(normalizedPath);
+  const base = await getActiveDeployApiBase(normalizedPath, executionScope);
   return `${base}${normalizedPath}`;
+}
+
+/**
+ * 按项目类型构建发布任务 API 地址。
+ * @description 前端项目始终在中央发布服务器执行；后端项目在桌面端使用本地构建服务。
+ * @param path 发布任务 API 路径
+ * @param projectType 项目类型
+ * @returns 完整请求地址
+ */
+async function getTargetExecutionApiUrl(path: string, projectType: DeployTarget['projectType']): Promise<string> {
+  const executionScope: DeployExecutionScope = projectType === 'backend' ? 'local' : 'server';
+  return getActiveDeployApiUrl(path, executionScope);
 }
 
 /**
