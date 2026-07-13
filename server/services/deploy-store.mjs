@@ -844,6 +844,7 @@ function mapTarget(row) {
     environmentName: row.environment_name || '',
     serviceName: row.service_name || normalizeBackendServiceName(row.project_name),
     buildJdkId: Number(row.build_jdk_id || row.jdk_id || 0),
+    requiredJdkAlias: row.required_jdk_alias || '',
     serverJavaRuntimeId: Number(row.server_java_runtime_id || 0),
     runtimeJavaHome: row.runtime_java_home || '',
     runtimeJavaVersion: row.runtime_java_version || '',
@@ -1301,12 +1302,27 @@ function applyBackendSchemaMigration(db) {
   if (!backendColumns.includes('environment_id')) db.exec('ALTER TABLE backend_target_configs ADD COLUMN environment_id INTEGER');
   if (!backendColumns.includes('require_nacos_registration')) db.exec('ALTER TABLE backend_target_configs ADD COLUMN require_nacos_registration INTEGER NOT NULL DEFAULT 0');
   if (!backendColumns.includes('server_java_runtime_id')) db.exec('ALTER TABLE backend_target_configs ADD COLUMN server_java_runtime_id INTEGER');
+  if (!backendColumns.includes('required_jdk_alias')) {
+    db.exec('ALTER TABLE backend_target_configs ADD COLUMN required_jdk_alias TEXT');
+    try {
+      db.exec(`
+        UPDATE backend_target_configs
+        SET required_jdk_alias = (
+          SELECT name FROM build_jdks WHERE build_jdks.id = backend_target_configs.build_jdk_id
+        )
+        WHERE build_jdk_id IS NOT NULL AND required_jdk_alias IS NULL
+      `);
+    } catch (e) {
+      console.warn('[Migration] 升级 required_jdk_alias 初始数据失败:', e);
+    }
+  }
 
   migrateLegacyBackendTargets(db);
   db.prepare("UPDATE deploy_tasks SET status = 'interrupted', error = '雨燕服务重启，任务已中断', finished_at = ? WHERE status = 'running'").run(now());
   db.prepare('INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (1, ?, ?)').run('backend-deployment-v1', now());
   db.prepare('INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (2, ?, ?)').run('backend-environments-and-server-root-v2', now());
   db.prepare('INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (3, ?, ?)').run('backend-runtime-jdk-reference-v3', now());
+  db.prepare('INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (4, ?, ?)').run('backend-logical-jdk-alias-v4', now());
 }
 
 /**
@@ -2484,18 +2500,19 @@ function upsertBackendTargetConfig(db, targetId, payload) {
   const ts = now();
   db.prepare(
     `INSERT INTO backend_target_configs
-     (target_id, environment_id, service_role, service_name, build_jdk_id, server_java_runtime_id, runtime_java_home, runtime_java_version, server_port,
+     (target_id, environment_id, service_role, service_name, build_jdk_id, required_jdk_alias, server_java_runtime_id, runtime_java_home, runtime_java_version, server_port,
       spring_profiles, external_config_path, jvm_options, app_args, process_mode, stop_timeout_seconds,
       startup_timeout_seconds, health_check_path, nacos_server_addr, nacos_console_url, nacos_namespace,
       nacos_group, require_nacos_registration, gateway_url, gateway_probe_path, artifact_pattern, openapi_command, openapi_output_path,
       legacy_start_command, legacy_stop_command, needs_review, service_status, last_status_output,
       last_status_at, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(target_id) DO UPDATE SET
        environment_id = excluded.environment_id,
        service_role = excluded.service_role,
        service_name = excluded.service_name,
        build_jdk_id = excluded.build_jdk_id,
+       required_jdk_alias = excluded.required_jdk_alias,
        server_java_runtime_id = excluded.server_java_runtime_id,
        runtime_java_home = excluded.runtime_java_home,
        runtime_java_version = excluded.runtime_java_version,
@@ -2528,6 +2545,7 @@ function upsertBackendTargetConfig(db, targetId, payload) {
     config.serviceRole,
     config.serviceName,
     config.buildJdkId || null,
+    config.requiredJdkAlias || '',
     config.serverJavaRuntimeId || null,
     config.runtimeJavaHome,
     config.runtimeJavaVersion,
@@ -3062,6 +3080,18 @@ function mapJdk(row) {
 export async function getJdk(id) {
   const db = await getDeployDb();
   const row = db.prepare('SELECT * FROM build_jdks WHERE id = ?').get(Number(id));
+  return mapJdk(row);
+}
+
+/**
+ * 根据别名获取本地首个检测通过的可用 JDK
+ * @param {string} alias - JDK 别名
+ * @returns {Promise<Object|null>} JDK 详情
+ */
+export async function findJdkByAlias(alias) {
+  if (!alias) return null;
+  const db = await getDeployDb();
+  const row = db.prepare("SELECT * FROM build_jdks WHERE name = ? AND status = 'available' LIMIT 1").get(String(alias).trim());
   return mapJdk(row);
 }
 

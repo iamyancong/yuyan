@@ -14,6 +14,7 @@ import { shellQuote } from './ssh-service.mjs';
 import {
   createOpenApiArtifact,
   getJdk,
+  findJdkByAlias,
   getLatestOpenApiArtifact,
   getTarget,
 } from './deploy-store.mjs';
@@ -367,8 +368,17 @@ export async function generateTargetOpenApi(targetId, options = {}) {
       return cached;
     }
   }
-  const jdk = target.buildJdkId ? await getJdk(target.buildJdkId) : null;
-  if (!jdk || jdk.status !== 'available' || !jdk.majorVersion) throw new Error('构建 JDK 未检测通过，请先在 JDK 管理中检测');
+  let jdk = target.buildJdkId ? await getJdk(target.buildJdkId) : null;
+  if ((!jdk || jdk.status !== 'available') && target.requiredJdkAlias) {
+    const matched = await findJdkByAlias(target.requiredJdkAlias);
+    if (matched) {
+      jdk = matched;
+      target.buildJdkId = matched.id;
+    }
+  }
+  if (!jdk || jdk.status !== 'available' || !jdk.majorVersion) {
+    throw new Error(`本机构建 JDK ${target.requiredJdkAlias || ''} 未检测通过，请先在客户端 JDK 管理中检测并绑定`);
+  }
   const env = { JAVA_HOME: jdk.homePath, PATH: `${path.join(jdk.homePath, 'bin')}:${process.env.PATH}` };
   log('info', `使用 ${jdk.name} 生成 OpenAPI`, 'openapi');
   await runBackendLocalCommand(target.openapiCommand, {

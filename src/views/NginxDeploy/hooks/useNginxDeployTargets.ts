@@ -930,6 +930,16 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     try {
       await refreshServerList();
       await refreshBuildJdks();
+      if (targetForm.projectType === 'backend' && targetForm.requiredJdkAlias) {
+        const matchedLocalJdk = jdks.value.find(jdk => jdk.name === targetForm.requiredJdkAlias && jdk.status === 'available');
+        if (matchedLocalJdk) {
+          targetForm.buildJdkId = matchedLocalJdk.id;
+          targetForm.jdkId = matchedLocalJdk.id;
+        } else {
+          targetForm.buildJdkId = undefined;
+          targetForm.jdkId = undefined;
+        }
+      }
       await refreshDeployEnvironments();
       await loadProjects(normalizeProjectSource(target.projectSource));
       initializingTargetForm.value = true;
@@ -1071,6 +1081,10 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
         if (!Number(payload.buildJdkId || payload.jdkId || 0)) {
           message.warning('请选择本机构建 JDK');
           return;
+        }
+        const selectedJdk = jdks.value.find(jdk => jdk.id === Number(payload.buildJdkId || payload.jdkId));
+        if (selectedJdk) {
+          payload.requiredJdkAlias = selectedJdk.name;
         }
         if (!String(payload.runtimeJavaHome || '').trim().startsWith('/')) {
           message.warning('服务器运行 JAVA_HOME 必须使用绝对路径');

@@ -11,6 +11,7 @@ import {
   getBackendReleaseByRecordId,
   getCurrentBackendRelease,
   getJdk,
+  findJdkByAlias,
   getDeployEnvironmentWithCredential,
   getServerJavaRuntime,
   updateDeployEnvironmentStatus,
@@ -139,11 +140,18 @@ async function getBackendContext(targetId, options = {}) {
   if (!target || target.projectType !== 'backend') throw new Error('后端部署目标不存在');
   const server = await getServerWithCredential(target.serverId);
   if (!server) throw new Error('部署服务器不存在');
-  const buildJdk = target.buildJdkId ? await getJdk(target.buildJdkId) : null;
+  let buildJdk = target.buildJdkId ? await getJdk(target.buildJdkId) : null;
+  if (requireBuild && (!buildJdk || buildJdk.status !== 'available') && target.requiredJdkAlias) {
+    const matchedLocal = await findJdkByAlias(target.requiredJdkAlias);
+    if (matchedLocal) {
+      buildJdk = matchedLocal;
+      target.buildJdkId = matchedLocal.id;
+    }
+  }
   const environment = target.environmentId ? await getDeployEnvironmentWithCredential(target.environmentId) : null;
   const serverJavaRuntime = target.serverJavaRuntimeId ? await getServerJavaRuntime(target.serverJavaRuntimeId) : null;
   if (requireBuild && (!buildJdk || buildJdk.status !== 'available' || !buildJdk.majorVersion)) {
-    throw new Error('本机构建 JDK 未检测通过，请先检测并选择匹配的 JDK');
+    throw new Error(`本机构建 JDK ${target.requiredJdkAlias || ''} 未在当前客户端检测通过，请先在客户端中检测并绑定您的本地环境`);
   }
   if (target.processMode === 'legacy' || target.needsReview) {
     throw new Error('该目标仍使用历史自定义启停命令，请编辑并保存为 PID 或 systemd 模式后再操作');
