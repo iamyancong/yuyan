@@ -144,7 +144,7 @@ export function useTargetOpenApi(params: UseTargetOpenApiParams) {
   const downloadOpenApi = async () => {
     if (!artifact.value) return;
     try {
-      const response = await fetch(getOpenApiArtifactDownloadUrl(artifact.value.id), { headers: getDeployApiAuthHeaders() });
+      const response = await fetch(await getOpenApiArtifactDownloadUrl(artifact.value.id), { headers: getDeployApiAuthHeaders() });
       if (!response.ok) throw new Error((await response.text()) || '下载失败');
       const blobUrl = window.URL.createObjectURL(await response.blob());
       const link = document.createElement('a');
