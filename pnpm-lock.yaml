@@ -71,6 +71,9 @@ importers:
       less:
         specifier: ^4.4.1
         version: 4.6.7
+      monaco-editor:
+        specifier: 0.54.0
+        version: 0.54.0
       ssh2:
         specifier: ^1.17.0
         version: 1.17.0
