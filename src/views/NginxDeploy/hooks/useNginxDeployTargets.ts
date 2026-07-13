@@ -1103,7 +1103,14 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       }
       if (activeTargetId.value) {
         const currentTarget = targets.value.find((target) => target.id === activeTargetId.value);
-        if (!(await ensureTargetIdle(currentTarget || { id: activeTargetId.value, projectName: payload.projectName }, '保存配置'))) return;
+        if (!(await ensureTargetIdle(
+          currentTarget || {
+            id: activeTargetId.value,
+            projectName: payload.projectName,
+            projectType: payload.projectType || 'frontend',
+          },
+          '保存配置'
+        ))) return;
       }
       if (activeTargetId.value) {
         const savedTarget = await updateDeployTarget(activeTargetId.value, payload);

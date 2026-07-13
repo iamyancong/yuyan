@@ -67,9 +67,9 @@ export function useTargetRuntime(targets: Ref<DeployTarget[]>) {
    * @param operationLabel 当前操作文案
    * @returns 是否允许继续操作
    */
-  const ensureTargetIdle = async (target: Pick<DeployTarget, 'id' | 'projectName'>, operationLabel: string) => {
+  const ensureTargetIdle = async (target: Pick<DeployTarget, 'id' | 'projectName' | 'projectType'>, operationLabel: string) => {
     try {
-      const snapshot = await getTargetDeployProgress(target.id);
+      const snapshot = await getTargetDeployProgress(target.id, target.projectType);
       if (!snapshot.running) {
         clearTargetRuntimeSnapshot(target.id);
         return true;
@@ -102,7 +102,7 @@ export function useTargetRuntime(targets: Ref<DeployTarget[]>) {
     const snapshots = await Promise.all(
       targetList.map(async (target) => {
         try {
-          const snapshot = await getTargetDeployProgress(target.id);
+          const snapshot = await getTargetDeployProgress(target.id, target.projectType);
           return snapshot.running ? snapshot : null;
         } catch (error: any) {
           if (isNotFoundError(error)) return null;

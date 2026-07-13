@@ -137,7 +137,7 @@ export function useTargetOpenApi(params: UseTargetOpenApiParams) {
     const targetId = activeTarget.value?.id;
     abortController?.abort();
     if (!targetId) return;
-    await stopTargetDeploy(targetId).catch(() => undefined);
+    await stopTargetDeploy(targetId, 'backend').catch(() => undefined);
   };
 
   /** 下载当前 OpenAPI 文件。 */

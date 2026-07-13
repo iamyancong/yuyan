@@ -259,6 +259,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     try {
       const result = await deployTargetWithProgress(
         target.id,
+        target.projectType,
         {
           branch: target.defaultBranch || 'dev',
           gitlabToken: authState.value.token || '',
@@ -350,7 +351,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     }
 
     try {
-      const result = await subscribeTargetDeployProgress(target.id, {
+      const result = await subscribeTargetDeployProgress(target.id, target.projectType, {
         signal: abortController.signal,
         onEvent: createScopedProgressHandler(sessionId),
       });
@@ -452,8 +453,8 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
 
   /** 停止当前发布任务 */
   const stopCurrentPublish = async () => {
-    const targetId = activePublishTarget.value?.id;
-    if (!publishStoppable.value || !targetId) {
+    const target = activePublishTarget.value;
+    if (!publishStoppable.value || !target) {
       message.warning('上传产物后不可停止当前发布任务');
       return;
     }
@@ -462,7 +463,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     progressState.detail = '正在终止当前发布任务';
     appendProgressStoppedLog();
     try {
-      await stopTargetDeploy(targetId);
+      await stopTargetDeploy(target.id, target.projectType);
     } catch (error: any) {
       publishStopping.value = false;
       message.error(getErrorMessage(error));
@@ -484,7 +485,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     rollbackProgressOpen.value = true;
     Object.assign(progressState, { percent: 0, title: '准备回滚', detail: '', logs: [], running: true, stopped: false });
     try {
-      await rollbackRecordWithProgress(record.id, { operator: userName.value || '' }, {
+      await rollbackRecordWithProgress(record.id, record.projectType, { operator: userName.value || '' }, {
         signal: abortController.signal,
         onEvent: createScopedProgressHandler(sessionId),
       });
@@ -527,7 +528,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     rollbackProgressOpen.value = true;
     Object.assign(progressState, { percent: 0, title: '准备撤销回滚', detail: '', logs: [], running: true, stopped: false });
     try {
-      await undoRollbackRecordWithProgress(record.id, { operator: userName.value || '' }, {
+      await undoRollbackRecordWithProgress(record.id, record.projectType, { operator: userName.value || '' }, {
         signal: abortController.signal,
         onEvent: createScopedProgressHandler(sessionId),
       });
@@ -562,7 +563,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
   const openTargetProgress = async (target: DeployTarget) => {
     if (!ensureLoggedIn()) return;
     try {
-      const runningTask = await getTargetDeployProgress(target.id);
+      const runningTask = await getTargetDeployProgress(target.id, target.projectType);
       if (!runningTask.running) {
         clearTargetRuntimeSnapshot?.(target.id);
         message.info('当前任务已结束，请查看发布历史');
@@ -593,7 +594,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       return;
     }
     try {
-      const runningTask = await getTargetDeployProgress(target.id);
+      const runningTask = await getTargetDeployProgress(target.id, target.projectType);
       detachPublishProgressStream();
       void subscribeRunningTargetProgress(target, runningTask);
       return;
