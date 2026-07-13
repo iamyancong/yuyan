@@ -25,7 +25,7 @@ Tauri 客户端
 - 使用 `/deploy-api/app-update/check?currentVersion&platform&arch&channel`。
 - 若有效静态 manifest 存在，服务端优先使用；正常代理模式下允许 manifest 不存在并回退 GitHub Releases。
 - 查询 Releases 时禁用缓存，忽略 draft，按语义版本排序，并选择包含当前平台安装包的最高版本。
-- 平台资源映射：macOS 选择 `.dmg`，Windows 选择 `.exe`。
+- 平台资源映射：macOS 必须结合 `aarch64` / `x86_64` 架构选择对应 `.dmg`，Windows x86_64 选择 `.exe`。
 - 只有远程版本更新且存在匹配资源时返回 `hasUpdate: true` 和 `downloadUrl`。
 - 不把 GitHub Tag 当成可更新版本；必须存在带安装包资产的 GitHub Release。
 

@@ -170,7 +170,7 @@ export function useNoticeCarousel() {
       const release = await fetchLatestRelease();
 
       if (release) {
-        const asset = matchAssetForPlatform(release.assets, platform);
+        const asset = matchAssetForPlatform(release.assets, platform, arch);
 
         if (asset) {
           const size = formatFileSize(asset.size);

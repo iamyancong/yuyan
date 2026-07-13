@@ -60,17 +60,22 @@ export const fetchLatestRelease = async (): Promise<GitHubReleaseInfo | null> =>
 
 /**
  * 根据平台和架构匹配对应的安装包
- * @description 基于文件扩展名匹配：macOS → .dmg，Windows → .exe
+ * @description 基于平台、CPU 架构和文件扩展名匹配安装包
  * @param assets Release 中的安装包列表
  * @param platform 平台标识（'darwin' | 'windows'）
+ * @param arch CPU 架构（'aarch64' | 'x86_64'）
  * @returns 匹配的安装包信息，未找到时返回 null
  */
 export const matchAssetForPlatform = (
   assets: GitHubReleaseAsset[],
   platform: string,
+  arch: string,
 ): GitHubReleaseAsset | null => {
   if (platform === 'darwin') {
-    return assets.find((a) => a.name.endsWith('.dmg')) ?? null;
+    const archPattern = arch === 'aarch64'
+      ? /(?:^|[._-])(?:aarch64|arm64)(?:[._-]|$)/i
+      : /(?:^|[._-])(?:x86_64|x64|amd64|intel)(?:[._-]|$)/i;
+    return assets.find((asset) => asset.name.endsWith('.dmg') && archPattern.test(asset.name)) ?? null;
   }
 
   if (platform === 'windows') {
