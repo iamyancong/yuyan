@@ -75,6 +75,7 @@ export function createDefaultServerForm(): DeployServerPayload {
     passphrase: '',
     useSudo: false,
     defaultDeployRoot: '/opt/yuyan/html',
+    defaultBackendRoot: '/opt/yuyan/backend',
     defaultNginxConfPath: '/opt/yuyan/nginx/conf/nginx.conf',
     nginxWorkDir: '',
     nginxTestCommand: 'nginx -t',

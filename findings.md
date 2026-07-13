@@ -13,6 +13,7 @@
 - 当前健康检查由桌面端 axios 请求，不适合私网服务，也扩大任意 URL 请求风险。
 - 当前默认后端目录写死为 /home/guest/backend/，而服务器实际按 /home/guest/huagui/backend/{project} 分项目存放。
 - 当前本机仅探测到 JDK 24；样本 POM 明确 java.version=8，不能静默构建。
+- 进一步检查发现本机其实已通过 SDKMAN 安装 Temurin 8（`~/.sdkman/candidates/java/8.0.482-tem`），旧扫描只读取 macOS JavaVirtualMachines，因此漏掉了可用 Java 8；现已扩展为多来源扫描。
 - valuation-outsourced 的服务端口为 9999，应用名为 yss-valuation-outsourced，健康端点基于 /monitor/health。
 - smart-doc 输出配置为 target/openapi；从 starter POM 执行时目标文件为 valuation-outsourced-starter/target/openapi/openapi.json。
 - YMonaco 当前包支持 readonly、json、toolbarOptions、复制、全屏和下载；Drawer 未封装，应使用 Ant Design Vue。
@@ -38,6 +39,7 @@
 | Java 运行时默认要求与构建 JDK major 一致 | 防止 Java 8 项目被 JDK 24 静默启动造成不可预测兼容问题 |
 | 服务端口检测只在受控服务离线时拒绝未知占用 | 当前服务在线发布时端口本就处于占用状态 |
 | Node 服务默认改为仅绑定 127.0.0.1 | 服务器模式需显式 HOST=0.0.0.0，并同时配置 API Token、非默认加密密钥和 CORS 白名单 |
+| JDK 采用“发现/校验优先，显式安装后扫描” | 桌面模式构建机是用户 Mac，中央模式构建机是 API 主机；静默安装或切换系统 Java 会引入权限、供应链和兼容风险 |
 
 ## 视觉/浏览器发现
 - 保留顶部 Hero、部署目标/服务器管理/发布历史三 Tab、筛选区和现有表格密度。

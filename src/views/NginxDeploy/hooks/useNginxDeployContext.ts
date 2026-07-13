@@ -42,6 +42,11 @@ export interface NginxDeployContext {
   /** 当前选中的部署目标 ID */
   activeTargetId: Ref<number | null>;
 
+  /** 全局过滤的项目类型：all | frontend | backend */
+  projectType: Ref<'all' | 'frontend' | 'backend'>;
+  /** 设置当前选中的项目类型，并触发本地缓存更新 */
+  setProjectType: (type: 'all' | 'frontend' | 'backend') => void;
+
   // --- 刷新与生命周期方法 ---
   /** 刷新当前激活 Tab 页面的数据 */
   refreshActiveTab: (options?: RefreshActiveTabOptions) => Promise<void>;

@@ -9,6 +9,7 @@ import { targetColumns } from '../../constant';
 import NginxProjectNameCell from '../NginxProjectNameCell/index.vue';
 import DeployTargetRuntimeCell from '../DeployTargetRuntimeCell/index.vue';
 import DeployTargetFilterBar from './components/DeployTargetFilterBar.vue';
+import { useNginxDeployContext } from '../../hooks/useNginxDeployContext';
 
 defineOptions({ name: 'DeployTargetTab' });
 
@@ -64,6 +65,19 @@ watch([() => props.loading, () => props.targets.length], recalculateAfterRender,
 const handleFilterFormUpdate = (val: TargetFilterForm) => {
   emit('update:filterForm', val);
 };
+
+const { projectType } = useNginxDeployContext();
+
+const activeColumns = computed(() => {
+  if (projectType.value === 'backend') {
+    const excludedFields = ['visitUrl', 'nginxInstanceName', 'listenPort', 'nginxServerName', 'nginxConfPath', 'uploadStrategy', 'preserveSubDirs', 'projectType'];
+    return targetColumns.filter((col) => !excludedFields.includes(col.field || ''));
+  } else if (projectType.value === 'frontend') {
+    const excludedFields = ['projectType', 'serviceRole', 'serverPort', 'serviceLinks'];
+    return targetColumns.filter((col) => !excludedFields.includes(col.field || ''));
+  }
+  return targetColumns;
+});
 </script>
 
 <template>
@@ -82,7 +96,7 @@ const handleFilterFormUpdate = (val: TargetFilterForm) => {
     <div ref="tableAreaRef" class="nginx-deploy-table-area">
       <YTable
         :data="targets"
-        :columns="targetColumns"
+        :columns="activeColumns"
         :loading="loading"
         :action-config="actionConfig"
         :max-height="tableHeight"
@@ -107,6 +121,17 @@ const handleFilterFormUpdate = (val: TargetFilterForm) => {
           <a v-if="row.visitUrl" :href="row.visitUrl" class="visit-link" @click.prevent.stop="openExternal(row.visitUrl)">
             {{ row.visitUrl }}
           </a>
+          <span v-else>-</span>
+        </template>
+        <template #serviceLinks="{ row }">
+          <div v-if="row.projectType === 'backend'" class="service-links">
+            <a v-if="row.directUrl" :href="row.directUrl" @click.prevent.stop="openExternal(row.directUrl)">直连</a>
+            <a v-if="row.gatewayUrl" :href="row.gatewayUrl" @click.prevent.stop="openExternal(row.gatewayUrl)">Gateway</a>
+            <a v-if="row.nacosConsoleUrl" :href="row.nacosConsoleUrl" @click.prevent.stop="openExternal(row.nacosConsoleUrl)">
+              Nacos{{ row.nacosStatus === 'online' ? ' · 在线' : row.nacosStatus === 'offline' ? ' · 离线' : '' }}
+            </a>
+            <span v-if="!row.directUrl && !row.gatewayUrl && !row.nacosConsoleUrl">-</span>
+          </div>
           <span v-else>-</span>
         </template>
       </YTable>

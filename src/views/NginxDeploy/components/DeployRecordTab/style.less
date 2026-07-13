@@ -91,6 +91,21 @@
   }
 }
 
+.record-project-cell {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+
+  &__name {
+    overflow: hidden;
+    color: var(--text-color);
+    font-weight: 650;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
 @media (max-width: 1200px) {
   .record-filter-bar {
     &__actions {

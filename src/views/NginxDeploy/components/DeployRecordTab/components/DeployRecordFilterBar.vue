@@ -18,7 +18,7 @@ interface DeployRecordFilterBarProps {
   /** 服务器筛选条件 */
   serverFilter?: number;
   /** 项目筛选条件 */
-  projectFilter: string;
+  projectFilter?: string;
   /** 分支筛选条件 */
   branchFilter?: string;
   /** 服务器下拉选项 */
@@ -35,7 +35,7 @@ const emit = defineEmits<{
   /** 服务器更改 */
   (e: 'serverChange', value?: number): void;
   /** 项目更改 */
-  (e: 'projectChange', value: string): void;
+  (e: 'projectChange', value?: string): void;
   /** 分支更改 */
   (e: 'branchChange', value?: string): void;
   /** 触发刷新 */
@@ -59,10 +59,11 @@ const emit = defineEmits<{
               class="record-filter-bar__server-select project-select"
               :options="serverOptions"
               :disabled="!serverOptions.length"
+              allow-clear
               show-search
               option-filter-prop="searchKey"
               option-label-prop="title"
-              placeholder="请选择服务器"
+              placeholder="全部服务器"
               :dropdown-match-select-width="300"
               popup-class-name="project-select-dropdown"
               @change="(value?: number) => emit('serverChange', value)"
@@ -76,13 +77,14 @@ const emit = defineEmits<{
               class="record-filter-bar__select project-select"
               :options="projectOptions"
               :disabled="!projectOptions.length"
+              allow-clear
               show-search
               option-filter-prop="searchKey"
               option-label-prop="title"
               :dropdown-match-select-width="500"
               popup-class-name="project-select-dropdown"
-              placeholder="请选择已配置项目"
-              @change="(value: string) => emit('projectChange', value)"
+              placeholder="全部项目"
+              @change="(value?: string) => emit('projectChange', value)"
             />
           </a-form-item>
         </a-col>

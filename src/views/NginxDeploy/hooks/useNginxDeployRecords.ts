@@ -1,4 +1,4 @@
-import { computed, reactive, ref, type Ref } from 'vue';
+import { computed, reactive, ref, watch, type Ref } from 'vue';
 import message from 'ant-design-vue/es/message';
 import {
   getDeployRecord,
@@ -18,10 +18,10 @@ import { renderTwoLineSelectOption } from './useDeployProjectOptions';
 interface UseNginxDeployRecordsParams {
   project?: DeployProjectContext;
   hasProjectContext?: Ref<boolean>;
-  allTargets?: Ref<DeployTarget[]>;
   authState?: Readonly<Ref<{ token?: string | null; host?: string | null }>>;
   ensureLoggedIn?: () => boolean;
   refreshActiveTab?: (options?: RefreshActiveTabOptions) => Promise<void>;
+  projectType?: Ref<'all' | 'frontend' | 'backend'>;
 }
 
 /**
@@ -43,19 +43,29 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
 
   const project = params?.project ?? context?.project!;
   const hasProjectContext = params?.hasProjectContext ?? context?.hasProjectContext!;
-  const allTargets = params?.allTargets ?? context?.allTargets!;
   const authState = params?.authState ?? context?.authState!;
   const ensureLoggedIn = params?.ensureLoggedIn ?? context?.ensureLoggedIn!;
   const refreshActiveTab = params?.refreshActiveTab ?? context?.refreshActiveTab!;
+  const projectType = params?.projectType ?? context?.projectType ?? ref<'all' | 'frontend' | 'backend'>('all');
 
   const recordLogLoading = ref(false);
   const records = ref<DeployRecord[]>([]);
+  const recordTargets = ref<DeployTarget[]>([]);
   const recordServerFilter = ref<number | undefined>();
-  const recordTargetFilter = ref('');
+  const recordTargetFilter = ref<string | undefined>();
   const recordProjectFilter = recordTargetFilter;
   const recordBranchFilter = ref<string | undefined>();
   const recordLogOpen = ref(false);
   const activeRecord = ref<DeployRecord | null>(null);
+  let recordRefreshSequence = 0;
+  let applyContextDefaults = true;
+
+  const filteredTargets = computed(() => {
+    if (!projectType.value || projectType.value === 'all') {
+      return recordTargets.value;
+    }
+    return recordTargets.value.filter((target) => target.projectType === projectType.value);
+  });
 
   const recordPagination = reactive({
     current: 1,
@@ -69,10 +79,14 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
     showTotal: (total: number, range: [number, number]) => `第 ${range[0]}-${range[1]} 条，共 ${total} 条`,
   });
 
-  const recordServerOptions = computed(() => createRecordServerOptions(allTargets.value));
+  const recordServerOptions = computed(() => createRecordServerOptions(filteredTargets.value));
 
   const recordTargetOptions = computed<RecordProjectOption[]>(() =>
-    createRecordTargetOptions(allTargets.value.filter((target) => Number(target.serverId || 0) === Number(recordServerFilter.value || 0)))
+    createRecordTargetOptions(
+      recordServerFilter.value
+        ? filteredTargets.value.filter((target) => Number(target.serverId || 0) === Number(recordServerFilter.value))
+        : filteredTargets.value
+    )
   );
 
   const recordProjectOptions = recordTargetOptions;
@@ -80,8 +94,12 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
   const recordBranchOptions = computed(() => {
     const selected = recordTargetOptions.value.find((option) => option.value === recordTargetFilter.value);
     const selectedTargetId = Number(selected?.targetId || 0);
-    if (!selectedTargetId) return [];
-    return createBranchOptions(allTargets.value.filter((target) => Number(target.id || 0) === selectedTargetId)).map((opt) => {
+    const eligibleTargets = selectedTargetId
+      ? filteredTargets.value.filter((target) => Number(target.id || 0) === selectedTargetId)
+      : recordServerFilter.value
+        ? filteredTargets.value.filter((target) => Number(target.serverId || 0) === Number(recordServerFilter.value))
+        : filteredTargets.value;
+    return createBranchOptions(eligibleTargets).map((opt) => {
       const name = String(opt.value);
       return {
         label: renderTwoLineSelectOption({ title: name, description: '代码分支' }),
@@ -113,8 +131,8 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
   const ensureRecordServerFilter = (targetList: DeployTarget[]) => {
     const current = Number(recordServerFilter.value || 0);
     if (current && recordServerOptions.value.some((option) => option.value === current)) return;
-    const contextTarget = findContextTarget(targetList);
-    recordServerFilter.value = contextTarget?.serverId || recordServerOptions.value[0]?.value;
+    const contextTarget = applyContextDefaults ? findContextTarget(targetList) : undefined;
+    recordServerFilter.value = contextTarget?.serverId || undefined;
     recordPagination.current = 1;
   };
 
@@ -122,11 +140,13 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
   const ensureRecordTargetFilter = () => {
     const current = recordTargetFilter.value;
     if (current && recordTargetOptions.value.some((option) => option.value === current)) return;
-    const serverTargets = allTargets.value.filter((target) => Number(target.serverId || 0) === Number(recordServerFilter.value || 0));
-    const contextTarget = findContextTarget(serverTargets);
-    const contextValue = contextTarget ? `target:${contextTarget.id}` : '';
+    const serverTargets = recordServerFilter.value
+      ? filteredTargets.value.filter((target) => Number(target.serverId || 0) === Number(recordServerFilter.value))
+      : filteredTargets.value;
+    const contextTarget = applyContextDefaults ? findContextTarget(serverTargets) : undefined;
+    const contextValue = contextTarget ? `target:${contextTarget.id}` : undefined;
     const contextOption = recordTargetOptions.value.find((option) => option.value === contextValue);
-    recordTargetFilter.value = contextOption?.value || recordTargetOptions.value[0]?.value || '';
+    recordTargetFilter.value = contextOption?.value;
     recordPagination.current = 1;
   };
 
@@ -141,14 +161,14 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
 
   /**
    * 获取当前发布历史项目查询参数。
-   * @returns 查询参数；未选择项目时返回 null
+   * @returns 当前聚合筛选查询参数
    */
-  const getRecordProjectQuery = (): DeployRecordQuery | null => {
+  const getRecordProjectQuery = (): DeployRecordQuery => {
     const selected = recordTargetOptions.value.find((option) => option.value === recordTargetFilter.value);
-    if (!selected) return null;
-    const query: DeployRecordQuery = {
-      targetId: selected.targetId,
-    };
+    const query: DeployRecordQuery = {};
+    if (selected?.targetId) query.targetId = selected.targetId;
+    if (!selected?.targetId && recordServerFilter.value) query.serverId = recordServerFilter.value;
+    if (projectType.value === 'frontend' || projectType.value === 'backend') query.projectType = projectType.value;
     if (recordBranchFilter.value) query.branch = recordBranchFilter.value;
     return query;
   };
@@ -160,29 +180,23 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
 
   /** 刷新发布历史项目选项 */
   const refreshRecordProjectOptions = async (options: RefreshActiveTabOptions = {}) => {
-    const shouldReloadTargets = Boolean(options.reloadRecordTargets) || !allTargets.value.length;
+    const shouldReloadTargets = Boolean(options.reloadRecordTargets) || !recordTargets.value.length;
     if (shouldReloadTargets) {
       const targetList = await listDeployTargets();
-      allTargets.value = targetList;
-      ensureRecordServerFilter(targetList);
-      ensureRecordTargetFilter();
-      ensureRecordBranchFilter();
-      return;
+      recordTargets.value = targetList;
     }
-    ensureRecordServerFilter(allTargets.value);
+    ensureRecordServerFilter(filteredTargets.value);
     ensureRecordTargetFilter();
     ensureRecordBranchFilter();
+    applyContextDefaults = false;
   };
 
   /** 刷新发布历史列表 */
   const refreshRecordList = async (options: RefreshActiveTabOptions = {}) => {
+    const refreshSequence = ++recordRefreshSequence;
     await refreshRecordProjectOptions(options);
+    if (refreshSequence !== recordRefreshSequence) return;
     const recordProjectQuery = getRecordProjectQuery();
-    if (!recordProjectQuery) {
-      records.value = [];
-      recordPagination.total = 0;
-      return;
-    }
     const recordList = await listDeployRecords(
       {
         ...recordProjectQuery,
@@ -192,6 +206,7 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
       authState.value.token || '',
       authState.value.host || ''
     );
+    if (refreshSequence !== recordRefreshSequence) return;
     records.value = recordList.items;
     recordPagination.current = recordList.page;
     recordPagination.pageSize = recordList.pageSize;
@@ -230,9 +245,9 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
    * 切换发布历史项目筛选。
    * @param value 项目筛选值
    */
-  const handleRecordProjectChange = async (value: string) => {
+  const handleRecordProjectChange = async (value?: string) => {
     recordTargetFilter.value = value;
-    ensureRecordBranchFilter();
+    recordBranchFilter.value = undefined;
     await refreshActiveTab({ resetRecordsPage: true, force: true });
   };
 
@@ -242,7 +257,7 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
    */
   const handleRecordServerChange = async (value?: number) => {
     recordServerFilter.value = value;
-    recordTargetFilter.value = '';
+    recordTargetFilter.value = undefined;
     recordBranchFilter.value = undefined;
     ensureRecordTargetFilter();
     await refreshActiveTab({ resetRecordsPage: true, force: true });
@@ -259,16 +274,30 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
 
   /** 清空发布历史数据和临时态 */
   const clearRecordData = () => {
+    recordRefreshSequence += 1;
     records.value = [];
+    recordTargets.value = [];
     recordServerFilter.value = undefined;
-    recordTargetFilter.value = '';
+    recordTargetFilter.value = undefined;
     recordBranchFilter.value = undefined;
     activeRecord.value = null;
     recordLogOpen.value = false;
     recordLogLoading.value = false;
     recordPagination.current = 1;
     recordPagination.total = 0;
+    applyContextDefaults = true;
   };
+
+  watch(projectType, () => {
+    applyContextDefaults = false;
+    recordRefreshSequence += 1;
+    recordServerFilter.value = undefined;
+    recordTargetFilter.value = undefined;
+    recordBranchFilter.value = undefined;
+    records.value = [];
+    recordPagination.current = 1;
+    recordPagination.total = 0;
+  });
 
   return {
     recordLogLoading,

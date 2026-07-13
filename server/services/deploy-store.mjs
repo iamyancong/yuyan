@@ -844,6 +844,7 @@ function mapTarget(row) {
     environmentName: row.environment_name || '',
     serviceName: row.service_name || normalizeBackendServiceName(row.project_name),
     buildJdkId: Number(row.build_jdk_id || row.jdk_id || 0),
+    serverJavaRuntimeId: Number(row.server_java_runtime_id || 0),
     runtimeJavaHome: row.runtime_java_home || '',
     runtimeJavaVersion: row.runtime_java_version || '',
     serverPort: backendPort,
@@ -891,6 +892,7 @@ function mapRecord(row, options = {}) {
     targetId: row.target_id,
     projectId: row.project_id,
     projectName: row.project_name,
+    projectType: row.project_type || 'frontend',
     projectPath: row.project_path || '',
     repositoryUrl: row.repository_url || '',
     envName: row.env_name,
@@ -1071,13 +1073,13 @@ function migrateLegacyNginxInstances(db) {
  */
 async function backupDeployDbBeforeBackendMigration(db) {
   const migrated = hasTable(db, 'schema_migrations')
-    ? Boolean(db.prepare("SELECT version FROM schema_migrations WHERE version = 2").get())
+    ? Boolean(db.prepare("SELECT version FROM schema_migrations WHERE version = 3").get())
     : false;
   if (migrated) return '';
   const stat = await fs.stat(DEPLOY_DB_PATH).catch(() => null);
   if (!stat?.isFile() || stat.size === 0) return '';
   const timestamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
-  const backupPath = `${DEPLOY_DB_PATH}.pre-backend-v2-${timestamp}.bak`;
+  const backupPath = `${DEPLOY_DB_PATH}.pre-backend-v3-${timestamp}.bak`;
   await fs.copyFile(DEPLOY_DB_PATH, backupPath);
   return backupPath;
 }
@@ -1161,6 +1163,7 @@ function applyBackendSchemaMigration(db) {
       service_role TEXT NOT NULL DEFAULT 'application',
       service_name TEXT NOT NULL,
       build_jdk_id INTEGER,
+      server_java_runtime_id INTEGER,
       runtime_java_home TEXT,
       runtime_java_version TEXT,
       server_port INTEGER,
@@ -1192,6 +1195,7 @@ function applyBackendSchemaMigration(db) {
       updated_at TEXT NOT NULL,
       FOREIGN KEY(target_id) REFERENCES deploy_targets(id),
       FOREIGN KEY(build_jdk_id) REFERENCES build_jdks(id),
+      FOREIGN KEY(server_java_runtime_id) REFERENCES server_java_runtimes(id),
       FOREIGN KEY(environment_id) REFERENCES deploy_environments(id)
     );
 
@@ -1296,11 +1300,13 @@ function applyBackendSchemaMigration(db) {
   const backendColumns = getTableColumns(db, 'backend_target_configs');
   if (!backendColumns.includes('environment_id')) db.exec('ALTER TABLE backend_target_configs ADD COLUMN environment_id INTEGER');
   if (!backendColumns.includes('require_nacos_registration')) db.exec('ALTER TABLE backend_target_configs ADD COLUMN require_nacos_registration INTEGER NOT NULL DEFAULT 0');
+  if (!backendColumns.includes('server_java_runtime_id')) db.exec('ALTER TABLE backend_target_configs ADD COLUMN server_java_runtime_id INTEGER');
 
   migrateLegacyBackendTargets(db);
   db.prepare("UPDATE deploy_tasks SET status = 'interrupted', error = '雨燕服务重启，任务已中断', finished_at = ? WHERE status = 'running'").run(now());
   db.prepare('INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (1, ?, ?)').run('backend-deployment-v1', now());
   db.prepare('INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (2, ?, ?)').run('backend-environments-and-server-root-v2', now());
+  db.prepare('INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (3, ?, ?)').run('backend-runtime-jdk-reference-v3', now());
 }
 
 /**
@@ -2452,6 +2458,13 @@ function validateBackendTargetBeforeWrite(db, payload) {
   const backendRoot = String(server.default_backend_root || '').trim();
   if (!backendRoot) throw new Error('请先在服务器配置中设置后端项目根目录');
   validateBackendDeployRoot(payload.deployRoot, backendRoot);
+  if (payload.serverJavaRuntimeId) {
+    const runtime = db.prepare('SELECT server_id, home_path, java_version, major_version, status FROM server_java_runtimes WHERE id = ?').get(Number(payload.serverJavaRuntimeId));
+    if (!runtime || Number(runtime.server_id) !== Number(payload.serverId)) throw new Error('服务器运行 JDK 不属于当前部署服务器');
+    if (runtime.status !== 'available') throw new Error('服务器运行 JDK 未检测通过');
+    payload.runtimeJavaHome = runtime.home_path;
+    payload.runtimeJavaVersion = runtime.java_version || String(runtime.major_version || '');
+  }
   normalizeBackendConfig(payload, { useSudo: Boolean(server.use_sudo) });
 }
 
@@ -2471,18 +2484,19 @@ function upsertBackendTargetConfig(db, targetId, payload) {
   const ts = now();
   db.prepare(
     `INSERT INTO backend_target_configs
-     (target_id, environment_id, service_role, service_name, build_jdk_id, runtime_java_home, runtime_java_version, server_port,
+     (target_id, environment_id, service_role, service_name, build_jdk_id, server_java_runtime_id, runtime_java_home, runtime_java_version, server_port,
       spring_profiles, external_config_path, jvm_options, app_args, process_mode, stop_timeout_seconds,
       startup_timeout_seconds, health_check_path, nacos_server_addr, nacos_console_url, nacos_namespace,
       nacos_group, require_nacos_registration, gateway_url, gateway_probe_path, artifact_pattern, openapi_command, openapi_output_path,
       legacy_start_command, legacy_stop_command, needs_review, service_status, last_status_output,
       last_status_at, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(target_id) DO UPDATE SET
        environment_id = excluded.environment_id,
        service_role = excluded.service_role,
        service_name = excluded.service_name,
        build_jdk_id = excluded.build_jdk_id,
+       server_java_runtime_id = excluded.server_java_runtime_id,
        runtime_java_home = excluded.runtime_java_home,
        runtime_java_version = excluded.runtime_java_version,
        server_port = excluded.server_port,
@@ -2514,6 +2528,7 @@ function upsertBackendTargetConfig(db, targetId, payload) {
     config.serviceRole,
     config.serviceName,
     config.buildJdkId || null,
+    config.serverJavaRuntimeId || null,
     config.runtimeJavaHome,
     config.runtimeJavaVersion,
     config.serverPort,
@@ -2924,7 +2939,7 @@ export async function listRecords(query = {}) {
   const offset = (page - 1) * pageSize;
   const whereParts = [];
   let fromSql = `
-    SELECT r.*, t.project_path, t.repository_url
+    SELECT r.*, t.project_path, t.repository_url, t.project_type
     FROM deploy_records r
     LEFT JOIN deploy_targets t ON t.id = r.target_id
   `;
@@ -2956,6 +2971,16 @@ export async function listRecords(query = {}) {
     if (conditions.length) {
       whereParts.push(`(${conditions.join(' OR ')})`);
     }
+  }
+  const serverId = Number(query.serverId || 0);
+  if (serverId) {
+    whereParts.push('t.server_id = ?');
+    params.push(serverId);
+  }
+  const projectType = String(query.projectType || '').trim();
+  if (projectType === 'frontend' || projectType === 'backend') {
+    whereParts.push('t.project_type = ?');
+    params.push(projectType);
   }
   const branch = String(query.branch || '').trim();
   if (branch) {
@@ -3049,6 +3074,9 @@ export async function createJdk(payload) {
   if (!payload.name || !payload.homePath) {
     throw new Error('JDK 名称和路径不能为空');
   }
+  if (!path.isAbsolute(String(payload.homePath)) || /[\r\n\0]/.test(String(payload.homePath))) {
+    throw new Error('本机 JDK JAVA_HOME 必须使用合法绝对路径');
+  }
   const db = await getDeployDb();
   const ts = now();
   const result = db
@@ -3083,6 +3111,9 @@ export async function createJdk(payload) {
 export async function updateJdk(id, payload) {
   if (!payload.name || !payload.homePath) {
     throw new Error('JDK 名称和路径不能为空');
+  }
+  if (!path.isAbsolute(String(payload.homePath)) || /[\r\n\0]/.test(String(payload.homePath))) {
+    throw new Error('本机 JDK JAVA_HOME 必须使用合法绝对路径');
   }
   const db = await getDeployDb();
   const row = db.prepare('SELECT id FROM build_jdks WHERE id = ?').get(Number(id));
@@ -3227,6 +3258,9 @@ export async function createServerJavaRuntime(serverId, payload) {
   const db = await getDeployDb();
   if (!hasServer(db, serverId)) throw new Error('部署服务器不存在');
   if (!String(payload.name || '').trim() || !String(payload.homePath || '').trim()) throw new Error('运行时名称和 JAVA_HOME 必填');
+  if (!path.posix.isAbsolute(String(payload.homePath)) || /[\r\n\0]/.test(String(payload.homePath))) {
+    throw new Error('服务器 JAVA_HOME 必须使用合法绝对路径');
+  }
   const ts = now();
   const result = db
     .prepare(
@@ -3236,6 +3270,24 @@ export async function createServerJavaRuntime(serverId, payload) {
     )
     .run(Number(serverId), payload.name.trim(), payload.homePath.trim(), '', null, '', '', 'unknown', '', '', ts, ts);
   return getServerJavaRuntime(Number(result.lastInsertRowid));
+}
+
+/**
+ * 删除未被后端部署目标引用的服务器 Java 运行时。
+ * @param {number} id 运行时 ID
+ * @returns {Promise<{deletedRuntimes: number}>} 删除结果
+ */
+export async function deleteServerJavaRuntime(id) {
+  const db = await getDeployDb();
+  const runtimeId = Number(id);
+  const target = db.prepare(
+    `SELECT t.project_name FROM backend_target_configs b
+     INNER JOIN deploy_targets t ON t.id = b.target_id
+     WHERE b.server_java_runtime_id = ? LIMIT 1`
+  ).get(runtimeId);
+  if (target) throw new Error(`服务器运行 JDK 正在被后端项目 ${target.project_name} 使用，无法删除`);
+  const result = db.prepare('DELETE FROM server_java_runtimes WHERE id = ?').run(runtimeId);
+  return { deletedRuntimes: result.changes || 0 };
 }
 
 /**

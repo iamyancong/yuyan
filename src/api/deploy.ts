@@ -114,6 +114,7 @@ export interface DeployTarget {
   environmentName: string;
   serviceName: string;
   buildJdkId: number;
+  serverJavaRuntimeId: number;
   runtimeJavaHome: string;
   runtimeJavaVersion: string;
   serverPort: number;
@@ -178,6 +179,7 @@ export interface DeployTargetPayload {
   environmentId?: number;
   serviceName?: string;
   buildJdkId?: number;
+  serverJavaRuntimeId?: number;
   runtimeJavaHome?: string;
   runtimeJavaVersion?: string;
   serverPort?: number;
@@ -311,6 +313,7 @@ export interface DeployRecord {
   targetId: number;
   projectId: number;
   projectName: string;
+  projectType: 'frontend' | 'backend';
   envName: string;
   branch: string;
   commitSha: string;
@@ -349,6 +352,8 @@ export interface DeployRecordQuery {
   projectName?: string;
   branch?: string;
   targetId?: number;
+  serverId?: number;
+  projectType?: 'frontend' | 'backend';
   page?: number;
   pageSize?: number;
 }
@@ -919,6 +924,21 @@ export const getBackendServiceStatus = (targetId: number) =>
 export const runBackendServiceAction = (targetId: number, action: 'start' | 'stop' | 'restart') =>
   client.post(`/targets/${targetId}/service-actions/${action}`).then(unwrap<BackendServiceRuntimeStatus>);
 
+/** 执行后端服务启停并订阅实时进度 */
+export async function runBackendServiceActionWithProgress(
+  targetId: number,
+  action: 'start' | 'stop' | 'restart',
+  options: DeployProgressOptions = {}
+): Promise<BackendServiceRuntimeStatus> {
+  const response = await fetch(getApiBase(`/deploy-api/targets/${targetId}/service-actions/${action}?stream=1`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson', ...getDeployApiAuthHeaders() },
+    body: JSON.stringify({}),
+    signal: options.signal,
+  });
+  return consumeProgressStream<BackendServiceRuntimeStatus>(response, options);
+}
+
 /** 获取后端服务日志 */
 export const getBackendServiceLogs = (targetId: number, lines = 500) =>
   client.get(`/targets/${targetId}/service-logs`, { params: { lines } }).then(unwrap<{ content: string; lines: number; path: string }>);
@@ -1149,8 +1169,23 @@ const getActiveLocalServerUrl = async (): Promise<string> => {
     return activeLocalServerUrl;
   }
 
+  // 1. 优先读取显式配置的本地服务地址（如 VITE_LOCAL_SERVER_URL），以便于本地联调与指定端口
+  const configuredUrl = getConfiguredLocalServerUrl();
+  if (configuredUrl) {
+    try {
+      await axios.get(`${configuredUrl}/health`, { timeout: 1000 });
+      activeLocalServerUrl = configuredUrl;
+      console.log(`[Port Detector] 使用 VITE_LOCAL_SERVER_URL 配置的本地辅助服务: ${configuredUrl}`);
+      return activeLocalServerUrl;
+    } catch (e) {
+      console.warn('[Port Detector] VITE_LOCAL_SERVER_URL 配置的本地服务不可用，将尝试自动探测', e);
+    }
+  }
+
   const isTauri = typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__ !== undefined;
   let localServerError: LocalServerUnavailableError | null = null;
+
+  // 2. 如果没有有效的手动配置，且在 Tauri 环境中，则自动向 Rust 探测内嵌 Node 端口
   if (isTauri) {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
@@ -1173,18 +1208,6 @@ const getActiveLocalServerUrl = async (): Promise<string> => {
         );
       }
       console.warn('[Port Detector] 本地辅助服务不可用', e);
-    }
-  }
-
-  const configuredUrl = getConfiguredLocalServerUrl();
-  if (configuredUrl) {
-    try {
-      await axios.get(`${configuredUrl}/health`, { timeout: 1000 });
-      activeLocalServerUrl = configuredUrl;
-      console.log(`[Port Detector] 使用 VITE_LOCAL_SERVER_URL 配置的本地辅助服务: ${configuredUrl}`);
-      return activeLocalServerUrl;
-    } catch (e) {
-      console.warn('[Port Detector] VITE_LOCAL_SERVER_URL 配置的本地服务不可用', e);
     }
   }
 
@@ -1316,6 +1339,10 @@ export const testDeployJdk = (id: number): Promise<BuildJdk> => {
   return client.post(`/jdks/${id}/test`).then(unwrap<BuildJdk>);
 };
 
+/** 扫描并检测本机已安装 JDK */
+export const scanLocalDeployJdks = (): Promise<BuildJdk[]> =>
+  client.post('/jdks/scan').then(unwrap<BuildJdk[]>);
+
 /** 获取服务器 Java 运行时 */
 export const listServerJavaRuntimes = (serverId: number): Promise<ServerJavaRuntime[]> =>
   client.get(`/servers/${serverId}/java-runtimes`).then(unwrap<ServerJavaRuntime[]>);
@@ -1331,6 +1358,10 @@ export const scanServerJavaRuntimes = (serverId: number): Promise<ServerJavaRunt
 /** 检测服务器 Java 运行时 */
 export const testServerJavaRuntime = (id: number): Promise<ServerJavaRuntime> =>
   client.post(`/java-runtimes/${id}/test`).then(unwrap<ServerJavaRuntime>);
+
+/** 删除服务器 Java 运行时 */
+export const deleteServerJavaRuntime = (id: number): Promise<{ deletedRuntimes: number }> =>
+  client.delete(`/java-runtimes/${id}`).then(unwrap<{ deletedRuntimes: number }>);
 
 /** 获取共享环境依赖配置 */
 export const listDeployEnvironments = (): Promise<DeployEnvironment[]> =>

@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { FileTextOutlined } from '@ant-design/icons-vue';
 import type { DeployTarget } from '@/api/deploy';
 import { openExternal } from '@/utils/open';
 import { getProjectDescription } from './constant';
+import ProjectTypeIcon from '../ProjectTypeIcon/index.vue';
 
 defineOptions({ name: 'NginxProjectNameCell' });
 
@@ -13,9 +13,7 @@ const props = defineProps<{
 
 <template>
   <div class="nginx-project-name-cell">
-    <span class="nginx-project-name-cell__icon">
-      <FileTextOutlined />
-    </span>
+    <ProjectTypeIcon :type="props.record.projectType" />
     <span class="nginx-project-name-cell__main">
       <a-tooltip :title="props.record.repositoryUrl || props.record.projectPath || props.record.projectName">
         <a

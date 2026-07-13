@@ -63,9 +63,12 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
     servers: false,
     records: false,
   });
+  let activeRefreshSequence = 0;
 
   /** 清空当前页面所有数据和临时态 */
   const clearData = () => {
+    activeRefreshSequence += 1;
+    loading.value = false;
     tabLoadedFlags.value = {
       targets: false,
       servers: false,
@@ -80,6 +83,7 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
    */
   const refreshActiveTab = async (options: RefreshActiveTabOptions = {}) => {
     if (!ensureLoggedIn()) return;
+    const refreshSequence = ++activeRefreshSequence;
     const tabKey = activeTabKey.value;
     if (options.resetRecordsPage) {
       resetRecordPage();
@@ -99,9 +103,11 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
       } else {
         await refreshTargetList();
       }
-      tabLoadedFlags.value[tabKey] = true;
+      if (refreshSequence === activeRefreshSequence) {
+        tabLoadedFlags.value[tabKey] = true;
+      }
     } finally {
-      if (shouldShowLoading) {
+      if (shouldShowLoading && refreshSequence === activeRefreshSequence) {
         loading.value = false;
       }
     }
@@ -136,6 +142,18 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
     return false;
   };
 
+  /**
+   * 重置受过滤影响的 Tab 缓存标记。
+   * @param excludeKey 排除的 Tab
+   */
+  const clearTabCache = (excludeKey?: NginxDeployTabKey) => {
+    (Object.keys(tabLoadedFlags.value) as NginxDeployTabKey[]).forEach((key) => {
+      if (key !== excludeKey) {
+        tabLoadedFlags.value[key] = false;
+      }
+    });
+  };
+
   watch(isLoggedIn, (newValue, oldValue) => {
     if (!newValue) {
       clearData();
@@ -150,6 +168,7 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
     loading,
     activeTabKey,
     clearData,
+    clearTabCache,
     refreshActiveTab,
     handleTabChange,
     initPage,

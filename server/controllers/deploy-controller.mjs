@@ -32,6 +32,7 @@ import {
   getOpenApiArtifact,
   listServerJavaRuntimes,
   createServerJavaRuntime,
+  deleteServerJavaRuntime,
   listDeployEnvironments,
   createDeployEnvironment,
   updateDeployEnvironment,
@@ -84,6 +85,7 @@ import {
 } from '../services/backend-runtime-service.mjs';
 import {
   scanServerJavaRuntimes,
+  scanLocalBuildJdks,
   testBuildJdk,
   testServerJavaRuntime,
 } from '../services/backend-toolchain-service.mjs';
@@ -475,7 +477,8 @@ function validateTargetPayload(body) {
     if (!String(body.runtimeJavaHome || '').trim().startsWith('/')) throw new Error('服务器运行 JAVA_HOME 必须使用绝对路径');
     if (!normalizeCommandText(body.buildCommand)) throw new Error('Maven 构建命令必填');
     if (!String(body.artifactPattern || body.artifactDir || '').trim()) throw new Error('Jar 产物路径必填');
-    if (body.processMode && !['pid', 'systemd', 'legacy'].includes(String(body.processMode))) throw new Error('进程管理模式不合法');
+    if (body.processMode === 'legacy') throw new Error('历史自定义启停命令已停用，请选择 PID 或 systemd 模式');
+    if (body.processMode && !['pid', 'systemd'].includes(String(body.processMode))) throw new Error('进程管理模式不合法');
     if (body.serviceRole && !['application', 'gateway'].includes(String(body.serviceRole))) throw new Error('后端服务角色不合法');
   }
 }
@@ -1885,6 +1888,15 @@ export async function handleTestJdk(req, res) {
   }
 }
 
+/** 扫描本机已安装 JDK。 */
+export async function handleScanLocalJdks(_req, res) {
+  try {
+    res.json({ success: true, data: await scanLocalBuildJdks() });
+  } catch (error) {
+    sendError(res, error, 400);
+  }
+}
+
 /** 获取服务器 Java 运行时。 */
 export async function handleListServerJavaRuntimes(req, res) {
   try {
@@ -1916,6 +1928,15 @@ export async function handleScanServerJavaRuntimes(req, res) {
 export async function handleTestServerJavaRuntime(req, res) {
   try {
     res.json({ success: true, data: await testServerJavaRuntime(Number(req.params.id)) });
+  } catch (error) {
+    sendError(res, error, 400);
+  }
+}
+
+/** 删除服务器 Java 运行时。 */
+export async function handleDeleteServerJavaRuntime(req, res) {
+  try {
+    res.json({ success: true, data: await deleteServerJavaRuntime(Number(req.params.id)) });
   } catch (error) {
     sendError(res, error, 400);
   }

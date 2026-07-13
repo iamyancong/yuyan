@@ -49,10 +49,12 @@ import {
   handleCheckTauriAppUpdate,
   handleDownloadAppUpdateAsset,
   handleTestJdk,
+  handleScanLocalJdks,
   handleListServerJavaRuntimes,
   handleCreateServerJavaRuntime,
   handleScanServerJavaRuntimes,
   handleTestServerJavaRuntime,
+  handleDeleteServerJavaRuntime,
   handleInspectBackendTarget,
   handleGetBackendServiceStatus,
   handleRunBackendServiceAction,
@@ -71,6 +73,7 @@ const router = express.Router();
 
 router.get('/jdks', handleListJdks);
 router.post('/jdks', handleCreateJdk);
+router.post('/jdks/scan', handleScanLocalJdks);
 router.put('/jdks/:id', handleUpdateJdk);
 router.delete('/jdks/:id', handleDeleteJdk);
 router.post('/jdks/:id/test', handleTestJdk);
@@ -84,6 +87,7 @@ router.get('/servers/:id/java-runtimes', handleListServerJavaRuntimes);
 router.post('/servers/:id/java-runtimes', handleCreateServerJavaRuntime);
 router.post('/servers/:id/java-runtimes/scan', handleScanServerJavaRuntimes);
 router.post('/java-runtimes/:id/test', handleTestServerJavaRuntime);
+router.delete('/java-runtimes/:id', handleDeleteServerJavaRuntime);
 router.get('/environments', handleListDeployEnvironments);
 router.post('/environments', handleCreateDeployEnvironment);
 router.put('/environments/:id', handleUpdateDeployEnvironment);

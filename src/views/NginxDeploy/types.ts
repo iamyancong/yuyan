@@ -71,8 +71,8 @@ export interface RefreshActiveTabOptions {
   reloadRecordTargets?: boolean;
 }
 
-/** 发布进度模式 */
-export type DeployProgressMode = 'deploy' | 'rollback' | 'undoRollback';
+/** 部署任务进度模式 */
+export type DeployProgressMode = Extract<DeployProgressSnapshot['action'], 'deploy' | 'rollback' | 'undoRollback' | 'start' | 'stop' | 'restart'>;
 
 /** 部署目标筛选项来源 */
 export type DeployTargetProjectInfo = Pick<DeployTarget, 'projectId' | 'projectPath'> | DeployProjectContext;

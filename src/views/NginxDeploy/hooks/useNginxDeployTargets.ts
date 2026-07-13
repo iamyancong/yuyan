@@ -4,21 +4,35 @@ import {
   createDeployTarget,
   deleteDeployTarget,
   getNextNginxInstancePort,
+  getBackendServiceStatus,
+  getBackendServiceLogs,
+  inspectBackendTarget,
   listDeployTargets,
+  runBackendServiceAction,
   syncNginxSite,
   updateDeployTarget,
+  listDeployJdks,
+  listDeployEnvironments,
   type DeployServer,
   type DeployTarget,
   type DeployTargetPayload,
   type DeployTargetQuery,
   type DeployProjectSource,
   type NginxInstance,
+  type BuildJdk,
+  type ServerJavaRuntime,
+  type DeployEnvironment,
 } from '@/api/deploy';
 import {
   DEFAULT_ARTIFACT_DIR,
   DEFAULT_BUILD_COMMAND,
   DEFAULT_INSTALL_COMMAND,
+  DEFAULT_BACKEND_INSTALL_COMMAND,
+  DEFAULT_BACKEND_BUILD_COMMAND,
+  DEFAULT_BACKEND_ARTIFACT_PATTERN,
   DEFAULT_PRESERVE_SUB_DIRS,
+  DEFAULT_BACKEND_OPENAPI_COMMAND,
+  DEFAULT_BACKEND_OPENAPI_OUTPUT_PATH,
   DEFAULT_PROJECT_SOURCE,
   DEFAULT_UPLOAD_STRATEGY,
   TEST_ENV_NAME,
@@ -57,6 +71,8 @@ interface UseNginxDeployTargetsParams {
   refreshActiveTab: (options?: RefreshActiveTabOptions) => Promise<void>;
   servers: Ref<DeployServer[]>;
   refreshServerList: () => Promise<void>;
+  projectType: Ref<'all' | 'frontend' | 'backend'>;
+  authState?: Readonly<Ref<{ token?: string | null }>>;
 }
 
 /**
@@ -114,6 +130,8 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
   const refreshActiveTab = params?.refreshActiveTab ?? context?.refreshActiveTab!;
   const servers = params?.servers ?? context?.servers!;
   const refreshServerList = params?.refreshServerList ?? context?.refreshServerList!;
+  const projectType = params?.projectType ?? context?.projectType!;
+  const authState = params?.authState ?? context?.authState;
 
   const {
     projectLoading,
@@ -135,6 +153,16 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
   const targetFormLoading = ref(false);
   const targets = ref<DeployTarget[]>([]);
   const allTargets = ref<DeployTarget[]>([]);
+  const jdks = ref<BuildJdk[]>([]);
+  const deployEnvironments = ref<DeployEnvironment[]>([]);
+  const serviceLogOpen = ref(false);
+  const serviceLogLoading = ref(false);
+  const serviceLogTarget = ref<DeployTarget | null>(null);
+  const serviceLogContent = ref('');
+  const javaManagerOpen = ref(false);
+  const javaManagerServerId = ref(0);
+  const environmentManagerOpen = ref(false);
+  let targetListRefreshSequence = 0;
 
   const targetFilterForm = reactive<TargetFilterForm>({
     projectKeyword: activeProject?.projectName || '',
@@ -212,9 +240,12 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
 
   const targetBranchFilterOptions = computed(() => {
     const serverId = Number(targetFilterForm.serverId || 0);
+    const projectTypeTargets = projectType.value === 'all'
+      ? allTargets.value
+      : allTargets.value.filter((target) => target.projectType === projectType.value);
     const filteredTargets = serverId
-      ? allTargets.value.filter((t) => Number(t.serverId || 0) === serverId)
-      : allTargets.value;
+      ? projectTypeTargets.filter((target) => Number(target.serverId || 0) === serverId)
+      : projectTypeTargets;
     return createBranchOptions(filteredTargets).map((opt) => {
       const name = String(opt.value);
       return {
@@ -252,6 +283,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       state.componentProps = {
         ...(state.componentProps || {}),
         onChange: handleTargetProjectSourceChange,
+        disabled: targetForm.projectType === 'backend',
       };
     });
   };
@@ -311,6 +343,88 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     });
   };
 
+  /** 同步部署目标弹窗 JDK 下拉状态 */
+  const syncTargetJdkFieldState = () => {
+    const options = jdks.value.filter((jdk) => jdk.status === 'available').map((jdk) => ({
+      label: `${jdk.name} · Java ${jdk.majorVersion}`,
+      title: `${jdk.name} · Java ${jdk.majorVersion}`,
+      value: jdk.id,
+      searchKey: `${jdk.name} ${jdk.majorVersion} ${jdk.homePath}`,
+    }));
+    syncSelectFieldState(targetFormRef.value, 'buildJdkId', options, {
+      showSearch: true,
+      optionFilterProp: 'searchKey',
+      optionLabelProp: 'label',
+      placeholder: '请选择绑定的 JDK 环境',
+    });
+  };
+
+  /** 刷新本机构建 JDK 列表并同步表单下拉。 */
+  const refreshBuildJdks = async () => {
+    jdks.value = await listDeployJdks().catch(() => []);
+    syncTargetJdkFieldState();
+  };
+
+  /** 刷新共享环境依赖配置并同步表单下拉。 */
+  const refreshDeployEnvironments = async () => {
+    deployEnvironments.value = await listDeployEnvironments().catch(() => []);
+    syncSelectFieldState(
+      targetFormRef.value,
+      'environmentId',
+      deployEnvironments.value.map((item) => ({ label: item.name, title: item.name, value: item.id, searchKey: item.name })),
+      {
+        allowClear: true,
+        placeholder: '可选；选择后继承 Nacos/Gateway 配置',
+        onChange: (value?: number) => {
+          const environment = deployEnvironments.value.find((item) => item.id === Number(value || 0));
+          if (environment) selectDeployEnvironment(environment);
+        },
+      }
+    );
+  };
+
+  /** 使用选中的共享环境依赖配置。 */
+  const selectDeployEnvironment = (environment: DeployEnvironment) => {
+    Object.assign(targetForm, {
+      environmentId: environment.id,
+      nacosServerAddr: environment.nacosServerAddr,
+      nacosConsoleUrl: environment.nacosConsoleUrl,
+      nacosNamespace: environment.nacosNamespace,
+      nacosGroup: environment.nacosGroup,
+      gatewayUrl: environment.gatewayPublicUrl,
+    });
+    syncTargetFormValues();
+    environmentManagerOpen.value = false;
+  };
+
+  /** 打开共享环境依赖管理抽屉。 */
+  const openEnvironmentManager = () => {
+    environmentManagerOpen.value = true;
+  };
+
+  /** 打开 Java 环境管理抽屉。 */
+  const openJavaManager = () => {
+    javaManagerServerId.value = Number(targetForm.serverId || servers.value[0]?.id || 0);
+    javaManagerOpen.value = true;
+  };
+
+  /** 使用选中的本机构建 JDK。 */
+  const selectBuildJdk = (jdk: BuildJdk) => {
+    targetForm.buildJdkId = jdk.id;
+    targetForm.jdkId = jdk.id;
+    syncTargetFormValues();
+    javaManagerOpen.value = false;
+  };
+
+  /** 使用选中的服务器 Java 运行时。 */
+  const selectServerRuntime = (runtime: ServerJavaRuntime) => {
+    targetForm.serverJavaRuntimeId = runtime.id;
+    targetForm.runtimeJavaHome = runtime.homePath;
+    targetForm.runtimeJavaVersion = runtime.javaVersion || String(runtime.majorVersion || '');
+    syncTargetFormValues();
+    javaManagerOpen.value = false;
+  };
+
   /** 同步托管站点相关的字段显隐状态 */
   const syncTargetNginxSiteManagedState = () => {
     const isManaged = Boolean(targetForm.nginxSiteManaged);
@@ -349,6 +463,9 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     if (projectKeyword) queryParams.projectKeyword = projectKeyword;
     if (targetFilterForm.branch) queryParams.branch = targetFilterForm.branch;
     if (targetFilterForm.serverId) queryParams.serverId = Number(targetFilterForm.serverId);
+    if (projectType.value && projectType.value !== 'all') {
+      queryParams.projectType = projectType.value;
+    }
     return queryParams;
   };
 
@@ -425,6 +542,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     const shouldKeepNginxFlags = activeTargetId.value === null;
     const prevEnableNginxTest = targetForm.enableNginxTest;
     const prevEnableNginxReload = targetForm.enableNginxReload;
+    const previousDeployRoot = String(targetForm.deployRoot || '').trim();
     Object.assign(
       targetForm,
       createTargetServerDefaults(
@@ -443,6 +561,16 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       targetForm.enableNginxTest = prevEnableNginxTest;
       targetForm.enableNginxReload = prevEnableNginxReload;
     }
+    if (targetForm.projectType === 'backend') {
+      const backendRoot = String(server.defaultBackendRoot || '').replace(/\/+$/, '');
+      const serviceDir = String(targetForm.serviceName || appName)
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9._-]+/g, '-');
+      targetForm.deployRoot = previousDeployRoot && backendRoot && (previousDeployRoot === backendRoot || previousDeployRoot.startsWith(`${backendRoot}/`))
+        ? previousDeployRoot
+        : backendRoot && serviceDir ? `${backendRoot}/${serviceDir}` : '';
+    }
     if (nginxInstance?.instanceType !== 'managed') {
       targetForm.listenPort = 0;
       targetForm.visitUrl = '';
@@ -454,6 +582,12 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
    * @param server 部署服务器
    */
   const applyManagedNginxDefaults = async (server: DeployServer | undefined, nginxInstance = getSelectedNginxInstance(server)) => {
+    if (targetForm.projectType === 'backend') {
+      targetForm.nginxSiteManaged = false;
+      targetForm.listenPort = 0;
+      targetForm.visitUrl = '';
+      return;
+    }
     if (!server || !nginxInstance || nginxInstance.instanceType !== 'managed' || !nginxInstance.initializedAt || nginxInstance.status === 'uninitialized') return;
     if (!isMainDeployProject(targetForm)) {
       targetForm.nginxSiteManaged = false;
@@ -496,6 +630,10 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     const selectedProject = getDefaultTargetProject();
     initializingTargetForm.value = true;
     activeTargetId.value = null;
+    const initialProjectType = projectType.value !== 'all' ? projectType.value : 'frontend';
+    const initialInstallCmd = initialProjectType === 'backend' ? DEFAULT_BACKEND_INSTALL_COMMAND : DEFAULT_INSTALL_COMMAND;
+    const initialBuildCmd = initialProjectType === 'backend' ? DEFAULT_BACKEND_BUILD_COMMAND : DEFAULT_BUILD_COMMAND;
+
     Object.assign(targetForm, {
       projectSource: DEFAULT_PROJECT_SOURCE,
       projectId: selectedProject?.projectId || 0,
@@ -514,12 +652,40 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       serverName: '_',
       enableNginxTest: false,
       enableNginxReload: false,
-      installCommand: DEFAULT_INSTALL_COMMAND,
-      buildCommand: DEFAULT_BUILD_COMMAND,
-      artifactDir: DEFAULT_ARTIFACT_DIR,
+      installCommand: initialInstallCmd,
+      buildCommand: initialBuildCmd,
+      artifactDir: initialProjectType === 'backend' ? DEFAULT_BACKEND_ARTIFACT_PATTERN : DEFAULT_ARTIFACT_DIR,
       preserveSubDirs: DEFAULT_PRESERVE_SUB_DIRS,
       uploadStrategy: DEFAULT_UPLOAD_STRATEGY,
       visitUrl: '',
+      projectType: initialProjectType,
+      jdkId: undefined,
+      buildJdkId: undefined,
+      serverJavaRuntimeId: undefined,
+      serviceRole: 'application',
+      environmentId: undefined,
+      serviceName: selectedProject?.projectName || '',
+      runtimeJavaHome: '',
+      runtimeJavaVersion: '',
+      serverPort: 9999,
+      processMode: 'pid',
+      springProfiles: '',
+      externalConfigPath: '',
+      jvmOptions: '',
+      appArgs: '',
+      stopTimeoutSeconds: 30,
+      startupTimeoutSeconds: 120,
+      healthCheckPath: '/monitor/health',
+      nacosServerAddr: '',
+      nacosConsoleUrl: '',
+      nacosNamespace: '',
+      nacosGroup: 'DEFAULT_GROUP',
+      requireNacosRegistration: false,
+      gatewayUrl: '',
+      gatewayProbePath: '',
+      artifactPattern: initialProjectType === 'backend' ? DEFAULT_BACKEND_ARTIFACT_PATTERN : '',
+      openapiCommand: initialProjectType === 'backend' ? DEFAULT_BACKEND_OPENAPI_COMMAND : '',
+      openapiOutputPath: initialProjectType === 'backend' ? DEFAULT_BACKEND_OPENAPI_OUTPUT_PATH : '',
     });
     applyTargetServerDefaults(selectedServer, selectedProject?.projectName || '');
     void applyManagedNginxDefaults(selectedServer);
@@ -642,20 +808,58 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
 
   /** 刷新部署目标列表 */
   const refreshTargetList = async () => {
+    const refreshSequence = ++targetListRefreshSequence;
     let queryParams = getTargetQueryParams();
-    let targetList = await listDeployTargets(queryParams);
+    const shouldLoadAllTargets = Boolean(Object.keys(queryParams).length) && !allTargets.value.length;
+    const [initialTargetList, completeTargetList] = await Promise.all([
+      listDeployTargets(queryParams),
+      shouldLoadAllTargets ? listDeployTargets() : Promise.resolve<DeployTarget[] | null>(null),
+    ]);
+    if (refreshSequence !== targetListRefreshSequence) return;
+    let targetList = initialTargetList;
     targets.value = targetList;
-    if (!Object.keys(queryParams).length || !allTargets.value.length) {
-      allTargets.value = targetList;
+    if (completeTargetList) {
+      allTargets.value = completeTargetList;
+    } else if (!Object.keys(queryParams).length) {
+      allTargets.value = initialTargetList;
     }
     const shouldReloadByDefaultServer = ensureTargetServerFilter() && !queryParams.serverId;
     if (shouldReloadByDefaultServer) {
       queryParams = getTargetQueryParams();
       targetList = await listDeployTargets(queryParams);
+      if (refreshSequence !== targetListRefreshSequence) return;
       targets.value = targetList;
     }
     await refreshTargetRuntimeSnapshots(targetList);
+    if (refreshSequence !== targetListRefreshSequence) return;
+    await refreshBackendServiceStatuses(targetList);
+    if (refreshSequence !== targetListRefreshSequence) return;
     startTargetRuntimePolling();
+  };
+
+  /**
+   * 从目标服务器刷新后端服务真实状态。
+   * @param sourceTargets 需要探测的目标列表
+   */
+  const refreshBackendServiceStatuses = async (sourceTargets: DeployTarget[]) => {
+    const backendTargets = sourceTargets.filter((target) => target.projectType === 'backend');
+    await Promise.allSettled(
+      backendTargets.map(async (target) => {
+        try {
+          const status = await getBackendServiceStatus(target.id);
+          Object.assign(target, {
+            serviceStatus: status.status,
+            serviceStatusOutput: status.output,
+            serviceStatusAt: status.checkedAt,
+            directUrl: status.directUrl || target.directUrl,
+            nacosStatus: status.nacosStatus || target.nacosStatus,
+          });
+        } catch (error: any) {
+          target.serviceStatus = 'unknown';
+          target.serviceStatusOutput = getErrorMessage(error);
+        }
+      })
+    );
   };
 
   /** 打开新增部署目标弹窗 */
@@ -682,6 +886,9 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       }
       // 数据准备就绪后，再次重置并填充完整的默认表单数据
       resetTargetForm();
+      await refreshBuildJdks();
+      await refreshDeployEnvironments();
+
       if (targetForm.projectId) {
         await loadBranches(Number(targetForm.projectId));
         if (!deployBranches.value.some((branch) => branch.name === targetForm.defaultBranch)) {
@@ -694,6 +901,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       syncTargetBranchFieldState();
       syncTargetNginxInstanceFieldState();
       syncTargetServerFieldState();
+      syncTargetJdkFieldState();
       syncTargetNginxSiteManagedState();
       syncTargetFormValues();
     } catch (error: any) {
@@ -721,6 +929,8 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     targetModalOpen.value = true;
     try {
       await refreshServerList();
+      await refreshBuildJdks();
+      await refreshDeployEnvironments();
       await loadProjects(normalizeProjectSource(target.projectSource));
       initializingTargetForm.value = true;
       Object.assign(targetForm, { ...target, projectSource: normalizeProjectSource(target.projectSource), serverName: target.nginxServerName || '_' });
@@ -736,12 +946,48 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       syncTargetBranchFieldState();
       syncTargetServerFieldState();
       syncTargetNginxInstanceFieldState();
+      syncTargetJdkFieldState();
       syncTargetNginxSiteManagedState();
       syncTargetFormValues();
     } catch (error: any) {
       initializingTargetForm.value = false;
       message.error(getErrorMessage(error));
       targetModalOpen.value = false; // 加载异常时自动关闭弹窗
+    } finally {
+      targetFormLoading.value = false;
+    }
+  };
+
+  /** 使用仓库中的 POM、bootstrap 和 smart-doc 配置回填后端目标。 */
+  const inspectActiveBackendTarget = async () => {
+    if (!activeTargetId.value) {
+      message.info('请先保存部署目标，再检测仓库配置');
+      return;
+    }
+    targetFormLoading.value = true;
+    try {
+      const inspection = await inspectBackendTarget(
+        activeTargetId.value,
+        String(targetForm.defaultBranch || ''),
+        String(authState?.value?.token || '')
+      );
+      const matchedJdk = jdks.value.find((jdk) => jdk.status === 'available' && Number(jdk.majorVersion) === Number(inspection.javaMajorVersion));
+      Object.assign(targetForm, {
+        serviceName: inspection.applicationName || targetForm.serviceName,
+        serverPort: inspection.serverPort || targetForm.serverPort,
+        healthCheckPath: inspection.healthCheckPath || targetForm.healthCheckPath,
+        buildCommand: inspection.buildCommand || targetForm.buildCommand,
+        artifactDir: inspection.artifactPattern || targetForm.artifactDir,
+        artifactPattern: inspection.artifactPattern || targetForm.artifactPattern,
+        openapiCommand: inspection.openapiCommand || targetForm.openapiCommand,
+        openapiOutputPath: inspection.openapiOutputPath || targetForm.openapiOutputPath,
+        buildJdkId: matchedJdk?.id || targetForm.buildJdkId,
+        runtimeJavaVersion: inspection.javaMajorVersion ? String(inspection.javaMajorVersion) : targetForm.runtimeJavaVersion,
+      });
+      syncTargetFormValues();
+      message.success(matchedJdk ? `检测完成，已匹配 Java ${inspection.javaMajorVersion}` : `检测完成，请配置 Java ${inspection.javaMajorVersion} 构建 JDK`);
+    } catch (error: any) {
+      message.error(getErrorMessage(error));
     } finally {
       targetFormLoading.value = false;
     }
@@ -775,7 +1021,8 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
         message.warning('请选择部署分支');
         return;
       }
-      if (!payload.installCommand) {
+      const isBackend = payload.projectType === 'backend';
+      if (!isBackend && !payload.installCommand) {
         message.warning('请填写安装命令');
         return;
       }
@@ -789,7 +1036,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
         return;
       }
       const selectedInstance = selectedServer.nginxInstances?.find((instance) => instance.id === Number(payload.nginxInstanceId));
-      if (!selectedInstance) {
+      if (!isBackend && !selectedInstance) {
         message.warning('请选择 Nginx 实例');
         return;
       }
@@ -801,7 +1048,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
         message.warning('部署根目录必须使用服务器绝对路径');
         return;
       }
-      if (
+      if (!isBackend &&
         !String(payload.nginxConfPath || '')
           .trim()
           .startsWith('/')
@@ -809,9 +1056,36 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
         message.warning('Nginx 配置文件路径必须使用服务器绝对路径');
         return;
       }
-      if (payload.nginxSiteManaged && (!Number.isInteger(Number(payload.listenPort)) || Number(payload.listenPort) < 1 || Number(payload.listenPort) > 65535)) {
+      if (!isBackend && payload.nginxSiteManaged && (!Number.isInteger(Number(payload.listenPort)) || Number(payload.listenPort) < 1 || Number(payload.listenPort) > 65535)) {
         message.warning('托管站点监听端口必须在 1-65535 之间');
         return;
+      }
+      if (isBackend) {
+        if (payload.processMode === 'legacy') {
+          message.warning('历史自定义启停命令已停用，请选择 PID 脚本或 systemd');
+          return;
+        }
+        payload.needsReview = false;
+        payload.stopCommand = '';
+        payload.startCommand = '';
+        if (!Number(payload.buildJdkId || payload.jdkId || 0)) {
+          message.warning('请选择本机构建 JDK');
+          return;
+        }
+        if (!String(payload.runtimeJavaHome || '').trim().startsWith('/')) {
+          message.warning('服务器运行 JAVA_HOME 必须使用绝对路径');
+          return;
+        }
+        const port = Number(payload.serverPort || 0);
+        if (!Number.isInteger(port) || port < 1 || port > 65535) {
+          message.warning('服务端口必须在 1-65535 之间');
+          return;
+        }
+        payload.artifactPattern = String(payload.artifactPattern || payload.artifactDir || '').trim();
+        if (!payload.artifactPattern) {
+          message.warning('请填写 Jar 产物匹配规则');
+          return;
+        }
       }
       if (activeTargetId.value) {
         const currentTarget = targets.value.find((target) => target.id === activeTargetId.value);
@@ -861,6 +1135,57 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     await syncNginxSite(target.id);
     message.success('同步托管 Nginx 站点配置成功');
     await refreshActiveTab({ force: true });
+  };
+
+  /**
+   * 执行后端服务启停操作。
+   * @param target 后端部署目标
+   * @param action 服务动作
+   */
+  const runTargetServiceAction = async (target: DeployTarget, action: 'start' | 'stop' | 'restart') => {
+    if (!ensureLoggedIn()) return;
+    if (!(await ensureTargetIdle(target, action === 'start' ? '启动' : action === 'stop' ? '停止' : '重启'))) return;
+    try {
+      target.serviceStatus = action === 'stop' ? 'stopping' : 'starting';
+      const status = await runBackendServiceAction(target.id, action);
+      Object.assign(target, {
+        serviceStatus: status.status,
+        serviceStatusOutput: status.output,
+        serviceStatusAt: status.checkedAt,
+      });
+      message.success(`服务${action === 'start' ? '启动' : action === 'stop' ? '停止' : '重启'}完成`);
+    } catch (error: any) {
+      target.serviceStatus = 'error';
+      target.serviceStatusOutput = getErrorMessage(error);
+      message.error(getErrorMessage(error));
+    }
+  };
+
+  /** 刷新当前后端服务日志。 */
+  const refreshTargetServiceLogs = async () => {
+    const target = serviceLogTarget.value;
+    if (!target) return;
+    serviceLogLoading.value = true;
+    try {
+      const result = await getBackendServiceLogs(target.id, 1000);
+      serviceLogContent.value = result.content || '暂无服务日志';
+    } catch (error: any) {
+      serviceLogContent.value = getErrorMessage(error);
+      message.error(serviceLogContent.value);
+    } finally {
+      serviceLogLoading.value = false;
+    }
+  };
+
+  /**
+   * 打开后端服务日志抽屉。
+   * @param target 后端部署目标
+   */
+  const openTargetServiceLogs = async (target: DeployTarget) => {
+    serviceLogTarget.value = target;
+    serviceLogContent.value = '';
+    serviceLogOpen.value = true;
+    await refreshTargetServiceLogs();
   };
 
   /**
@@ -950,6 +1275,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
 
   /** 清空部署目标数据和临时态 */
   const clearTargetData = () => {
+    targetListRefreshSequence += 1;
     stopTargetRuntimePolling();
     cancelPendingRequests();
     targets.value = [];
@@ -978,8 +1304,13 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
 
   watch(
     () => targetForm.serverId,
-    (serverId) => {
+    (serverId, oldServerId) => {
       if (!serverId || initializingTargetForm.value) return;
+      if (oldServerId && Number(oldServerId) !== Number(serverId) && targetForm.projectType === 'backend') {
+        targetForm.serverJavaRuntimeId = undefined;
+        targetForm.runtimeJavaHome = '';
+        targetForm.runtimeJavaVersion = '';
+      }
       const server = servers.value.find((item) => item.id === Number(serverId));
       if (!server) return;
       const nextInstance = getDefaultNginxInstance(server);
@@ -1011,7 +1342,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     { flush: 'sync' }
   );
 
-  watch(projectOptions, () => {
+  watch([projectOptions, projectLoading], () => {
     if (targetModalOpen.value) syncTargetProjectFieldState();
   });
 
@@ -1034,6 +1365,85 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     }
   );
 
+  watch(
+    () => targetForm.projectType,
+    (newType, oldType) => {
+      if (initializingTargetForm.value || !targetModalOpen.value || newType === oldType) return;
+
+      const server = servers.value.find((item) => item.id === Number(targetForm.serverId));
+
+      if (newType === 'backend') {
+        if (targetForm.projectSource !== 'gitlab') {
+          void handleTargetProjectSourceChange('gitlab');
+        }
+        if (targetForm.installCommand === DEFAULT_INSTALL_COMMAND) {
+          targetForm.installCommand = DEFAULT_BACKEND_INSTALL_COMMAND;
+        }
+        if (targetForm.buildCommand === DEFAULT_BUILD_COMMAND) {
+          targetForm.buildCommand = DEFAULT_BACKEND_BUILD_COMMAND;
+        }
+        targetForm.serviceRole ||= 'application';
+        targetForm.serviceName ||= targetForm.projectName;
+        targetForm.serverPort ||= 9999;
+        targetForm.processMode = targetForm.processMode === 'systemd' ? 'systemd' : 'pid';
+        targetForm.stopTimeoutSeconds ||= 30;
+        targetForm.startupTimeoutSeconds ||= 120;
+        targetForm.healthCheckPath ||= '/monitor/health';
+        targetForm.artifactDir ||= DEFAULT_BACKEND_ARTIFACT_PATTERN;
+        targetForm.artifactPattern ||= targetForm.artifactDir;
+        targetForm.openapiCommand ||= DEFAULT_BACKEND_OPENAPI_COMMAND;
+        targetForm.openapiOutputPath ||= DEFAULT_BACKEND_OPENAPI_OUTPUT_PATH;
+
+        // 算出当前服务器对应的前端默认部署根目录
+        const defaultFrontDeployRoot = server
+          ? createTargetServerDefaults(
+              server,
+              targetForm.projectName,
+              applyProjectTemplate,
+              getSelectedNginxInstance(server),
+              {
+                projectName: targetForm.projectName,
+                projectDescription: targetForm.projectDescription || '',
+              },
+              allTargets.value.length ? allTargets.value : targets.value
+            ).deployRoot
+          : '';
+
+        if (!targetForm.deployRoot || targetForm.deployRoot === defaultFrontDeployRoot || targetForm.deployRoot.includes('frontend')) {
+          const backendRoot = String(server?.defaultBackendRoot || '').replace(/\/+$/, '');
+          const serviceDir = String(targetForm.serviceName || targetForm.projectName).trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
+          targetForm.deployRoot = backendRoot && serviceDir ? `${backendRoot}/${serviceDir}` : '';
+        }
+      } else {
+        if (targetForm.installCommand === DEFAULT_BACKEND_INSTALL_COMMAND) {
+          targetForm.installCommand = DEFAULT_INSTALL_COMMAND;
+        }
+        if (targetForm.buildCommand === DEFAULT_BACKEND_BUILD_COMMAND) {
+          targetForm.buildCommand = DEFAULT_BUILD_COMMAND;
+        }
+
+        if (!targetForm.deployRoot) {
+          if (server) {
+            const defaults = createTargetServerDefaults(
+              server,
+              targetForm.projectName,
+              applyProjectTemplate,
+              getSelectedNginxInstance(server),
+              {
+                projectName: targetForm.projectName,
+                projectDescription: targetForm.projectDescription || '',
+              },
+              allTargets.value.length ? allTargets.value : targets.value
+            );
+            targetForm.deployRoot = defaults.deployRoot;
+          }
+        }
+      }
+      syncTargetProjectSourceFieldState();
+      syncTargetFormValues();
+    }
+  );
+
   return {
     targetSaving,
     targetBindingRepairing,
@@ -1053,6 +1463,14 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     targetForm,
     targetFormModel,
     targetSchema,
+    serviceLogOpen,
+    serviceLogLoading,
+    serviceLogTarget,
+    serviceLogContent,
+    javaManagerOpen,
+    javaManagerServerId,
+    environmentManagerOpen,
+    deployEnvironments,
     hasProjectContext,
     getTargetRuntimeSnapshot,
     setTargetRuntimeSnapshot,
@@ -1061,9 +1479,20 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     refreshTargetList,
     openCreateTarget,
     openEditTarget,
+    inspectActiveBackendTarget,
+    refreshBuildJdks,
+    openJavaManager,
+    selectBuildJdk,
+    selectServerRuntime,
+    refreshDeployEnvironments,
+    selectDeployEnvironment,
+    openEnvironmentManager,
     saveTarget,
     deleteTarget,
     syncTargetSite,
+    runTargetServiceAction,
+    openTargetServiceLogs,
+    refreshTargetServiceLogs,
     repairManagedNginxBindings,
     openNginxConfig,
     handleTargetFilterSearch,

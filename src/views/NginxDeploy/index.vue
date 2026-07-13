@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { onMounted } from 'vue';
+import { nextTick, onMounted, ref } from 'vue';
+import '@ycwang-dev/components/dist/style.css';
 import { useYssVxeUI } from '@/composables/useYssVxeUI';
 import NginxDeployWorkspace from './components/NginxDeployWorkspace/index.vue';
 import NginxDeployOverlays from './components/NginxDeployOverlays/index.vue';
@@ -12,6 +13,7 @@ import {
   useNginxDeployRecords,
   useNginxDeployServers,
   useNginxDeployTargets,
+  useTargetOpenApi,
 } from './hooks/useNginxDeploy';
 import { provideNginxDeployContext } from './hooks/useNginxDeployContext';
 import type { RefreshActiveTabOptions } from './types';
@@ -19,6 +21,35 @@ import type { RefreshActiveTabOptions } from './types';
 defineOptions({ name: 'NginxDeploy' });
 
 useYssVxeUI();
+
+/** 部署项目类型 */
+type DeployProjectType = 'all' | 'frontend' | 'backend';
+
+/**
+ * 读取合法的项目类型偏好，避免异常缓存导致页面所有项目均被过滤。
+ * @returns 已校验的项目类型
+ */
+const getInitialProjectType = (): DeployProjectType => {
+  const storedType = localStorage.getItem('yuyan_deploy_type_preference');
+  return storedType === 'frontend' || storedType === 'backend' || storedType === 'all' ? storedType : 'all';
+};
+
+const projectType = ref<DeployProjectType>(getInitialProjectType());
+
+/**
+ * 切换全局项目类型并刷新当前 Tab。
+ * @param type 目标项目类型
+ */
+const setProjectType = (type: DeployProjectType) => {
+  if (projectType.value === type) return;
+  projectType.value = type;
+  localStorage.setItem('yuyan_deploy_type_preference', type);
+  // 重置除了当前激活 Tab 之外的其他 Tab 缓存加载标记
+  lifecycleState.clearTabCache(lifecycleState.activeTabKey.value);
+  // 延迟刷新，让 Select 面板关闭动画先完成，避免同步阻塞导致交互卡顿
+  const resetRecordsPage = lifecycleState.activeTabKey.value === 'records';
+  void nextTick(() => refreshActiveTab({ force: true, resetRecordsPage }));
+};
 
 const project = useNginxDeployProjectContext();
 const {
@@ -54,14 +85,17 @@ const targetState = useNginxDeployTargets({
   refreshActiveTab,
   servers: serverState.servers,
   refreshServerList: serverState.refreshServerList,
+  projectType,
+  authState,
 });
+const openApiState = useTargetOpenApi({ ensureLoggedIn, authState });
 const recordState = useNginxDeployRecords({
   project,
   hasProjectContext: targetState.hasProjectContext,
-  allTargets: targetState.allTargets,
   authState,
   ensureLoggedIn,
   refreshActiveTab,
+  projectType,
 });
 const progressState = useNginxDeployProgress({
   ensureLoggedIn,
@@ -100,6 +134,9 @@ const { serverActionConfig, targetActionConfig, recordActionConfig } = useNginxD
   openEditServer: serverState.openEditServer,
   deleteServer: serverState.deleteServer,
   openPublishConfirm: progressState.openPublishConfirm,
+  openOpenApi: openApiState.openOpenApi,
+  runServiceAction: progressState.runTargetServiceAction,
+  openServiceLogs: targetState.openTargetServiceLogs,
   openTargetProgress: progressState.openTargetProgress,
   openNginxConfig: targetState.openNginxConfig,
   openEditTarget: targetState.openEditTarget,
@@ -129,6 +166,8 @@ provideNginxDeployContext({
   hasProjectContext: targetState.hasProjectContext,
   targetFormLoading: targetState.targetFormLoading,
   activeTargetId: targetState.activeTargetId,
+  projectType,
+  setProjectType,
 
   refreshActiveTab,
   refreshServerList: serverState.refreshServerList,
@@ -164,6 +203,7 @@ onMounted(() => {
       :target-state="targetState"
       :record-state="recordState"
       :progress-state="progressState"
+      :open-api-state="openApiState"
     />
   </div>
 </template>

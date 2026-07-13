@@ -4,6 +4,7 @@ import {
   deployTargetWithProgress,
   getTargetDeployProgress,
   rollbackRecordWithProgress,
+  runBackendServiceActionWithProgress,
   stopTargetDeploy,
   subscribeTargetDeployProgress,
   undoRollbackRecordWithProgress,
@@ -94,7 +95,11 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
 
   /** 恢复类操作进度弹窗标题 */
   const rollbackProgressTitle = computed(() => {
-    return progressMode.value === 'undoRollback' ? '撤销回滚进度' : '回滚进度';
+    if (progressMode.value === 'undoRollback') return '撤销回滚进度';
+    if (progressMode.value === 'start') return '服务启动进度';
+    if (progressMode.value === 'stop') return '服务停止进度';
+    if (progressMode.value === 'restart') return '服务重启进度';
+    return '回滚进度';
   });
 
   /**
@@ -156,7 +161,9 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       if (item.type === 'stage' && event.type === 'stage') return item.stage === event.stage && item.message === event.message;
       if (item.type === 'log' && event.type === 'log') return item.stage === event.stage && item.message === event.message;
       if (item.type === 'error' && event.type === 'error') return item.message === event.message;
-      if (item.type === 'result' && event.type === 'result') return item.data.id === event.data.id && item.data.status === event.data.status;
+      if (item.type === 'result' && event.type === 'result') {
+        return JSON.stringify(item.data) === JSON.stringify(event.data);
+      }
       return true;
     });
   };
@@ -204,22 +211,24 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
         return;
       }
       progressState.percent = 100;
-      progressState.title = progressMode.value === 'undoRollback' ? '撤销回滚完成' : progressMode.value === 'rollback' ? '回滚完成' : '发布完成';
+      progressState.title = `${getDeployProgressActionLabel(progressMode.value)}完成`;
       progressState.detail =
         progressMode.value === 'undoRollback'
           ? `${activeRecord.value?.projectName || activePublishTarget.value?.projectName || '当前项目'} 撤销回滚成功`
           : progressMode.value === 'rollback'
           ? `${activeRecord.value?.projectName || activePublishTarget.value?.projectName || '当前项目'} 回滚成功`
+          : ['start', 'stop', 'restart'].includes(progressMode.value)
+          ? `${activePublishTarget.value?.projectName || '当前服务'}${getDeployProgressActionLabel(progressMode.value)}成功`
           : `${activePublishTarget.value?.projectName || '当前项目'} 发布成功`;
     }
     if (event.type === 'error') {
-      const isRestoreAction = progressMode.value === 'rollback' || progressMode.value === 'undoRollback';
+      const shouldShowRawError = progressMode.value !== 'deploy';
       progressState.title = getDeployProgressFailureTitle({
         action: progressMode.value,
         events: progressState.logs,
         fallbackStage: event.stage || currentPublishStageKey.value,
       });
-      progressState.detail = isRestoreAction ? event.message : DEPLOY_FAILURE_BRIEF;
+      progressState.detail = shouldShowRawError ? event.message : DEPLOY_FAILURE_BRIEF;
     }
   };
 
@@ -315,12 +324,18 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
    * @param snapshot 运行中任务快照
    */
   const subscribeRunningTargetProgress = async (target: DeployTarget, snapshot: DeployProgressSnapshot) => {
-    progressMode.value = snapshot.action;
+    if (!['deploy', 'rollback', 'undoRollback', 'start', 'stop', 'restart'].includes(snapshot.action)) {
+      message.info('该后台任务请在对应功能入口查看进度');
+      return;
+    }
+    progressMode.value = snapshot.action as DeployProgressMode;
     const sessionId = ++progressSessionId;
     const abortController = new AbortController();
     deployAbortController = abortController;
     activePublishTarget.value = target;
-    if (snapshot.action !== 'deploy') activeRecord.value = snapshot.result;
+    if (snapshot.action !== 'deploy' && snapshot.result && 'projectId' in snapshot.result) {
+      activeRecord.value = snapshot.result;
+    }
     setTargetRuntimeSnapshot?.(snapshot);
     hydrateProgressFromSnapshot(snapshot);
     let shouldClearRuntime = false;
@@ -378,6 +393,59 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
         if (deployAbortController === abortController) deployAbortController = null;
         if (shouldClearRuntime) clearTargetRuntimeSnapshot?.(target.id);
         if (!publishConfirmOpen.value && !rollbackProgressOpen.value) resetPublishWorkbench();
+      }
+    }
+  };
+
+  /**
+   * 执行后端服务启停并展示实时进度。
+   * @param target 后端部署目标
+   * @param action 服务动作
+   */
+  const runTargetServiceAction = async (target: DeployTarget, action: 'start' | 'stop' | 'restart') => {
+    if (!ensureLoggedIn()) return;
+    detachPublishProgressStream();
+    progressMode.value = action;
+    activePublishTarget.value = target;
+    publishStarted.value = false;
+    publishConfirmOpen.value = false;
+    rollbackProgressOpen.value = true;
+    const sessionId = ++progressSessionId;
+    const abortController = new AbortController();
+    deployAbortController = abortController;
+    Object.assign(progressState, {
+      percent: 0,
+      title: `准备${getDeployProgressActionLabel(action)}`,
+      detail: target.projectName || '当前后端服务',
+      logs: [],
+      running: true,
+      stopped: false,
+    });
+    try {
+      await runBackendServiceActionWithProgress(target.id, action, {
+        signal: abortController.signal,
+        onEvent: createScopedProgressHandler(sessionId),
+      });
+      if (sessionId !== progressSessionId || abortController.signal.aborted) return;
+      message.success(`服务${getDeployProgressActionLabel(action)}完成`);
+      await refreshActiveTab({ force: true });
+    } catch (error: any) {
+      if (isAbortError(error) || abortController.signal.aborted || sessionId !== progressSessionId) return;
+      const errorMessage = getErrorMessage(error);
+      appendProgressErrorLog(errorMessage, currentPublishStageKey.value || action);
+      progressState.title = getDeployProgressFailureTitle({
+        action,
+        events: progressState.logs,
+        fallbackStage: currentPublishStageKey.value || action,
+      });
+      progressState.detail = errorMessage;
+      message.error(errorMessage);
+      await refreshActiveTab({ force: true });
+    } finally {
+      if (sessionId === progressSessionId) {
+        progressState.running = false;
+        clearTargetRuntimeSnapshot?.(target.id);
+        if (deployAbortController === abortController) deployAbortController = null;
       }
     }
   };
@@ -589,6 +657,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
   });
 
   return {
+    progressMode,
     rollbackProgressOpen,
     publishConfirmOpen,
     publishStarted,
@@ -605,6 +674,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     stopCurrentPublish,
     runRollback,
     runUndoRollback,
+    runTargetServiceAction,
     clearProgressData,
   };
 }

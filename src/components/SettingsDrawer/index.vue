@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { BulbOutlined, CheckOutlined, CloseOutlined, EyeInvisibleOutlined } from '@ant-design/icons-vue';
 import { YButton } from '@ycwang-dev/components/lite';
 import { useTheme } from '@/hooks/useTheme';
@@ -32,6 +32,43 @@ const emit = defineEmits<{
 
 const { isDark, isCompact, borderRadius, spacing, primaryColor, setDarkMode, setCompact, setBorderRadius, setSpacing, setPrimaryColor, resetTheme } =
   useTheme();
+
+const colorInputVal = ref(primaryColor.value);
+
+watch(primaryColor, (newVal) => {
+  colorInputVal.value = newVal;
+}, { immediate: true });
+
+/**
+ * 处理用户手动输入色值
+ * @param event 输入事件
+ */
+const handleInputColor = (event: Event) => {
+  let val = (event.target as HTMLInputElement).value.trim();
+  if (/^[0-9A-Fa-f]{6}$/.test(val)) {
+    val = `#${val}`;
+    colorInputVal.value = val;
+  }
+  if (/^#[0-9A-Fa-f]{6}$/.test(val)) {
+    setPrimaryColor(val);
+  }
+};
+
+/**
+ * 输入框失去焦点时，进行格式化和重置
+ */
+const handleInputBlur = () => {
+  let val = colorInputVal.value.trim();
+  if (/^[0-9A-Fa-f]{6}$/.test(val)) {
+    val = `#${val}`;
+    colorInputVal.value = val;
+  }
+  if (/^#[0-9A-Fa-f]{6}$/.test(val)) {
+    setPrimaryColor(val);
+  } else {
+    colorInputVal.value = primaryColor.value;
+  }
+};
 
 const colorValue = computed({
   get: () => primaryColor.value,
@@ -148,7 +185,14 @@ const handlePickColor = (event: Event) => {
           </div>
           <div class="current-color">
             <span class="current-color__chip" :style="{ backgroundColor: colorValue }" />
-            <span>{{ colorValue }}</span>
+            <input
+              v-model="colorInputVal"
+              class="current-color__input"
+              maxlength="7"
+              @input="handleInputColor"
+              @blur="handleInputBlur"
+              @keydown.enter="handleInputBlur"
+            />
           </div>
         </div>
 

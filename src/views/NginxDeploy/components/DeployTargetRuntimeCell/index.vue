@@ -18,6 +18,21 @@ const snapshot = computed(() => props.record.runtimeSnapshot);
 /** 是否存在运行中任务 */
 const running = computed(() => Boolean(snapshot.value?.running));
 
+/** 后端服务状态展示信息 */
+const serviceState = computed(() => {
+  if (props.record.projectType !== 'backend') return { title: '空闲', detail: '可操作', className: '' };
+  const states = {
+    online: { title: '在线', detail: `端口 ${props.record.serverPort || '-'}`, className: 'is-online' },
+    offline: { title: '离线', detail: '可启动', className: 'is-offline' },
+    starting: { title: '启动中', detail: '等待健康检查', className: 'is-transitioning' },
+    stopping: { title: '停止中', detail: '等待进程退出', className: 'is-transitioning' },
+    deploying: { title: '发布中', detail: '版本切换中', className: 'is-transitioning' },
+    error: { title: '异常', detail: '请查看日志', className: 'is-error' },
+    unknown: { title: '未知', detail: '等待探测', className: 'is-unknown' },
+  } as const;
+  return states[props.record.serviceStatus || 'unknown'];
+});
+
 /** 当前任务操作类型 */
 const actionLabel = computed(() => getDeployProgressActionLabel(snapshot.value?.action));
 
@@ -38,7 +53,10 @@ const progressStyle = computed(() => ({
 
 /** 运行态悬浮提示 */
 const tooltipTitle = computed(() => {
-  if (!running.value) return '当前没有运行中的发布或回滚任务';
+  if (!running.value) {
+    if (props.record.projectType !== 'backend') return '当前没有运行中的发布或回滚任务';
+    return props.record.serviceStatusOutput || `后端服务状态：${serviceState.value.title}`;
+  }
   const operator = String(snapshot.value?.operator || '').trim() || '未知操作人';
   return `${operator}发起${actionLabel.value}，当前阶段：${stageLabel.value}，开始于 ${formatDeployDateTime(snapshot.value?.startedAt)}`;
 });
@@ -51,7 +69,7 @@ const emit = defineEmits<{
   <a-tooltip :title="tooltipTitle" placement="top">
     <span
       class="target-runtime-cell"
-      :class="{ 'is-running': running, 'is-clickable': running }"
+      :class="[serviceState.className, { 'is-running': running, 'is-clickable': running }]"
       :style="progressStyle"
       @click="running && emit('click')"
     >
@@ -62,8 +80,8 @@ const emit = defineEmits<{
         <span v-else class="target-runtime-cell__dot" />
       </span>
       <span class="target-runtime-cell__content">
-        <strong>{{ running ? `正在${actionLabel}` : '空闲' }}</strong>
-        <small>{{ running ? stageLabel : '可操作' }}</small>
+        <strong>{{ running ? `正在${actionLabel}` : serviceState.title }}</strong>
+        <small>{{ running ? stageLabel : serviceState.detail }}</small>
       </span>
       <span v-if="running" class="target-runtime-cell__progress" />
     </span>

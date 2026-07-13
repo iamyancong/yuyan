@@ -45,6 +45,7 @@ test('Jar 匹配排除 sources/original 并要求唯一', async (t) => {
   await fs.writeFile(path.join(target, 'app-1.jar'), 'jar');
   await fs.writeFile(path.join(target, 'app-1-sources.jar'), 'sources');
   await fs.writeFile(path.join(target, 'app-1.jar.original'), 'original');
+  await fs.writeFile(path.join(target, 'original-app-1.jar'), 'original-prefix');
   const artifact = await resolveBackendArtifact(root, 'starter/target/app-*.jar');
   assert.equal(artifact.jarName, 'app-1.jar');
   await fs.writeFile(path.join(target, 'app-2.jar'), 'jar2');

@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "node scripts/copy-node.js --dev && tauri dev",
     "build": "node scripts/copy-node.js && tauri build",
-    "frontend:dev": "concurrently -n \"api,web\" -c \"green,blue\" \"node server/index.mjs\" \"vite --host 127.0.0.1 --port 1420\"",
+    "frontend:dev": "concurrently -n \"api,web\" -c \"green,blue\" \"node --watch server/index.mjs\" \"vite --host 127.0.0.1 --port 1420\"",
+    "server:dev": "node --watch server/index.mjs",
     "frontend:build": "node --input-type=commonjs -e \"if(!process.env.CI){require('child_process').execSync('npx vue-tsc --noEmit',{stdio:'inherit'})}\" && vite build",
     "frontend:build:ci": "vite build",
     "typecheck": "vue-tsc --noEmit",

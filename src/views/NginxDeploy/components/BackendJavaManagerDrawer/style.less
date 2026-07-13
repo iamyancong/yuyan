@@ -1,0 +1,58 @@
+.java-add-row,
+.java-server-toolbar,
+.java-runtime-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+:deep(.ant-alert) {
+  margin-bottom: 14px;
+}
+
+.java-add-row,
+.java-server-toolbar {
+  margin-bottom: 14px;
+}
+
+.java-add-row > :nth-child(1) {
+  flex: 1;
+  min-width: 120px;
+}
+
+.java-add-row > :nth-child(2) {
+  flex: 2;
+  min-width: 200px;
+}
+
+.java-runtime-row {
+  margin-bottom: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-color-split);
+  border-radius: 10px;
+  background: var(--glass-bg);
+
+  &__main {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 3px;
+
+    span,
+    small {
+      overflow: hidden;
+      color: var(--text-color-secondary);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+}
+
+@media (max-width: 760px) {
+  .java-add-row,
+  .java-runtime-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
