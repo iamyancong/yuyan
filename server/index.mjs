@@ -48,9 +48,14 @@ function isValidDeployToken(value) {
   return actual.length === expected.length && actual.length > 0 && crypto.timingSafeEqual(actual, expected);
 }
 
+/** 判断是否为兼容旧版客户端的免鉴权更新包下载请求。 */
+function isPublicAppUpdateDownload(req) {
+  return req.method === 'GET' && req.path === '/app-update/download-asset';
+}
+
 /** 非本机部署 API 鉴权中间件。 */
 function authorizeDeployApi(req, res, next) {
-  if (isLoopbackBind || isTauriSubprocess) return next();
+  if (isLoopbackBind || isTauriSubprocess || isPublicAppUpdateDownload(req)) return next();
   const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
   const token = String(req.headers['x-deploy-token'] || bearer);
   if (!isValidDeployToken(token)) {
