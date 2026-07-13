@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { getDeployApiToken } from '@/api/deploy';
 
 /** Tauri 原生更新下载状态。 */
 export interface NativeAppUpdateStatus {
@@ -63,6 +64,7 @@ export const useNativeAppUpdate = (): NativeAppUpdateActions => {
       expectedSize: metadata.expectedSize,
       sha256: metadata.sha256,
       etag: metadata.etag,
+      deployApiToken: getDeployApiToken() || undefined,
     });
   };
 

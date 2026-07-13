@@ -368,6 +368,22 @@ fn parse_content_range(value: &str) -> Option<(u64, u64)> {
     Some((start.parse().ok()?, total.parse().ok()?))
 }
 
+/** 构建更新包下载请求，仅为受鉴权保护的动态代理附加部署 Token。 */
+fn build_download_request(
+    client: &reqwest::Client,
+    url: reqwest::Url,
+    deploy_api_token: Option<&str>,
+) -> reqwest::RequestBuilder {
+    let is_protected_proxy = url.path() == UPDATE_DOWNLOAD_PATH;
+    let mut request = client.get(url);
+    if is_protected_proxy {
+        if let Some(token) = deploy_api_token.filter(|value| !value.is_empty()) {
+            request = request.header("X-Deploy-Token", token);
+        }
+    }
+    request
+}
+
 /** 将内网安装包下载到临时文件，并在校验完成后原子替换正式文件。 */
 async fn download_update(
     app: AppHandle,
@@ -377,6 +393,7 @@ async fn download_update(
     expected_size: Option<u64>,
     expected_sha256: Option<String>,
     expected_etag: Option<String>,
+    deploy_api_token: Option<String>,
 ) -> Result<PathBuf, String> {
     let update_dir = app
         .path()
@@ -416,6 +433,7 @@ async fn download_update(
         &partial_path,
         expected_size,
         expected_etag.as_deref(),
+        deploy_api_token.as_deref(),
     )
     .await;
     if let Err(error) = result {
@@ -451,6 +469,7 @@ async fn download_to_partial(
     partial_path: &Path,
     expected_size: Option<u64>,
     expected_etag: Option<&str>,
+    deploy_api_token: Option<&str>,
 ) -> Result<(), String> {
     let client = reqwest::Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
@@ -479,7 +498,7 @@ async fn download_to_partial(
             return Ok(());
         }
 
-        let mut request = client.get(url.clone());
+        let mut request = build_download_request(&client, url.clone(), deploy_api_token);
         if offset > 0 {
             request = request.header(reqwest::header::RANGE, format!("bytes={offset}-"));
             if let Some(etag) = expected_etag {
@@ -600,6 +619,7 @@ pub async fn start_app_update_download(
     expected_size: Option<u64>,
     sha256: Option<String>,
     etag: Option<String>,
+    deploy_api_token: Option<String>,
 ) -> Result<AppUpdateCommandResult, String> {
     if manager.snapshot().status == "downloading" {
         return Ok(AppUpdateCommandResult {
@@ -622,6 +642,7 @@ pub async fn start_app_update_download(
             expected_size.filter(|size| *size > 0),
             sha256.filter(|value| !value.is_empty()),
             etag.filter(|value| !value.is_empty()),
+            deploy_api_token.filter(|value| !value.is_empty()),
         )
         .await
         {
@@ -726,8 +747,9 @@ pub async fn install_app_update(
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_content_range, validate_download_url, validate_downloaded_length, validate_filename,
-        validate_package_signature, AppUpdateManager,
+        build_download_request, parse_content_range, validate_download_url,
+        validate_downloaded_length, validate_filename, validate_package_signature,
+        AppUpdateManager,
     };
 
     /** 验证仅允许指定内网更新代理。 */
@@ -758,6 +780,44 @@ mod tests {
             port
         );
         assert!(validate_download_url(&invalid_url).is_err());
+    }
+
+    /** 验证动态更新代理携带鉴权头，静态安装包路径不泄露 Token。 */
+    #[test]
+    fn applies_deploy_token_only_to_protected_proxy() {
+        let port = super::UPDATE_SERVER_PORT_STR
+            .and_then(|p| p.parse::<u16>().ok())
+            .unwrap_or(3100);
+        let client = reqwest::Client::new();
+        let proxy_url = format!(
+            "http://{}:{}/deploy-api/app-update/download-asset?assetId=123&filename=yuyan.dmg",
+            super::UPDATE_SERVER_HOST,
+            port
+        )
+        .parse()
+        .expect("动态代理 URL 应有效");
+        let proxy_request = build_download_request(&client, proxy_url, Some("deploy-secret"))
+            .build()
+            .expect("动态代理请求应成功构建");
+        assert_eq!(
+            proxy_request
+                .headers()
+                .get("X-Deploy-Token")
+                .and_then(|value| value.to_str().ok()),
+            Some("deploy-secret")
+        );
+
+        let static_url = format!(
+            "http://{}:{}/app-updates/stable/1.2.3/darwin-aarch64/yuyan.dmg",
+            super::UPDATE_SERVER_HOST,
+            port
+        )
+        .parse()
+        .expect("静态安装包 URL 应有效");
+        let static_request = build_download_request(&client, static_url, Some("deploy-secret"))
+            .build()
+            .expect("静态安装包请求应成功构建");
+        assert!(static_request.headers().get("X-Deploy-Token").is_none());
     }
 
     /** 验证安装包文件名拒绝路径穿越和错误扩展名。 */

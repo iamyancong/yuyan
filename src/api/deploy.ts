@@ -561,16 +561,22 @@ import { getApiBase } from '@/utils/env';
 
 const client = axios.create({ baseURL: getApiBase('/deploy-api') });
 
-/**
- * 获取服务器模式部署 API 鉴权头；Tauri/本机模式通常为空。
- * @returns 部署 API 鉴权头
- */
-export const getDeployApiAuthHeaders = (): Record<string, string> => {
+/** 获取服务器模式部署 API Token。 */
+export const getDeployApiToken = (): string => {
   let token = String(import.meta.env.VITE_DEPLOY_API_TOKEN || '').trim();
   try {
     token = String(window.localStorage.getItem('yuyan_deploy_api_token') || token).trim();
   } catch {
   }
+  return token;
+};
+
+/**
+ * 获取服务器模式部署 API 鉴权头；Tauri/本机模式通常为空。
+ * @returns 部署 API 鉴权头
+ */
+export const getDeployApiAuthHeaders = (): Record<string, string> => {
+  const token = getDeployApiToken();
   return token ? { 'X-Deploy-Token': token } : {};
 };
 
