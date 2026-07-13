@@ -234,6 +234,7 @@ export function normalizeBackendConfig(payload, server = {}) {
     serviceRole,
     serviceName: normalizeBackendServiceName(payload.serviceName || payload.projectName),
     buildJdkId: Number(payload.buildJdkId || payload.jdkId || 0),
+    requiredJdkAlias: normalizeSingleLine(payload.requiredJdkAlias || '', '所需的 JDK 逻辑别名'),
     serverJavaRuntimeId: Number(payload.serverJavaRuntimeId || 0),
     runtimeJavaHome: normalizeSingleLine(payload.runtimeJavaHome, '服务器 JAVA_HOME'),
     runtimeJavaVersion: normalizeSingleLine(payload.runtimeJavaVersion, '服务器 Java 版本'),

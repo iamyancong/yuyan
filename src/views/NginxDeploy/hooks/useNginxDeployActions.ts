@@ -1,7 +1,10 @@
-import { computed, type Ref } from 'vue';
+import { computed, type Ref, ref, onMounted, onUnmounted } from 'vue';
 import type { YTableActionConfig } from '@ycwang-dev/components/lite';
 import type { DeployProgressSnapshot, DeployRecord, DeployServer, DeployTarget } from '@/api/deploy';
 import { useNginxDeployContext } from './useNginxDeployContext';
+import { isTauri } from '@/utils/env';
+import message from 'ant-design-vue/es/message';
+import axios from 'axios';
 
 /** 部署中心表格操作 Hook 参数 */
 interface UseNginxDeployActionsParams {
@@ -50,6 +53,33 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
   const openNginxRuntime = params?.openNginxRuntime;
   const openEditServer = params?.openEditServer;
   const deleteServer = params?.deleteServer;
+
+  const isLocalHelperOnline = ref(true);
+  let heartbeatTimer: any = null;
+
+  const checkHeartbeat = async () => {
+    if (isTauri()) {
+      isLocalHelperOnline.value = true;
+      return;
+    }
+    try {
+      await axios.get('http://127.0.0.1:3100/health', { timeout: 1000 });
+      isLocalHelperOnline.value = true;
+    } catch {
+      isLocalHelperOnline.value = false;
+    }
+  };
+
+  onMounted(() => {
+    void checkHeartbeat();
+    heartbeatTimer = setInterval(() => {
+      void checkHeartbeat();
+    }, 5000);
+  });
+
+  onUnmounted(() => {
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+  });
   const openPublishConfirm = params?.openPublishConfirm;
   const openOpenApi = params?.openOpenApi;
   const runServiceAction = params?.runServiceAction;
@@ -134,6 +164,10 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
         type: 'link',
         hideFn: ({ row }) => isTargetRunning(row),
         clickFn: ({ row }) => {
+          if (row.projectType === 'backend' && !isTauri()) {
+            message.warning('后端项目需要本地打包环境，请使用雨燕客户端进行发布');
+            return;
+          }
           void openPublishConfirm?.(row);
         },
       },
@@ -143,6 +177,10 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
         type: 'link',
         hideFn: ({ row }) => row.projectType !== 'backend' || isTargetRunning(row),
         clickFn: ({ row }) => {
+          if (!isTauri()) {
+            message.warning('生成 OpenAPI 需要本地构建环境，请使用雨燕客户端进行操作');
+            return;
+          }
           void openOpenApi?.(row);
         },
       },

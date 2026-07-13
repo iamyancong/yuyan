@@ -76,7 +76,7 @@ test('v1/v2/v3 迁移保留前端目标，将历史后端命令标记为 legacy 
       recordTypes: allRecords.items.map(x => x.projectType).sort(),
     }));
   `);
-  assert.deepEqual(migrated.versions, [1, 2, 3]);
+  assert.deepEqual(migrated.versions, [1, 2, 3, 4]);
   assert.deepEqual(migrated.targets, [
     { name: 'backend-app', type: 'backend' },
     { name: 'frontend-app', type: 'frontend' },
@@ -94,7 +94,7 @@ test('v1/v2/v3 迁移保留前端目标，将历史后端命令标记为 legacy 
     await store.closeDeployDb();
     console.log(JSON.stringify(result));
   `);
-  assert.deepEqual(repeated, { versions: 3, configs: 1, taskStatus: 'interrupted' });
+  assert.deepEqual(repeated, { versions: 4, configs: 1, taskStatus: 'interrupted' });
   const backups = (await fs.readdir(root)).filter((name) => name.includes('.pre-backend-v3-') && name.endsWith('.bak'));
   assert.equal(backups.length, 1);
 });

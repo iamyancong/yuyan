@@ -114,6 +114,7 @@ export interface DeployTarget {
   environmentName: string;
   serviceName: string;
   buildJdkId: number;
+  requiredJdkAlias: string;
   serverJavaRuntimeId: number;
   runtimeJavaHome: string;
   runtimeJavaVersion: string;
@@ -179,6 +180,7 @@ export interface DeployTargetPayload {
   environmentId?: number;
   serviceName?: string;
   buildJdkId?: number;
+  requiredJdkAlias?: string;
   serverJavaRuntimeId?: number;
   runtimeJavaHome?: string;
   runtimeJavaVersion?: string;
@@ -581,7 +583,7 @@ export const getDeployApiAuthHeaders = (): Record<string, string> => {
 };
 
 client.interceptors.request.use(async (config) => {
-  config.baseURL = await getActiveDeployApiBase();
+  config.baseURL = await getActiveDeployApiBase(config.url || '');
   Object.assign(config.headers, getDeployApiAuthHeaders());
   return config;
 });
@@ -1236,14 +1238,30 @@ function hasCustomDeployApiBase(): boolean {
   }
 }
 
+const LOCAL_EXECUTE_API_PATTERNS = [
+  /\/targets\/\d+\/(?:deploy|deploy-progress|deploy\/stop|service-actions\/|service-status|service-logs|inspect|nginx-site\/sync|openapi\/generate)/i,
+  /\/records\/\d+\/(?:rollback|undo-rollback)/i,
+  /\/servers\/\d+\/nginx-runtime\/init/i,
+  /\/nginx-instances\/\d+\/(?:init|archive)/i,
+];
+
+/** 判断请求路径是否是需要在本地辅助服务中执行的动作类接口 */
+export function isLocalExecuteApi(url: string): boolean {
+  if (!url) return false;
+  return LOCAL_EXECUTE_API_PATTERNS.some((pattern) => pattern.test(url));
+}
+
 /**
  * 获取当前模式实际执行部署任务的 API 根地址。
  * @description 桌面端默认使用内嵌服务以在用户机器构建；网页端和显式自定义模式使用中央 API。
- * @returns 部署 API 根地址
+ * @param {string} url - 请求 URL 相对路径
+ * @returns {Promise<string>} 部署 API 根地址
  */
-async function getActiveDeployApiBase(): Promise<string> {
+async function getActiveDeployApiBase(url = ''): Promise<string> {
   if (isTauri() && !hasCustomDeployApiBase()) {
-    return `${await getActiveLocalServerUrl()}/deploy-api`;
+    if (isLocalExecuteApi(url)) {
+      return `${await getActiveLocalServerUrl()}/deploy-api`;
+    }
   }
   return getApiBase('/deploy-api');
 }
@@ -1255,7 +1273,8 @@ async function getActiveDeployApiBase(): Promise<string> {
  */
 async function getActiveDeployApiUrl(path: string): Promise<string> {
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-  return `${await getActiveDeployApiBase()}${normalizedPath}`;
+  const base = await getActiveDeployApiBase(normalizedPath);
+  return `${base}${normalizedPath}`;
 }
 
 /**
