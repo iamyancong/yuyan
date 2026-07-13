@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
-import { SearchOutlined } from '@ant-design/icons-vue';
-import { YButton, YTable } from '@yss-ui/components/lite';
+import { YTable } from '@yss-ui/components/lite';
 import { openExternal } from '@/utils/open';
 import { useTableHeight } from '@yss-ui/hooks';
 import type { YTableActionConfig } from '@yss-ui/components/lite';
@@ -9,6 +8,8 @@ import type { RuntimeAwareDeployTarget, TargetFilterForm } from '../../types';
 import { targetColumns } from '../../constant';
 import NginxProjectNameCell from '../NginxProjectNameCell/index.vue';
 import DeployTargetRuntimeCell from '../DeployTargetRuntimeCell/index.vue';
+import DeployTargetFilterBar from './components/DeployTargetFilterBar.vue';
+import { useNginxDeployContext } from '../../hooks/useNginxDeployContext';
 
 defineOptions({ name: 'DeployTargetTab' });
 
@@ -44,24 +45,6 @@ const { tableHeight: rawTableHeight, recalculateHeight } = useTableHeight(tableA
   defaultHeight: 420,
 });
 
-/** 项目关键字双向绑定 */
-const projectKeyword = computed({
-  get: () => props.filterForm.projectKeyword,
-  set: (value: string) => emit('update:filterForm', { ...props.filterForm, projectKeyword: value }),
-});
-
-/** 分支筛选双向绑定 */
-const branch = computed({
-  get: () => props.filterForm.branch,
-  set: (value?: string) => emit('update:filterForm', { ...props.filterForm, branch: value }),
-});
-
-/** 服务器筛选双向绑定 */
-const serverId = computed({
-  get: () => props.filterForm.serverId,
-  set: (value?: number) => emit('update:filterForm', { ...props.filterForm, serverId: value, branch: undefined }),
-});
-
 /** 限制表格最小高度，避免 hook 内部 availableHeight <= minHeight 时 fallback 到 0 的 Bug */
 const tableHeight = computed(() => {
   return rawTableHeight.value > 240 ? rawTableHeight.value : 240;
@@ -74,81 +57,49 @@ const recalculateAfterRender = async () => {
 };
 
 watch([() => props.loading, () => props.targets.length], recalculateAfterRender, { flush: 'post' });
+
+/**
+ * 传递最新的筛选表单数据。
+ * @param val 筛选表单最新值
+ */
+const handleFilterFormUpdate = (val: TargetFilterForm) => {
+  emit('update:filterForm', val);
+};
+
+const { projectType } = useNginxDeployContext();
+
+const activeColumns = computed(() => {
+  if (projectType.value === 'backend') {
+    const excludedFields = ['visitUrl', 'nginxInstanceName', 'listenPort', 'nginxServerName', 'nginxConfPath', 'uploadStrategy', 'preserveSubDirs', 'projectType'];
+    return targetColumns.filter((col) => !excludedFields.includes(col.field || ''));
+  } else if (projectType.value === 'frontend') {
+    const excludedFields = ['projectType', 'serviceRole', 'serverPort', 'serviceLinks'];
+    return targetColumns.filter((col) => !excludedFields.includes(col.field || ''));
+  }
+  return targetColumns;
+});
 </script>
 
 <template>
   <div class="nginx-deploy-tab-pane">
-    <div class="target-filter-bar">
-      <a-form
-        layout="horizontal"
-        :label-col="{ style: { width: '60px' } }"
-        :wrapper-col="{ style: { flex: 1 } }"
-        @submit.prevent="emit('search')"
-      >
-        <a-row :gutter="[16, 12]">
-          <a-col :xs="24" :sm="24" :md="12" :xl="6">
-            <a-form-item label="项目" class="target-filter-item">
-              <a-input
-                v-model:value="projectKeyword"
-                class="target-filter-bar__project"
-                placeholder="搜索项目名称、路径或备注"
-                allow-clear
-              />
-            </a-form-item>
-          </a-col>
-          <a-col :xs="24" :sm="24" :md="12" :xl="5">
-            <a-form-item label="分支" class="target-filter-item">
-              <a-select
-                v-model:value="branch"
-                class="target-filter-bar__branch project-select"
-                :options="branchOptions"
-                placeholder="全部分支"
-                allow-clear
-                show-search
-                :dropdown-match-select-width="300"
-                option-filter-prop="searchKey"
-                option-label-prop="title"
-                popup-class-name="project-select-dropdown"
-                @change="emit('search')"
-              />
-            </a-form-item>
-          </a-col>
-          <a-col :xs="24" :sm="24" :md="12" :xl="5">
-            <a-form-item label="服务器" class="target-filter-item">
-              <a-select
-                v-model:value="serverId"
-                class="target-filter-bar__server project-select"
-                :options="serverOptions"
-                placeholder="请选择服务器"
-                show-search
-                option-filter-prop="searchKey"
-                option-label-prop="title"
-                :dropdown-match-select-width="300"
-                popup-class-name="project-select-dropdown"
-                @change="emit('search')"
-              />
-            </a-form-item>
-          </a-col>
-          <a-col :xs="24" :sm="24" :md="12" :xl="8" class="target-filter-bar__actions">
-            <a-space>
-              <YButton type="primary" html-type="submit" :loading="loading">
-                <template #icon><SearchOutlined /></template>
-                查询
-              </YButton>
-              <YButton @click="emit('reset')">重置</YButton>
-              <YButton :loading="repairLoading" @click="emit('repairNginxBindings')">修复 Nginx 关联</YButton>
-            </a-space>
-          </a-col>
-        </a-row>
-      </a-form>
-    </div>
+    <DeployTargetFilterBar
+      :loading="loading"
+      :repair-loading="repairLoading"
+      :filter-form="filterForm"
+      :branch-options="branchOptions"
+      :server-options="serverOptions"
+      @update:filter-form="handleFilterFormUpdate"
+      @search="emit('search')"
+      @reset="emit('reset')"
+      @repair-nginx-bindings="emit('repairNginxBindings')"
+    />
     <div ref="tableAreaRef" class="nginx-deploy-table-area">
       <YTable
         :data="targets"
-        :columns="targetColumns"
+        :columns="activeColumns"
         :loading="loading"
         :action-config="actionConfig"
-        :height="tableHeight"
+        :max-height="tableHeight"
         :cell-config="{ height: 58 }"
         :header-height="42"
         :pageable="false"
@@ -170,6 +121,17 @@ watch([() => props.loading, () => props.targets.length], recalculateAfterRender,
           <a v-if="row.visitUrl" :href="row.visitUrl" class="visit-link" @click.prevent.stop="openExternal(row.visitUrl)">
             {{ row.visitUrl }}
           </a>
+          <span v-else>-</span>
+        </template>
+        <template #serviceLinks="{ row }">
+          <div v-if="row.projectType === 'backend'" class="service-links">
+            <a v-if="row.directUrl" :href="row.directUrl" @click.prevent.stop="openExternal(row.directUrl)">直连</a>
+            <a v-if="row.gatewayUrl" :href="row.gatewayUrl" @click.prevent.stop="openExternal(row.gatewayUrl)">Gateway</a>
+            <a v-if="row.nacosConsoleUrl" :href="row.nacosConsoleUrl" @click.prevent.stop="openExternal(row.nacosConsoleUrl)">
+              Nacos{{ row.nacosStatus === 'online' ? ' · 在线' : row.nacosStatus === 'offline' ? ' · 离线' : '' }}
+            </a>
+            <span v-if="!row.directUrl && !row.gatewayUrl && !row.nacosConsoleUrl">-</span>
+          </div>
           <span v-else>-</span>
         </template>
       </YTable>

@@ -14,6 +14,7 @@ import {
 } from '../../constant';
 import type { RecordProjectOption, RecordServerOption } from '../../types';
 import DeployRecordFilterBar from './components/DeployRecordFilterBar.vue';
+import ProjectTypeIcon from '../ProjectTypeIcon/index.vue';
 
 defineOptions({ name: 'DeployRecordTab' });
 
@@ -49,7 +50,7 @@ interface DeployRecordTabProps {
   records: DeployRecord[];
   actionConfig: YTableActionConfig;
   serverFilter?: number;
-  projectFilter: string;
+  projectFilter?: string;
   branchFilter?: string;
   serverOptions: RecordServerOption[];
   projectOptions: RecordProjectOption[];
@@ -61,7 +62,7 @@ const props = defineProps<DeployRecordTabProps>();
 
 const emit = defineEmits<{
   (e: 'serverChange', value?: number): void;
-  (e: 'projectChange', value: string): void;
+  (e: 'projectChange', value?: string): void;
   (e: 'branchChange', value?: string): void;
   (e: 'pageChange', value: { current: number; pageSize: number }): void;
   (e: 'refresh'): void;
@@ -154,7 +155,7 @@ const getCommitUrl = (record: DeployRecord): string => {
       :project-options="projectOptions"
       :branch-options="branchOptions"
       @server-change="(val?: number) => emit('serverChange', val)"
-      @project-change="(val: string) => emit('projectChange', val)"
+      @project-change="(val?: string) => emit('projectChange', val)"
       @branch-change="(val?: string) => emit('branchChange', val)"
       @refresh="emit('refresh')"
     />
@@ -171,6 +172,12 @@ const getCommitUrl = (record: DeployRecord): string => {
         id="nginx-deploy-records"
         @page-change="(pageInfo: { current: number; pageSize: number }) => emit('pageChange', pageInfo)"
       >
+        <template #projectName="{ row }">
+          <div class="record-project-cell">
+            <ProjectTypeIcon :type="row.projectType" compact />
+            <span class="record-project-cell__name">{{ row.projectName }}</span>
+          </div>
+        </template>
         <template #status="{ row }">
           <a-tag :color="getDeployRecordStatusColor(row.status)">
             {{ getDeployRecordStatusLabel(row.status) }}

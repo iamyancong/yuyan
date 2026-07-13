@@ -22,7 +22,7 @@ function runStoreScript(root, source) {
   return line ? JSON.parse(line) : null;
 }
 
-test('v1/v2 迁移保留前端目标，将历史后端命令标记为 legacy 且可重复执行', async (t) => {
+test('v1/v2/v3 迁移保留前端目标，将历史后端命令标记为 legacy 且可重复执行', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'yuyan-migration-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
 
@@ -55,11 +55,28 @@ test('v1/v2 迁移保留前端目标，将历史后端命令标记为 legacy 且
     const versions = db.prepare('SELECT version FROM schema_migrations ORDER BY version').all().map(x => x.version);
     const config = db.prepare('SELECT process_mode, needs_review, legacy_start_command, legacy_stop_command FROM backend_target_configs').get();
     const ts = new Date().toISOString();
+    await store.createRecord({ targetId: 1, projectId: 1, projectName: 'frontend-app', envName: '测试', branch: 'dev', status: 'success', startedAt: ts, finishedAt: ts });
+    await store.createRecord({ targetId: 2, projectId: 2, projectName: 'backend-app', envName: '测试', branch: 'dev', status: 'success', startedAt: ts, finishedAt: ts });
+    const allRecords = await store.listRecords({ pageSize: 20 });
+    const frontendRecords = await store.listRecords({ projectType: 'frontend', pageSize: 20 });
+    const backendRecords = await store.listRecords({ projectType: 'backend', pageSize: 20 });
+    const missingServerRecords = await store.listRecords({ serverId: 999, pageSize: 20 });
     db.prepare(\`INSERT INTO deploy_tasks (target_id,action,status,stage,percent,operator,started_at,heartbeat_at) VALUES (2,'deploy','running','build',30,'tester',?,?)\`).run(ts,ts);
     await store.closeDeployDb();
-    console.log(JSON.stringify({ targets: targets.map(x => ({name:x.projectName,type:x.projectType})), versions, config }));
+    console.log(JSON.stringify({
+      targets: targets.map(x => ({name:x.projectName,type:x.projectType})),
+      versions,
+      config,
+      recordCounts: {
+        all: allRecords.total,
+        frontend: frontendRecords.total,
+        backend: backendRecords.total,
+        missingServer: missingServerRecords.total,
+      },
+      recordTypes: allRecords.items.map(x => x.projectType).sort(),
+    }));
   `);
-  assert.deepEqual(migrated.versions, [1, 2]);
+  assert.deepEqual(migrated.versions, [1, 2, 3]);
   assert.deepEqual(migrated.targets, [
     { name: 'backend-app', type: 'backend' },
     { name: 'frontend-app', type: 'frontend' },
@@ -67,6 +84,8 @@ test('v1/v2 迁移保留前端目标，将历史后端命令标记为 legacy 且
   assert.equal(migrated.config.process_mode, 'legacy');
   assert.equal(migrated.config.needs_review, 1);
   assert.equal(migrated.config.legacy_start_command, 'nohup java');
+  assert.deepEqual(migrated.recordCounts, { all: 2, frontend: 1, backend: 1, missingServer: 0 });
+  assert.deepEqual(migrated.recordTypes, ['backend', 'frontend']);
 
   const repeated = runStoreScript(root, `
     const store = await import('./server/services/deploy-store.mjs');
@@ -75,7 +94,7 @@ test('v1/v2 迁移保留前端目标，将历史后端命令标记为 legacy 且
     await store.closeDeployDb();
     console.log(JSON.stringify(result));
   `);
-  assert.deepEqual(repeated, { versions: 2, configs: 1, taskStatus: 'interrupted' });
-  const backups = (await fs.readdir(root)).filter((name) => name.includes('.pre-backend-v2-') && name.endsWith('.bak'));
+  assert.deepEqual(repeated, { versions: 3, configs: 1, taskStatus: 'interrupted' });
+  const backups = (await fs.readdir(root)).filter((name) => name.includes('.pre-backend-v3-') && name.endsWith('.bak'));
   assert.equal(backups.length, 1);
 });

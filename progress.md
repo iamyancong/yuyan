@@ -50,10 +50,20 @@
   - 后端配置表单补齐构建/运行 JDK、端口、PID/systemd、健康检查、Nacos、Gateway 和 OpenAPI 字段，移除任意启停命令入口。
   - 后端列表展示真实在线/离线/异常状态、直连/Gateway/Nacos 地址，并支持启停、重启和服务日志。
   - 增加 Java 环境管理抽屉，可新增/检测本机构建 JDK，扫描/检测服务器运行 JDK，并直接回填目标配置。
+  - 本机 JDK 扫描扩展到 SDKMAN、jEnv、macOS 用户/系统 JavaVirtualMachines 与 JAVA_HOME；当前机器实测发现 Temurin 8 和 Oracle/OpenJDK 24 均可直接执行。
+  - v3 migration 将后端目标关联到已检测的服务器 Java 运行时记录，切换服务器会清空旧运行时选择，避免只保存一段可能失效的路径。
   - 服务默认仅监听本机；非本机绑定强制 DEPLOY_API_TOKEN、非默认 DEPLOY_SECRET_KEY 和 CORS 白名单，前端请求统一携带部署令牌。
 
 ### 阶段 5：测试与验收
-- **状态：** in_progress
+- **状态：** complete（本地可验证范围）
+- 最终结果：
+  - `pnpm typecheck` 通过。
+  - `pnpm test:server` 17/17 通过。
+  - `pnpm frontend:build:ci` 通过（仅保留既有大 chunk 警告）。
+  - 远程模式 API 鉴权冒烟：未授权 401、允许来源 200、恶意来源 403。
+  - 本机 JDK HTTP 扫描：Temurin 8 与 OpenJDK 24 均为 available。
+  - Java 8 样本项目检测与用户给定 POM/bootstrap/smart-doc 配置一致。
+  - 未对真实 SSH 服务器执行发布/停止/回滚；未获得可调用的内置浏览器会话，未做最终截图验收。
 
 ## 测试结果
 | 测试 | 输入 | 预期结果 | 实际结果 | 状态 |

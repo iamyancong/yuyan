@@ -6,6 +6,7 @@ export { useNginxDeployProjectContext } from './useNginxDeployProjectContext';
 export { useNginxDeployRecords } from './useNginxDeployRecords';
 export { useNginxDeployServers } from './useNginxDeployServers';
 export { useNginxDeployTargets } from './useNginxDeployTargets';
+export { useTargetOpenApi } from './useTargetOpenApi';
 export type {
   DeployProgressMode,
   DeployProjectContext,

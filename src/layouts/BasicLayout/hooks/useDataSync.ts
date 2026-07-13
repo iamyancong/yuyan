@@ -16,7 +16,7 @@ export function useDataSync() {
   const confirmSyncData = () => {
     Modal.confirm({
       title: '同步测试环境数据到本地',
-      content: `确定要拉取测试环境（${import.meta.env.VITE_APP_SERVER_URL || ''}）的最新数据库并覆盖本地吗？此操作不可逆，本地现有的所有配置和服务器数据将被完全覆盖。`,
+      content: `确定要拉取测试环境（${import.meta.env.VITE_TEST_DB_SERVER_URL || import.meta.env.VITE_APP_SERVER_URL || ''}）的最新数据库并覆盖本地吗？此操作不可逆，本地现有的所有配置和服务器数据将被完全覆盖。`,
       okText: '确认同步',
       cancelText: '取消',
       onOk: async () => {
@@ -24,7 +24,8 @@ export function useDataSync() {
         try {
           message.loading({ content: '正在从测试环境下载数据...', key: 'db-sync', duration: 0 });
           // 1. 下载测试环境数据库二进制数据
-          const dbData = await backupDbFromServer(import.meta.env.VITE_APP_SERVER_URL || '');
+          const dbSource = import.meta.env.VITE_TEST_DB_SERVER_URL || import.meta.env.VITE_APP_SERVER_URL || '';
+          const dbData = await backupDbFromServer(dbSource);
           
           message.loading({ content: '正在写入本地数据库并重新挂载...', key: 'db-sync', duration: 0 });
           // 2. 还原数据覆盖本地 SQLite 文件

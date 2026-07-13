@@ -6,7 +6,7 @@ import { formatServerLabel } from './utils';
 export const TEST_ENV_NAME = '测试';
 
 /** 默认部署项目来源 */
-export const DEFAULT_PROJECT_SOURCE: DeployProjectSource = 'ops';
+export const DEFAULT_PROJECT_SOURCE: DeployProjectSource = 'gitlab';
 
 /** 部署项目来源选项 */
 export const PROJECT_SOURCE_OPTIONS: Array<{ label: string; value: DeployProjectSource }> = [
@@ -19,6 +19,21 @@ export const DEFAULT_INSTALL_COMMAND = 'pnpm install';
 
 /** 默认构建命令 */
 export const DEFAULT_BUILD_COMMAND = 'pnpm build';
+
+/** 默认后端安装命令 */
+export const DEFAULT_BACKEND_INSTALL_COMMAND = '';
+
+/** 默认后端构建命令 */
+export const DEFAULT_BACKEND_BUILD_COMMAND = './mvnw -nsu clean package -pl valuation-outsourced-starter -am -DskipTests';
+
+/** 默认后端 Jar 匹配规则 */
+export const DEFAULT_BACKEND_ARTIFACT_PATTERN = 'valuation-outsourced-starter/target/valuation-outsourced-starter-*.jar';
+
+/** 默认 OpenAPI 生成命令 */
+export const DEFAULT_BACKEND_OPENAPI_COMMAND = './mvnw -nsu -f valuation-outsourced-starter/pom.xml smart-doc:openapi';
+
+/** 默认 OpenAPI 输出路径 */
+export const DEFAULT_BACKEND_OPENAPI_OUTPUT_PATH = 'valuation-outsourced-starter/target/openapi/openapi.json';
 
 /** 默认产物目录，空值表示自动识别 */
 export const DEFAULT_ARTIFACT_DIR = '';
@@ -79,6 +94,10 @@ export const getDeployRecordActionLabel = (record?: Pick<DeployRecord, 'action' 
 export const getDeployProgressActionLabel = (action?: DeployProgressSnapshot['action'] | null): string => {
   if (action === 'rollback') return '回滚';
   if (action === 'undoRollback') return '撤销回滚';
+  if (action === 'openapi') return '生成 OpenAPI';
+  if (action === 'start') return '启动';
+  if (action === 'stop') return '停止';
+  if (action === 'restart') return '重启';
   return '发布';
 };
 
@@ -173,6 +192,9 @@ export const DEPLOY_PROGRESS_STAGE_LABEL_MAP: Record<string, string> = {
   upload: '上传产物',
   nginx: '校验 Nginx',
   reload: '重载 Nginx',
+  start: '启动服务',
+  stop: '停止服务',
+  restart: '重启服务',
   rollback: '恢复版本',
   finish: '收尾',
 };
@@ -225,6 +247,9 @@ export const getDeployProgressFailureTitle = (params: {
 }): string => {
   if (params.action === 'rollback') return '回滚失败';
   if (params.action === 'undoRollback') return '撤销回滚失败';
+  if (params.action === 'start') return '启动失败';
+  if (params.action === 'stop') return '停止失败';
+  if (params.action === 'restart') return '重启失败';
   const stageKey = getDeployProgressFailureStageKey(params.events || [], params.fallbackStage);
   return stageKey ? `${DEPLOY_PROGRESS_STAGE_LABEL_MAP[stageKey]}失败` : '发布失败';
 };
@@ -289,6 +314,7 @@ export const serverColumns: YTableColumn[] = [
 /** 部署目标表格列 */
 export const targetColumns: YTableColumn[] = [
   { field: 'projectName', title: '项目名称', minWidth: 280, fixed: 'left', slots: { default: 'projectName' } },
+  { field: 'projectType', title: '类型', width: 80, align: 'center', formatter: ({ cellValue }) => cellValue === 'backend' ? '后端' : '前端' },
   { field: 'defaultBranch', title: '分支', minWidth: 200, align: 'center', slots: { default: 'defaultBranch' } },
   { field: 'remark', title: '备注', minWidth: 140 },
   {
@@ -300,6 +326,9 @@ export const targetColumns: YTableColumn[] = [
   },
   { field: 'serverName', title: '服务器', minWidth: 140, formatter: ({ row }) => formatServerLabel(row.serverName, row.serverHost) },
   { field: 'deployRoot', title: '部署根目录', minWidth: 240 },
+  { field: 'serviceRole', title: '服务角色', width: 90, align: 'center', formatter: ({ row }) => row.projectType === 'backend' ? (row.serviceRole === 'gateway' ? 'Gateway' : '业务服务') : '-' },
+  { field: 'serverPort', title: '服务端口', width: 90, align: 'center', formatter: ({ row }) => row.projectType === 'backend' ? row.serverPort || '-' : '-' },
+  { field: 'serviceLinks', title: '服务地址', minWidth: 230, slots: { default: 'serviceLinks' } },
   { field: 'visitUrl', title: '页面访问地址', minWidth: 220, slots: { default: 'visitUrl' } },
   { field: 'nginxInstanceName', title: 'Nginx 实例', minWidth: 90, formatter: ({ row }) => row.nginxInstanceName || '-' },
   { field: 'listenPort', title: '监听端口', width: 90, align: 'center', formatter: ({ row }) => (row.nginxSiteManaged ? row.listenPort || '-' : '-') },
@@ -312,7 +341,7 @@ export const targetColumns: YTableColumn[] = [
 
 /** 发布记录表格列 */
 export const recordColumns: YTableColumn[] = [
-  { field: 'projectName', title: '项目名称', minWidth: 220, fixed: 'left' },
+  { field: 'projectName', title: '项目名称', minWidth: 240, fixed: 'left', slots: { default: 'projectName' } },
   { field: 'operator', title: '发布人', minWidth: 100, formatter: ({ row }) => getDeployRecordOperator(row) },
   { field: 'branch', title: '分支', width: 140 },
   { field: 'commitMessage', title: '当前生效提交信息', minWidth: 260, slots: { default: 'commitMessage' } },
@@ -492,6 +521,15 @@ export const serverFormSchema = {
               'x-component': 'Input',
               'x-component-props': { placeholder: '/opt/yuyan/html' },
             },
+            defaultBackendRoot: {
+              type: 'string',
+              title: '后端项目根目录',
+              required: true,
+              'x-decorator': 'FormItem',
+              'x-decorator-props': { tooltip: '每个后端目标的部署根目录必须位于此目录下，例如 /home/guest/huagui/backend' },
+              'x-component': 'Input',
+              'x-component-props': { placeholder: '/opt/yuyan/backend' },
+            },
             defaultNginxConfPath: {
               type: 'string',
               title: '默认配置文件',
@@ -544,7 +582,7 @@ export const targetFormSchema = {
       'x-component-props': {
         layout: 'horizontal',
         labelAlign: 'right',
-        labelWidth: 104,
+        labelWidth: 130,
       },
       properties: {
         basicSection: {
@@ -633,6 +671,120 @@ export const targetFormSchema = {
               enum: [],
               'x-decorator': 'FormItem',
               'x-component': 'Select',
+              'x-reactions': {
+                dependencies: ['.projectType'],
+                fulfill: {
+                  state: {
+                    visible: '{{$deps[0] !== "backend"}}',
+                  },
+                },
+              },
+            },
+            projectType: {
+              type: 'string',
+              title: '项目类型',
+              required: true,
+              enum: [
+                { label: '前端项目', value: 'frontend' },
+                { label: '后端项目', value: 'backend' },
+              ],
+              'x-decorator': 'FormItem',
+              'x-component': 'Select',
+              'x-component-props': { placeholder: '请选择项目类型' },
+            },
+            buildJdkId: {
+              type: 'number',
+              title: '本机构建 JDK',
+              required: true,
+              enum: [],
+              'x-decorator': 'FormItem',
+              'x-component': 'Select',
+              'x-reactions': {
+                dependencies: ['.projectType'],
+                fulfill: {
+                  state: {
+                    visible: '{{$deps[0] === "backend"}}',
+                  },
+                },
+              },
+            },
+            serviceRole: {
+              type: 'string',
+              title: '服务角色',
+              required: true,
+              enum: [
+                { label: '业务服务', value: 'application' },
+                { label: 'Gateway 网关', value: 'gateway' },
+              ],
+              'x-decorator': 'FormItem',
+              'x-component': 'Select',
+              'x-reactions': {
+                dependencies: ['.projectType'],
+                fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } },
+              },
+            },
+            environmentId: {
+              type: 'number',
+              title: '共享环境配置',
+              enum: [],
+              'x-decorator': 'FormItem',
+              'x-component': 'Select',
+              'x-component-props': { allowClear: true, placeholder: '可选；继承 Nacos/Gateway 地址' },
+              'x-reactions': {
+                dependencies: ['.projectType'],
+                fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } },
+              },
+            },
+            serviceName: {
+              type: 'string',
+              title: '服务名称',
+              required: true,
+              'x-decorator': 'FormItem',
+              'x-component': 'Input',
+              'x-component-props': { placeholder: '例如 valuation-outsourced' },
+              'x-reactions': {
+                dependencies: ['.projectType'],
+                fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } },
+              },
+            },
+            runtimeJavaHome: {
+              type: 'string',
+              title: '运行 JDK 路径',
+              required: true,
+              'x-decorator': 'FormItem',
+              'x-component': 'Input',
+              'x-component-props': { placeholder: '例如 /usr/lib/jvm/java-8-openjdk' },
+              'x-reactions': {
+                dependencies: ['.projectType'],
+                fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } },
+              },
+            },
+            serverPort: {
+              type: 'number',
+              title: '服务端口',
+              required: true,
+              'x-decorator': 'FormItem',
+              'x-component': 'InputNumber',
+              'x-component-props': { min: 1, max: 65535, style: { width: '100%' } },
+              'x-reactions': {
+                dependencies: ['.projectType'],
+                fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } },
+              },
+            },
+            processMode: {
+              type: 'string',
+              title: '进程管理',
+              required: true,
+              enum: [
+                { label: 'PID 脚本', value: 'pid' },
+                { label: 'systemd（自动回退 PID）', value: 'systemd' },
+              ],
+              'x-decorator': 'FormItem',
+              'x-component': 'Select',
+              'x-reactions': {
+                dependencies: ['.projectType'],
+                fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } },
+              },
             },
           },
         },
@@ -665,6 +817,10 @@ export const targetFormSchema = {
               required: true,
               'x-decorator': 'FormItem',
               'x-component': 'Input',
+              'x-reactions': {
+                dependencies: ['projectType'],
+                fulfill: { state: { visible: '{{$deps[0] !== "backend"}}' } },
+              },
             },
             nginxSiteManaged: {
               type: 'boolean',
@@ -675,6 +831,10 @@ export const targetFormSchema = {
               },
               'x-component': 'Switch',
               'x-component-props': { checkedChildren: '开', unCheckedChildren: '关' },
+              'x-reactions': {
+                dependencies: ['projectType'],
+                fulfill: { state: { visible: '{{$deps[0] !== "backend"}}' } },
+              },
             },
             visitUrl: {
               type: 'string',
@@ -682,8 +842,8 @@ export const targetFormSchema = {
               'x-decorator': 'FormItem',
               'x-component': 'Input',
               'x-reactions': {
-                dependencies: ['.nginxSiteManaged'],
-                fulfill: { state: { display: '{{$deps[0] ? "visible" : "none"}}' } },
+                dependencies: ['projectType', '.nginxSiteManaged'],
+                fulfill: { state: { visible: '{{$deps[0] !== "backend" && $deps[1]}}' } },
               },
             },
             listenPort: {
@@ -693,8 +853,8 @@ export const targetFormSchema = {
               'x-component': 'InputNumber',
               'x-component-props': { min: 1, max: 65535, placeholder: '自动分配' },
               'x-reactions': {
-                dependencies: ['.nginxSiteManaged'],
-                fulfill: { state: { display: '{{$deps[0] ? "visible" : "none"}}' } },
+                dependencies: ['projectType', '.nginxSiteManaged'],
+                fulfill: { state: { visible: '{{$deps[0] !== "backend" && $deps[1]}}' } },
               },
             },
             serverName: {
@@ -704,8 +864,8 @@ export const targetFormSchema = {
               'x-component': 'Input',
               'x-component-props': { placeholder: '_' },
               'x-reactions': {
-                dependencies: ['.nginxSiteManaged'],
-                fulfill: { state: { display: '{{$deps[0] ? "visible" : "none"}}' } },
+                dependencies: ['projectType', '.nginxSiteManaged'],
+                fulfill: { state: { visible: '{{$deps[0] !== "backend" && $deps[1]}}' } },
               },
             },
           },
@@ -732,6 +892,10 @@ export const targetFormSchema = {
               'x-decorator': 'FormItem',
               'x-component': 'Switch',
               'x-component-props': { checkedChildren: '开', unCheckedChildren: '关' },
+              'x-reactions': {
+                dependencies: ['projectType'],
+                fulfill: { state: { visible: '{{$deps[0] !== "backend"}}' } },
+              },
             },
             enableNginxReload: {
               type: 'boolean',
@@ -739,6 +903,10 @@ export const targetFormSchema = {
               'x-decorator': 'FormItem',
               'x-component': 'Switch',
               'x-component-props': { checkedChildren: '开', unCheckedChildren: '关' },
+              'x-reactions': {
+                dependencies: ['projectType'],
+                fulfill: { state: { visible: '{{$deps[0] !== "backend"}}' } },
+              },
             },
             installCommand: {
               type: 'string',
@@ -748,6 +916,18 @@ export const targetFormSchema = {
               'x-decorator-props': { gridSpan: 2 },
               'x-component': 'Input.TextArea',
               'x-component-props': { rows: 3, placeholder: '每行一条命令，例如：\npnpm install\npnpm --filter app install' },
+              'x-reactions': {
+                dependencies: ['projectType'],
+                fulfill: {
+                  state: {
+                    title: '{{$deps[0] === "backend" ? "Maven 依赖命令" : "安装命令"}}',
+                    required: '{{$deps[0] !== "backend"}}',
+                    componentProps: {
+                      placeholder: '{{$deps[0] === "backend" ? "每行一条命令，可选（若已在打包命令中处理则可空）。示例：\\n./mvnw -nsu dependency:resolve" : "每行一条命令，例如：\\npnpm install\\npnpm --filter app install"}}'
+                    }
+                  }
+                }
+              }
             },
             buildCommand: {
               type: 'string',
@@ -757,6 +937,17 @@ export const targetFormSchema = {
               'x-decorator-props': { gridSpan: 2 },
               'x-component': 'Input.TextArea',
               'x-component-props': { rows: 3, placeholder: '每行一条命令，例如：\npnpm build\npnpm --filter app build' },
+              'x-reactions': {
+                dependencies: ['projectType'],
+                fulfill: {
+                  state: {
+                    title: '{{$deps[0] === "backend" ? "Maven 打包命令" : "构建命令"}}',
+                    componentProps: {
+                      placeholder: '{{$deps[0] === "backend" ? "每行一条命令，例如：\\n./mvnw -nsu -pl valuation-outsourced-starter -am -DskipTests package" : "每行一条命令，例如：\\npnpm build\\npnpm --filter app build"}}'
+                    }
+                  }
+                }
+              }
             },
             artifactDir: {
               type: 'string',
@@ -769,6 +960,21 @@ export const targetFormSchema = {
               },
               'x-component': 'Input',
               'x-component-props': { placeholder: '不填自动识别；示例：packages/dist' },
+              'x-reactions': {
+                dependencies: ['projectType'],
+                fulfill: {
+                  state: {
+                    title: '{{$deps[0] === "backend" ? "Jar 产物相对路径" : "产物目录"}}',
+                    required: '{{$deps[0] === "backend"}}',
+                    decoratorProps: {
+                      tooltip: '{{$deps[0] === "backend" ? "请填写打包后生成的 jar 包在仓库内的相对路径，必须直接指向 jar 包文件，例如：valuation-outsourced-starter/target/valuation-outsourced-starter-3.0.0-SNAPSHOT.jar" : "不填时发布系统会在本次构建后的仓库中自动查找静态产物目录；填写时请填构建产物在仓库内的相对路径，例如 packages/dist。" }}'
+                    },
+                    componentProps: {
+                      placeholder: '{{$deps[0] === "backend" ? "必填，示例：valuation-outsourced-starter/target/xxx.jar" : "不填自动识别；示例：packages/dist"}}'
+                    }
+                  }
+                }
+              }
             },
             preserveSubDirs: {
               type: 'string',
@@ -777,10 +983,14 @@ export const targetFormSchema = {
               'x-decorator': 'FormItem',
               'x-decorator-props': {
                 tooltip:
-                  '默认会自动识别同一服务器下部署根目录位于当前目录内的部署目标，并在发布、失败恢复和回滚时保留这些顶层目录。这里可手动补充目录名，多个用逗号分隔，例如 insurance-risk, masterData。',
+                  '默认会自动识别同一服务器下部署根目录位于当前目录内的部署目标，并在发布、失败恢复 and 回滚时保留这些顶层目录。这里可手动补充目录名，多个用逗号分隔，例如 insurance-risk, masterData。',
               },
               'x-component': 'Input',
               'x-component-props': { placeholder: '自动识别；手动补充示例：insurance-risk, masterData' },
+              'x-reactions': {
+                dependencies: ['projectType'],
+                fulfill: { state: { visible: '{{$deps[0] !== "backend"}}' } },
+              },
             },
             uploadStrategy: {
               type: 'string',
@@ -794,6 +1004,157 @@ export const targetFormSchema = {
                   '清空后替换会先清理部署目录再上传新产物；覆盖上传并保留旧资源适合微应用平滑发布，会保留旧 hash 静态资源并按最近发布次数自动清理。',
               },
               'x-component': 'Select',
+              'x-reactions': {
+                dependencies: ['projectType'],
+                fulfill: { state: { visible: '{{$deps[0] !== "backend"}}' } },
+              },
+            },
+            springProfiles: {
+              type: 'string',
+              title: 'Spring Profiles',
+              'x-decorator': 'FormItem',
+              'x-decorator-props': {
+                tooltip: '留空时采用应用自身默认配置；如需填写，必须与服务器现有 startup.sh 的 spring.profiles.active 保持一致。检测项目配置不会自动覆盖此项。',
+              },
+              'x-component': 'Input',
+              'x-component-props': { allowClear: true, placeholder: '可选，例如 test；不要根据文件名猜测' },
+              'x-reactions': {
+                dependencies: ['projectType'],
+                fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } }
+              }
+            },
+            externalConfigPath: {
+              type: 'string',
+              title: '外部配置路径',
+              'x-decorator': 'FormItem',
+              'x-component': 'Input',
+              'x-component-props': { placeholder: '可选，例如 /home/guest/.../shared/config/' },
+              'x-reactions': {
+                dependencies: ['projectType'],
+                fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } }
+              }
+            },
+            jvmOptions: {
+              type: 'string',
+              title: 'JVM 参数',
+              'x-decorator': 'FormItem',
+              'x-decorator-props': { gridSpan: 2 },
+              'x-component': 'Input.TextArea',
+              'x-component-props': { rows: 2, placeholder: '例如 -Xms512m -Xmx1024m' },
+              'x-reactions': {
+                dependencies: ['projectType'],
+                fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } }
+              }
+            },
+            appArgs: {
+              type: 'string',
+              title: '应用参数',
+              'x-decorator': 'FormItem',
+              'x-decorator-props': { gridSpan: 2 },
+              'x-component': 'Input.TextArea',
+              'x-component-props': { rows: 2, placeholder: '可选的 Spring Boot 命令行参数' },
+              'x-reactions': {
+                dependencies: ['projectType'],
+                fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } }
+              }
+            },
+            stopTimeoutSeconds: {
+              type: 'number',
+              title: '停止超时（秒）',
+              'x-decorator': 'FormItem',
+              'x-component': 'InputNumber',
+              'x-component-props': { min: 5, max: 300, style: { width: '100%' } },
+              'x-reactions': { dependencies: ['projectType'], fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } } },
+            },
+            startupTimeoutSeconds: {
+              type: 'number',
+              title: '启动超时（秒）',
+              'x-decorator': 'FormItem',
+              'x-component': 'InputNumber',
+              'x-component-props': { min: 10, max: 900, style: { width: '100%' } },
+              'x-reactions': { dependencies: ['projectType'], fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } } },
+            },
+            healthCheckPath: {
+              type: 'string',
+              title: '健康检查路径',
+              required: true,
+              'x-decorator': 'FormItem',
+              'x-component': 'Input',
+              'x-component-props': { placeholder: '例如 /monitor/health' },
+              'x-reactions': { dependencies: ['projectType'], fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } } },
+            },
+            nacosServerAddr: {
+              type: 'string',
+              title: 'Nacos 地址',
+              'x-decorator': 'FormItem',
+              'x-component': 'Input',
+              'x-component-props': { placeholder: '例如 192.168.10.10:8848' },
+              'x-reactions': { dependencies: ['projectType'], fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } } },
+            },
+            nacosConsoleUrl: {
+              type: 'string',
+              title: 'Nacos 控制台',
+              'x-decorator': 'FormItem',
+              'x-component': 'Input',
+              'x-component-props': { placeholder: '例如 http://192.168.10.10:8848/nacos' },
+              'x-reactions': { dependencies: ['projectType'], fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } } },
+            },
+            nacosNamespace: {
+              type: 'string',
+              title: 'Nacos Namespace',
+              'x-decorator': 'FormItem',
+              'x-component': 'Input',
+              'x-reactions': { dependencies: ['projectType'], fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } } },
+            },
+            nacosGroup: {
+              type: 'string',
+              title: 'Nacos Group',
+              'x-decorator': 'FormItem',
+              'x-component': 'Input',
+              'x-component-props': { placeholder: '例如 DEFAULT_GROUP' },
+              'x-reactions': { dependencies: ['projectType'], fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } } },
+            },
+            requireNacosRegistration: {
+              type: 'boolean',
+              title: '校验 Nacos 注册',
+              'x-decorator': 'FormItem',
+              'x-component': 'Switch',
+              'x-component-props': { checkedChildren: '开', unCheckedChildren: '关' },
+              'x-reactions': { dependencies: ['projectType'], fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } } },
+            },
+            gatewayUrl: {
+              type: 'string',
+              title: 'Gateway 地址',
+              'x-decorator': 'FormItem',
+              'x-component': 'Input',
+              'x-component-props': { placeholder: '例如 http://192.168.10.10:8080' },
+              'x-reactions': { dependencies: ['projectType'], fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } } },
+            },
+            gatewayProbePath: {
+              type: 'string',
+              title: 'Gateway 探测路径',
+              'x-decorator': 'FormItem',
+              'x-component': 'Input',
+              'x-component-props': { placeholder: '例如 /valuation/monitor/health' },
+              'x-reactions': { dependencies: ['projectType'], fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } } },
+            },
+            openapiCommand: {
+              type: 'string',
+              title: 'OpenAPI 命令',
+              'x-decorator': 'FormItem',
+              'x-decorator-props': { gridSpan: 2 },
+              'x-component': 'Input.TextArea',
+              'x-component-props': { rows: 2 },
+              'x-reactions': { dependencies: ['projectType'], fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } } },
+            },
+            openapiOutputPath: {
+              type: 'string',
+              title: 'OpenAPI 输出路径',
+              'x-decorator': 'FormItem',
+              'x-decorator-props': { gridSpan: 2 },
+              'x-component': 'Input',
+              'x-component-props': { placeholder: '仓库内相对路径，禁止 ..' },
+              'x-reactions': { dependencies: ['projectType'], fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } } },
             },
           },
         },

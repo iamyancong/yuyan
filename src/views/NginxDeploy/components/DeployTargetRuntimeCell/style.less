@@ -55,6 +55,36 @@
       0 8px 18px var(--primary-color-lighter);
   }
 
+  &.is-online:not(.is-running) {
+    border-color: rgba(34, 197, 94, 0.32);
+    background: rgba(240, 253, 244, 0.86);
+  }
+
+  &.is-online:not(.is-running) &__dot {
+    background: #22c55e;
+    box-shadow: 0 0 0 5px rgba(34, 197, 94, 0.14);
+  }
+
+  &.is-offline:not(.is-running) &__dot,
+  &.is-unknown:not(.is-running) &__dot {
+    background: #94a3b8;
+  }
+
+  &.is-error:not(.is-running) {
+    border-color: rgba(239, 68, 68, 0.3);
+    background: rgba(254, 242, 242, 0.9);
+  }
+
+  &.is-error:not(.is-running) &__dot {
+    background: #ef4444;
+    box-shadow: 0 0 0 5px rgba(239, 68, 68, 0.13);
+  }
+
+  &.is-transitioning:not(.is-running) &__dot {
+    background: #f59e0b;
+    box-shadow: 0 0 0 5px rgba(245, 158, 11, 0.14);
+  }
+
   &__indicator {
     display: inline-flex;
     flex: none;

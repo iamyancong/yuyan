@@ -12,6 +12,9 @@ interface UseNginxDeployActionsParams {
   openEditServer?: (server: DeployServer) => Promise<void>;
   deleteServer?: (server: DeployServer) => Promise<void>;
   openPublishConfirm?: (target: DeployTarget) => Promise<void>;
+  openOpenApi?: (target: DeployTarget) => Promise<void>;
+  runServiceAction?: (target: DeployTarget, action: 'start' | 'stop' | 'restart') => Promise<void>;
+  openServiceLogs?: (target: DeployTarget) => Promise<void>;
   openTargetProgress?: (target: DeployTarget) => Promise<void>;
   openNginxConfig?: (target: DeployTarget) => void;
   openEditTarget?: (target: DeployTarget) => Promise<void>;
@@ -48,6 +51,9 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
   const openEditServer = params?.openEditServer;
   const deleteServer = params?.deleteServer;
   const openPublishConfirm = params?.openPublishConfirm;
+  const openOpenApi = params?.openOpenApi;
+  const runServiceAction = params?.runServiceAction;
+  const openServiceLogs = params?.openServiceLogs;
   const openTargetProgress = params?.openTargetProgress;
   const openNginxConfig = params?.openNginxConfig;
   const openEditTarget = params?.openEditTarget;
@@ -110,7 +116,7 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
   }));
 
   const targetActionConfig = computed<YTableActionConfig>(() => ({
-    width: 240,
+    width: 360,
     fixed: 'right',
     buttons: [
       {
@@ -132,9 +138,19 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
         },
       },
       {
+        key: 'openapi',
+        text: '生成 OpenAPI',
+        type: 'link',
+        hideFn: ({ row }) => row.projectType !== 'backend' || isTargetRunning(row),
+        clickFn: ({ row }) => {
+          void openOpenApi?.(row);
+        },
+      },
+      {
         key: 'nginx',
         text: 'Nginx',
         type: 'link',
+        hideFn: ({ row }) => row.projectType === 'backend',
         disabledFn: ({ row }) => isTargetRunning(row),
         clickFn: ({ row }) => {
           openNginxConfig?.(row);
@@ -144,7 +160,7 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
         key: 'syncSite',
         text: '同步站点',
         type: 'link',
-        hideFn: ({ row }) => !row.nginxSiteManaged,
+        hideFn: ({ row }) => row.projectType === 'backend' || !row.nginxSiteManaged,
         disabledFn: ({ row }) => isTargetRunning(row),
         isConfirm: true,
         confirmProps: {
@@ -160,6 +176,63 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
             helpers?.hideLoading?.();
           }
         },
+      },
+      {
+        key: 'startService',
+        text: '启动',
+        type: 'link',
+        hideFn: ({ row }) => row.projectType !== 'backend' || row.serviceStatus === 'online' || isTargetRunning(row),
+        isConfirm: true,
+        confirmProps: {
+          title: '确认启动该后端服务？',
+          okText: '启动',
+          cancelText: '取消',
+          needLoading: true,
+        },
+        clickFn: async ({ row }, _btn, helpers) => {
+          try {
+            await runServiceAction?.(row, 'start');
+          } finally {
+            helpers?.hideLoading?.();
+          }
+        },
+      },
+      {
+        key: 'stopService',
+        text: '停止',
+        type: 'link',
+        hideFn: ({ row }) => row.projectType !== 'backend' || row.serviceStatus !== 'online' || isTargetRunning(row),
+        isConfirm: true,
+        confirmProps: { title: '确认优雅停止该后端服务？', okText: '停止', cancelText: '取消', needLoading: true },
+        clickFn: async ({ row }, _btn, helpers) => {
+          try {
+            await runServiceAction?.(row, 'stop');
+          } finally {
+            helpers?.hideLoading?.();
+          }
+        },
+      },
+      {
+        key: 'restartService',
+        text: '重启',
+        type: 'link',
+        hideFn: ({ row }) => row.projectType !== 'backend' || row.serviceStatus !== 'online' || isTargetRunning(row),
+        isConfirm: true,
+        confirmProps: { title: '确认重启该后端服务？', okText: '重启', cancelText: '取消', needLoading: true },
+        clickFn: async ({ row }, _btn, helpers) => {
+          try {
+            await runServiceAction?.(row, 'restart');
+          } finally {
+            helpers?.hideLoading?.();
+          }
+        },
+      },
+      {
+        key: 'serviceLogs',
+        text: '日志',
+        type: 'link',
+        hideFn: ({ row }) => row.projectType !== 'backend',
+        clickFn: ({ row }) => void openServiceLogs?.(row),
       },
       {
         key: 'edit',

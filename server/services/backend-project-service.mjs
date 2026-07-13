@@ -248,7 +248,7 @@ export async function resolveBackendArtifact(repoDir, artifactPattern) {
   const candidates = entries
     .filter((entry) => entry.isFile() && matcher.test(entry.name) && entry.name.endsWith('.jar'))
     .map((entry) => entry.name)
-    .filter((name) => !/(?:-sources|-javadoc)\.jar$|\.original$/i.test(name));
+    .filter((name) => !/(?:-sources|-javadoc)\.jar$|\.original$|^original-/i.test(name));
   if (!candidates.length) throw new Error(`未找到匹配的 Jar 产物：${normalized}`);
   if (candidates.length > 1) throw new Error(`Jar 产物匹配到多个文件，请缩小规则：${candidates.join('、')}`);
   return { jarPath: path.join(dir, candidates[0]), jarName: candidates[0] };

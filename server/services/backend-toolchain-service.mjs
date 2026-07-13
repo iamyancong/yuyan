@@ -4,17 +4,21 @@
  */
 
 import path from 'node:path';
+import os from 'node:os';
+import fs from 'node:fs/promises';
+import { execFile } from 'node:child_process';
 import {
   createServerJavaRuntime,
+  createJdk,
   getJdk,
   getServerJavaRuntime,
   getServerWithCredential,
   listServerJavaRuntimes,
+  listJdks,
   updateJdkDetection,
   updateServerJavaRuntimeDetection,
 } from './deploy-store.mjs';
 import { parseJavaMajorVersion, redactDeployLog } from './backend-domain.mjs';
-import { runBackendLocalCommand } from './backend-project-service.mjs';
 import { execSsh, shellQuote, withSsh } from './ssh-service.mjs';
 
 /**
@@ -39,7 +43,29 @@ export function parseJavaDetection(output) {
 }
 
 /**
+ * 直接执行本机可执行文件（不经过 shell），避免 macOS Tauri 子进程的 /bin/sh 安全限制。
+ * @param {string} bin 可执行文件绝对路径
+ * @param {string[]} args 参数列表
+ * @param {Object} [options] 选项
+ * @param {number} [options.timeoutMs] 超时时间
+ * @returns {Promise<{stdout: string, stderr: string}>} 执行结果
+ */
+function execFileDirect(bin, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(bin, args, { timeout: options.timeoutMs || 15000 }, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(`检测本机 JDK执行失败，退出码 ${error.code ?? 'unknown'}\n${redactDeployLog(stderr || stdout || error.message).trim()}`));
+        return;
+      }
+      resolve({ stdout: stdout || '', stderr: stderr || '' });
+    });
+  });
+}
+
+/**
  * 检测本机构建 JDK。
+ * 使用 execFile 直接执行 Java 二进制文件，不经过 /bin/sh，
+ * 避免 macOS Tauri 子进程环境下 shell 无法定位外部可执行文件的问题。
  * @param {number} id JDK ID
  * @returns {Promise<Object>} JDK 配置
  */
@@ -48,13 +74,89 @@ export async function testBuildJdk(id) {
   if (!jdk) throw new Error('构建 JDK 不存在');
   try {
     const javaBin = path.join(jdk.homePath, 'bin', process.platform === 'win32' ? 'java.exe' : 'java');
-    const result = await runBackendLocalCommand(`${shellQuote(javaBin)} -version`, { label: '检测本机 JDK', timeoutMs: 15000 });
+    const result = await execFileDirect(javaBin, ['-version']);
     const detection = parseJavaDetection(`${result.stdout}\n${result.stderr}`);
     return updateJdkDetection(id, detection);
   } catch (error) {
     await updateJdkDetection(id, { status: 'unavailable', statusOutput: error instanceof Error ? error.message : String(error) });
     throw error;
   }
+}
+
+/**
+ * 收集目录下的 JDK home 候选。
+ * @param {Set<string>} candidates 候选集合
+ * @param {string} root 版本目录根路径
+ * @param {(entryPath: string) => string} resolveHome 从子目录解析 JAVA_HOME
+ */
+async function collectJavaHomes(candidates, root, resolveHome = (entryPath) => entryPath) {
+  const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+    const entryPath = path.join(root, entry.name);
+    const homePath = resolveHome(entryPath);
+    const javaBin = path.join(homePath, 'bin', process.platform === 'win32' ? 'java.exe' : 'java');
+    if (await fs.access(javaBin).then(() => true).catch(() => false)) candidates.add(homePath);
+  }
+}
+
+/** 从 JDK release 文件提取更准确的实现厂商。 */
+async function readJdkImplementor(homePath) {
+  const release = await fs.readFile(path.join(homePath, 'release'), 'utf8').catch(() => '');
+  return release.match(/^IMPLEMENTOR="([^"]+)"/m)?.[1] || '';
+}
+
+/**
+ * 扫描本机已安装的真实 JDK，并逐个执行 java -version。
+ * @returns {Promise<Object[]>} 已刷新检测状态的 JDK 列表
+ */
+export async function scanLocalBuildJdks() {
+  const candidates = new Set();
+  if (process.env.JAVA_HOME) candidates.add(String(process.env.JAVA_HOME));
+  const home = os.homedir();
+  await collectJavaHomes(candidates, path.join(home, '.sdkman', 'candidates', 'java'));
+  await collectJavaHomes(candidates, path.join(home, '.jenv', 'versions'));
+  if (process.platform === 'darwin') {
+    await collectJavaHomes(candidates, path.join(home, 'Library', 'Java', 'JavaVirtualMachines'), (entryPath) => path.join(entryPath, 'Contents', 'Home'));
+    await collectJavaHomes(candidates, '/Library/Java/JavaVirtualMachines', (entryPath) => path.join(entryPath, 'Contents', 'Home'));
+  }
+
+  const existing = await listJdks();
+  const existingByRealPath = new Map();
+  for (const jdk of existing) {
+    const real = await fs.realpath(jdk.homePath).catch(() => path.resolve(jdk.homePath));
+    existingByRealPath.set(real, jdk);
+  }
+
+  for (const candidate of candidates) {
+    const homePath = await fs.realpath(candidate).catch(() => '');
+    if (!homePath) continue;
+    const javaBin = path.join(homePath, 'bin', process.platform === 'win32' ? 'java.exe' : 'java');
+    try {
+      const result = await execFileDirect(javaBin, ['-version']);
+      const parsed = parseJavaDetection(`${result.stdout}\n${result.stderr}`);
+      const implementor = await readJdkImplementor(homePath);
+      const detection = { ...parsed, vendor: implementor || parsed.vendor };
+      const current = existingByRealPath.get(homePath);
+      if (current) {
+        await updateJdkDetection(current.id, detection);
+      } else {
+        const created = await createJdk({
+          name: `${implementor || 'JDK'} ${detection.majorVersion}`,
+          homePath,
+          ...detection,
+          lastCheckedAt: new Date().toISOString(),
+          remark: '本机扫描',
+        });
+        existingByRealPath.set(homePath, created);
+      }
+    } catch {
+    }
+  }
+
+  const refreshed = await listJdks();
+  await Promise.all(refreshed.map((jdk) => testBuildJdk(jdk.id).catch(() => null)));
+  return listJdks();
 }
 
 /**
