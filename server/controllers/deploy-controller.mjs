@@ -1433,7 +1433,11 @@ export async function handleCheckAppUpdate(req, res) {
       return res.json({ hasUpdate: false, message: '暂无版本发布信息' });
     }
 
-    const compatibleRelease = selectLatestCompatibleRelease(data, normalizedPlatform);
+    const compatibleRelease = selectLatestCompatibleRelease(
+      data,
+      normalizedPlatform,
+      normalizedArch
+    );
     if (!compatibleRelease) {
       return res.json({
         hasUpdate: false,

@@ -52,6 +52,12 @@ jobs:
             artifact: yuyan-macos-aarch64
             update_target: darwin-aarch64
             bundle_path: src-tauri/target/release/bundle/dmg/*.dmg
+            expected_arch: arm64
+          - platform: macos-15-intel
+            artifact: yuyan-macos-x86_64
+            update_target: darwin-x86_64
+            bundle_path: src-tauri/target/release/bundle/dmg/*.dmg
+            expected_arch: x86_64
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -113,6 +119,19 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
           NODE_OPTIONS: '--max-old-space-size=4096'
 
+      - name: Verify macOS Bundle Architecture
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          APP_BINARY=$(find src-tauri/target/release/bundle/macos -path '*/Contents/MacOS/yuyan-app' -type f -print -quit)
+          NODE_BINARY=$(find src-tauri/target/release/bundle/macos -path '*/Contents/Resources/resources/bin/node' -type f -print -quit)
+          test -n "$APP_BINARY"
+          test -n "$NODE_BINARY"
+          file "$APP_BINARY" | tee /tmp/yuyan-app-arch.txt
+          file "$NODE_BINARY" | tee /tmp/yuyan-node-arch.txt
+          grep -q '${{ matrix.expected_arch }}' /tmp/yuyan-app-arch.txt
+          grep -q '${{ matrix.expected_arch }}' /tmp/yuyan-node-arch.txt
+
       - name: Prepare Update Artifact
         shell: bash
         run: |
@@ -142,6 +161,12 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: yuyan-macos-aarch64
+          path: ./dist-release
+
+      - name: Download macOS Intel Artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: yuyan-macos-x86_64
           path: ./dist-release
 
       - name: Create GitHub Release

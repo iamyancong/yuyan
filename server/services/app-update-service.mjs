@@ -76,33 +76,38 @@ export function isNewerAppVersion(local, remote) {
  * 获取 Release 中与客户端平台匹配的安装包。
  * @param {object} release - GitHub Release
  * @param {string} platform - 标准化平台名称
+ * @param {string} arch - 标准化 CPU 架构
  * @returns {object | null} 匹配的 Release Asset
  */
-function getCompatibleReleaseAsset(release, platform) {
+function getCompatibleReleaseAsset(release, platform, arch) {
   const expectedExtension = platform === 'darwin' ? '.dmg' : '.exe';
-  return (
-    release?.assets?.find((asset) =>
-      String(asset?.name || '')
-        .toLowerCase()
-        .endsWith(expectedExtension)
-    ) || null
+  const candidates = (release?.assets || []).filter((asset) =>
+    String(asset?.name || '').toLowerCase().endsWith(expectedExtension)
   );
+  if (platform !== 'darwin') return candidates[0] || null;
+
+  const normalizedArch = normalizeUpdateArch(arch);
+  const archPattern = normalizedArch === 'aarch64'
+    ? /(?:^|[._-])(?:aarch64|arm64)(?:[._-]|$)/i
+    : /(?:^|[._-])(?:x86_64|x64|amd64|intel)(?:[._-]|$)/i;
+  return candidates.find((asset) => archPattern.test(String(asset?.name || ''))) || null;
 }
 
 /**
  * 从 GitHub Releases 中选择版本最高且包含当前平台安装包的发布。
  * @param {object[]} releases - GitHub Releases
  * @param {string} platform - 标准化平台名称
+ * @param {string} arch - 标准化 CPU 架构
  * @returns {{ release: object, asset: object } | null} 发布及安装包
  */
-export function selectLatestCompatibleRelease(releases, platform) {
+export function selectLatestCompatibleRelease(releases, platform, arch = 'x86_64') {
   if (!Array.isArray(releases)) return null;
 
   const candidates = releases
     .filter((release) => !release?.draft && parseAppVersion(release?.tag_name))
     .map((release) => ({
       release,
-      asset: getCompatibleReleaseAsset(release, platform),
+      asset: getCompatibleReleaseAsset(release, platform, arch),
     }))
     .filter(({ asset }) => Boolean(asset))
     .sort((left, right) =>
