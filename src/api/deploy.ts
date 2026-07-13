@@ -557,9 +557,9 @@ export interface DeployTargetPublishPayload {
   forceInstallDependencies?: boolean;
 }
 
-import { getApiBase } from '@/utils/env';
+import { getApiBase, isTauri } from '@/utils/env';
 
-const client = axios.create({ baseURL: getApiBase('/deploy-api') });
+const client = axios.create();
 
 /** 获取服务器模式部署 API Token。 */
 export const getDeployApiToken = (): string => {
@@ -580,7 +580,8 @@ export const getDeployApiAuthHeaders = (): Record<string, string> => {
   return token ? { 'X-Deploy-Token': token } : {};
 };
 
-client.interceptors.request.use((config) => {
+client.interceptors.request.use(async (config) => {
+  config.baseURL = await getActiveDeployApiBase();
   Object.assign(config.headers, getDeployApiAuthHeaders());
   return config;
 });
@@ -628,7 +629,7 @@ export const initNginxRuntime = (serverId: number, payload: NginxRuntimePayload)
 
 /** 流式初始化托管 Nginx 运行时 */
 export async function initNginxRuntimeWithProgress(serverId: number, payload: NginxRuntimePayload, options: NginxRuntimeProgressOptions = {}) {
-  const response = await fetch(getApiBase(`/deploy-api/servers/${serverId}/nginx-runtime/init?stream=1`), {
+  const response = await fetch(await getActiveDeployApiUrl(`/servers/${serverId}/nginx-runtime/init?stream=1`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson', ...getDeployApiAuthHeaders() },
     body: JSON.stringify(payload),
@@ -677,7 +678,7 @@ export async function initNginxRuntimeWithProgress(serverId: number, payload: Ng
 
 /** 流式初始化 Nginx 实例 */
 export async function initNginxInstanceWithProgress(instanceId: number, payload: NginxRuntimePayload, options: NginxRuntimeProgressOptions = {}) {
-  const response = await fetch(getApiBase(`/deploy-api/nginx-instances/${instanceId}/init?stream=1`), {
+  const response = await fetch(await getActiveDeployApiUrl(`/nginx-instances/${instanceId}/init?stream=1`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson', ...getDeployApiAuthHeaders() },
     body: JSON.stringify(payload),
@@ -738,10 +739,10 @@ export const runNginxInstanceAction = (instanceId: number, action: NginxRuntimeA
  * @param type 下载类型
  * @returns 运行包下载 URL
  */
-export const getNginxInstanceArchiveDownloadUrl = (
+export const getNginxInstanceArchiveDownloadUrl = async (
   instanceId: number,
   type: NginxArchiveDownloadType = 'all'
-) => getApiBase(`/deploy-api/nginx-instances/${instanceId}/archive?type=${encodeURIComponent(type)}`);
+) => getActiveDeployApiUrl(`/nginx-instances/${instanceId}/archive?type=${encodeURIComponent(type)}`);
 
 /**
  * 下载托管 Nginx 实例运行包。
@@ -756,7 +757,7 @@ export async function downloadNginxInstanceArchive(
   onProgress?: (loaded: number) => void,
   signal?: AbortSignal
 ): Promise<NginxInstanceArchiveDownload> {
-  const response = await fetch(getApiBase(`/deploy-api/nginx-instances/${instanceId}/archive?type=${type}`), {
+  const response = await fetch(await getActiveDeployApiUrl(`/nginx-instances/${instanceId}/archive?type=${type}`), {
     signal,
     headers: getDeployApiAuthHeaders(),
   });
@@ -936,7 +937,7 @@ export async function runBackendServiceActionWithProgress(
   action: 'start' | 'stop' | 'restart',
   options: DeployProgressOptions = {}
 ): Promise<BackendServiceRuntimeStatus> {
-  const response = await fetch(getApiBase(`/deploy-api/targets/${targetId}/service-actions/${action}?stream=1`), {
+  const response = await fetch(await getActiveDeployApiUrl(`/targets/${targetId}/service-actions/${action}?stream=1`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson', ...getDeployApiAuthHeaders() },
     body: JSON.stringify({}),
@@ -958,7 +959,7 @@ export const getOpenApiArtifactContent = (artifactId: number) =>
   client.get(`/openapi-artifacts/${artifactId}/content`, { responseType: 'text' }).then((response) => String(response.data || ''));
 
 /** 获取 OpenAPI 下载地址 */
-export const getOpenApiArtifactDownloadUrl = (artifactId: number) => getApiBase(`/deploy-api/openapi-artifacts/${artifactId}/download`);
+export const getOpenApiArtifactDownloadUrl = (artifactId: number) => getActiveDeployApiUrl(`/openapi-artifacts/${artifactId}/download`);
 
 /** 解析 JSON 或文本响应 */
 const parseJsonOrText = async (response: Response) => {
@@ -1055,7 +1056,7 @@ export async function generateTargetOpenApiWithProgress(
   payload: { branch?: string; force?: boolean; gitlabToken?: string },
   options: DeployProgressOptions = {}
 ): Promise<OpenApiArtifact> {
-  const response = await fetch(getApiBase(`/deploy-api/targets/${targetId}/openapi/generate?stream=1`), {
+  const response = await fetch(await getActiveDeployApiUrl(`/targets/${targetId}/openapi/generate?stream=1`), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -1071,7 +1072,7 @@ export async function generateTargetOpenApiWithProgress(
 
 /** 执行发布 */
 export async function deployTargetWithProgress(targetId: number, payload: DeployTargetPublishPayload, options: DeployProgressOptions = {}) {
-  const response = await fetch(getApiBase(`/deploy-api/targets/${targetId}/deploy?stream=1`), {
+  const response = await fetch(await getActiveDeployApiUrl(`/targets/${targetId}/deploy?stream=1`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson', ...getDeployApiAuthHeaders() },
     body: JSON.stringify(payload),
@@ -1082,7 +1083,7 @@ export async function deployTargetWithProgress(targetId: number, payload: Deploy
 
 /** 订阅部署目标运行中的发布进度 */
 export async function subscribeTargetDeployProgress(targetId: number, options: DeployProgressOptions = {}) {
-  const response = await fetch(getApiBase(`/deploy-api/targets/${targetId}/deploy-progress?stream=1`), {
+  const response = await fetch(await getActiveDeployApiUrl(`/targets/${targetId}/deploy-progress?stream=1`), {
     method: 'GET',
     headers: { Accept: 'application/x-ndjson', ...getDeployApiAuthHeaders() },
     signal: options.signal,
@@ -1092,7 +1093,7 @@ export async function subscribeTargetDeployProgress(targetId: number, options: D
 
 /** 执行回滚 */
 export async function rollbackRecordWithProgress(recordId: number, payload: { operator?: string }, options: DeployProgressOptions = {}) {
-  const response = await fetch(getApiBase(`/deploy-api/records/${recordId}/rollback?stream=1`), {
+  const response = await fetch(await getActiveDeployApiUrl(`/records/${recordId}/rollback?stream=1`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson', ...getDeployApiAuthHeaders() },
     body: JSON.stringify(payload),
@@ -1103,7 +1104,7 @@ export async function rollbackRecordWithProgress(recordId: number, payload: { op
 
 /** 执行撤销回滚 */
 export async function undoRollbackRecordWithProgress(recordId: number, payload: { operator?: string }, options: DeployProgressOptions = {}) {
-  const response = await fetch(getApiBase(`/deploy-api/records/${recordId}/undo-rollback?stream=1`), {
+  const response = await fetch(await getActiveDeployApiUrl(`/records/${recordId}/undo-rollback?stream=1`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson', ...getDeployApiAuthHeaders() },
     body: JSON.stringify(payload),
@@ -1170,7 +1171,7 @@ const getConfiguredLocalServerUrl = () => {
  * 动态解析当前客户端本地服务地址。
  * @description Tauri 环境下向 Rust 查询动态端口；浏览器调试环境需显式配置 VITE_LOCAL_SERVER_URL
  */
-const getActiveLocalServerUrl = async (): Promise<string> => {
+async function getActiveLocalServerUrl(): Promise<string> {
   if (activeLocalServerUrl) {
     return activeLocalServerUrl;
   }
@@ -1221,18 +1222,52 @@ const getActiveLocalServerUrl = async (): Promise<string> => {
     throw localServerError;
   }
   throw new LocalServerUnavailableError('未找到可用的本地辅助服务地址，请在桌面端内使用，或为浏览器调试配置 VITE_LOCAL_SERVER_URL');
-};
+}
+
+/**
+ * 判断桌面端是否显式指定了部署 API 地址。
+ * @returns 是否应绕过内嵌本地服务
+ */
+function hasCustomDeployApiBase(): boolean {
+  try {
+    return Boolean(window.localStorage.getItem('CUSTOM_API_BASE'));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 获取当前模式实际执行部署任务的 API 根地址。
+ * @description 桌面端默认使用内嵌服务以在用户机器构建；网页端和显式自定义模式使用中央 API。
+ * @returns 部署 API 根地址
+ */
+async function getActiveDeployApiBase(): Promise<string> {
+  if (isTauri() && !hasCustomDeployApiBase()) {
+    return `${await getActiveLocalServerUrl()}/deploy-api`;
+  }
+  return getApiBase('/deploy-api');
+}
+
+/**
+ * 构建当前模式的部署 API 完整地址。
+ * @param path 部署 API 内部路径
+ * @returns 完整请求地址
+ */
+async function getActiveDeployApiUrl(path: string): Promise<string> {
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  return `${await getActiveDeployApiBase()}${normalizedPath}`;
+}
 
 /**
  * 构建本机辅助服务 API 地址。
  * @param path - deploy-api 路径
  * @returns 本机辅助服务完整 URL
  */
-const getLocalDeployApiUrl = async (path: string): Promise<string> => {
+async function getLocalDeployApiUrl(path: string): Promise<string> {
   const baseUrl = await getActiveLocalServerUrl();
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
   return `${baseUrl}${normalizedPath}`;
-};
+}
 
 /**
  * 还原二进制数据库数据到本地服务

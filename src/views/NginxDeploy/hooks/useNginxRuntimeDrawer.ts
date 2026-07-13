@@ -515,8 +515,8 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
     }
 
     /** 触发普通浏览器下载，作为本地直写不可用时的降级方案。 */
-    const triggerBrowserDownload = () => {
-      const downloadUrl = getNginxInstanceArchiveDownloadUrl(instance.id, type);
+    const triggerBrowserDownload = async () => {
+      const downloadUrl = await getNginxInstanceArchiveDownloadUrl(instance.id, type);
       const link = document.createElement('a');
       link.href = downloadUrl;
       link.download = defaultFileName;
@@ -540,7 +540,7 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
     }
 
     if (!isTauriClient) {
-      triggerBrowserDownload();
+      await triggerBrowserDownload();
       return;
     }
 
@@ -606,7 +606,7 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
         ? h('button', {
             class: 'ant-btn ant-btn-sm',
             onClick: () => {
-              triggerBrowserDownload();
+              void triggerBrowserDownload();
               message.info('已切换为普通下载');
             }
           }, '普通下载')
@@ -766,7 +766,7 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
         return;
       }
       if (isLocalServerUnavailableError(error)) {
-        triggerBrowserDownload();
+        await triggerBrowserDownload();
         notification.warning({
           key: notificationKey,
           class: 'c4d-download-notification',
