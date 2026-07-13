@@ -153,6 +153,22 @@ export async function scanLocalBuildJdks() {
     await collectJavaHomes(candidates, '/opt/homebrew/opt', (entryPath) => path.join(entryPath, 'libexec', 'openjdk.jdk', 'Contents', 'Home'));
     await collectJavaHomes(candidates, '/usr/local/opt', (entryPath) => path.join(entryPath, 'libexec', 'openjdk.jdk', 'Contents', 'Home'));
   }
+  if (process.platform === 'win32') {
+    const programFiles = process.env['ProgramFiles'] || 'C:\\Program Files';
+    const winDirs = [
+      path.join(programFiles, 'Java'),
+      path.join(programFiles, 'AdoptOpenJDK'),
+      path.join(programFiles, 'Eclipse Foundation'),
+      path.join(programFiles, 'Eclipse Adoptium'),
+      path.join(programFiles, 'Amazon Corretto'),
+      path.join(programFiles, 'Microsoft'),
+      path.join(programFiles, 'Zulu'),
+      path.join(programFiles, 'Azul Zulu'),
+    ];
+    for (const winDir of winDirs) {
+      await collectJavaHomes(candidates, winDir);
+    }
+  }
 
   const existing = await listJdks();
   const existingByRealPath = new Map();

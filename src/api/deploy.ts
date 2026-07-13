@@ -1243,6 +1243,7 @@ const LOCAL_EXECUTE_API_PATTERNS = [
   /\/records\/\d+\/(?:rollback|undo-rollback)/i,
   /\/servers\/\d+\/nginx-runtime\/init/i,
   /\/nginx-instances\/\d+\/(?:init|archive)/i,
+  /\/jdks(?:\/|$)/i,
 ];
 
 /** 判断请求路径是否是需要在本地辅助服务中执行的动作类接口 */
