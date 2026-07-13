@@ -100,6 +100,36 @@ async function collectJavaHomes(candidates, root, resolveHome = (entryPath) => e
   }
 }
 
+/**
+ * 从 macOS java_home 输出中提取 JAVA_HOME 绝对路径。
+ * @param {string} output java_home 标准输出与错误输出
+ * @returns {string[]} JAVA_HOME 路径列表
+ */
+export function parseMacJavaHomes(output) {
+  return [...new Set(
+    String(output || '')
+      .split(/\r?\n/)
+      .map((line) => line.match(/(\/[^\s]+\/Contents\/Home)\s*$/)?.[1] || '')
+      .filter(Boolean)
+  )];
+}
+
+/**
+ * 使用 macOS 系统 java_home 工具补充系统已注册的 JDK。
+ * @param {Set<string>} candidates 候选集合
+ * @returns {Promise<void>}
+ */
+async function collectMacJavaHomes(candidates) {
+  try {
+    const result = await execFileDirect('/usr/libexec/java_home', ['-V']);
+    for (const homePath of parseMacJavaHomes(`${result.stdout}\n${result.stderr}`)) {
+      candidates.add(homePath);
+    }
+  } catch {
+    /** java_home 不存在或系统未注册 JDK 时，继续扫描其他目录。 */
+  }
+}
+
 /** 从 JDK release 文件提取更准确的实现厂商。 */
 async function readJdkImplementor(homePath) {
   const release = await fs.readFile(path.join(homePath, 'release'), 'utf8').catch(() => '');
@@ -117,8 +147,11 @@ export async function scanLocalBuildJdks() {
   await collectJavaHomes(candidates, path.join(home, '.sdkman', 'candidates', 'java'));
   await collectJavaHomes(candidates, path.join(home, '.jenv', 'versions'));
   if (process.platform === 'darwin') {
+    await collectMacJavaHomes(candidates);
     await collectJavaHomes(candidates, path.join(home, 'Library', 'Java', 'JavaVirtualMachines'), (entryPath) => path.join(entryPath, 'Contents', 'Home'));
     await collectJavaHomes(candidates, '/Library/Java/JavaVirtualMachines', (entryPath) => path.join(entryPath, 'Contents', 'Home'));
+    await collectJavaHomes(candidates, '/opt/homebrew/opt', (entryPath) => path.join(entryPath, 'libexec', 'openjdk.jdk', 'Contents', 'Home'));
+    await collectJavaHomes(candidates, '/usr/local/opt', (entryPath) => path.join(entryPath, 'libexec', 'openjdk.jdk', 'Contents', 'Home'));
   }
 
   const existing = await listJdks();
@@ -160,6 +193,15 @@ export async function scanLocalBuildJdks() {
 }
 
 /**
+ * 生成服务器 JDK 扫描命令。
+ * 覆盖 Linux 常见安装目录、SDKMAN，并解析 alternatives 符号链接后的真实 JAVA_HOME。
+ * @returns {string} 只读扫描命令
+ */
+export function buildServerJavaScanCommand() {
+  return `for java in "$(command -v java 2>/dev/null)" /usr/lib/jvm/*/bin/java /usr/java/*/bin/java /opt/java/*/bin/java /opt/jdk*/bin/java /usr/local/java/*/bin/java "$HOME"/.sdkman/candidates/java/*/bin/java; do [ -x "$java" ] || continue; resolved="$(readlink -f "$java" 2>/dev/null || realpath "$java" 2>/dev/null || printf '%s' "$java")"; home="$(cd "$(dirname "$resolved")/.." && pwd -P)"; echo "$home"; done | awk '!seen[$0]++'`;
+}
+
+/**
  * 检测服务器 Java 运行时。
  * @param {number} id 运行时 ID
  * @returns {Promise<Object>} 运行时配置
@@ -192,7 +234,7 @@ export async function scanServerJavaRuntimes(serverId) {
   const server = await getServerWithCredential(serverId);
   if (!server) throw new Error('部署服务器不存在');
   const paths = await withSsh(server, async (conn) => {
-    const command = `for java in "$(command -v java 2>/dev/null)" /usr/lib/jvm/*/bin/java /opt/java/*/bin/java; do [ -x "$java" ] || continue; home="$(cd "$(dirname "$java")/.." && pwd -P)"; echo "$home"; done | awk '!seen[$0]++'`;
+    const command = buildServerJavaScanCommand();
     const result = await execSsh(conn, command, { allowFailure: true, label: '扫描服务器 JDK' });
     return result.stdout.split(/\r?\n/).map((item) => item.trim()).filter((item) => item.startsWith('/'));
   });
