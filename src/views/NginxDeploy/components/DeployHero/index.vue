@@ -101,58 +101,5 @@ const emit = defineEmits<{
 </style>
 
 <style lang="less">
-// 全局样式定义，避免 scoped 限制导致挂载到 body 上的下拉面板样式失效
-.glass-type-select-popup {
-  background: rgba(255, 255, 255, 0.72) !important;
-  backdrop-filter: blur(18px) saturate(180%) !important;
-  -webkit-backdrop-filter: blur(18px) saturate(180%) !important;
-  border: 1px solid rgba(255, 255, 255, 0.5) !important;
-  border-radius: 14px !important;
-  box-shadow:
-    0 12px 40px rgba(31, 38, 135, 0.1),
-    0 2px 8px rgba(31, 38, 135, 0.04),
-    inset 0 1px 0 rgba(255, 255, 255, 0.7) !important;
-  padding: 6px !important;
-  overflow: visible;
-
-  // 下拉菜单选项
-  .ant-select-item {
-    margin: 2px 0;
-    padding: 10px 20px !important;
-    border-radius: 10px !important;
-    font-size: 14px !important;
-    font-weight: 600 !important;
-    color: #4b5563 !important;
-    background: transparent !important;
-    white-space: nowrap !important;
-    overflow: visible !important;
-    text-overflow: unset !important;
-    text-align: center !important;
-    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
-    min-height: auto !important;
-    line-height: 1.4 !important;
-
-    // 选项文字内容，覆盖 AntDV 默认的截断行为
-    .ant-select-item-option-content {
-      white-space: nowrap !important;
-      overflow: visible !important;
-      text-overflow: unset !important;
-    }
-
-    // 悬浮状态
-    &-option-active:not(&-option-selected) {
-      background: rgba(79, 70, 229, 0.07) !important;
-      color: #4f46e5 !important;
-    }
-
-    // 选中状态
-    &-option-selected {
-      background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%) !important;
-      color: #ffffff !important;
-      font-weight: 700 !important;
-      box-shadow: 0 4px 14px rgba(79, 70, 229, 0.3) !important;
-      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
-    }
-  }
-}
+@import './popup.less';
 </style>
