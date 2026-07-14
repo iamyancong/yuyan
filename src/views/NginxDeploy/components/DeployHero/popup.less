@@ -1,0 +1,52 @@
+.glass-type-select-popup {
+  background: var(--glass-bg-heavy) !important;
+  backdrop-filter: blur(18px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(180%) !important;
+  border: 1px solid var(--glass-border) !important;
+  border-radius: 14px !important;
+  box-shadow:
+    var(--glass-shadow),
+    var(--glass-inset-shadow) !important;
+  padding: 6px !important;
+  overflow: visible;
+
+  // 下拉菜单选项
+  .ant-select-item {
+    margin: 2px 0;
+    padding: 10px 20px !important;
+    border-radius: 10px !important;
+    font-size: 14px !important;
+    font-weight: 600 !important;
+    color: var(--text-color) !important;
+    background: transparent !important;
+    white-space: nowrap !important;
+    overflow: visible !important;
+    text-overflow: unset !important;
+    text-align: center !important;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    min-height: auto !important;
+    line-height: 1.4 !important;
+
+    // 选项文字内容，覆盖 AntDV 默认的截断行为
+    .ant-select-item-option-content {
+      white-space: nowrap !important;
+      overflow: visible !important;
+      text-overflow: unset !important;
+    }
+
+    // 悬浮状态
+    &-option-active:not(&-option-selected) {
+      background: var(--primary-color-lighter) !important;
+      color: var(--primary-color) !important;
+    }
+
+    // 选中状态
+    &-option-selected {
+      background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-color-active) 100%) !important;
+      color: #ffffff !important;
+      font-weight: 700 !important;
+      box-shadow: 0 4px 14px color-mix(in srgb, var(--primary-color) 30%, transparent) !important;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+    }
+  }
+}
