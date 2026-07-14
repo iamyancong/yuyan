@@ -7,7 +7,7 @@ import {
 } from '@ant-design/icons-vue';
 
 /** 更新状态枚举 */
-export type UpdateStatus = 'idle' | 'downloading' | 'paused' | 'completed' | 'installing' | 'error';
+export type UpdateStatus = 'idle' | 'preparing' | 'downloading' | 'paused' | 'completed' | 'installing' | 'error';
 
 /** 更新状态详情 */
 export interface UpdateState {
@@ -51,6 +51,12 @@ export const STATUS_CONFIG_MAP: Record<UpdateStatus, CapsuleConfig> = {
     clickable: true,
     className: 'status-idle',
   },
+  preparing: {
+    icon: LoadingOutlined,
+    label: '服务器正在准备更新包...',
+    clickable: false,
+    className: 'status-preparing',
+  },
   downloading: {
     icon: CloudDownloadOutlined,
     label: '正在下载...',
@@ -91,6 +97,9 @@ export const INITIAL_CHECK_DELAY_MS = 2000;
 
 /** 下载进度轮询间隔（毫秒） */
 export const PROGRESS_POLL_INTERVAL_MS = 1000;
+
+/** 内网更新缓存状态轮询间隔（毫秒） */
+export const CACHE_STATUS_POLL_INTERVAL_MS = 2000;
 
 /** 安装完成后关闭 APP 延迟（毫秒） */
 export const CLOSE_APP_DELAY_MS = 1500;

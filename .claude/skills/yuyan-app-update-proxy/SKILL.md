@@ -31,16 +31,17 @@ Tauri 客户端
 
 ## 预下载与缓存
 
-- 检测到新版本后异步调用 `preloadAndCacheAsset`，不得阻塞 check 响应。
+- 中央 API 启动后定时查询最新 Release，并主动预热 macOS ARM、macOS Intel 和 Windows 安装包；更新检测也只负责确保任务已启动，不等待资源下载完成。
 - 缓存目录固定为 `${DEPLOY_DATA_DIR}/app-update-cache`；生产默认路径为 `/data/yuyan-ops/deploy-data/app-update-cache`。
-- 缓存文件使用 `${assetId}-${filename}`，临时文件校验通过后原子重命名。
-- 使用 `activePreloads` 避免同一 asset 并发预下载。
+- 缓存文件使用 `${assetId}-${filename}`，稳定临时文件使用 `${assetId}-${filename}.part`，校验通过后原子重命名。
+- 使用带 Promise 和进度快照的任务 Map 避免同一 asset 并发回源；服务端回源支持 Range、If-Range、指数退避和断点续传。
 - EXE 必须具有 `MZ` 文件头；DMG 必须具有 `koly` 尾部签名；损坏缓存立即删除并回源。
 
 ## 客户端下载
 
 - 命中有效缓存时直接 `sendFile`，支持 Range 和长期不可变缓存。
-- 未命中时由内网 API 使用 GitHub Token 实时代理；只有完整的 `200` 非 Range 下载可以同步落盘，`206` 分段响应不得写成完整缓存。
+- 新客户端未命中缓存时轮询 `/deploy-api/app-update/cache-status`，下载接口在准备中返回 `202`，不得再创建第二条 GitHub 回源流。
+- 旧客户端允许短暂等待同一缓存任务，仍未就绪时使用 GitHub Token 实时代理兼容；兼容代理不写缓存，尤其不得把 `206` 分段响应写成完整缓存。
 - Tauri 原生层负责断点下载、进度、大小/SHA-256 校验、拉起安装程序和安全退出。
 - 顶部更新胶囊仅在 Tauri 环境且接口返回有效更新时展示；不要为网页端伪造 Tauri 状态。
 
@@ -49,4 +50,4 @@ Tauri 客户端
 - 不在前端、URL、日志、仓库或 `tauri.conf.json` 中写入 Token。
 - 不引入 GitHub Actions 到内网的强制 SSH 发布；内网 API 代理缓存是默认路径。
 - 修改版本比较、Release 筛选或缓存逻辑时补充 `server/services/app-update-service.test.mjs`。
-- 至少验证：旧版本有更新、同版本无更新、draft 被忽略、平台资产匹配、缓存损坏回源、Range 不写完整缓存。
+- 至少验证：旧版本有更新、同版本无更新、draft 被忽略、平台资产匹配、缓存损坏回源、单任务回源、服务端 Range/If-Range 续传和新客户端准备状态。

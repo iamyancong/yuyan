@@ -1389,6 +1389,24 @@ export const restoreDbToLocal = async (data: ArrayBuffer): Promise<{ success: bo
  * @param {string} arch - 客户端 CPU 架构
  * @param {string} channel - 更新通道
  */
+export type AppUpdateCacheState = 'ready' | 'preparing' | 'missing' | 'failed';
+
+/** 更新包内网缓存状态。 */
+export interface AppUpdateCacheStatus {
+  status: AppUpdateCacheState;
+  progress: number;
+  downloadedBytes: number;
+  totalBytes: number | null;
+  bytesPerSecond: number;
+  remainingSeconds: number | null;
+  retryCount: number;
+  error: string | null;
+  etag?: string;
+  statusUrl?: string;
+  downloadUrl?: string;
+}
+
+/** 桌面端更新检测结果。 */
 export interface AppUpdateCheckResult {
   hasUpdate: boolean;
   version?: string;
@@ -1398,6 +1416,7 @@ export interface AppUpdateCheckResult {
   url?: string;
   downloadUrl?: string;
   filename?: string;
+  assetId?: string;
   size?: number;
   sha256?: string;
   signature?: string;
@@ -1405,6 +1424,7 @@ export interface AppUpdateCheckResult {
   channel?: string;
   target?: string;
   source?: 'manifest' | 'github-release';
+  cache?: AppUpdateCacheStatus;
   message?: string;
 }
 
@@ -1416,7 +1436,7 @@ export const checkAppUpdateFromServer = (
   channel = 'stable'
 ): Promise<AppUpdateCheckResult> => {
   return axios.get(getApiBase('/deploy-api/app-update/check'), {
-    params: { currentVersion, platform, arch, channel },
+    params: { currentVersion, platform, arch, channel, cacheAware: 1 },
     headers: getDeployApiAuthHeaders(),
   }).then((res) => {
     const data = res.data as AppUpdateCheckResult;
@@ -1425,6 +1445,30 @@ export const checkAppUpdateFromServer = (
     }
     if (data && data.url && !data.url.startsWith('http')) {
       data.url = getApiBase(data.url);
+    }
+    if (data?.cache?.statusUrl && !data.cache.statusUrl.startsWith('http')) {
+      data.cache.statusUrl = getApiBase(data.cache.statusUrl);
+    }
+    return data;
+  });
+};
+
+/**
+ * 查询更新包内网缓存准备状态。
+ * @param statusUrl - check 接口返回的缓存状态地址
+ * @returns 最新缓存状态
+ */
+export const getAppUpdateCacheStatus = (statusUrl: string): Promise<AppUpdateCacheStatus> => {
+  const url = statusUrl.startsWith('http') ? statusUrl : getApiBase(statusUrl);
+  return axios.get(url, {
+    headers: getDeployApiAuthHeaders(),
+  }).then((res) => {
+    const data = res.data as AppUpdateCacheStatus;
+    if (data.downloadUrl && !data.downloadUrl.startsWith('http')) {
+      data.downloadUrl = getApiBase(data.downloadUrl);
+    }
+    if (data.statusUrl && !data.statusUrl.startsWith('http')) {
+      data.statusUrl = getApiBase(data.statusUrl);
     }
     return data;
   });
