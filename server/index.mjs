@@ -31,11 +31,13 @@ import deployRoutes from './routes/deploy.mjs';
 import healthRoutes from './routes/health.mjs';
 import { closeDeployDb, getDeployDb } from './services/deploy-store.mjs';
 import { abortAppUpdateTransfers } from './controllers/deploy-controller.mjs';
+import { startAppUpdatePreloadScheduler } from './services/app-update-release-service.mjs';
 
 // 创建 Express 应用
 const app = express();
 let httpServer = null;
 let stopCleanupScheduler = null;
+let stopUpdatePreloadScheduler = null;
 let shuttingDown = false;
 const activeSockets = new Set();
 const isTauriSubprocess = process.env.IS_TAURI_SUBPROCESS === 'true';
@@ -261,6 +263,13 @@ async function shutdown(reason = 'unknown') {
     console.warn('[shutdown] 停止清理任务失败:', error);
   }
 
+  try {
+    stopUpdatePreloadScheduler?.();
+    stopUpdatePreloadScheduler = null;
+  } catch (error) {
+    console.warn('[shutdown] 停止更新包预热任务失败:', error);
+  }
+
   await new Promise((resolve) => {
     if (!httpServer) {
       resolve();
@@ -326,6 +335,9 @@ async function bootstrap() {
 
     // 启动定时清理任务
     stopCleanupScheduler = startCleanupScheduler();
+    if (!isTauriSubprocess) {
+      stopUpdatePreloadScheduler = startAppUpdatePreloadScheduler();
+    }
 
     // 初始化独立服务器部署数据库
     await getDeployDb();

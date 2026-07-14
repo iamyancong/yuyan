@@ -39,7 +39,6 @@ import {
   deleteDeployEnvironment,
 } from '../services/deploy-store.mjs';
 import fs from 'node:fs/promises';
-import fsSync from 'node:fs';
 import path from 'node:path';
 import axios from 'axios';
 import { DEPLOY_DB_PATH } from '../config/constants.mjs';
@@ -77,6 +76,11 @@ import {
   selectLatestCompatibleRelease,
   validateManifestAsset,
 } from '../services/app-update-service.mjs';
+import { updateAssetCacheManager } from '../services/app-update-cache-service.mjs';
+import {
+  fetchGithubAppReleases,
+  mapGithubAssetToCacheAsset,
+} from '../services/app-update-release-service.mjs';
 import { generateTargetOpenApi, inspectBackendTarget } from '../services/backend-project-service.mjs';
 import {
   getBackendServiceStatus,
@@ -1177,8 +1181,7 @@ export async function handleRestoreDb(req, res) {
   }
 }
 
-// 预下载和缓存管理器，防止并发重复下载
-const activePreloads = new Set();
+/** 兼容旧客户端实时代理请求的中断控制器。 */
 const activeUpdateAbortControllers = new Set();
 
 /**
@@ -1200,152 +1203,59 @@ export function abortAppUpdateTransfers(reason = 'shutdown') {
     controller.abort(reason);
   }
   activeUpdateAbortControllers.clear();
-  activePreloads.clear();
+  updateAssetCacheManager.abortAll();
 }
 
 /**
- * 校验缓存文件是否为有效的系统安装包
- * @param {string} filePath 缓存文件路径
- * @param {string} filename 安装包文件名
- * @returns {boolean} 文件大小和格式签名是否有效
+ * 构建 GitHub Release Asset 的下载与缓存状态地址。
+ * @param {object} asset - 缓存资源元数据
+ * @param {boolean} cacheAware - 客户端是否理解缓存准备状态
+ * @returns {{ downloadUrl: string, cacheStatusUrl: string }} 相对接口地址
  */
-function isValidUpdateAssetFile(filePath, filename = '') {
-  try {
-    const stats = fsSync.statSync(filePath);
-    if (!stats.isFile() || stats.size <= 1024 * 1024) return false;
-
-    const extension = path.extname(filename).toLowerCase();
-    const descriptor = fsSync.openSync(filePath, 'r');
-    try {
-      if (extension === '.exe') {
-        const header = Buffer.alloc(2);
-        fsSync.readSync(descriptor, header, 0, header.length, 0);
-        return header.equals(Buffer.from('MZ'));
-      }
-      if (extension === '.dmg') {
-        if (stats.size < 512) return false;
-        const trailer = Buffer.alloc(4);
-        fsSync.readSync(descriptor, trailer, 0, trailer.length, stats.size - 512);
-        return trailer.equals(Buffer.from('koly'));
-      }
-      return false;
-    } finally {
-      fsSync.closeSync(descriptor);
-    }
-  } catch (error) {
-    console.warn(`[Update Cache] 校验安装包失败: ${filePath}`, error.message);
-    return false;
-  }
-}
-
-/**
- * 在后台预下载 GitHub Release 安装包并缓存到本地目录
- */
-async function preloadAndCacheAsset(assetId, filename) {
-  const token = process.env.GITHUB_TOKEN || '';
-  if (!token) return;
-
-  const safeFilename = path.basename(String(filename || 'update'));
-  if (!safeFilename) return;
-
-  const cacheDir = path.join(process.env.DEPLOY_DATA_DIR || '/data/yuyan-ops/deploy-data', 'app-update-cache');
-  const cachePath = path.join(cacheDir, `${assetId}-${safeFilename}`);
-
-  // 1. 确保缓存目录存在
-  if (!fsSync.existsSync(cacheDir)) {
-    try {
-      fsSync.mkdirSync(cacheDir, { recursive: true });
-    } catch (err) {
-      console.error('[Update Cache] 创建缓存目录失败:', err);
-      return;
-    }
-  }
-
-  // 2. 如果已经存在且格式有效，则跳过；损坏缓存立即清理
-  if (fsSync.existsSync(cachePath)) {
-    if (isValidUpdateAssetFile(cachePath, safeFilename)) {
-      const stats = fsSync.statSync(cachePath);
-      console.log(`[Update Cache] 缓存包已存在且格式有效: ${cachePath} (${(stats.size/1024/1024).toFixed(2)}MB)，无需预下载`);
-      return;
-    }
-    console.warn(`[Update Cache] 检测到损坏缓存，立即清理: ${cachePath}`);
-    try { fsSync.unlinkSync(cachePath); } catch (e) {}
-  }
-
-  // 3. 避免并发重复下载
-  if (activePreloads.has(assetId)) {
-    return;
-  }
-  activePreloads.add(assetId);
-
-  console.log(`[Update Cache] 开始静默预下载 GitHub Release 资源: ${assetId} -> ${cachePath}`);
-
-  const tempCachePath = `${cachePath}.preload-${process.pid}-${Date.now()}.tmp`;
-  const controller = new AbortController();
-  const untrack = trackUpdateAbortController(controller);
-  let source = null;
-  let writer = null;
-  const abortTransfer = () => {
-    source?.destroy?.(new Error('预下载已中断'));
-    writer?.destroy?.(new Error('预下载已中断'));
+function buildGithubUpdateAssetUrls(asset, cacheAware) {
+  const query = new URLSearchParams({
+    assetId: String(asset.assetId),
+    filename: String(asset.filename),
+  });
+  if (cacheAware) query.set('cacheAware', '1');
+  return {
+    downloadUrl: `/deploy-api/app-update/download-asset?${query.toString()}`,
+    cacheStatusUrl: `/deploy-api/app-update/cache-status?assetId=${encodeURIComponent(asset.assetId)}&filename=${encodeURIComponent(asset.filename)}`,
   };
-  controller.signal.addEventListener('abort', abortTransfer, { once: true });
-  try {
-    const url = `https://api.github.com/repos/${GITHUB_REPO}/releases/assets/${assetId}`;
-    const headers = {
-      'User-Agent': 'yuyan-app',
-      'Accept': 'application/octet-stream',
-      'Authorization': `Bearer ${token.trim()}`
-    };
+}
 
-    const response = await axios({
-      method: 'get',
-      url: url,
-      responseType: 'stream',
-      headers: headers,
-      timeout: 300000, // 5分钟超时
-      signal: controller.signal,
-    });
-
-    source = response.data;
-    writer = fsSync.createWriteStream(tempCachePath);
-
-    source.pipe(writer);
-
-    await new Promise((resolve, reject) => {
-      writer.on('finish', resolve);
-      writer.on('error', reject);
-      source.on('error', reject);
-    });
-
-    if (!isValidUpdateAssetFile(tempCachePath, safeFilename)) {
-      throw new Error('预下载文件格式校验失败，不是有效安装包');
-    }
-
-    // 下载成功并校验后重命名为正式缓存文件
-    fsSync.renameSync(tempCachePath, cachePath);
-    console.log(`[Update Cache] 资源预下载并缓存成功: ${cachePath}`);
-  } catch (err) {
-    if (controller.signal.aborted) {
-      console.warn(`[Update Cache] 资源预下载已中断: ${assetId}`);
-    } else {
-      console.error(`[Update Cache] 资源预下载失败:`, err.message);
-    }
-    if (fsSync.existsSync(tempCachePath)) {
-      try { fsSync.unlinkSync(tempCachePath); } catch (e) {}
-    }
-  } finally {
-    controller.signal.removeEventListener('abort', abortTransfer);
-    untrack();
-    activePreloads.delete(assetId);
-  }
+/**
+ * 构建返回客户端的缓存状态。
+ * @param {object} status - 缓存服务状态
+ * @param {string} cacheStatusUrl - 状态查询地址
+ * @returns {object} 客户端缓存状态
+ */
+function buildClientCacheStatus(status, cacheStatusUrl) {
+  return {
+    status: status.status,
+    progress: status.progress,
+    downloadedBytes: status.downloadedBytes,
+    totalBytes: status.totalBytes,
+    bytesPerSecond: status.bytesPerSecond,
+    remainingSeconds: status.remainingSeconds,
+    retryCount: status.retryCount,
+    error: status.error,
+    etag: status.etag,
+    statusUrl: cacheStatusUrl,
+  };
 }
 
 /**
  * 自动更新版本检测（统一通过服务端环境变量 GITHUB_TOKEN 代理访问 GitHub API）
  */
 export async function handleCheckAppUpdate(req, res) {
-  const { currentVersion, platform, arch = 'x86_64', channel = 'stable' } = req.query;
+  const {
+    currentVersion,
+    platform,
+    arch = 'x86_64',
+    channel = 'stable',
+    cacheAware = '0',
+  } = req.query;
   if (!currentVersion) {
     return sendError(res, new Error('缺少必要参数 currentVersion'), 400);
   }
@@ -1398,6 +1308,18 @@ export async function handleCheckAppUpdate(req, res) {
         channel: normalizedChannel,
         target,
         source: 'manifest',
+        cache: {
+          status: 'ready',
+          progress: 100,
+          downloadedBytes: Number(manifestAsset.size),
+          totalBytes: Number(manifestAsset.size),
+          bytesPerSecond: 0,
+          remainingSeconds: 0,
+          retryCount: 0,
+          error: null,
+          etag: manifestAsset.etag || `"sha256-${manifestAsset.sha256}"`,
+          statusUrl: '',
+        },
       });
     }
 
@@ -1405,29 +1327,7 @@ export async function handleCheckAppUpdate(req, res) {
       return res.json({ hasUpdate: false, message: '已是最新版本' });
     }
 
-    // Token 统一从服务端环境变量获取
-    const token = process.env.GITHUB_TOKEN || '';
-    const headers = {
-      'Accept': 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-      'User-Agent': 'yuyan-app',
-      'Cache-Control': 'no-cache',
-      'Pragma': 'no-cache',
-    };
-
-    if (token && token.trim() !== '') {
-      headers['Authorization'] = `Bearer ${token.trim()}`;
-    }
-
-    // 从 GitHub 获取 Releases 列表
-    const response = await axios.get(`https://api.github.com/repos/${GITHUB_REPO}/releases`, {
-      headers,
-      params: {
-        per_page: 100,
-        cacheBust: Date.now(),
-      },
-    });
-    const data = response.data;
+    const data = await fetchGithubAppReleases();
 
     if (!Array.isArray(data) || data.length === 0) {
       return res.json({ hasUpdate: false, message: '暂无版本发布信息' });
@@ -1449,14 +1349,9 @@ export async function handleCheckAppUpdate(req, res) {
     const remoteVersion = latestRelease.tag_name;
 
     if (isNewerAppVersion(currentVersion, remoteVersion)) {
-      // 重写下载链接为内网服务器的免密中转链接（Token 由服务端环境变量管理，无需拼入 URL）
-      const filename = targetAsset.name;
-      const downloadUrl = `/deploy-api/app-update/download-asset?assetId=${encodeURIComponent(targetAsset.id)}&filename=${encodeURIComponent(filename)}`;
-
-      // 触发后台预下载（静默执行，不阻塞 check 接口的响应）
-      preloadAndCacheAsset(targetAsset.id, filename).catch(err => {
-        console.error('[Update Cache] 预下载启动异常:', err);
-      });
+      const cacheAsset = mapGithubAssetToCacheAsset(targetAsset);
+      const urls = buildGithubUpdateAssetUrls(cacheAsset, String(cacheAware) === '1');
+      const cacheStatus = await updateAssetCacheManager.ensureCached(cacheAsset);
 
       res.json({
         hasUpdate: true,
@@ -1464,9 +1359,10 @@ export async function handleCheckAppUpdate(req, res) {
         latestVersion: remoteVersion.replace(/^v/, ''),
         notes: latestRelease.body || '无更新说明。',
         updateLogs: latestRelease.body || '无更新说明。',
-        url: downloadUrl,
-        downloadUrl,
-        filename,
+        url: urls.downloadUrl,
+        downloadUrl: urls.downloadUrl,
+        filename: cacheAsset.filename,
+        assetId: cacheAsset.assetId,
         size: Number(targetAsset.size || 0),
         sha256: String(targetAsset.digest || '').replace(/^sha256:/, ''),
         signature: '',
@@ -1474,6 +1370,7 @@ export async function handleCheckAppUpdate(req, res) {
         channel: normalizedChannel,
         target,
         source: 'github-release',
+        cache: buildClientCacheStatus(cacheStatus, urls.cacheStatusUrl),
       });
     } else {
       res.json({ hasUpdate: false, message: '已是最新版本' });
@@ -1533,98 +1430,131 @@ export async function handleCheckTauriAppUpdate(req, res) {
 }
 
 /**
- * 代理下载 GitHub Release Asset 资源，并将二进制流通过 pipe 实时中转给本地客户端（Token 由服务端环境变量统一管理）
+ * 返回指定 GitHub Asset 的缓存准备状态。
+ * @param {Object} req - Express 请求
+ * @param {Object} res - Express 响应
+ */
+export async function handleGetAppUpdateCacheStatus(req, res) {
+  try {
+    const asset = updateAssetCacheManager.resolveAsset({
+      assetId: req.query.assetId,
+      filename: req.query.filename,
+    });
+    const status = await updateAssetCacheManager.ensureCached(asset);
+    const urls = buildGithubUpdateAssetUrls(asset, true);
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      ...buildClientCacheStatus(status, urls.cacheStatusUrl),
+      downloadUrl: urls.downloadUrl,
+    });
+  } catch (error) {
+    sendError(res, error, 400);
+  }
+}
+
+/**
+ * 从内网缓存发送安装包并启用 Range。
+ * @param {Object} res - Express 响应
+ * @param {object} asset - 更新资源
+ * @param {object} status - 缓存状态
+ */
+function sendCachedAppUpdateAsset(res, asset, status) {
+  const { cachePath } = updateAssetCacheManager.getPaths(asset);
+  res.setHeader('Content-Type', 'application/octet-stream');
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  res.setHeader('Content-Disposition', `attachment; filename=${encodeURIComponent(asset.filename)}`);
+  res.setHeader('X-Update-Source', 'cache');
+  if (asset.sha256) res.setHeader('ETag', `"sha256-${asset.sha256}"`);
+  else if (status.etag) res.setHeader('ETag', status.etag);
+  return res.sendFile(cachePath, {
+    acceptRanges: true,
+    cacheControl: true,
+    immutable: true,
+    lastModified: true,
+    maxAge: '1y',
+  });
+}
+
+/**
+ * 代理下载 GitHub Release Asset；新客户端等待缓存，旧客户端保留实时代理兼容路径。
+ * @param {Object} req - Express 请求
+ * @param {Object} res - Express 响应
  */
 export async function handleDownloadAppUpdateAsset(req, res) {
-  const { assetId, filename } = req.query;
-  if (!assetId) {
-    return sendError(res, new Error('缺少必要参数 assetId'), 400);
+  let asset;
+  try {
+    asset = updateAssetCacheManager.resolveAsset({
+      assetId: req.query.assetId,
+      filename: req.query.filename,
+    });
+  } catch (error) {
+    return sendError(res, error, 400);
   }
-  const safeFilename = path.basename(String(filename || 'update'));
-  if (!safeFilename) {
-    return sendError(res, new Error('安装包文件名无效'), 400);
+
+  const cacheAware = String(req.query.cacheAware || '') === '1';
+  try {
+    let cacheStatus = await updateAssetCacheManager.ensureCached(asset);
+    if (cacheStatus.status === 'ready') {
+      return sendCachedAppUpdateAsset(res, asset, cacheStatus);
+    }
+
+    if (!cacheAware && cacheStatus.status === 'preparing') {
+      cacheStatus = await updateAssetCacheManager.waitForAsset(asset, 15_000);
+      if (cacheStatus.status === 'ready') {
+        return sendCachedAppUpdateAsset(res, asset, cacheStatus);
+      }
+    }
+
+    if (cacheAware) {
+      const statusCode = cacheStatus.status === 'failed' ? 503 : 202;
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('Retry-After', cacheStatus.status === 'failed' ? '30' : '2');
+      res.setHeader('X-Update-Source', 'preload');
+      return res.status(statusCode).json(buildClientCacheStatus(
+        cacheStatus,
+        buildGithubUpdateAssetUrls(asset, true).cacheStatusUrl
+      ));
+    }
+  } catch (error) {
+    console.warn('[Update Cache] 读取缓存状态失败，旧客户端回退实时代理:', error.message);
+    if (cacheAware) return sendError(res, error, 503);
   }
 
   const controller = new AbortController();
   const untrack = trackUpdateAbortController(controller);
   let source = null;
-  let cacheWriter = null;
-  let tempCachePath = '';
   let completed = false;
-  const cleanupTempCache = () => {
-    if (tempCachePath && fsSync.existsSync(tempCachePath)) {
-      try { fsSync.unlinkSync(tempCachePath); } catch (e) {}
-    }
-  };
+  /** 清理旧客户端实时代理监听。 */
   const cleanupTransfer = () => {
     req.off?.('aborted', abortTransfer);
     res.off?.('close', abortTransfer);
     untrack();
   };
+  /** 中断旧客户端实时代理。 */
   function abortTransfer() {
     if (completed) return;
     controller.abort('client closed');
     source?.destroy?.(new Error('客户端下载已中断'));
-    if (cacheWriter && !cacheWriter.destroyed) cacheWriter.destroy();
-    cleanupTempCache();
     cleanupTransfer();
   }
   req.on('aborted', abortTransfer);
   res.on('close', abortTransfer);
 
   try {
-    const cacheDir = path.join(process.env.DEPLOY_DATA_DIR || '/data/yuyan-ops/deploy-data', 'app-update-cache');
-    const cachePath = path.join(cacheDir, `${assetId}-${safeFilename}`);
-
-    // 1. 如果命中有效缓存则直接返回；损坏缓存先清理再回源
-    if (fsSync.existsSync(cachePath)) {
-      if (isValidUpdateAssetFile(cachePath, safeFilename)) {
-        completed = true;
-        cleanupTransfer();
-        const stats = fsSync.statSync(cachePath);
-        console.log(`[Update Cache] 命中缓存，直接返回本地缓存包: ${cachePath} (${(stats.size/1024/1024).toFixed(2)}MB)`);
-
-        res.setHeader('Content-Length', stats.size);
-        res.setHeader('Content-Type', 'application/octet-stream');
-        res.setHeader('Accept-Ranges', 'bytes');
-        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-        res.setHeader('Content-Disposition', `attachment; filename=${encodeURIComponent(safeFilename)}`);
-
-        return res.sendFile(cachePath, {
-          acceptRanges: true,
-          cacheControl: true,
-          immutable: true,
-          lastModified: true,
-          maxAge: '1y',
-        });
-      }
-      console.warn(`[Update Cache] 命中损坏缓存，删除后回源下载: ${cachePath}`);
-      try { fsSync.unlinkSync(cachePath); } catch (e) {}
-    }
-
-    // 2. 缓存未命中，实时从中转下载，并且同步写入缓存
-    const token = process.env.GITHUB_TOKEN || '';
+    const token = String(process.env.GITHUB_TOKEN || '').trim();
     const headers = {
       'User-Agent': 'yuyan-app',
-      'Accept': 'application/octet-stream'
+      'Accept': 'application/octet-stream',
     };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    if (req.headers.range) headers.Range = req.headers.range;
+    if (req.headers['if-range']) headers['If-Range'] = req.headers['if-range'];
 
-    if (token && token.trim() !== '') {
-      headers['Authorization'] = `Bearer ${token.trim()}`;
-    }
-    if (req.headers.range) {
-      headers.Range = req.headers.range;
-    }
-    if (req.headers['if-range']) {
-      headers['If-Range'] = req.headers['if-range'];
-    }
-
-    const url = `https://api.github.com/repos/${GITHUB_REPO}/releases/assets/${assetId}`;
-    console.log(`[Update Proxy] 缓存未命中，内网服务器代理下载私有资源: ${assetId} (文件名: ${safeFilename})`);
-
+    console.log(`[Update Proxy] 旧客户端使用 GitHub 实时代理: ${asset.assetId} (${asset.filename})`);
     const response = await axios({
       method: 'get',
-      url: url,
+      url: `https://api.github.com/repos/${GITHUB_REPO}/releases/assets/${asset.assetId}`,
       responseType: 'stream',
       headers,
       signal: controller.signal,
@@ -1632,105 +1562,34 @@ export async function handleDownloadAppUpdateAsset(req, res) {
     });
 
     res.status(response.status);
-    res.setHeader('Content-Length', response.headers['content-length']);
     res.setHeader('Content-Type', response.headers['content-type'] || 'application/octet-stream');
-    ['accept-ranges', 'content-range', 'etag', 'last-modified'].forEach((headerName) => {
-      if (response.headers[headerName]) {
-        res.setHeader(headerName, response.headers[headerName]);
-      }
+    res.setHeader('Content-Disposition', `attachment; filename=${encodeURIComponent(asset.filename)}`);
+    res.setHeader('X-Update-Source', 'github-proxy-legacy');
+    ['content-length', 'accept-ranges', 'content-range', 'etag', 'last-modified'].forEach((headerName) => {
+      if (response.headers[headerName]) res.setHeader(headerName, response.headers[headerName]);
     });
-    res.setHeader('Content-Disposition', `attachment; filename=${encodeURIComponent(safeFilename)}`);
 
-    // 尝试在本地保存一份缓存
-    tempCachePath = `${cachePath}.proxy-${process.pid}-${Date.now()}.tmp`;
-    try {
-      const isFullDownload = response.status === 200 && !req.headers.range;
-      if (isFullDownload && !fsSync.existsSync(cacheDir)) {
-        fsSync.mkdirSync(cacheDir, { recursive: true });
-      }
-      if (isFullDownload) {
-        cacheWriter = fsSync.createWriteStream(tempCachePath);
-      }
-    } catch (e) {
-      console.error('[Update Cache] 创建缓存写入流失败，仅执行实时中转:', e.message);
-    }
-
-    // 手动分流：避免对同一 Readable 流执行两次 pipe() 导致背压死锁
-    // 使用 data/end/error 事件手动将数据分发到 res 和 cacheWriter
     source = response.data;
-
-    source.on('data', (chunk) => {
-      if (controller.signal.aborted || res.destroyed) return;
-      // 1. 写入 HTTP 响应流（优先保证客户端接收）
-      const resOk = res.write(chunk);
-      // 2. 写入本地缓存文件（非阻塞，忽略背压以避免影响主流程）
-      if (cacheWriter && !cacheWriter.destroyed) {
-        cacheWriter.write(chunk);
-      }
-      // 仅在 res 需要背压控制时暂停源流
-      if (!resOk) {
-        source.pause();
-        res.once('drain', () => source.resume());
-      }
-    });
-
-    source.on('end', () => {
+    source.once('end', () => {
       completed = true;
       cleanupTransfer();
-      res.end();
-      if (cacheWriter && !cacheWriter.destroyed) {
-        cacheWriter.end(() => {
-          // 下载完整并通过格式校验后，将独立临时文件重命名为正式缓存
-          try {
-            if (!isValidUpdateAssetFile(tempCachePath, safeFilename)) {
-              throw new Error('代理下载文件格式校验失败，不写入缓存');
-            }
-            fsSync.renameSync(tempCachePath, cachePath);
-            console.log(`[Update Cache] 代理下载的同时成功将文件写入缓存: ${cachePath}`);
-          } catch (renameErr) {
-            console.error('[Update Cache] 重命名缓存文件失败:', renameErr);
-            try { fsSync.unlinkSync(tempCachePath); } catch (e) {}
-          }
-        });
-      }
     });
-
-    source.on('error', (err) => {
+    source.once('error', (error) => {
       if (controller.signal.aborted) return;
       cleanupTransfer();
-      console.error('[Update Proxy] 源数据流错误:', err);
-      res.destroy(err);
-      if (cacheWriter && !cacheWriter.destroyed) {
-        cacheWriter.destroy();
-        try { fsSync.unlinkSync(tempCachePath); } catch (e) {}
-      }
+      res.destroy(error);
     });
-
-    if (cacheWriter) {
-      cacheWriter.on('error', (err) => {
-        console.error('[Update Cache] 代理写入缓存文件出错:', err);
-        cacheWriter.destroy();
-        try { fsSync.unlinkSync(tempCachePath); } catch (e) {}
-      });
-    }
+    source.pipe(res);
   } catch (error) {
     cleanupTransfer();
-    if (controller.signal.aborted) {
-      cleanupTempCache();
-      return;
-    }
-    console.error('[Update Proxy] 代理资源流失败:', error);
-    let status = 500;
-    let errMsg = error.message;
-    if (error.response) {
-      status = error.response.status;
-      errMsg = `GitHub 响应错误: ${error.response.statusText || status} (${status})`;
-      if (status === 401) errMsg = '下载时鉴权失败(401)，GitHub Token 无效';
-      if (status === 404) errMsg = '未找到该安装包资源(404)，请检查发布版本是否正确';
-    } else if (error.request) {
-      errMsg = '中转下载失败，连接 GitHub 网络超时';
-    }
-    sendError(res, new Error(errMsg), status);
+    if (controller.signal.aborted) return;
+    console.error('[Update Proxy] 旧客户端代理资源失败:', error);
+    let status = error.response?.status || 500;
+    let errMsg = error.message || '中转下载失败';
+    if (status === 401) errMsg = '下载时鉴权失败(401)，GitHub Token 无效';
+    if (status === 404) errMsg = '未找到该安装包资源(404)，请检查发布版本是否正确';
+    if (error.request && !error.response) errMsg = '中转下载失败，连接 GitHub 网络超时';
+    return sendError(res, new Error(errMsg), status);
   }
 }
 

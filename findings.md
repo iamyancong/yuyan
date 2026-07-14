@@ -7,6 +7,21 @@
 - 保持现有前端/Nginx 发布链路和页面整体布局。
 
 ## 研究发现
+- 本机 Codex 桌面端使用 Sparkle，缓存中存在约 16.6 MiB 的 `.delta` 增量包；雨燕当前仍下载完整 DMG/EXE。
+- 雨燕客户端已有 Range/If-Range、暂停、重试、大小/SHA-256 和安装包格式校验，主要瓶颈不在前端进度组件。
+- 当前 check 接口异步启动预下载后立即返回；用户点击下载时可能与预下载并发回源同一 GitHub Asset。
+- `activePreloads` 只阻止预下载之间重复，不阻止下载接口再次回源；缓存未命中仍实时代理 GitHub。
+- 当前服务端预下载失败会删除临时文件，不支持服务端断点续传；首次回源失败可能从零开始。
+- Tauri Updater 依赖已声明，但应用未初始化插件，`tauri.conf.json` 未配置 `createUpdaterArtifacts/pubkey/endpoints`，GitHub Actions 也只上传 DMG/EXE。
+- Tauri 更新包验签使用本地生成的免费密钥；Apple Developer/Windows Authenticode 属于独立系统代码签名，不纳入本次无付费实现。
+- 双分支中 `feat/github-actions-build` 负责 GitHub Release，`yuyan-3.0` 负责内网 API；内网 API 主动轮询 Release 比 GitHub Actions SSH 回推更符合现有架构。
+- 服务器入口已经有统一 `shutdown` 和更新流中断钩子，适合在同一生命周期中启动/停止 Release 预热调度器。
+- `/app-update/download-asset` 为兼容旧客户端保持免部署令牌访问；新增缓存状态最好继续通过现有受保护的 check 响应返回，避免扩大公开接口。
+- 客户端 `UpdateState` 可增加 `preparing` 状态，复用胶囊单例生命周期；缓存状态轮询必须独立于 15 分钟版本检查和 1 秒原生进度轮询。
+- 当前 GitHub Release Asset 已返回 `size` 与可选 `digest`，可以把元数据传给缓存服务进行大小/SHA-256 校验；无 digest 时仍保留格式与大小校验。
+- 主动预热只应在中央 API 运行，不能让每个 Tauri 内嵌 Node 子进程重复访问 GitHub。
+- 已验证当前环境未配置 Tauri 签名私钥/公钥，也没有可操作 GitHub Secrets 的 `gh` 工具；官方 Updater 启用受密钥托管阻塞，不受费用阻塞。
+- 已就绪缓存增加文件大小、mtime 与预期摘要组合记忆，避免每次状态轮询和定时预热重复计算整包 SHA-256；文件变化后仍会重新校验。
 - 当前后端目标创建时允许无 Nginx，但 deploy-service 的 getTargetContext 仍强制 Nginx，发布会在构建前失败。
 - 当前后端空安装/构建命令在 controller 中会回退为 pnpm 命令。
 - 当前后端回滚复用前端目录恢复并执行 Nginx 校验/重载，不可用。
@@ -40,6 +55,11 @@
 | 服务端口检测只在受控服务离线时拒绝未知占用 | 当前服务在线发布时端口本就处于占用状态 |
 | Node 服务默认改为仅绑定 127.0.0.1 | 服务器模式需显式 HOST=0.0.0.0，并同时配置 API Token、非默认加密密钥和 CORS 白名单 |
 | JDK 采用“发现/校验优先，显式安装后扫描” | 桌面模式构建机是用户 Mac，中央模式构建机是 API 主机；静默安装或切换系统 Java 会引入权限、供应链和兼容风险 |
+| 更新资源采用后台主动预热 + 请求侧单任务共享 | 在不增加付费 CDN 的前提下隐藏 GitHub 慢链路，并避免重复占用带宽 |
+| 缓存准备中返回 202，不实时开启第二条代理流 | 保证同一 asset 只有一个 GitHub 上游下载，客户端等待后走内网高速静态文件 |
+| 保留现有 Rust 下载器 | 已具备断点和校验，替换为多线程或浏览器下载收益小且风险更高 |
+| Sparkle 增量更新暂缓 | 仅覆盖 macOS，会扩大双平台维护和签名安装复杂度；先解决共同的回源瓶颈 |
+| 官方 Tauri Updater 暂不启用 | 验签本身免费，但缺少可持续托管的稳定私钥与 CI Secrets；临时生成密钥会给后续版本留下不可恢复风险 |
 
 ## 视觉/浏览器发现
 - 保留顶部 Hero、部署目标/服务器管理/发布历史三 Tab、筛选区和现有表格密度。

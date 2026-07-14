@@ -47,6 +47,7 @@ import {
   handleRestoreDb,
   handleCheckAppUpdate,
   handleCheckTauriAppUpdate,
+  handleGetAppUpdateCacheStatus,
   handleDownloadAppUpdateAsset,
   handleTestJdk,
   handleScanLocalJdks,
@@ -139,6 +140,7 @@ router.post('/db/restore', express.raw({ type: 'application/octet-stream', limit
 // 自动更新检测与原生下载代理接口
 router.get('/app-update/check', handleCheckAppUpdate);
 router.get('/app-update/tauri/:target/:arch/:currentVersion', handleCheckTauriAppUpdate);
+router.get('/app-update/cache-status', handleGetAppUpdateCacheStatus);
 router.get('/app-update/download-asset', handleDownloadAppUpdateAsset);
 
 export default router;

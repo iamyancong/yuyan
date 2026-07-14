@@ -35,6 +35,16 @@ const downloadDetail = computed(() => {
   if (retry > 0) parts.push(`重试 ${retry}/${3}`);
   return parts.join(' · ');
 });
+
+/** 服务器准备安装包时的进度说明。 */
+const preparingDetail = computed(() => {
+  const progress = updateState.value.progress;
+  const remaining = updateState.value.remainingSeconds;
+  const parts = [progress > 0 ? `准备 ${progress}%` : '正在加速准备'];
+  if (updateState.value.bytesPerSecond > 0) parts.push(formattedSpeed.value);
+  if (remaining !== null) parts.push(`约 ${remaining} 秒`);
+  return parts.join(' · ');
+});
 </script>
 
 <template>
@@ -65,6 +75,12 @@ const downloadDetail = computed(() => {
           <PauseCircleOutlined />
         </span>
       </a-tooltip>
+    </template>
+
+    <!-- 内网服务器预热安装包 -->
+    <template v-else-if="updateState.status === 'preparing'">
+      <span class="progress-text">{{ preparingDetail }}</span>
+      <div class="progress-bar-bg" :style="{ width: `${updatePercent}%` }"></div>
     </template>
 
     <!-- 其他状态文案 -->

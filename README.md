@@ -173,6 +173,9 @@ pnpm build
 | `GITLAB_TOKEN` | 空 | GitLab 访问 Token（创建仓库 / 推送所需） |
 | `GIT_USER_NAME` / `GIT_USER_EMAIL` | `yuyan-ops` / … | Git 提交身份 |
 | `DEPLOY_DATA_DIR` | `.yuyan-deploy` | 部署数据目录（SQLite / 日志 / 备份） |
+| `APP_UPDATE_CACHE_DIR` | `${DEPLOY_DATA_DIR}/app-update-cache` | GitHub Release 安装包的内网缓存目录 |
+| `APP_UPDATE_PRELOAD_INTERVAL_MS` | `300000` | 中央 API 主动检查并预热最新安装包的间隔（最低 60 秒） |
+| `APP_UPDATE_PRELOAD_INITIAL_DELAY_MS` | `2000` | 中央 API 启动后首次预热的延迟 |
 | `DEPLOY_SECRET_KEY` | 本地默认值 | **部署凭据加密密钥，生产务必显式配置** |
 | `DEPLOY_RECORD_KEEP_PER_PROJECT` | `20` | 每个项目保留的发布记录数 |
 | `DEPLOY_BACKUP_KEEP_PER_TARGET` | `8` | 每个目标保留的远端备份版本数 |
@@ -190,7 +193,9 @@ pnpm build
 - `GET  /scaffold-api/download/:appName/:timestamp` —— 下载生成的项目压缩包
 - `POST /scaffold-api/ops/backfill-topics` —— 批量补打 `yuyan-ops` 标签
 - `/deploy-api/servers` · `/targets` · `/records` · `/nginx-instances` · `/nginx-runtime` 等 —— 服务器、部署目标、发布记录、Nginx 实例 / 运行时的增删改查与发布、回滚、Nginx 测试、数据库备份恢复等
-- `/deploy-api/app-update/check`、`/deploy-api/app-update/download-asset`、`/app-updates/*` —— 桌面端更新检测与安装包代理下载；安装和退出由 Tauri 原生层负责
+- `/deploy-api/app-update/check`、`/deploy-api/app-update/cache-status`、`/deploy-api/app-update/download-asset`、`/app-updates/*` —— 桌面端更新检测、缓存准备状态和内网 Range 下载；安装和退出由 Tauri 原生层负责
+
+中央 API 会在启动后主动预热 macOS ARM、macOS Intel 和 Windows 安装包。同一 GitHub Asset 只允许一个回源任务，失败可从稳定 `.part` 文件续传，校验大小、SHA-256 与安装包格式后原子落盘。新客户端会先展示“服务器准备更新包”，缓存就绪后再从内网高速下载；旧客户端仍保留实时代理兼容路径。该方案不需要购买签名证书，但中央 API 必须配置只读 `GITHUB_TOKEN`，且缓存目录应挂载到持久卷。
 
 ---
 

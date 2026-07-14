@@ -75,6 +75,22 @@ export const DEPLOY_OPENAPI_DIR = process.env.DEPLOY_OPENAPI_DIR || path.join(DE
 /** 桌面端更新静态资源根目录。 */
 export const APP_UPDATE_DIR = process.env.APP_UPDATE_DIR || path.join(DEPLOY_DATA_DIR, 'app-updates');
 
+/** GitHub Release 安装包内网缓存目录。 */
+export const APP_UPDATE_CACHE_DIR = process.env.APP_UPDATE_CACHE_DIR
+  || path.join(DEPLOY_DATA_DIR, 'app-update-cache');
+
+/** 主动检查并预热 GitHub Release 的间隔。 */
+export const APP_UPDATE_PRELOAD_INTERVAL_MS = Math.max(
+  60_000,
+  Number(process.env.APP_UPDATE_PRELOAD_INTERVAL_MS) || 5 * 60_000
+);
+
+/** 服务启动后首次主动预热更新包的延迟。 */
+export const APP_UPDATE_PRELOAD_INITIAL_DELAY_MS = Math.max(
+  0,
+  Number(process.env.APP_UPDATE_PRELOAD_INITIAL_DELAY_MS) || 2_000
+);
+
 /** 部署凭据加密密钥，生产环境必须显式配置 */
 export const DEFAULT_DEPLOY_SECRET_KEY = 'yuyan-ops-local-deploy-secret';
 export const DEPLOY_SECRET_KEY = process.env.DEPLOY_SECRET_KEY || DEFAULT_DEPLOY_SECRET_KEY;

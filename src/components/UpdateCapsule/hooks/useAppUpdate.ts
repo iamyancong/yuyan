@@ -1,6 +1,11 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { isTauri } from '@/utils/env';
-import { checkAppUpdateFromServer, type AppUpdateCheckResult } from '@/api/deploy';
+import {
+  checkAppUpdateFromServer,
+  getAppUpdateCacheStatus,
+  type AppUpdateCacheStatus,
+  type AppUpdateCheckResult,
+} from '@/api/deploy';
 import { message } from 'ant-design-vue';
 import type { UpdateState } from '../constant';
 import { useNativeAppUpdate } from './useNativeAppUpdate';
@@ -9,6 +14,7 @@ import {
   CLOSE_APP_DELAY_MS,
   AUTO_CHECK_INTERVAL_MS,
   INITIAL_CHECK_DELAY_MS,
+  CACHE_STATUS_POLL_INTERVAL_MS,
 } from '../constant';
 
 const nativeAppUpdate = useNativeAppUpdate();
@@ -20,6 +26,7 @@ const currentAppVersion = ref('1.0.0');
 const latestVersion = ref('');
 const updateLogs = ref('');
 const downloadUrl = ref('');
+const cacheStatusUrl = ref('');
 const updateAsset = ref<Pick<AppUpdateCheckResult, 'filename' | 'size' | 'sha256' | 'etag'>>({});
 
 const updateState = ref<UpdateState>({
@@ -37,9 +44,12 @@ const updateState = ref<UpdateState>({
 const updatePercent = computed(() => updateState.value.progress);
 
 let progressInterval: ReturnType<typeof setInterval> | null = null;
+let cacheStatusInterval: ReturnType<typeof setInterval> | null = null;
 let autoUpdateInterval: ReturnType<typeof setInterval> | null = null;
+let initialCheckTimer: ReturnType<typeof setTimeout> | null = null;
 let unlistenMenuCheckUpdate: (() => void) | null = null;
 let instanceCount = 0;
+let pollingCacheStatus = false;
 
 /** 将原生下载状态同步到 Vue 响应式状态。 */
 const applyNativeUpdateStatus = (status: Awaited<ReturnType<typeof nativeAppUpdate.getStatus>>) => {
@@ -109,6 +119,63 @@ const clearProgressPolling = () => {
   }
 };
 
+/** 清除服务器更新包缓存状态轮询。 */
+const clearCacheStatusPolling = () => {
+  if (cacheStatusInterval) {
+    clearInterval(cacheStatusInterval);
+    cacheStatusInterval = null;
+  }
+  pollingCacheStatus = false;
+};
+
+/**
+ * 将服务器缓存状态同步到胶囊状态。
+ * @param status - 服务端缓存状态
+ */
+const applyCacheStatus = (status: AppUpdateCacheStatus) => {
+  updateState.value = {
+    status: status.status === 'ready' ? 'idle' : 'preparing',
+    progress: status.status === 'ready' ? 0 : status.progress,
+    error: status.error,
+    downloadedBytes: status.status === 'ready' ? 0 : status.downloadedBytes,
+    totalBytes: status.totalBytes,
+    bytesPerSecond: status.status === 'ready' ? 0 : status.bytesPerSecond,
+    remainingSeconds: status.status === 'ready' ? null : status.remainingSeconds,
+    resumable: status.downloadedBytes > 0,
+    retryCount: status.retryCount,
+  };
+};
+
+/** 查询一次服务器更新包缓存状态。 */
+const pollCacheStatus = async () => {
+  if (!cacheStatusUrl.value || pollingCacheStatus) return;
+  pollingCacheStatus = true;
+  try {
+    const status = await getAppUpdateCacheStatus(cacheStatusUrl.value);
+    if (status.statusUrl) cacheStatusUrl.value = status.statusUrl;
+    if (status.downloadUrl) downloadUrl.value = status.downloadUrl;
+    if (status.etag) updateAsset.value.etag = status.etag;
+    applyCacheStatus(status);
+    if (status.status === 'ready') {
+      clearCacheStatusPolling();
+      console.log('[Update] 内网服务器更新包已准备完成，等待用户开始下载');
+    }
+  } catch (error) {
+    console.warn('[Update] 查询服务器更新包缓存状态失败:', error);
+  } finally {
+    pollingCacheStatus = false;
+  }
+};
+
+/** 启动服务器更新包缓存状态轮询。 */
+const startCacheStatusPolling = () => {
+  clearCacheStatusPolling();
+  void pollCacheStatus();
+  cacheStatusInterval = setInterval(() => {
+    void pollCacheStatus();
+  }, CACHE_STATUS_POLL_INTERVAL_MS);
+};
+
 /**
  * 下载完成后自动拉起安装程序并关闭 APP
  */
@@ -173,7 +240,7 @@ const startProgressPolling = () => {
  * 用户确认后发起后台更新包下载
  */
 const triggerUpdateDownload = async () => {
-  if (!downloadUrl.value) return;
+  if (!downloadUrl.value || updateState.value.status === 'preparing') return;
   const target = await nativeAppUpdate.getTarget();
   const filename =
     updateAsset.value.filename ||
@@ -214,10 +281,12 @@ const checkAppUpdate = async (manual = false) => {
     const res = await checkAppUpdateFromServer(currentAppVersion.value, target.platform, target.arch);
 
     if (res?.hasUpdate && res.downloadUrl) {
+      clearCacheStatusPolling();
       hasUpdate.value = true;
       latestVersion.value = res.latestVersion || '';
       updateLogs.value = res.updateLogs || '无更新内容描述。';
       downloadUrl.value = res.downloadUrl;
+      cacheStatusUrl.value = res.cache?.statusUrl || '';
       updateAsset.value = {
         filename: res.filename,
         size: res.size,
@@ -232,7 +301,20 @@ const checkAppUpdate = async (manual = false) => {
 
         if (statusRes.status === 'downloading') {
           startProgressPolling();
+        } else if (res.cache && res.cache.status !== 'ready') {
+          applyCacheStatus(res.cache);
+          startCacheStatusPolling();
         } else if (statusRes.status === 'idle') {
+          applyCacheStatus(res.cache || {
+            status: 'ready',
+            progress: 100,
+            downloadedBytes: 0,
+            totalBytes: res.size || null,
+            bytesPerSecond: 0,
+            remainingSeconds: 0,
+            retryCount: 0,
+            error: null,
+          });
           console.log('[Update] 检测到有新版本，等待用户手动点击更新按钮');
         } else if (statusRes.status === 'completed') {
           console.log('[Update] 更新包已下载完成，等待用户手动点击安装');
@@ -244,6 +326,7 @@ const checkAppUpdate = async (manual = false) => {
           nativeError instanceof Error ? nativeError.message : String(nativeError);
       }
     } else {
+      clearCacheStatusPolling();
       hasUpdate.value = false;
       if (manual) {
         message.success(res?.message || '当前已是最新版本！');
@@ -264,7 +347,9 @@ const checkAppUpdate = async (manual = false) => {
  * 胶囊点击事件处理器
  */
 const handleCapsuleClick = async () => {
-  if (updateState.value.status === 'idle' || updateState.value.status === 'paused') {
+  if (updateState.value.status === 'preparing') {
+    message.info('内网服务器正在准备更新包，完成后即可高速下载');
+  } else if (updateState.value.status === 'idle' || updateState.value.status === 'paused') {
     // 用户主动点击"更新"按钮后才开始后台下载
     void triggerUpdateDownload();
   } else if (updateState.value.status === 'completed') {
@@ -290,6 +375,11 @@ const handleCheckUpdateClick = () => {
   }
   if (hasUpdate.value && updateState.value.status === 'downloading') {
     message.info('新版本正在后台加速下载中，请稍后...');
+    return;
+  }
+  if (hasUpdate.value && updateState.value.status === 'preparing') {
+    message.info('内网服务器正在准备更新包，请稍后...');
+    void pollCacheStatus();
     return;
   }
   if (hasUpdate.value && updateState.value.status === 'installing') {
@@ -321,7 +411,8 @@ export const useAppUpdate = () => {
       });
 
       // 延迟 2 秒后启动首次静默检测
-      setTimeout(() => {
+      initialCheckTimer = setTimeout(() => {
+        initialCheckTimer = null;
         void checkAppUpdate(false);
       }, INITIAL_CHECK_DELAY_MS);
 
@@ -337,6 +428,11 @@ export const useAppUpdate = () => {
     if (instanceCount <= 0) {
       instanceCount = 0;
       clearProgressPolling();
+      clearCacheStatusPolling();
+      if (initialCheckTimer) {
+        clearTimeout(initialCheckTimer);
+        initialCheckTimer = null;
+      }
       if (autoUpdateInterval) {
         clearInterval(autoUpdateInterval);
         autoUpdateInterval = null;
