@@ -1195,9 +1195,7 @@ function applyBackendSchemaMigration(db) {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY(target_id) REFERENCES deploy_targets(id),
-      FOREIGN KEY(build_jdk_id) REFERENCES build_jdks(id),
-      FOREIGN KEY(server_java_runtime_id) REFERENCES server_java_runtimes(id),
-      FOREIGN KEY(environment_id) REFERENCES deploy_environments(id)
+      FOREIGN KEY(server_java_runtime_id) REFERENCES server_java_runtimes(id)
     );
 
     CREATE TABLE IF NOT EXISTS server_java_runtimes (
@@ -2498,6 +2496,19 @@ function upsertBackendTargetConfig(db, targetId, payload) {
   const server = db.prepare('SELECT use_sudo FROM deploy_servers WHERE id = ?').get(Number(payload.serverId)) || {};
   const config = normalizeBackendConfig(payload, { useSudo: Boolean(server.use_sudo) });
   const ts = now();
+
+  // 防护性存在校验：防止本地自增 ID 在远程不存在引起物理外键冲突
+  let validatedBuildJdkId = config.buildJdkId || null;
+  if (validatedBuildJdkId) {
+    const hasJdk = db.prepare('SELECT id FROM build_jdks WHERE id = ?').get(validatedBuildJdkId);
+    if (!hasJdk) validatedBuildJdkId = null;
+  }
+  let validatedEnvironmentId = config.environmentId || null;
+  if (validatedEnvironmentId) {
+    const hasEnv = db.prepare('SELECT id FROM deploy_environments WHERE id = ?').get(validatedEnvironmentId);
+    if (!hasEnv) validatedEnvironmentId = null;
+  }
+
   db.prepare(
     `INSERT INTO backend_target_configs
      (target_id, environment_id, service_role, service_name, build_jdk_id, required_jdk_alias, server_java_runtime_id, runtime_java_home, runtime_java_version, server_port,
@@ -2541,10 +2552,10 @@ function upsertBackendTargetConfig(db, targetId, payload) {
        updated_at = excluded.updated_at`
   ).run(
     Number(targetId),
-    config.environmentId || null,
+    validatedEnvironmentId,
     config.serviceRole,
     config.serviceName,
-    config.buildJdkId || null,
+    validatedBuildJdkId,
     config.requiredJdkAlias || '',
     config.serverJavaRuntimeId || null,
     config.runtimeJavaHome,

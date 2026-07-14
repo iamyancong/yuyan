@@ -32,35 +32,35 @@ test('1.0.1 客户端可检测到 1.0.2 更新', () => {
 
 test('Apple Silicon 客户端选择版本最高的 ARM64 DMG', () => {
   const releases = [
-    createRelease('v1.0.0-9a0e1df', ['雨燕_1.0.0_aarch64.dmg']),
-    createRelease('v1.0.3', ['雨燕_1.0.3_x64.dmg', '雨燕_1.0.3_x64-setup.exe']),
-    createRelease('v1.0.2', ['雨燕_1.0.2_aarch64.dmg', '雨燕_1.0.2_x64.dmg']),
-    createRelease('v9.0.0', ['雨燕_9.0.0_aarch64.dmg'], { draft: true }),
+    createRelease('v1.0.0-9a0e1df', ['yuyan_1.0.0_aarch64.dmg']),
+    createRelease('v1.0.3', ['yuyan_1.0.3_x64.dmg', 'yuyan_1.0.3_x64-setup.exe']),
+    createRelease('v1.0.2', ['yuyan_1.0.2_aarch64.dmg', 'yuyan_1.0.2_x64.dmg']),
+    createRelease('v9.0.0', ['yuyan_9.0.0_aarch64.dmg'], { draft: true }),
   ];
 
   const result = selectLatestCompatibleRelease(releases, 'darwin', 'aarch64');
   assert.equal(result?.release.tag_name, 'v1.0.2');
-  assert.equal(result?.asset.name, '雨燕_1.0.2_aarch64.dmg');
+  assert.equal(result?.asset.name, 'yuyan_1.0.2_aarch64.dmg');
 });
 
 test('Intel Mac 客户端只选择 x86_64 DMG', () => {
   const releases = [
-    createRelease('v1.0.3', ['雨燕_1.0.3_aarch64.dmg']),
-    createRelease('v1.0.2', ['雨燕_1.0.2_aarch64.dmg', '雨燕_1.0.2_x64.dmg']),
+    createRelease('v1.0.3', ['yuyan_1.0.3_aarch64.dmg']),
+    createRelease('v1.0.2', ['yuyan_1.0.2_aarch64.dmg', 'yuyan_1.0.2_x64.dmg']),
   ];
 
   const result = selectLatestCompatibleRelease(releases, 'darwin', 'x86_64');
   assert.equal(result?.release.tag_name, 'v1.0.2');
-  assert.equal(result?.asset.name, '雨燕_1.0.2_x64.dmg');
+  assert.equal(result?.asset.name, 'yuyan_1.0.2_x64.dmg');
 });
 
 test('Windows 客户端只选择 EXE 安装包', () => {
   const releases = [
-    createRelease('v1.0.3', ['雨燕_1.0.3_aarch64.dmg']),
-    createRelease('v1.0.2', ['雨燕_1.0.2_x64-setup.exe']),
+    createRelease('v1.0.3', ['yuyan_1.0.3_aarch64.dmg']),
+    createRelease('v1.0.2', ['yuyan_1.0.2_x64-setup.exe']),
   ];
 
   const result = selectLatestCompatibleRelease(releases, 'windows');
   assert.equal(result?.release.tag_name, 'v1.0.2');
-  assert.equal(result?.asset.name, '雨燕_1.0.2_x64-setup.exe');
+  assert.equal(result?.asset.name, 'yuyan_1.0.2_x64-setup.exe');
 });
