@@ -13,6 +13,11 @@ export interface NativeAppUpdateStatus {
   remainingSeconds: number | null;
   resumable: boolean;
   retryCount: number;
+  version: string;
+  assetId: string;
+  filename: string;
+  expectedSha256: string | null;
+  expectedEtag: string | null;
 }
 
 /** Tauri 原生更新命令结果。 */
@@ -30,12 +35,15 @@ export interface NativeAppUpdateActions {
   ) => Promise<NativeAppUpdateCommandResult>;
   cancelDownload: () => Promise<NativeAppUpdateCommandResult>;
   getStatus: () => Promise<NativeAppUpdateStatus>;
+  discard: () => Promise<NativeAppUpdateCommandResult>;
   getTarget: () => Promise<NativeAppUpdateTarget>;
   install: () => Promise<NativeAppUpdateCommandResult>;
 }
 
 /** 更新包完整性元数据。 */
 export interface NativeAppUpdateMetadata {
+  version: string;
+  assetId: string;
   expectedSize?: number;
   sha256?: string;
   etag?: string;
@@ -60,6 +68,8 @@ export const useNativeAppUpdate = (): NativeAppUpdateActions => {
   const startDownload = (url: string, filename: string, metadata: NativeAppUpdateMetadata) => {
     return invoke<NativeAppUpdateCommandResult>('start_app_update_download', {
       url,
+      version: metadata.version,
+      assetId: metadata.assetId,
       filename,
       expectedSize: metadata.expectedSize,
       sha256: metadata.sha256,
@@ -78,6 +88,11 @@ export const useNativeAppUpdate = (): NativeAppUpdateActions => {
     return invoke<NativeAppUpdateStatus>('get_app_update_status');
   };
 
+  /** 清理不再需要的本机更新包和断点状态。 */
+  const discard = () => {
+    return invoke<NativeAppUpdateCommandResult>('discard_app_update');
+  };
+
   /** 获取当前系统和 CPU 架构。 */
   const getTarget = () => {
     return invoke<NativeAppUpdateTarget>('get_app_update_target');
@@ -92,6 +107,7 @@ export const useNativeAppUpdate = (): NativeAppUpdateActions => {
     startDownload,
     cancelDownload,
     getStatus,
+    discard,
     getTarget,
     install,
   };

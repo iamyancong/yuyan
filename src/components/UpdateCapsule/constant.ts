@@ -71,7 +71,7 @@ export const STATUS_CONFIG_MAP: Record<UpdateStatus, CapsuleConfig> = {
   },
   completed: {
     icon: ThunderboltOutlined,
-    label: '✨ 新版本已就绪，点击安装',
+    label: '新版本已就绪，点击安装',
     clickable: true,
     className: 'status-completed',
   },
@@ -101,5 +101,14 @@ export const PROGRESS_POLL_INTERVAL_MS = 1000;
 /** 内网更新缓存状态轮询间隔（毫秒） */
 export const CACHE_STATUS_POLL_INTERVAL_MS = 2000;
 
-/** 安装完成后关闭 APP 延迟（毫秒） */
-export const CLOSE_APP_DELAY_MS = 1500;
+/** 单次服务器缓存准备的最长静默等待时间（毫秒） */
+export const CACHE_STATUS_TIMEOUT_MS = 10 * 60 * 1000;
+
+/** 缓存状态接口连续失败上限 */
+export const CACHE_STATUS_MAX_ERRORS = 5;
+
+/** 等待旧原生下载任务释放的轮询间隔（毫秒） */
+export const NATIVE_TASK_RELEASE_INTERVAL_MS = 100;
+
+/** 等待旧原生下载任务释放的最大次数 */
+export const NATIVE_TASK_RELEASE_MAX_ATTEMPTS = 100;

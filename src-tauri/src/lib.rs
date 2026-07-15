@@ -764,6 +764,7 @@ pub fn run() {
             app_update::start_app_update_download,
             app_update::cancel_app_update_download,
             app_update::get_app_update_status,
+            app_update::discard_app_update,
             app_update::get_app_update_target,
             app_update::install_app_update,
             exit_app,
