@@ -9,6 +9,45 @@
 @purple-dark: var(--primary-color);
 @purple-shadow: var(--primary-color-light);
 
+/* ---------- 更新就绪确认面板 ---------- */
+.update-ready-panel {
+  width: min(360px, 70vw);
+}
+
+.update-ready-title {
+  color: var(--text-color);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.update-ready-hint {
+  margin-top: 4px;
+  color: var(--text-color-secondary);
+  font-size: 12px;
+}
+
+.update-ready-logs {
+  max-height: 220px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  overflow: auto;
+  color: var(--text-color-secondary);
+  background: var(--bg-color-container);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.update-ready-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 /* ---------- 根容器 ---------- */
 .update-capsule {
   position: relative;

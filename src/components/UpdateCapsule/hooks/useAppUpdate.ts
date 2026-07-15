@@ -1,35 +1,37 @@
-import { ref, computed, onMounted, onUnmounted } from 'vue';
-import { isTauri } from '@/utils/env';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { message } from 'ant-design-vue';
 import {
   checkAppUpdateFromServer,
   getAppUpdateCacheStatus,
   type AppUpdateCacheStatus,
   type AppUpdateCheckResult,
 } from '@/api/deploy';
-import { message } from 'ant-design-vue';
+import { isTauri } from '@/utils/env';
 import type { UpdateState } from '../constant';
-import { useNativeAppUpdate } from './useNativeAppUpdate';
 import {
-  PROGRESS_POLL_INTERVAL_MS,
-  CLOSE_APP_DELAY_MS,
   AUTO_CHECK_INTERVAL_MS,
-  INITIAL_CHECK_DELAY_MS,
+  CACHE_STATUS_MAX_ERRORS,
   CACHE_STATUS_POLL_INTERVAL_MS,
+  CACHE_STATUS_TIMEOUT_MS,
+  INITIAL_CHECK_DELAY_MS,
+  NATIVE_TASK_RELEASE_INTERVAL_MS,
+  NATIVE_TASK_RELEASE_MAX_ATTEMPTS,
+  PROGRESS_POLL_INTERVAL_MS,
 } from '../constant';
+import {
+  useNativeAppUpdate,
+  type NativeAppUpdateStatus,
+} from './useNativeAppUpdate';
+
+type UpdateAssetMetadata = Pick<
+  AppUpdateCheckResult,
+  'assetId' | 'etag' | 'filename' | 'sha256' | 'size' | 'source' | 'target'
+>;
 
 const nativeAppUpdate = useNativeAppUpdate();
 
-// ============ 单例模式：全局共享状态 ============
-const hasUpdate = ref(false);
-const checkingUpdate = ref(false);
-const currentAppVersion = ref('1.0.0');
-const latestVersion = ref('');
-const updateLogs = ref('');
-const downloadUrl = ref('');
-const cacheStatusUrl = ref('');
-const updateAsset = ref<Pick<AppUpdateCheckResult, 'filename' | 'size' | 'sha256' | 'etag'>>({});
-
-const updateState = ref<UpdateState>({
+/** 创建无更新任务时的初始状态。 */
+const createIdleUpdateState = (): UpdateState => ({
   status: 'idle',
   progress: 0,
   error: null,
@@ -41,6 +43,19 @@ const updateState = ref<UpdateState>({
   retryCount: 0,
 });
 
+/** 是否展示已就绪更新胶囊。 */
+const hasUpdate = ref(false);
+/** 是否已经检测到远程新版本。 */
+const detectedUpdate = ref(false);
+const checkingUpdate = ref(false);
+const currentAppVersion = ref('1.0.0');
+const latestVersion = ref('');
+const updateLogs = ref('');
+const downloadUrl = ref('');
+const cacheStatusUrl = ref('');
+const updateAsset = ref<UpdateAssetMetadata>({});
+const updateState = ref<UpdateState>(createIdleUpdateState());
+
 const updatePercent = computed(() => updateState.value.progress);
 
 let progressInterval: ReturnType<typeof setInterval> | null = null;
@@ -50,9 +65,54 @@ let initialCheckTimer: ReturnType<typeof setTimeout> | null = null;
 let unlistenMenuCheckUpdate: (() => void) | null = null;
 let instanceCount = 0;
 let pollingCacheStatus = false;
+let pollingNativeStatus = false;
+let cachePollingGeneration = 0;
+let progressPollingGeneration = 0;
+let cachePollingStartedAt = 0;
+let cachePollingErrorCount = 0;
+let cachePollingManual = false;
+let notifyDownloadFailure = false;
+
+/** 等待指定时长。 */
+const delay = (milliseconds: number) => new Promise<void>((resolve) => {
+  setTimeout(resolve, milliseconds);
+});
+
+/** 规范化接口和原生层使用的版本号。 */
+const normalizeVersion = (version: string) => version.replace(/^v/, '');
+
+/** 获取当前更新资源在客户端的稳定身份。 */
+const getCurrentAssetIdentity = () => {
+  if (updateAsset.value.assetId) return `github:${updateAsset.value.assetId}`;
+  const target = updateAsset.value.target || 'unknown';
+  return `manifest:${normalizeVersion(latestVersion.value)}:${target}:${updateAsset.value.filename || 'unknown'}`;
+};
+
+/** 获取接口结果对应的稳定客户端资源身份。 */
+const getResultAssetIdentity = (result: AppUpdateCheckResult) => {
+  if (result.assetId) return `github:${result.assetId}`;
+  const version = normalizeVersion(result.latestVersion || result.version || '');
+  return `manifest:${version}:${result.target || 'unknown'}:${result.filename || 'unknown'}`;
+};
+
+/** 判断原生状态是否属于当前检测到的更新资源。 */
+const isCurrentNativeAsset = (status: NativeAppUpdateStatus) => {
+  return Boolean(
+    latestVersion.value
+      && updateAsset.value.filename
+      && normalizeVersion(status.version) === normalizeVersion(latestVersion.value)
+      && status.assetId === getCurrentAssetIdentity()
+      && status.filename === updateAsset.value.filename
+  );
+};
+
+/** 判断原生状态中是否包含可清理的历史资源。 */
+const hasNativeAssetMetadata = (status: NativeAppUpdateStatus) => {
+  return Boolean(status.version || status.assetId || status.filename);
+};
 
 /** 将原生下载状态同步到 Vue 响应式状态。 */
-const applyNativeUpdateStatus = (status: Awaited<ReturnType<typeof nativeAppUpdate.getStatus>>) => {
+const applyNativeUpdateStatus = (status: NativeAppUpdateStatus) => {
   updateState.value = {
     status: status.status,
     progress: status.progress,
@@ -64,59 +124,29 @@ const applyNativeUpdateStatus = (status: Awaited<ReturnType<typeof nativeAppUpda
     resumable: status.resumable,
     retryCount: status.retryCount,
   };
+  hasUpdate.value = detectedUpdate.value
+    && status.status === 'completed'
+    && isCurrentNativeAsset(status);
 };
 
-/**
- * 初始化本地应用版本号
- */
+/** 初始化本地应用版本号。 */
 const initLocalVersion = async () => {
-  if (currentAppVersion.value !== '1.0.0') return;
-  if (isTauri()) {
-    try {
-      const { getVersion } = await import('@tauri-apps/api/app');
-      currentAppVersion.value = await getVersion();
-    } catch (e) {
-      console.warn('获取本地版本号失败，使用默认配置:', e);
-    }
+  if (currentAppVersion.value !== '1.0.0' || !isTauri()) return;
+  try {
+    const { getVersion } = await import('@tauri-apps/api/app');
+    currentAppVersion.value = await getVersion();
+  } catch (error) {
+    console.warn('[Update] 获取本地版本号失败，使用默认配置:', error);
   }
 };
 
-/**
- * 语义化版本号对比：判断 remote 是否比 local 新
- * @param local 当前本地版本号
- * @param remote 远程最新版本号
- */
-const isNewerVersion = (local: string, remote: string): boolean => {
-  const l = local.replace(/^v/, '');
-  const r = remote.replace(/^v/, '');
-  if (l === r) return false;
-
-  const [lMain, lPre] = l.split('-');
-  const [rMain, rPre] = r.split('-');
-  const lParts = lMain.split('.').map(Number);
-  const rParts = rMain.split('.').map(Number);
-
-  for (let i = 0; i < Math.max(lParts.length, rParts.length); i++) {
-    const lNum = lParts[i] || 0;
-    const rNum = rParts[i] || 0;
-    if (rNum > lNum) return true;
-    if (lNum > rNum) return false;
-  }
-
-  if (rPre && !lPre) return false;
-  if (!rPre && lPre) return true;
-  if (rPre && lPre && rPre !== lPre) return true;
-  return false;
-};
-
-/**
- * 清除进度轮询定时器
- */
+/** 清除原生下载进度轮询。 */
 const clearProgressPolling = () => {
   if (progressInterval) {
     clearInterval(progressInterval);
     progressInterval = null;
   }
+  progressPollingGeneration += 1;
 };
 
 /** 清除服务器更新包缓存状态轮询。 */
@@ -125,16 +155,21 @@ const clearCacheStatusPolling = () => {
     clearInterval(cacheStatusInterval);
     cacheStatusInterval = null;
   }
-  pollingCacheStatus = false;
+  cachePollingGeneration += 1;
+  cachePollingStartedAt = 0;
+  cachePollingErrorCount = 0;
+  cachePollingManual = false;
 };
 
-/**
- * 将服务器缓存状态同步到胶囊状态。
- * @param status - 服务端缓存状态
- */
+/** 将服务器缓存状态映射为内部状态，自动流程仍保持胶囊隐藏。 */
 const applyCacheStatus = (status: AppUpdateCacheStatus) => {
+  const mappedStatus = status.status === 'ready'
+    ? 'idle'
+    : status.status === 'failed'
+      ? 'error'
+      : 'preparing';
   updateState.value = {
-    status: status.status === 'ready' ? 'idle' : 'preparing',
+    status: mappedStatus,
     progress: status.status === 'ready' ? 0 : status.progress,
     error: status.error,
     downloadedBytes: status.status === 'ready' ? 0 : status.downloadedBytes,
@@ -144,326 +179,437 @@ const applyCacheStatus = (status: AppUpdateCacheStatus) => {
     resumable: status.downloadedBytes > 0,
     retryCount: status.retryCount,
   };
+  hasUpdate.value = false;
 };
 
-/** 查询一次服务器更新包缓存状态。 */
-const pollCacheStatus = async () => {
-  if (!cacheStatusUrl.value || pollingCacheStatus) return;
+/** 等待并清理仍在退出中的旧原生下载任务。 */
+const discardNativeUpdate = async () => {
+  for (let attempt = 0; attempt < NATIVE_TASK_RELEASE_MAX_ATTEMPTS; attempt += 1) {
+    const result = await nativeAppUpdate.discard();
+    if (result.success) return;
+    await delay(NATIVE_TASK_RELEASE_INTERVAL_MS);
+  }
+  throw new Error('旧版本更新任务尚未释放，请稍后重试');
+};
+
+/** 安装用户已经明确点击确认的就绪更新。 */
+const installReadyUpdate = async () => {
+  if (updateState.value.status !== 'completed') return;
+  try {
+    message.loading({
+      content: `正在验证 v${latestVersion.value} 更新状态...`,
+      duration: 0,
+      key: 'app-update-install',
+    });
+    if (!await revalidateReadyUpdate()) return;
+    updateState.value.status = 'installing';
+    message.loading({
+      content: `正在启动 v${latestVersion.value} 安装程序...`,
+      duration: 0,
+      key: 'app-update-install',
+    });
+    const result = await nativeAppUpdate.install();
+    if (!result.success) throw new Error(result.message || '拉起安装失败');
+    message.success({
+      content: '安装程序已启动，应用即将退出以完成升级',
+      duration: 3,
+      key: 'app-update-install',
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error || '拉起安装失败');
+    const nativeStatus = await nativeAppUpdate.getStatus().catch(() => null);
+    if (nativeStatus?.status === 'completed' && isCurrentNativeAsset(nativeStatus)) {
+      applyNativeUpdateStatus(nativeStatus);
+    } else {
+      hasUpdate.value = false;
+      updateState.value.status = 'error';
+      updateState.value.error = errorMessage;
+    }
+    message.error({
+      content: `验证或启动安装失败：${errorMessage}`,
+      key: 'app-update-install',
+    });
+  }
+};
+
+/**
+ * 查询一次原生下载状态并处理终态。
+ * @param generation 当前下载轮询代次，过期结果会被丢弃
+ */
+const syncNativeDownloadStatus = async (generation: number) => {
+  if (generation !== progressPollingGeneration || pollingNativeStatus) return;
+  pollingNativeStatus = true;
+  try {
+    const status = await nativeAppUpdate.getStatus();
+    if (generation !== progressPollingGeneration) return;
+    applyNativeUpdateStatus(status);
+    if (status.status === 'completed') {
+      clearProgressPolling();
+      if (isCurrentNativeAsset(status)) {
+        console.log(`[Update] v${latestVersion.value} 已静默下载并校验完成，等待用户安装`);
+      }
+      notifyDownloadFailure = false;
+    } else if (status.status === 'error' || status.status === 'paused') {
+      clearProgressPolling();
+      hasUpdate.value = false;
+      if (notifyDownloadFailure) {
+        const reason = status.error || (status.status === 'paused' ? '下载已暂停' : '下载失败');
+        message.error(`更新包准备失败：${reason}`);
+      }
+      notifyDownloadFailure = false;
+    }
+  } catch (error) {
+    console.warn('[Update] 查询原生下载状态失败:', error);
+  } finally {
+    pollingNativeStatus = false;
+  }
+};
+
+/** 启动原生下载状态轮询。 */
+const startProgressPolling = (manual: boolean) => {
+  clearProgressPolling();
+  const generation = progressPollingGeneration;
+  notifyDownloadFailure = notifyDownloadFailure || manual;
+  void syncNativeDownloadStatus(generation);
+  progressInterval = setInterval(() => {
+    void syncNativeDownloadStatus(generation);
+  }, PROGRESS_POLL_INTERVAL_MS);
+};
+
+/** 在服务器缓存就绪后静默下载当前更新包。 */
+const triggerUpdateDownload = async (manual = false) => {
+  if (!downloadUrl.value || !latestVersion.value || !updateAsset.value.filename) return;
+  hasUpdate.value = false;
+  try {
+    updateState.value.status = 'downloading';
+    updateState.value.error = null;
+    const result = await nativeAppUpdate.startDownload(
+      downloadUrl.value,
+      updateAsset.value.filename,
+      {
+        version: normalizeVersion(latestVersion.value),
+        assetId: getCurrentAssetIdentity(),
+        expectedSize: updateAsset.value.size,
+        sha256: updateAsset.value.sha256,
+        etag: updateAsset.value.etag,
+      }
+    );
+    if (!result.success) throw new Error(result.message || '启动下载失败');
+    startProgressPolling(manual);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error || '启动下载失败');
+    updateState.value.status = 'error';
+    updateState.value.error = errorMessage;
+    hasUpdate.value = false;
+    console.warn('[Update] 静默下载启动失败:', error);
+    if (manual) message.error(`更新包准备失败：${errorMessage}`);
+  }
+};
+
+/**
+ * 查询一次服务器更新包缓存状态。
+ * @param generation 当前缓存轮询代次，过期结果会被丢弃
+ */
+const pollCacheStatus = async (generation = cachePollingGeneration) => {
+  if (
+    generation !== cachePollingGeneration
+    || !cacheStatusUrl.value
+    || pollingCacheStatus
+  ) return;
+  if (
+    cachePollingStartedAt > 0
+    && Date.now() - cachePollingStartedAt >= CACHE_STATUS_TIMEOUT_MS
+  ) {
+    const shouldNotify = cachePollingManual;
+    clearCacheStatusPolling();
+    updateState.value.status = 'error';
+    updateState.value.error = '服务器准备更新包超时';
+    if (shouldNotify) message.warning('更新包准备时间较长，后台稍后会自动重试');
+    return;
+  }
+
   pollingCacheStatus = true;
   try {
     const status = await getAppUpdateCacheStatus(cacheStatusUrl.value);
+    if (generation !== cachePollingGeneration) return;
+    cachePollingErrorCount = 0;
     if (status.statusUrl) cacheStatusUrl.value = status.statusUrl;
     if (status.downloadUrl) downloadUrl.value = status.downloadUrl;
     if (status.etag) updateAsset.value.etag = status.etag;
     applyCacheStatus(status);
+
     if (status.status === 'ready') {
+      const shouldNotify = cachePollingManual;
       clearCacheStatusPolling();
-      console.log('[Update] 内网服务器更新包已准备完成，等待用户开始下载');
+      await triggerUpdateDownload(shouldNotify);
+    } else if (status.status === 'failed') {
+      const shouldNotify = cachePollingManual;
+      clearCacheStatusPolling();
+      if (shouldNotify) {
+        message.error(`服务器准备更新包失败：${status.error || '稍后将自动重试'}`);
+      }
+    } else if (status.status === 'missing') {
+      const shouldNotify = cachePollingManual;
+      clearCacheStatusPolling();
+      void checkAppUpdate(shouldNotify);
     }
   } catch (error) {
+    if (generation !== cachePollingGeneration) return;
+    cachePollingErrorCount += 1;
     console.warn('[Update] 查询服务器更新包缓存状态失败:', error);
+    if (cachePollingErrorCount >= CACHE_STATUS_MAX_ERRORS) {
+      const shouldNotify = cachePollingManual;
+      clearCacheStatusPolling();
+      updateState.value.status = 'error';
+      updateState.value.error = '连接更新服务器失败';
+      if (shouldNotify) message.error('连接更新服务器失败，请稍后重试');
+    }
   } finally {
     pollingCacheStatus = false;
   }
 };
 
-/** 启动服务器更新包缓存状态轮询。 */
-const startCacheStatusPolling = () => {
+/** 启动服务器缓存状态轮询。 */
+const startCacheStatusPolling = (manual: boolean) => {
   clearCacheStatusPolling();
-  void pollCacheStatus();
+  const generation = cachePollingGeneration;
+  cachePollingStartedAt = Date.now();
+  cachePollingManual = manual;
+  void pollCacheStatus(generation);
   cacheStatusInterval = setInterval(() => {
-    void pollCacheStatus();
+    void pollCacheStatus(generation);
   }, CACHE_STATUS_POLL_INTERVAL_MS);
 };
 
-/**
- * 下载完成后自动拉起安装程序并关闭 APP
- */
-const autoInstallAndClose = async () => {
-  try {
-    updateState.value.status = 'installing';
-    message.loading({ content: '⚡ 正在为您拉起安装程序...', duration: 5, key: 'auto-install' });
+/** 将远程更新信息写入当前单例状态。 */
+const applyUpdateResult = (result: AppUpdateCheckResult) => {
+  detectedUpdate.value = true;
+  hasUpdate.value = false;
+  latestVersion.value = normalizeVersion(result.latestVersion || result.version || '');
+  updateLogs.value = result.updateLogs || result.notes || '无更新内容描述。';
+  downloadUrl.value = result.downloadUrl || '';
+  cacheStatusUrl.value = result.cache?.statusUrl || '';
+  updateAsset.value = {
+    assetId: result.assetId,
+    etag: result.etag || result.cache?.etag,
+    filename: result.filename,
+    sha256: result.sha256,
+    size: result.size,
+    source: result.source,
+    target: result.target,
+  };
+};
 
-    const res = await nativeAppUpdate.install();
-    if (!res?.success) {
-      throw new Error(res?.message || '拉起安装失败');
-    }
-
-    message.success({ content: '安装程序已启动，应用即将关闭以完成覆盖升级...', key: 'auto-install', duration: 3 });
-
-    // 延迟关闭 APP，释放文件占用以顺利覆盖安装
-    setTimeout(async () => {
-      try {
-        if (isTauri()) {
-          const { invoke } = await import('@tauri-apps/api/core');
-          await invoke('exit_app');
-        }
-      } catch (closeErr) {
-        console.warn('[Update] 自动关闭窗口并退出应用失败:', closeErr);
-      }
-    }, CLOSE_APP_DELAY_MS);
-  } catch (e: any) {
-    console.error('[Update] 自动安装失败:', e);
-    updateState.value.status = 'completed';
-    message.error({ content: `自动安装失败: ${e.message || e}，请手动点击安装`, key: 'auto-install' });
+/** 接管当前原生状态，并在服务器缓存就绪后开始静默预下载。 */
+const reconcileUpdate = async (result: AppUpdateCheckResult, manual: boolean) => {
+  let nativeStatus = await nativeAppUpdate.getStatus();
+  if (hasNativeAssetMetadata(nativeStatus) && !isCurrentNativeAsset(nativeStatus)) {
+    await discardNativeUpdate();
+    nativeStatus = await nativeAppUpdate.getStatus();
   }
+
+  if (isCurrentNativeAsset(nativeStatus) && nativeStatus.status === 'completed') {
+    applyNativeUpdateStatus(nativeStatus);
+    if (manual) message.success(`新版本 v${latestVersion.value} 已准备完成，请点击顶部胶囊安装`);
+    return;
+  }
+  if (isCurrentNativeAsset(nativeStatus) && nativeStatus.status === 'downloading') {
+    applyNativeUpdateStatus(nativeStatus);
+    startProgressPolling(manual);
+    if (manual) message.info(`新版本 v${latestVersion.value} 正在后台准备，完成后会显示安装按钮`);
+    return;
+  }
+
+  const cache = result.cache;
+  if (!cache || cache.status === 'ready') {
+    if (manual) message.info(`发现新版本 v${latestVersion.value}，正在后台准备安装包`);
+    await triggerUpdateDownload(manual);
+    return;
+  }
+
+  applyCacheStatus(cache);
+  if (cache.status === 'failed') {
+    if (manual) message.error(`服务器准备更新包失败：${cache.error || '稍后将自动重试'}`);
+    return;
+  }
+  if (manual) message.info(`发现新版本 v${latestVersion.value}，服务器正在准备更新包`);
+  startCacheStatusPolling(manual);
 };
 
-/**
- * 启动后台进度轮询
- */
-const startProgressPolling = () => {
-  clearProgressPolling();
-  progressInterval = setInterval(async () => {
-    try {
-      const res = await nativeAppUpdate.getStatus();
-      applyNativeUpdateStatus(res);
-
-      if (res.status === 'completed') {
-        console.log('[Update] 后台下载完成！自动拉起安装...');
-        clearProgressPolling();
-        // 下载完成后立即自动安装
-        void autoInstallAndClose();
-      } else if (res.status === 'error') {
-        console.error('[Update] 下载过程中发生错误:', res.error);
-        clearProgressPolling();
-      } else if (res.status === 'paused') {
-        clearProgressPolling();
-      }
-    } catch (e) {
-      console.error('[Update] 轮询下载进度失败:', e);
-    }
-  }, PROGRESS_POLL_INTERVAL_MS);
-};
-
-/**
- * 用户确认后发起后台更新包下载
- */
-const triggerUpdateDownload = async () => {
-  if (!downloadUrl.value || updateState.value.status === 'preparing') return;
+/** 安装前重新确认版本仍有效，并在出现更高版本时切换静默准备目标。 */
+async function revalidateReadyUpdate(): Promise<boolean> {
   const target = await nativeAppUpdate.getTarget();
-  const filename =
-    updateAsset.value.filename ||
-    `yuyan-${latestVersion.value}.${target.platform === 'macos' ? 'dmg' : 'exe'}`;
-
-  try {
-    updateState.value.status = 'downloading';
-    updateState.value.error = null;
-    const res = await nativeAppUpdate.startDownload(downloadUrl.value, filename, {
-      expectedSize: updateAsset.value.size,
-      sha256: updateAsset.value.sha256,
-      etag: updateAsset.value.etag,
+  const result = await checkAppUpdateFromServer(
+    currentAppVersion.value,
+    target.platform,
+    target.arch
+  );
+  if (!result?.hasUpdate || !result.downloadUrl) {
+    await discardNativeUpdate();
+    detectedUpdate.value = false;
+    hasUpdate.value = false;
+    updateState.value = createIdleUpdateState();
+    message.warning({
+      content: '该更新版本已撤回或不再适用，已清理本机安装包',
+      key: 'app-update-install',
     });
-    if (res?.success) {
-      startProgressPolling();
-    } else {
-      throw new Error(res?.message || '启动下载失败');
-    }
-  } catch (e: any) {
-    const errorMsg = e instanceof Error ? e.message : String(e || '启动原生更新下载失败');
-    updateState.value.status = 'error';
-    updateState.value.error = errorMsg;
-    console.error('[Update] 启动 Tauri 原生下载失败:', e);
+    return false;
   }
-};
 
-/**
- * 执行 GitHub Releases 更新检测
- * @param manual 是否为手动触发
- */
+  const resultVersion = normalizeVersion(result.latestVersion || result.version || '');
+  const sameAsset = resultVersion === normalizeVersion(latestVersion.value)
+    && result.filename === updateAsset.value.filename
+    && getResultAssetIdentity(result) === getCurrentAssetIdentity();
+  if (sameAsset) return true;
+
+  applyUpdateResult(result);
+  await reconcileUpdate(result, false);
+  message.info({
+    content: `检测到更新版本 v${latestVersion.value}，正在重新准备安装包`,
+    key: 'app-update-install',
+  });
+  return false;
+}
+
+/** 执行更新检测，并区分自动静默与手动反馈。 */
 const checkAppUpdate = async (manual = false) => {
-  if (checkingUpdate.value) return;
+  if (checkingUpdate.value) {
+    if (manual) message.info('正在检查更新，请稍候');
+    return;
+  }
   checkingUpdate.value = true;
+  const hideLoading = manual ? message.loading('正在检查更新...', 0) : null;
 
   try {
     await initLocalVersion();
     const target = await nativeAppUpdate.getTarget();
-    const res = await checkAppUpdateFromServer(currentAppVersion.value, target.platform, target.arch);
+    const result = await checkAppUpdateFromServer(
+      currentAppVersion.value,
+      target.platform,
+      target.arch
+    );
 
-    if (res?.hasUpdate && res.downloadUrl) {
+    if (result?.hasUpdate && result.downloadUrl) {
       clearCacheStatusPolling();
-      hasUpdate.value = true;
-      latestVersion.value = res.latestVersion || '';
-      updateLogs.value = res.updateLogs || '无更新内容描述。';
-      downloadUrl.value = res.downloadUrl;
-      cacheStatusUrl.value = res.cache?.statusUrl || '';
-      updateAsset.value = {
-        filename: res.filename,
-        size: res.size,
-        sha256: res.sha256,
-        etag: res.etag,
-      };
-
-      // 检测并接管当前 Tauri 原生下载状态
-      try {
-        const statusRes = await nativeAppUpdate.getStatus();
-        applyNativeUpdateStatus(statusRes);
-
-        if (statusRes.status === 'downloading') {
-          startProgressPolling();
-        } else if (res.cache && res.cache.status !== 'ready') {
-          applyCacheStatus(res.cache);
-          startCacheStatusPolling();
-        } else if (statusRes.status === 'idle') {
-          applyCacheStatus(res.cache || {
-            status: 'ready',
-            progress: 100,
-            downloadedBytes: 0,
-            totalBytes: res.size || null,
-            bytesPerSecond: 0,
-            remainingSeconds: 0,
-            retryCount: 0,
-            error: null,
-          });
-          console.log('[Update] 检测到有新版本，等待用户手动点击更新按钮');
-        } else if (statusRes.status === 'completed') {
-          console.log('[Update] 更新包已下载完成，等待用户手动点击安装');
-        }
-      } catch (nativeError) {
-        console.warn('获取 Tauri 原生下载状态失败:', nativeError);
-        updateState.value.status = 'error';
-        updateState.value.error =
-          nativeError instanceof Error ? nativeError.message : String(nativeError);
-      }
-    } else {
-      clearCacheStatusPolling();
-      hasUpdate.value = false;
-      if (manual) {
-        message.success(res?.message || '当前已是最新版本！');
-      }
+      applyUpdateResult(result);
+      await reconcileUpdate(result, manual);
+      return;
     }
+
+    detectedUpdate.value = false;
+    hasUpdate.value = false;
+    clearCacheStatusPolling();
+    clearProgressPolling();
+    const nativeStatus = await nativeAppUpdate.getStatus();
+    if (hasNativeAssetMetadata(nativeStatus)) await discardNativeUpdate();
+    updateState.value = createIdleUpdateState();
+    if (manual) message.success(result?.message || '当前已是最新版本！');
   } catch (error: any) {
-    console.error('内网代理更新检测失败:', error);
+    console.warn('[Update] 更新检测或静默准备失败:', error);
+    hasUpdate.value = false;
     if (manual) {
-      const errMsg = error.response?.data?.error || error.message || '连接内网服务器异常';
-      message.error(`检查更新失败: ${errMsg}`);
+      const errorMessage = error.response?.data?.error || error.message || '连接内网服务器异常';
+      message.error(`检查更新失败：${errorMessage}`);
     }
   } finally {
+    hideLoading?.();
     checkingUpdate.value = false;
   }
 };
 
-/**
- * 胶囊点击事件处理器
- */
-const handleCapsuleClick = async () => {
-  if (updateState.value.status === 'preparing') {
-    message.info('内网服务器正在准备更新包，完成后即可高速下载');
-  } else if (updateState.value.status === 'idle' || updateState.value.status === 'paused') {
-    // 用户主动点击"更新"按钮后才开始后台下载
-    void triggerUpdateDownload();
-  } else if (updateState.value.status === 'completed') {
-    void autoInstallAndClose();
-  } else if (updateState.value.status === 'error') {
-    void triggerUpdateDownload();
+/** 处理用户点击已就绪胶囊。 */
+const handleCapsuleClick = () => {
+  if (updateState.value.status === 'completed') {
+    void installReadyUpdate();
+  } else if (updateState.value.status === 'installing') {
+    message.info('安装程序正在启动，请稍候');
   }
 };
 
-/** 暂停当前下载并保留断点文件。 */
-const pauseUpdateDownload = async () => {
-  if (updateState.value.status !== 'downloading') return;
-  await nativeAppUpdate.cancelDownload();
-};
-
-/**
- * 菜单"检查更新"按钮点击
- */
+/** 处理系统菜单或页面菜单中的“检查更新”。 */
 const handleCheckUpdateClick = () => {
   if (hasUpdate.value && updateState.value.status === 'completed') {
-    void autoInstallAndClose();
+    message.success(`新版本 v${latestVersion.value} 已准备完成，请点击顶部胶囊安装`);
     return;
   }
-  if (hasUpdate.value && updateState.value.status === 'downloading') {
-    message.info('新版本正在后台加速下载中，请稍后...');
+  if (detectedUpdate.value && updateState.value.status === 'downloading') {
+    message.info(`新版本 v${latestVersion.value} 正在后台准备，完成后会显示安装按钮`);
     return;
   }
-  if (hasUpdate.value && updateState.value.status === 'preparing') {
-    message.info('内网服务器正在准备更新包，请稍后...');
-    void pollCacheStatus();
+  if (detectedUpdate.value && updateState.value.status === 'preparing') {
+    cachePollingManual = true;
+    message.info(`新版本 v${latestVersion.value} 的安装包正在服务器准备中`);
+    void pollCacheStatus(cachePollingGeneration);
     return;
   }
-  if (hasUpdate.value && updateState.value.status === 'installing') {
-    message.info('安装程序已拉起，请等待覆盖升级完成...');
+  if (updateState.value.status === 'installing') {
+    message.info('安装程序正在启动，请稍候');
     return;
   }
   void checkAppUpdate(true);
 };
 
-// ============ 单例生命周期管理 ============
-
 /**
- * 自动更新单例 Composable
- * @description 全局唯一实例，确保 Layout 菜单与胶囊组件共享同一份更新状态。
- * 首次挂载时自动启动后台检测，最后一个消费者卸载时清理定时器。
+ * 自动更新单例 Composable。
+ * @description 自动检测、服务端预热和本机预下载保持静默，仅在安装包完整校验后展示胶囊。
  */
 export const useAppUpdate = () => {
   onMounted(() => {
-    instanceCount++;
-    // 只在首次挂载时启动生命周期
-    if (instanceCount === 1 && isTauri()) {
-      // 监听 macOS 顶部系统菜单"检查更新"事件
-      import('@tauri-apps/api/event').then(({ listen }) => {
-        listen('menu-check-update', () => {
-          handleCheckUpdateClick();
-        }).then((unlisten) => {
-          unlistenMenuCheckUpdate = unlisten;
-        });
+    instanceCount += 1;
+    if (instanceCount !== 1 || !isTauri()) return;
+
+    import('@tauri-apps/api/event').then(({ listen }) => {
+      listen('menu-check-update', handleCheckUpdateClick).then((unlisten) => {
+        unlistenMenuCheckUpdate = unlisten;
       });
+    });
 
-      // 延迟 2 秒后启动首次静默检测
-      initialCheckTimer = setTimeout(() => {
-        initialCheckTimer = null;
-        void checkAppUpdate(false);
-      }, INITIAL_CHECK_DELAY_MS);
+    initialCheckTimer = setTimeout(() => {
+      initialCheckTimer = null;
+      void checkAppUpdate(false);
+    }, INITIAL_CHECK_DELAY_MS);
 
-      // 每 15 分钟后台静默检测一次新版本
-      autoUpdateInterval = setInterval(() => {
-        void checkAppUpdate(false);
-      }, AUTO_CHECK_INTERVAL_MS);
-    }
+    autoUpdateInterval = setInterval(() => {
+      void checkAppUpdate(false);
+    }, AUTO_CHECK_INTERVAL_MS);
   });
 
   onUnmounted(() => {
-    instanceCount--;
-    if (instanceCount <= 0) {
-      instanceCount = 0;
-      clearProgressPolling();
-      clearCacheStatusPolling();
-      if (initialCheckTimer) {
-        clearTimeout(initialCheckTimer);
-        initialCheckTimer = null;
-      }
-      if (autoUpdateInterval) {
-        clearInterval(autoUpdateInterval);
-        autoUpdateInterval = null;
-      }
-      if (unlistenMenuCheckUpdate) {
-        unlistenMenuCheckUpdate();
-        unlistenMenuCheckUpdate = null;
-      }
+    instanceCount -= 1;
+    if (instanceCount > 0) return;
+    instanceCount = 0;
+    clearProgressPolling();
+    clearCacheStatusPolling();
+    if (initialCheckTimer) {
+      clearTimeout(initialCheckTimer);
+      initialCheckTimer = null;
     }
+    if (autoUpdateInterval) {
+      clearInterval(autoUpdateInterval);
+      autoUpdateInterval = null;
+    }
+    unlistenMenuCheckUpdate?.();
+    unlistenMenuCheckUpdate = null;
   });
 
   return {
-    /** 是否发现新版本 */
+    /** 是否展示已就绪更新胶囊 */
     hasUpdate,
-    /** 更新状态详情 */
+    /** 当前更新状态 */
     updateState,
-    /** 下载百分比 */
+    /** 当前进度百分比 */
     updatePercent,
     /** 最新版本号 */
     latestVersion,
     /** 更新日志 */
     updateLogs,
-    /** 是否正在检测中 */
+    /** 是否正在检查更新 */
     checkingUpdate,
-    /** 手动检查更新 */
+    /** 手动或自动检查更新 */
     checkAppUpdate,
-    /** 胶囊点击事件 */
+    /** 点击已就绪胶囊 */
     handleCapsuleClick,
-    /** 暂停更新下载 */
-    pauseUpdateDownload,
-    /** 菜单"检查更新"点击 */
+    /** 菜单检查更新 */
     handleCheckUpdateClick,
   };
 };
