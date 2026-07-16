@@ -151,7 +151,7 @@ async function getBackendContext(targetId, options = {}) {
   const environment = target.environmentId ? await getDeployEnvironmentWithCredential(target.environmentId) : null;
   const serverJavaRuntime = target.serverJavaRuntimeId ? await getServerJavaRuntime(target.serverJavaRuntimeId) : null;
   if (requireBuild && (!buildJdk || buildJdk.status !== 'available' || !buildJdk.majorVersion)) {
-    throw new Error(`本机构建 JDK ${target.requiredJdkAlias || ''} 未在当前客户端检测通过，请先在客户端中检测并绑定您的本地环境`);
+    throw new Error(`本地未检测到满足要求的 Java ${target.requiredJdkAlias || ''} 构建环境，请先在 Java 环境管理中检测并绑定您的本地环境`);
   }
   if (target.processMode === 'legacy' || target.needsReview) {
     throw new Error('该目标仍使用历史自定义启停命令，请编辑并保存为 PID 或 systemd 模式后再操作');
@@ -771,6 +771,9 @@ export async function deployBackendTarget(targetId, payload, emit) {
     ({ commitSha, commitMessage, commitAuthor } = workspace);
 
     const env = { JAVA_HOME: buildJdk.homePath, PATH: `${path.join(buildJdk.homePath, 'bin')}:${process.env.PATH}` };
+    if (buildJdk.isDownwardCompatible) {
+      log('warning', `[WARN] 本地未找到完全匹配的 Java ${buildJdk.originalRequiredVersion}，已向下兼容使用 ${buildJdk.name} 进行构建`, 'build');
+    }
     await withBackendBuildSlot(async () => {
       if (target.installCommand) {
         stage('install', 28, 'Maven 仓库预热', target.installCommand);

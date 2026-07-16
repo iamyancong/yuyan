@@ -377,9 +377,12 @@ export async function generateTargetOpenApi(targetId, options = {}) {
     }
   }
   if (!jdk || jdk.status !== 'available' || !jdk.majorVersion) {
-    throw new Error(`本机构建 JDK ${target.requiredJdkAlias || ''} 未检测通过，请先在客户端 JDK 管理中检测并绑定`);
+    throw new Error(`本地未检测到满足要求的 Java ${target.requiredJdkAlias || ''} 构建环境，请先在 Java 环境管理中检测并绑定`);
   }
   const env = { JAVA_HOME: jdk.homePath, PATH: `${path.join(jdk.homePath, 'bin')}:${process.env.PATH}` };
+  if (jdk.isDownwardCompatible) {
+    log('warning', `[WARN] 本地未找到完全匹配的 Java ${jdk.originalRequiredVersion}，已向下兼容使用 ${jdk.name} 进行构建`, 'openapi');
+  }
   log('info', `使用 ${jdk.name} 生成 OpenAPI`, 'openapi');
   await runBackendLocalCommand(target.openapiCommand, {
     cwd: workspace.repoDir,
