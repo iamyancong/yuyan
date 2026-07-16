@@ -1326,7 +1326,7 @@ export function isLocalExecuteApi(url: string): boolean {
  */
 async function getActiveDeployApiBase(url = '', executionScope?: DeployExecutionScope): Promise<string> {
   if (isTauri() && !hasCustomDeployApiBase()) {
-    if (executionScope === 'local' || (!executionScope && isLocalExecuteApi(url))) {
+    if (executionScope !== 'server') {
       return `${await getActiveLocalServerUrl()}/deploy-api`;
     }
   }
