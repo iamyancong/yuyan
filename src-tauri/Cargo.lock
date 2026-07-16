@@ -5581,7 +5581,7 @@ dependencies = [
 
 [[package]]
 name = "yuyan-app"
-version = "1.2.10"
+version = "1.2.11"
 dependencies = [
  "cocoa",
  "fs2",
