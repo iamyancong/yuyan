@@ -177,6 +177,8 @@ jobs:
           name: yuyan ${{ needs.prep-version.outputs.tag }}
           draft: false
           prerelease: ${{ needs.prep-version.outputs.prerelease == 'true' }}
+          body: |
+            ${{ github.event.head_commit.message }}
           files: |
             ./dist-release/**/*.exe
             ./dist-release/**/*.dmg

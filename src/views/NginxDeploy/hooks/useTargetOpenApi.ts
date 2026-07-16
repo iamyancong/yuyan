@@ -1,5 +1,7 @@
 import { computed, ref, type Ref } from 'vue';
 import message from 'ant-design-vue/es/message';
+import { Modal } from 'ant-design-vue';
+import axios from 'axios';
 import {
   generateTargetOpenApiWithProgress,
   getLatestTargetOpenApi,
@@ -7,6 +9,7 @@ import {
   getOpenApiArtifactDownloadUrl,
   getDeployApiAuthHeaders,
   stopTargetDeploy,
+  updateDeployTarget,
   type DeployProgressEvent,
   type DeployTarget,
   type OpenApiArtifact,
@@ -64,6 +67,62 @@ export function useTargetOpenApi(params: UseTargetOpenApiParams) {
     content.value = await getOpenApiArtifactContent(nextArtifact.id);
   };
 
+  /** 尝试从测试环境同步此项目的 OpenAPI 配置 */
+  const trySyncTargetOpenApiFromTestEnv = async (target: DeployTarget): Promise<boolean> => {
+    const testDbUrl = import.meta.env.VITE_TEST_DB_SERVER_URL;
+    const testToken = import.meta.env.VITE_DEPLOY_API_TOKEN;
+    if (!testDbUrl) return false;
+
+    try {
+      const testDbOrigin = new URL(testDbUrl).origin;
+      // 避免重复请求自己
+      if (window.location.origin === testDbOrigin) return false;
+
+      const url = `${testDbUrl.replace(/\/$/, '')}/deploy-api/targets/${target.id}`;
+      const headers: Record<string, string> = {};
+      if (testToken) {
+        headers['x-deploy-token'] = testToken;
+      }
+
+      const response = await axios.get(url, { headers, timeout: 3000 });
+      if (response.data?.success && response.data?.data) {
+        const remoteTarget = response.data.data;
+        if (remoteTarget.openapiCommand && remoteTarget.openapiOutputPath) {
+          return new Promise<boolean>((resolve) => {
+            Modal.confirm({
+              title: '配置未同步提示',
+              content: '检测到您本地尚未配置该目标的 OpenAPI 生成信息，但测试环境已配置。是否一键同步测试环境配置到本地并重新生成？',
+              okText: '一键同步并生成',
+              cancelText: '取消',
+              onOk: async () => {
+                try {
+                  const payload = {
+                    ...target,
+                    openapiCommand: remoteTarget.openapiCommand,
+                    openapiOutputPath: remoteTarget.openapiOutputPath,
+                  } as any;
+                  const updated = await updateDeployTarget(target.id, payload);
+                  activeTarget.value = updated;
+                  message.success('配置同步成功');
+                  resolve(true);
+                } catch (err: any) {
+                  message.error('同步配置到本地失败: ' + (err.message || err));
+                  resolve(false);
+                }
+              },
+              onCancel: () => {
+                resolve(false);
+              },
+            });
+          });
+        }
+      }
+    } catch (err) {
+      console.warn('[trySyncTargetOpenApiFromTestEnv] 请求测试环境配置失败:', err);
+    }
+    return false;
+  };
+
   /**
    * 生成 OpenAPI。
    * @param force 是否忽略当前 commit 缓存
@@ -95,7 +154,17 @@ export function useTargetOpenApi(params: UseTargetOpenApiParams) {
       if (isAbortError(error) || abortController?.signal.aborted) {
         message.warning('已请求取消 OpenAPI 生成');
       } else {
-        errorMessage.value = getErrorMessage(error);
+        const errorMsg = getErrorMessage(error);
+        if (errorMsg.includes('请先配置 OpenAPI 生成命令和输出路径')) {
+          const synced = await trySyncTargetOpenApiFromTestEnv(target);
+          if (synced) {
+            generating.value = false;
+            abortController = null;
+            void generateOpenApi(force, silent);
+            return;
+          }
+        }
+        errorMessage.value = errorMsg;
         message.error(errorMessage.value);
       }
     } finally {
