@@ -9,7 +9,7 @@ import {
   getOpenApiArtifactDownloadUrl,
   getDeployApiAuthHeaders,
   stopTargetDeploy,
-  updateDeployTarget,
+  updateLocalDeployTarget,
   type DeployProgressEvent,
   type DeployTarget,
   type OpenApiArtifact,
@@ -101,7 +101,7 @@ export function useTargetOpenApi(params: UseTargetOpenApiParams) {
                     openapiCommand: remoteTarget.openapiCommand,
                     openapiOutputPath: remoteTarget.openapiOutputPath,
                   } as any;
-                  const updated = await updateDeployTarget(target.id, payload);
+                  const updated = await updateLocalDeployTarget(target.id, payload);
                   activeTarget.value = updated;
                   message.success('配置同步成功');
                   resolve(true);
