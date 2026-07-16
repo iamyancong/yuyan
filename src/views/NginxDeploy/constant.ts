@@ -692,11 +692,16 @@ export const targetFormSchema = {
               'x-component': 'Select',
               'x-component-props': { placeholder: '请选择项目类型' },
             },
-            buildJdkId: {
-              type: 'number',
-              title: '本机构建 JDK',
+            requiredJdkAlias: {
+              type: 'string',
+              title: '本机构建 Java 版本',
               required: true,
-              enum: [],
+              enum: [
+                { label: 'Java 8 (1.8)', value: '8' },
+                { label: 'Java 11', value: '11' },
+                { label: 'Java 17', value: '17' },
+                { label: 'Java 21', value: '21' },
+              ],
               'x-decorator': 'FormItem',
               'x-component': 'Select',
               'x-reactions': {

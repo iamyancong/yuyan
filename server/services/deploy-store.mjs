@@ -3095,15 +3095,68 @@ export async function getJdk(id) {
 }
 
 /**
- * 根据别名获取本地首个检测通过的可用 JDK
+ * 从别名中提取 Java 主版本号
+ * @param {string} alias - JDK 别名或版本号
+ * @returns {number|null} Java 主版本号
+ */
+function parseMajorVersionFromAlias(alias) {
+  const str = String(alias || '').trim();
+  if (!str) return null;
+  // 兼容 1.8 -> 8, 1.7 -> 7, 1.6 -> 6
+  if (/^1\.[678]$/.test(str)) {
+    return Number(str.split('.')[1]);
+  }
+  // 匹配类似 "Java 8", "JDK 8", "8" 等中的版本号数字
+  const match = str.match(/(?:java|openjdk|jdk)?\s*(\d+)/i);
+  if (match) {
+    const num = Number(match[1]);
+    // 兼容 1.8.x 的前缀情况
+    if (num === 1) {
+      const matchSub = str.match(/1\.([6789])/);
+      if (matchSub) return Number(matchSub[1]);
+    }
+    return num;
+  }
+  return null;
+}
+
+/**
+ * 根据别名获取本地首个检测通过的可用 JDK，支持主版本自动匹配和向下兼容
  * @param {string} alias - JDK 别名
  * @returns {Promise<Object|null>} JDK 详情
  */
 export async function findJdkByAlias(alias) {
   if (!alias) return null;
   const db = await getDeployDb();
-  const row = db.prepare("SELECT * FROM build_jdks WHERE name = ? AND status = 'available' LIMIT 1").get(String(alias).trim());
-  return mapJdk(row);
+  
+  // 1. 尝试完全匹配名称
+  const exactRow = db.prepare("SELECT * FROM build_jdks WHERE name = ? AND status = 'available' LIMIT 1").get(String(alias).trim());
+  if (exactRow) return mapJdk(exactRow);
+
+  // 2. 提取所要求的主版本
+  const reqVer = parseMajorVersionFromAlias(alias);
+  if (!reqVer) return null;
+
+  // 查询所有本地可用的 JDK
+  const rows = db.prepare("SELECT * FROM build_jdks WHERE status = 'available'").all();
+  const jdks = rows.map(mapJdk);
+
+  // 3. 寻找精确匹配主版本的 JDK
+  const exactMatch = jdks.find(j => j.majorVersion === reqVer);
+  if (exactMatch) return exactMatch;
+
+  // 4. 寻找比项目要求高、且相差最小的 JDK (向下兼容)
+  const higherJdks = jdks
+    .filter(j => j.majorVersion > reqVer)
+    .sort((a, b) => a.majorVersion - b.majorVersion);
+  if (higherJdks.length > 0) {
+    const selected = { ...higherJdks[0] };
+    selected.isDownwardCompatible = true;
+    selected.originalRequiredVersion = reqVer;
+    return selected;
+  }
+
+  return null;
 }
 
 /**

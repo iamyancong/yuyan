@@ -108,6 +108,32 @@ const createDefaultTargetForm = (project: DeployProjectContext): DeployTargetPay
 });
 
 /**
+ * 从 JDK 别名或名称中提取 Java 主版本号字符串
+ * @param alias JDK 别名或名称
+ * @returns Java 主版本号，如 "8", "11", "17", "21" 或空字符串
+ */
+function parseMajorVersionFromAlias(alias?: string): string {
+  const str = String(alias || '').trim();
+  if (!str) return '';
+  // 兼容 1.8 -> 8, 1.7 -> 7, 1.6 -> 6
+  if (/^1\.[678]$/.test(str)) {
+    return str.split('.')[1];
+  }
+  // 匹配类似 "Java 8", "JDK 8", "8" 等中的版本号数字
+  const match = str.match(/(?:java|openjdk|jdk)?\s*(\d+)/i);
+  if (match) {
+    const num = Number(match[1]);
+    // 兼容 1.8.x 的前缀情况
+    if (num === 1) {
+      const matchSub = str.match(/1\.([6789])/);
+      if (matchSub) return matchSub[1];
+    }
+    return String(num);
+  }
+  return '';
+}
+
+/**
  * 管理部署目标列表、筛选和配置表单。
  * @description 通过 Provide/Inject 上下文与微 Hooks 裂变进行了深度重构。原巨无霸 Hook 大幅减负。
  * @param params 可选的认证、刷新和服务器依赖（不传时默认使用 NginxDeployContext）
@@ -343,26 +369,9 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     });
   };
 
-  /** 同步部署目标弹窗 JDK 下拉状态 */
-  const syncTargetJdkFieldState = () => {
-    const options = jdks.value.filter((jdk) => jdk.status === 'available').map((jdk) => ({
-      label: `${jdk.name} · Java ${jdk.majorVersion}`,
-      title: `${jdk.name} · Java ${jdk.majorVersion}`,
-      value: jdk.id,
-      searchKey: `${jdk.name} ${jdk.majorVersion} ${jdk.homePath}`,
-    }));
-    syncSelectFieldState(targetFormRef.value, 'buildJdkId', options, {
-      showSearch: true,
-      optionFilterProp: 'searchKey',
-      optionLabelProp: 'label',
-      placeholder: '请选择绑定的 JDK 环境',
-    });
-  };
-
   /** 刷新本机构建 JDK 列表并同步表单下拉。 */
   const refreshBuildJdks = async () => {
     jdks.value = await listDeployJdks().catch(() => []);
-    syncTargetJdkFieldState();
   };
 
   /** 刷新共享环境依赖配置并同步表单下拉。 */
@@ -901,7 +910,6 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       syncTargetBranchFieldState();
       syncTargetNginxInstanceFieldState();
       syncTargetServerFieldState();
-      syncTargetJdkFieldState();
       syncTargetNginxSiteManagedState();
       syncTargetFormValues();
     } catch (error: any) {
@@ -930,20 +938,16 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     try {
       await refreshServerList();
       await refreshBuildJdks();
-      if (targetForm.projectType === 'backend' && targetForm.requiredJdkAlias) {
-        const matchedLocalJdk = jdks.value.find(jdk => jdk.name === targetForm.requiredJdkAlias && jdk.status === 'available');
-        if (matchedLocalJdk) {
-          targetForm.buildJdkId = matchedLocalJdk.id;
-          targetForm.jdkId = matchedLocalJdk.id;
-        } else {
-          targetForm.buildJdkId = undefined;
-          targetForm.jdkId = undefined;
-        }
+      if (targetForm.projectType === 'backend') {
+        targetForm.requiredJdkAlias = parseMajorVersionFromAlias(targetForm.requiredJdkAlias);
       }
       await refreshDeployEnvironments();
       await loadProjects(normalizeProjectSource(target.projectSource));
       initializingTargetForm.value = true;
       Object.assign(targetForm, { ...target, projectSource: normalizeProjectSource(target.projectSource), serverName: target.nginxServerName || '_' });
+      if (targetForm.projectType === 'backend') {
+        targetForm.requiredJdkAlias = parseMajorVersionFromAlias(targetForm.requiredJdkAlias);
+      }
       if (!targetForm.nginxInstanceId) {
         const selectedServer = servers.value.find((server) => server.id === Number(targetForm.serverId));
         targetForm.nginxInstanceId = getDefaultNginxInstance(selectedServer)?.id || 0;
@@ -956,7 +960,6 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       syncTargetBranchFieldState();
       syncTargetServerFieldState();
       syncTargetNginxInstanceFieldState();
-      syncTargetJdkFieldState();
       syncTargetNginxSiteManagedState();
       syncTargetFormValues();
     } catch (error: any) {
@@ -1078,14 +1081,16 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
         payload.needsReview = false;
         payload.stopCommand = '';
         payload.startCommand = '';
-        if (!Number(payload.buildJdkId || payload.jdkId || 0)) {
-          message.warning('请选择本机构建 JDK');
+        if (!payload.requiredJdkAlias) {
+          message.warning('请选择本机构建 Java 版本');
           return;
         }
-        const selectedJdk = jdks.value.find(jdk => jdk.id === Number(payload.buildJdkId || payload.jdkId));
-        if (selectedJdk) {
-          payload.requiredJdkAlias = selectedJdk.name;
-        }
+        const matchedLocal = jdks.value.find(jdk => 
+          jdk.status === 'available' && 
+          String(jdk.majorVersion) === String(payload.requiredJdkAlias)
+        );
+        payload.buildJdkId = matchedLocal ? matchedLocal.id : undefined;
+        payload.jdkId = matchedLocal ? matchedLocal.id : undefined;
         if (!String(payload.runtimeJavaHome || '').trim().startsWith('/')) {
           message.warning('服务器运行 JAVA_HOME 必须使用绝对路径');
           return;
