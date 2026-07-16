@@ -1,5 +1,5 @@
-import { invoke } from '@tauri-apps/api/core';
 import { getDeployApiToken } from '@/api/deploy';
+import { isTauri } from '@/utils/env';
 
 /** Tauri 原生更新下载状态。 */
 export interface NativeAppUpdateStatus {
@@ -65,7 +65,9 @@ export const useNativeAppUpdate = (): NativeAppUpdateActions => {
    * @param url 内网更新代理地址
    * @param filename 安装包文件名
    */
-  const startDownload = (url: string, filename: string, metadata: NativeAppUpdateMetadata) => {
+  const startDownload = async (url: string, filename: string, metadata: NativeAppUpdateMetadata) => {
+    if (!isTauri()) return { success: false, message: 'Not in Tauri environment' };
+    const { invoke } = await import('@tauri-apps/api/core');
     return invoke<NativeAppUpdateCommandResult>('start_app_update_download', {
       url,
       version: metadata.version,
@@ -79,27 +81,55 @@ export const useNativeAppUpdate = (): NativeAppUpdateActions => {
   };
 
   /** 暂停当前下载并保留断点。 */
-  const cancelDownload = () => {
+  const cancelDownload = async () => {
+    if (!isTauri()) return { success: false, message: 'Not in Tauri environment' };
+    const { invoke } = await import('@tauri-apps/api/core');
     return invoke<NativeAppUpdateCommandResult>('cancel_app_update_download');
   };
 
   /** 获取当前原生下载状态。 */
-  const getStatus = () => {
+  const getStatus = async () => {
+    if (!isTauri()) {
+      return {
+        status: 'idle',
+        progress: 0,
+        error: null,
+        localPath: null,
+        downloadedBytes: 0,
+        totalBytes: null,
+        bytesPerSecond: 0,
+        remainingSeconds: null,
+        resumable: false,
+        retryCount: 0,
+        version: '',
+        assetId: '',
+        filename: '',
+        expectedSha256: null,
+        expectedEtag: null,
+      } as NativeAppUpdateStatus;
+    }
+    const { invoke } = await import('@tauri-apps/api/core');
     return invoke<NativeAppUpdateStatus>('get_app_update_status');
   };
 
   /** 清理不再需要的本机更新包和断点状态。 */
-  const discard = () => {
+  const discard = async () => {
+    if (!isTauri()) return { success: false, message: 'Not in Tauri environment' };
+    const { invoke } = await import('@tauri-apps/api/core');
     return invoke<NativeAppUpdateCommandResult>('discard_app_update');
   };
 
   /** 获取当前系统和 CPU 架构。 */
-  const getTarget = () => {
+  const getTarget = async () => {
+    if (!isTauri()) return { platform: 'unknown', arch: 'unknown' };
+    const { invoke } = await import('@tauri-apps/api/core');
     return invoke<NativeAppUpdateTarget>('get_app_update_target');
   };
 
   /** 使用系统默认程序打开安装包。 */
-  const install = () => {
+  const install = async () => {
+    if (!isTauri()) return { success: false, message: 'Not in Tauri environment' };
+    const { invoke } = await import('@tauri-apps/api/core');
     return invoke<NativeAppUpdateCommandResult>('install_app_update');
   };
 

@@ -6,16 +6,43 @@
   min-height: 0;
 }
 
-.route-loading-mask {
+.route-loading-progress {
   position: absolute;
-  inset: 0;
-  z-index: 20;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding-top: 96px;
-  background: var(--loading-mask-bg);
-  backdrop-filter: blur(2px);
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  height: 3px;
+  overflow: hidden;
+  pointer-events: none;
+  background: var(--theme-primary-lighter);
+
+  span {
+    display: block;
+    width: 42%;
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, transparent, var(--theme-primary), transparent);
+    animation: route-loading-slide 0.85s ease-in-out infinite;
+    will-change: transform;
+  }
+}
+
+@keyframes route-loading-slide {
+  from {
+    transform: translate3d(-120%, 0, 0);
+  }
+
+  to {
+    transform: translate3d(340%, 0, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .route-loading-progress span {
+    width: 100%;
+    animation: none;
+  }
 }
 
 :deep(.ant-layout-header) {

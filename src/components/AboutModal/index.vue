@@ -92,6 +92,7 @@ const handleClose = () => {
               <span class="label">客户端版本</span>
               <span class="value">v{{ systemInfo.appVersion }}</span>
             </div>
+            <!-- 注释掉的暂不展示 -->
             <!-- <div class="info-row">
               <span class="label">Tauri 核心</span>
               <span class="value">{{ systemInfo.tauriVersion }}</span>
@@ -104,14 +105,10 @@ const handleClose = () => {
               <span class="label">Node.js 环境</span>
               <span class="value">{{ systemInfo.nodeVersion }}</span>
             </div> -->
-            <div class="info-row">
-              <span class="label">Node.js 环境</span>
-              <span class="value">{{ systemInfo.nodeVersion }}</span>
-            </div>
-            <div class="info-row">
+            <!-- <div class="info-row">
               <span class="label">本地服务</span>
               <span class="value">{{ localServerLabel }}</span>
-            </div>
+            </div> -->
             <div class="info-row">
               <span class="label">操作系统</span>
               <span class="value">{{ systemInfo.osInfo }}</span>

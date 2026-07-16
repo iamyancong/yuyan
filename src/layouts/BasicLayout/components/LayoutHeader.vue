@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useAuth } from '@/composables/useAuth';
 import UpdateCapsule from '@/components/UpdateCapsule/index.vue';
+import NoticeCapsule from '@/components/NoticeCapsule/index.vue';
 import { useAppUpdate } from '@/components/UpdateCapsule/hooks/useAppUpdate';
 import {
   BgColorsOutlined,
@@ -31,7 +32,7 @@ defineEmits<{
 
 const { isLoggedIn, userName, userAvatar, logout, authLoading } = useAuth();
 const { syncing, confirmSyncData } = useDataSync();
-const { handleCheckUpdateClick } = useAppUpdate();
+const { hasUpdate, handleCheckUpdateClick } = useAppUpdate();
 
 /**
  * 处理退出登录逻辑
@@ -43,9 +44,11 @@ const handleLogout = async () => {
 
 <template>
   <a-layout-header class="yuyan-layout-header">
-    <div class="yuyan-layout-header-left">
+    <div class="yuyan-layout-header-left" :class="{ 'has-notice': !isTauriClient }">
       <!-- 赛博玻璃拟态更新胶囊 -->
-      <UpdateCapsule v-if="isTauriClient" />
+      <UpdateCapsule v-if="isTauriClient && hasUpdate" />
+      <!-- 跑马灯通知消息胶囊 -->
+      <NoticeCapsule v-if="!isTauriClient" />
     </div>
     
     <div class="yuyan-layout-header-drag" v-if="isTauriClient" data-tauri-drag-region></div>
@@ -151,7 +154,7 @@ const handleLogout = async () => {
   display: flex;
   align-items: center;
   
-  &:has(.notice-capsule) {
+  &.has-notice {
     flex: 1;
     margin-right: 24px;
   }

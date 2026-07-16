@@ -8,5 +8,9 @@
 	<array>
 		<string>zh_CN</string>
 	</array>
+	<key>CFBundleDisplayName</key>
+	<string>雨燕</string>
+	<key>CFBundleName</key>
+	<string>雨燕</string>
 </dict>
 </plist>
