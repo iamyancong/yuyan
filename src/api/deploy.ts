@@ -890,6 +890,18 @@ export const createDeployTarget = (payload: DeployTargetPayload) => client.post(
 /** 更新部署目标 */
 export const updateDeployTarget = (id: number, payload: DeployTargetPayload) => client.put(`/targets/${id}`, payload).then(unwrap<DeployTarget>);
 
+/**
+ * 更新桌面端本地数据库中的部署目标。
+ * @description 仅用于必须落到内嵌服务的本地配置同步，避免改变普通部署数据默认读取中央服务的行为。
+ * @param id 部署目标 ID
+ * @param payload 部署目标配置
+ * @returns 更新后的本地部署目标
+ */
+export async function updateLocalDeployTarget(id: number, payload: DeployTargetPayload): Promise<DeployTarget> {
+  const url = await getActiveDeployApiUrl(`/targets/${id}`, 'local');
+  return axios.put(url, payload, { headers: getDeployApiAuthHeaders() }).then(unwrap<DeployTarget>);
+}
+
 /** 删除部署目标 */
 export const deleteDeployTarget = (id: number) => client.delete(`/targets/${id}`);
 
@@ -1305,6 +1317,8 @@ function hasCustomDeployApiBase(): boolean {
 
 const LOCAL_EXECUTE_API_PATTERNS = [
   /\/targets\/\d+\/(?:deploy|deploy-progress|deploy\/stop|service-actions\/|service-status|service-logs|inspect|nginx-site\/sync|openapi\/generate)/i,
+  /\/targets\/\d+\/openapi\/latest/i,
+  /\/openapi-artifacts\/\d+\/(?:content|download)/i,
   /\/records\/\d+\/(?:rollback|undo-rollback)/i,
   /\/servers\/\d+\/nginx-runtime\/init/i,
   /\/nginx-instances\/\d+\/(?:init|archive)/i,
@@ -1319,14 +1333,14 @@ export function isLocalExecuteApi(url: string): boolean {
 
 /**
  * 获取当前模式实际执行部署任务的 API 根地址。
- * @description 桌面端默认使用内嵌服务以在用户机器构建；网页端和显式自定义模式使用中央 API。
+ * @description 桌面端普通数据请求默认使用中央 API，仅明确的本地执行请求使用内嵌服务；网页端和显式自定义模式使用配置的 API。
  * @param {string} url - 请求 URL 相对路径
  * @param executionScope 显式指定的执行环境
  * @returns {Promise<string>} 部署 API 根地址
  */
 async function getActiveDeployApiBase(url = '', executionScope?: DeployExecutionScope): Promise<string> {
   if (isTauri() && !hasCustomDeployApiBase()) {
-    if (executionScope !== 'server') {
+    if (executionScope === 'local' || (!executionScope && isLocalExecuteApi(url))) {
       return `${await getActiveLocalServerUrl()}/deploy-api`;
     }
   }
