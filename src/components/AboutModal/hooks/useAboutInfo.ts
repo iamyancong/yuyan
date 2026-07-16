@@ -84,8 +84,8 @@ export const useAboutInfo = () => {
       `版本 (Version): v${systemInfo.value.appVersion}`,
       // `渲染内核 (Engine): ${systemInfo.value.renderEngine}`,
       // `Tauri 版本 (Tauri): ${systemInfo.value.tauriVersion}`,
-      `Node.js 版本 (Node): ${systemInfo.value.nodeVersion}`,
-      `本地服务 (Local Server): ${systemInfo.value.localServerStatus?.status || 'unknown'} / ${systemInfo.value.localServerStatus?.lastError || 'no error'}`,
+      // `Node.js 版本 (Node): ${systemInfo.value.nodeVersion}`,
+      // `本地服务 (Local Server): ${systemInfo.value.localServerStatus?.status || 'unknown'} / ${systemInfo.value.localServerStatus?.lastError || 'no error'}`,
       `操作系统 (OS): ${systemInfo.value.osInfo}`,
     ].join('\n');
 

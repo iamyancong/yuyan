@@ -1,7 +1,28 @@
-import { ref, computed } from 'vue';
+import { computed, nextTick, ref } from 'vue';
 import { useRoute, useRouter, NavigationFailureType, isNavigationFailure } from 'vue-router';
 import { routes } from '@/router';
 import { getMenuIcon } from '../constant';
+
+/** 布局与侧栏共享的路由切换状态 */
+const routeLoading = ref(false);
+
+/** 用户刚点击、尚未完成路由提交的目标路径 */
+const pendingPath = ref('');
+
+/** 全局路由跳转顺序标识，用于丢弃快速连点产生的旧导航 */
+let navigationSequence = 0;
+
+/**
+ * 等待菜单选中态至少完成一次浏览器绘制。
+ * @returns 下一帧绘制完成后的 Promise
+ */
+const waitForInteractionPaint = async () => {
+  await nextTick();
+  if (typeof window === 'undefined') return;
+  await new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => resolve());
+  });
+};
 
 /**
  * 布局导航与菜单状态管理的 Hook
@@ -10,15 +31,9 @@ import { getMenuIcon } from '../constant';
 export function useNavigation() {
   const route = useRoute();
   const router = useRouter();
-  
-  /** 路由切换加载状态 */
-  const routeLoading = ref(false);
-  
-  /** 路由跳转顺序标识，用于解决竞态问题 */
-  let navigationSequence = 0;
 
   /** 当前选中的菜单项 Key 数组 */
-  const selectedKeys = computed(() => [route.path]);
+  const selectedKeys = computed(() => [pendingPath.value || route.path]);
 
   /** 当前页面标题，从路由 meta 提取，默认为 '概览' */
   const title = computed(() => (route.meta?.title as string) || '概览');
@@ -58,18 +73,22 @@ export function useNavigation() {
   };
 
   /**
-   * 安全地切换到目标路由路径，并展示加载反馈遮罩
+   * 安全地切换到目标路由路径，并展示轻量加载进度
    * @param path 目标路由路径
    */
   const navigateToPath = async (path: string) => {
     if (!path || path === route.path) return;
 
     const currentNavigation = ++navigationSequence;
+    pendingPath.value = path;
     routeLoading.value = true;
     try {
+      await waitForInteractionPaint();
+      if (currentNavigation !== navigationSequence) return;
       await router.push(path);
     } finally {
       if (currentNavigation === navigationSequence) {
+        pendingPath.value = '';
         routeLoading.value = false;
       }
     }

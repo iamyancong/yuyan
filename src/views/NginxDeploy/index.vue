@@ -3,7 +3,7 @@ import { nextTick, onMounted, ref } from 'vue';
 import '@ycwang-dev/components/dist/style.css';
 import { useYssVxeUI } from '@/composables/useYssVxeUI';
 import NginxDeployWorkspace from './components/NginxDeployWorkspace/index.vue';
-import NginxDeployOverlays from './components/NginxDeployOverlays/index.vue';
+import NginxDeployOverlayHost from './components/NginxDeployOverlayHost/index.vue';
 import {
   useNginxDeployActions,
   useNginxDeployAuth,
@@ -198,7 +198,7 @@ onMounted(() => {
       :target-action-config="targetActionConfig"
       :record-action-config="recordActionConfig"
     />
-    <NginxDeployOverlays
+    <NginxDeployOverlayHost
       :server-state="serverState"
       :target-state="targetState"
       :record-state="recordState"

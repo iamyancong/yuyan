@@ -1,4 +1,4 @@
-import { computed, type Ref, ref, onMounted, onUnmounted } from 'vue';
+import { computed, type Ref, ref, onActivated, onDeactivated, onMounted, onUnmounted } from 'vue';
 import type { YTableActionConfig } from '@ycwang-dev/components/lite';
 import type { DeployProgressSnapshot, DeployRecord, DeployServer, DeployTarget } from '@/api/deploy';
 import { useNginxDeployContext } from './useNginxDeployContext';
@@ -55,8 +55,9 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
   const deleteServer = params?.deleteServer;
 
   const isLocalHelperOnline = ref(true);
-  let heartbeatTimer: any = null;
+  let heartbeatTimer: number | null = null;
 
+  /** 检查本机辅助服务是否在线 */
   const checkHeartbeat = async () => {
     if (isTauri()) {
       isLocalHelperOnline.value = true;
@@ -70,16 +71,27 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
     }
   };
 
-  onMounted(() => {
+  /** 启动本机辅助服务心跳 */
+  const startHeartbeat = () => {
+    if (heartbeatTimer !== null) return;
     void checkHeartbeat();
-    heartbeatTimer = setInterval(() => {
+    heartbeatTimer = window.setInterval(() => {
       void checkHeartbeat();
     }, 5000);
-  });
+  };
 
-  onUnmounted(() => {
-    if (heartbeatTimer) clearInterval(heartbeatTimer);
-  });
+  /** 停止本机辅助服务心跳 */
+  const stopHeartbeat = () => {
+    if (heartbeatTimer === null) return;
+    window.clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  };
+
+  onMounted(startHeartbeat);
+  onActivated(startHeartbeat);
+  onDeactivated(stopHeartbeat);
+  onUnmounted(stopHeartbeat);
+
   const openPublishConfirm = params?.openPublishConfirm;
   const openOpenApi = params?.openOpenApi;
   const runServiceAction = params?.runServiceAction;

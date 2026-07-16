@@ -1,4 +1,4 @@
-import { onUnmounted, ref, type Ref } from 'vue';
+import { onActivated, onDeactivated, onMounted, onUnmounted, ref, type Ref } from 'vue';
 import message from 'ant-design-vue/es/message';
 import { getTargetDeployProgress, type DeployProgressSnapshot, type DeployTarget } from '@/api/deploy';
 import { getDeployProgressActionLabel } from '../constant';
@@ -24,6 +24,8 @@ export function useTargetRuntime(targets: Ref<DeployTarget[]>) {
 
   let runtimeRefreshSequence = 0;
   let targetRuntimeTimer: number | null = null;
+  /** 当前组件是否允许发起运行态请求与轮询 */
+  let runtimePollingEnabled = false;
 
   /** 页面回到前台时立即刷新一次运行态 */
   const handleVisibilityChange = () => {
@@ -92,6 +94,10 @@ export function useTargetRuntime(targets: Ref<DeployTarget[]>) {
    * @param targetList 目标列表
    */
   const refreshTargetRuntimeSnapshots = async (targetList: DeployTarget[] = targets.value) => {
+    if (!runtimePollingEnabled) {
+      targetRuntimeLoading.value = false;
+      return;
+    }
     const sequence = ++runtimeRefreshSequence;
     if (!targetList.length) {
       targetRuntimeSnapshots.value = {};
@@ -120,7 +126,7 @@ export function useTargetRuntime(targets: Ref<DeployTarget[]>) {
 
   /** 开始轮询部署目标运行态 */
   const startTargetRuntimePolling = () => {
-    if (targetRuntimeTimer !== null) return;
+    if (!runtimePollingEnabled || targetRuntimeTimer !== null) return;
     targetRuntimeTimer = window.setInterval(() => {
       if (!targets.value.length || isPageHidden()) return;
       void refreshTargetRuntimeSnapshots();
@@ -141,14 +147,34 @@ export function useTargetRuntime(targets: Ref<DeployTarget[]>) {
     }
   };
 
-  onUnmounted(() => {
-    stopTargetRuntimePolling();
-  });
-
   /** 取消并废弃所有正在进行的运行态快照请求 */
   const cancelPendingRequests = () => {
     runtimeRefreshSequence += 1;
+    targetRuntimeLoading.value = false;
   };
+
+  onMounted(() => {
+    runtimePollingEnabled = true;
+  });
+
+  onActivated(() => {
+    runtimePollingEnabled = true;
+    startTargetRuntimePolling();
+    if (!isPageHidden() && targets.value.length) {
+      void refreshTargetRuntimeSnapshots();
+    }
+  });
+
+  onDeactivated(() => {
+    runtimePollingEnabled = false;
+    stopTargetRuntimePolling();
+    cancelPendingRequests();
+  });
+
+  onUnmounted(() => {
+    runtimePollingEnabled = false;
+    stopTargetRuntimePolling();
+  });
 
   return {
     targetRuntimeSnapshots,

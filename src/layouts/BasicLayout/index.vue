@@ -8,7 +8,7 @@ import { useNavigation } from './hooks/useNavigation';
 import SettingsDrawer from '@/components/SettingsDrawer/index.vue';
 import LoginModal from '@/components/LoginModal.vue';
 import LayoutHeader from './components/LayoutHeader.vue';
-import LayoutSider from './components/LayoutSider.vue';
+import LayoutSider from './components/LayoutSider/index.vue';
 import AboutModal from '@/components/AboutModal/index.vue';
 
 defineOptions({ name: 'BasicLayout' });
@@ -133,11 +133,15 @@ onUnmounted(() => {
       />
       
       <!-- 主体内容区域 -->
-      <a-layout-content class="yuyan-layout-content">
-        <div v-if="routeLoading" class="route-loading-mask">
-          <a-spin tip="页面加载中" />
+      <a-layout-content class="yuyan-layout-content" :aria-busy="routeLoading">
+        <div v-if="routeLoading" class="route-loading-progress" role="progressbar" aria-label="页面切换中">
+          <span />
         </div>
-        <router-view />
+        <router-view v-slot="{ Component, route }">
+          <KeepAlive :max="4">
+            <component :is="Component" :key="String(route.name || route.path)" />
+          </KeepAlive>
+        </router-view>
       </a-layout-content>
     </a-layout>
   </a-layout>
