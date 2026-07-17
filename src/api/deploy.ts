@@ -1452,7 +1452,7 @@ export const checkAppUpdateFromServer = (
   channel = 'stable'
 ): Promise<AppUpdateCheckResult> => {
   return axios.get(getApiBase('/deploy-api/app-update/check'), {
-    params: { currentVersion, platform, arch, channel, cacheAware: 1 },
+    params: { currentVersion, platform, arch, channel, cacheAware: 1, updaterCapable: 1 },
     headers: getDeployApiAuthHeaders(),
   }).then((res) => {
     const data = res.data as AppUpdateCheckResult;

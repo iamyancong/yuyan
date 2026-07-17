@@ -18,6 +18,7 @@ export interface NativeAppUpdateStatus {
   filename: string;
   expectedSha256: string | null;
   expectedEtag: string | null;
+  expectedSignature: string | null;
 }
 
 /** Tauri 原生更新命令结果。 */
@@ -47,6 +48,7 @@ export interface NativeAppUpdateMetadata {
   expectedSize?: number;
   sha256?: string;
   etag?: string;
+  signature?: string;
 }
 
 /** 当前客户端更新目标。 */
@@ -76,6 +78,7 @@ export const useNativeAppUpdate = (): NativeAppUpdateActions => {
       expectedSize: metadata.expectedSize,
       sha256: metadata.sha256,
       etag: metadata.etag,
+      signature: metadata.signature,
       deployApiToken: getDeployApiToken() || undefined,
     });
   };
@@ -106,6 +109,7 @@ export const useNativeAppUpdate = (): NativeAppUpdateActions => {
         filename: '',
         expectedSha256: null,
         expectedEtag: null,
+        expectedSignature: null,
       } as NativeAppUpdateStatus;
     }
     const { invoke } = await import('@tauri-apps/api/core');
@@ -126,11 +130,13 @@ export const useNativeAppUpdate = (): NativeAppUpdateActions => {
     return invoke<NativeAppUpdateTarget>('get_app_update_target');
   };
 
-  /** 使用系统默认程序打开安装包。 */
+  /** 验签、覆盖安装并自动重启应用。 */
   const install = async () => {
     if (!isTauri()) return { success: false, message: 'Not in Tauri environment' };
     const { invoke } = await import('@tauri-apps/api/core');
-    return invoke<NativeAppUpdateCommandResult>('install_app_update');
+    return invoke<NativeAppUpdateCommandResult>('install_app_update', {
+      deployApiToken: getDeployApiToken() || undefined,
+    });
   };
 
   return {

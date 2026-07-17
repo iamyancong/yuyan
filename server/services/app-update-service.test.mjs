@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   compareAppVersions,
   isNewerAppVersion,
+  resolveCompatibleUpdaterAsset,
   selectLatestCompatibleRelease,
 } from './app-update-service.mjs';
 
@@ -63,4 +64,40 @@ test('Windows 客户端只选择 EXE 安装包', () => {
   const result = selectLatestCompatibleRelease(releases, 'windows');
   assert.equal(result?.release.tag_name, 'v1.0.2');
   assert.equal(result?.asset.name, 'yuyan_1.0.2_x64-setup.exe');
+});
+
+test('latest.json 只解析同版本、同平台且存在于 Release 的签名 Updater 资源', () => {
+  const release = createRelease('v1.2.3', [
+    'yuyan_1.2.3_aarch64.dmg',
+    'yuyan_1.2.3_darwin-aarch64.app.tar.gz',
+  ]);
+  const manifest = {
+    version: '1.2.3',
+    platforms: {
+      'darwin-aarch64': {
+        url: 'https://github.com/ycwang-dev/yuyan/releases/download/v1.2.3/yuyan_1.2.3_darwin-aarch64.app.tar.gz',
+        signature: 'signed-updater',
+      },
+    },
+  };
+
+  const result = resolveCompatibleUpdaterAsset(release, manifest, 'darwin', 'aarch64');
+  assert.equal(result?.asset.name, 'yuyan_1.2.3_darwin-aarch64.app.tar.gz');
+  assert.equal(result?.signature, 'signed-updater');
+  assert.equal(
+    resolveCompatibleUpdaterAsset(release, { ...manifest, version: '1.2.4' }, 'darwin', 'aarch64'),
+    null
+  );
+  assert.equal(
+    resolveCompatibleUpdaterAsset(release, {
+      ...manifest,
+      platforms: {
+        'darwin-aarch64': {
+          url: 'https://example.com/yuyan.app.tar.gz',
+          signature: 'signed-updater',
+        },
+      },
+    }, 'darwin', 'aarch64'),
+    null
+  );
 });

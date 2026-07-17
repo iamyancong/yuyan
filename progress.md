@@ -1,5 +1,55 @@
 # 进度日志
 
+## 会话：2026-07-17（更新后自动替换与重启）
+
+### 阶段 37：自动替换与重启基线对照
+- **状态：** complete
+- 已完成：
+  - 读取自动更新代理、版本发布与文件规划 Skills，恢复既有更新方案和工作区上下文。
+  - 确认工作区当前无未提交/暂存改动，分支为 `feat/github-actions-build`。
+  - 将本次工作追加为阶段 37-40，目标是保留现有静默预下载与完整性校验，并补齐安装后自动替换、自动重启闭环。
+- 初步对照：
+  - `yuyan-vpn` 使用 Tauri 官方 Updater 的下载验签、覆盖安装与 `relaunch()`，而不是打开 DMG 后让用户拖拽替换。
+  - 其配置已开启 updater artifacts、固定公钥、更新 endpoint 和重启权限；Windows 应用内更新目前仍被前端禁用。
+  - `yuyan-app` 的 updater/process 依赖和权限已存在，但 updater plugin/config/签名产物未真正启用；CI 仍只发布 EXE/DMG。
+  - `yuyan-app` Windows 当前仅静默启动 EXE 后退出，macOS 当前仅打开 DMG 后退出，后者正是用户仍需手动替换的直接根因。
+  - 服务端和发布脚本已经预留签名 updater manifest/asset 结构；当前主要缺口在 GitHub Actions 没有生成签名产物、客户端没有初始化/调用官方 updater，以及静态 manifest 未形成发布闭环。
+- 下一步：对照 `../yuyan-vpn` 与当前 `src-tauri`、更新胶囊和构建产物实现，形成平台级迁移决策后落地。
+
+### 阶段 38：自动替换与重启方案设计
+- **状态：** complete
+- 已确定：
+  - 保留现有内网预热、自研断点下载、SHA-256、状态持久化和胶囊交互。
+  - 新客户端请求签名 updater 资产；安装前使用 VPN 项目稳定公钥执行 Minisign 验签，再交给 Tauri 官方 Updater 覆盖安装。
+  - macOS 使用 `.app.tar.gz + .sig` 替换当前 App 后调用 `relaunch()`；Windows 使用签名 NSIS，由 Updater 追加更新与重启参数并安全退出。
+  - GitHub Actions 生成并发布签名 updater 资源；内网 API 动态清单继续代理 GitHub Release，客户端不持有 GitHub Token。
+- 签名核对：本机 VPN updater 公钥与仓库线上公钥不一致，已决定禁止用本机私钥做正式验证；实现固定使用线上公钥，并让 CI 在缺少匹配 Secret 时提前失败。
+- 已补齐：通过 `updaterCapable=1` 保持旧客户端安装包协议；新客户端消费 Release `latest.json` 的签名 updater 资产；安装失败恢复 completed，成功后按平台自动重启。
+
+### 阶段 39：实现更新后自动替换并重启
+- **状态：** complete
+- 计划修改：Tauri 配置/原生安装器、更新 API 与客户端状态、服务端签名资产解析/缓存/预热、GitHub Actions updater 产物和对应测试。
+- 已完成首版：
+  - Tauri 开启 updater artifacts、注册 updater plugin、配置已发布公钥与 Windows passive 安装模式。
+  - 原生状态新增签名元数据；macOS 仅接受 `.app.tar.gz`，安装前验证 Minisign，并通过官方 Updater 覆盖后自动重启。
+  - 服务端支持读取 GitHub Release `latest.json`、解析同版本同架构签名资产，并将 updater 包纳入单任务预热与缓存格式校验。
+  - 新客户端通过 `updaterCapable=1` 与旧 DMG/EXE 客户端隔离；前端只有签名和资源身份均一致时才展示可安装状态。
+  - GitHub Actions 增加签名 Secret 门禁、三平台 updater 产物收集、`latest.json` 生成与 Release 上传。
+- 收口实现：动态 Tauri 清单同时支持内网静态 manifest 与 GitHub Release `latest.json` 回退；响应使用绝对下载 URL，新客户端缺签名时明确失败，不静默退回 DMG/手工安装路径。
+- 安全门禁：CI 会用客户端内置公钥验证刚生成的 updater 产物，线上 Secret 与固定公钥不匹配时直接阻止 Release。
+- 首轮验证：新增 Node/服务端测试 16/16 通过，Vue 类型检查通过；`cargo fmt --check` 仅报告 2 处测试排版差异，尚未进入 Rust 编译。
+
+### 阶段 40：验证与交付
+- **状态：** complete
+- 最终验证：
+  - 服务端全量测试 40/40 通过；updater manifest 生成测试 2/2 通过；相关 MJS 语法检查通过。
+  - `vue-tsc --noEmit` 通过；Vite 生产构建完成（8007 modules），只保留既有大 chunk 警告。
+  - `cargo fmt --check` 与 `cargo test --all-targets` 通过，Rust 更新模块 10/10；只保留既有 `objc` 宏 cfg 警告。
+  - GitHub Actions YAML 解析和 `git diff --check` 通过；最终差异未包含构建过程产生的意外跟踪文件。
+- 完整本地 `tauri build` 已成功生成 release 可执行文件、DMG 和 `.app.tar.gz`，随后因本机没有与配置公钥匹配的 `TAURI_SIGNING_PRIVATE_KEY` 在签名阶段按设计失败；没有使用不匹配的本机 VPN 私钥绕过验证。
+- 真实签名安装/重启需在仓库配置匹配线上公钥的 GitHub Secrets 后，由三平台 CI 构建并执行新加的产物验签门禁；旧客户端首次迁移仍需手动安装一次新版本。
+- 本轮按用户要求只完成方案与代码执行，未 commit、未 push，也未触发双分支发布。
+
 ## 会话：2026-07-16（侧栏减法与 Header 视觉统一）
 
 ### 阶段 33：侧栏减法与 Header 统一基线

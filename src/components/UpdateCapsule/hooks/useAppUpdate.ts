@@ -25,7 +25,7 @@ import {
 
 type UpdateAssetMetadata = Pick<
   AppUpdateCheckResult,
-  'assetId' | 'etag' | 'filename' | 'sha256' | 'size' | 'source' | 'target'
+  'assetId' | 'etag' | 'filename' | 'sha256' | 'signature' | 'size' | 'source' | 'target'
 >;
 
 const nativeAppUpdate = useNativeAppUpdate();
@@ -103,6 +103,8 @@ const isCurrentNativeAsset = (status: NativeAppUpdateStatus) => {
       && normalizeVersion(status.version) === normalizeVersion(latestVersion.value)
       && status.assetId === getCurrentAssetIdentity()
       && status.filename === updateAsset.value.filename
+      && Boolean(updateAsset.value.signature)
+      && status.expectedSignature === updateAsset.value.signature
   );
 };
 
@@ -204,19 +206,14 @@ const installReadyUpdate = async () => {
     if (!await revalidateReadyUpdate()) return;
     updateState.value.status = 'installing';
     message.loading({
-      content: `正在启动 v${latestVersion.value} 安装程序...`,
+      content: `正在验签并安装 v${latestVersion.value}，完成后将自动重启...`,
       duration: 0,
       key: 'app-update-install',
     });
     const result = await nativeAppUpdate.install();
-    if (!result.success) throw new Error(result.message || '拉起安装失败');
-    message.success({
-      content: '安装程序已启动，应用即将退出以完成升级',
-      duration: 3,
-      key: 'app-update-install',
-    });
+    if (!result.success) throw new Error(result.message || '更新安装失败');
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error || '拉起安装失败');
+    const errorMessage = error instanceof Error ? error.message : String(error || '更新安装失败');
     const nativeStatus = await nativeAppUpdate.getStatus().catch(() => null);
     if (nativeStatus?.status === 'completed' && isCurrentNativeAsset(nativeStatus)) {
       applyNativeUpdateStatus(nativeStatus);
@@ -226,7 +223,7 @@ const installReadyUpdate = async () => {
       updateState.value.error = errorMessage;
     }
     message.error({
-      content: `验证或启动安装失败：${errorMessage}`,
+      content: `验证、安装或重启失败：${errorMessage}`,
       key: 'app-update-install',
     });
   }
@@ -292,6 +289,7 @@ const triggerUpdateDownload = async (manual = false) => {
         expectedSize: updateAsset.value.size,
         sha256: updateAsset.value.sha256,
         etag: updateAsset.value.etag,
+        signature: updateAsset.value.signature,
       }
     );
     if (!result.success) throw new Error(result.message || '启动下载失败');
@@ -394,6 +392,7 @@ const applyUpdateResult = (result: AppUpdateCheckResult) => {
     etag: result.etag || result.cache?.etag,
     filename: result.filename,
     sha256: result.sha256,
+    signature: result.signature,
     size: result.size,
     source: result.source,
     target: result.target,
@@ -455,11 +454,20 @@ async function revalidateReadyUpdate(): Promise<boolean> {
     });
     return false;
   }
+  if (!result.signature) {
+    message.error({
+      content: '服务器未返回签名 Updater 资源，已保留本机已验证更新包并取消安装',
+      key: 'app-update-install',
+    });
+    return false;
+  }
 
   const resultVersion = normalizeVersion(result.latestVersion || result.version || '');
   const sameAsset = resultVersion === normalizeVersion(latestVersion.value)
     && result.filename === updateAsset.value.filename
-    && getResultAssetIdentity(result) === getCurrentAssetIdentity();
+    && getResultAssetIdentity(result) === getCurrentAssetIdentity()
+    && Boolean(result.signature)
+    && result.signature === updateAsset.value.signature;
   if (sameAsset) return true;
 
   applyUpdateResult(result);
@@ -490,6 +498,9 @@ const checkAppUpdate = async (manual = false) => {
     );
 
     if (result?.hasUpdate && result.downloadUrl) {
+      if (!result.signature) {
+        throw new Error('服务器未返回签名 Updater 资源，已阻止手工安装包回退');
+      }
       clearCacheStatusPolling();
       applyUpdateResult(result);
       await reconcileUpdate(result, manual);
@@ -522,7 +533,7 @@ const handleCapsuleClick = () => {
   if (updateState.value.status === 'completed') {
     void installReadyUpdate();
   } else if (updateState.value.status === 'installing') {
-    message.info('安装程序正在启动，请稍候');
+    message.info('正在安装更新并准备重启，请稍候');
   }
 };
 
@@ -543,7 +554,7 @@ const handleCheckUpdateClick = () => {
     return;
   }
   if (updateState.value.status === 'installing') {
-    message.info('安装程序正在启动，请稍候');
+    message.info('正在安装更新并准备重启，请稍候');
     return;
   }
   void checkAppUpdate(true);
