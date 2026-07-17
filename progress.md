@@ -1,5 +1,28 @@
 # 进度日志
 
+## 会话：2026-07-17（Windows 控制台闪窗治理）
+
+### 阶段 45：Windows 控制台闪窗基线与调用面盘点
+- **状态：** complete
+- 已确认 release 主进程本身已配置 Windows GUI 子系统；问题来自后台启动的 Node、taskkill、Git、Java、Maven、npm 和 zip 等控制台程序。
+- 启动路径会执行 Node 版本与 `node:sqlite` 检查、启动 Node 服务，系统信息查询又会重复检查；本地服务失败重试会进一步放大闪窗次数。
+- 已完成 Rust 与 `server/` 运行时子进程调用点盘点，确定统一隐藏窗口且保留 stdout/stderr、退出码和现有日志。
+
+### 阶段 46：后台子进程无窗口治理
+- **状态：** complete
+- Rust 层已为 Node 版本检查、`node:sqlite` 检查、内嵌服务启动和 `taskkill` 统一应用 Windows `CREATE_NO_WINDOW`，stdout/stderr 管道保持不变。
+- Node 层新增统一后台进程选项，覆盖 Git、Java、Maven/构建 shell、npm/脚手架和 zip 调用；模板同步改用参数化 `execFile('git', args)`，不再隐式创建 `cmd.exe`。
+- 调用点复查确认：剩余 `deploy-store` 的 `execSync` 仅在 macOS 分支调用，`explorer.exe` 属于用户主动打开的 GUI 程序，均不是 Windows 控制台闪窗来源。
+- 当前工作区基线干净，分支为 `feat/github-actions-build`；本次不修改版本号、Updater 配置或发布流程。
+
+### 阶段 47：构建验证与 Windows 验收边界
+- **状态：** complete
+- `cargo fmt --check`、`cargo check`、`cargo test --all-targets` 通过，Rust 10/10；仅保留既有 `objc` cfg 警告。
+- 服务端测试 41/41、相关 MJS 语法检查、Vue 类型检查和 Vite 生产构建通过；构建完成 8007 modules，仅保留既有大 chunk 警告。
+- Windows target 最小 Rust 编译已通过，确认 `CommandExt::creation_flags(CREATE_NO_WINDOW)` 可编译；完整 Windows 交叉检查在 macOS 上因 `ring` 缺少 MSVC `assert.h` 失败，与本次代码无关。
+- `git diff --check` 与运行时子进程调用点审计通过。真实 Windows 安装/首次启动仍需用下一份 Windows 包确认：无黑色控制台闪现、内嵌服务正常启动、模板同步和构建日志仍可见。
+- 本轮未修改版本号，未执行真实发布，未 commit、未 push。
+
 ## 会话：2026-07-17（yuyan-app 专用签名密钥与双分支发布）
 
 ### 阶段 41：生成 yuyan-app 专用 Updater 密钥

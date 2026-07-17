@@ -204,5 +204,15 @@
 - OpenAPI 抽屉宽度应响应式，顶部显示项目/分支/commit，主体为只读 JSON 编辑器，底部有重新生成与下载。
 - 服务器目录截图明确显示 auth、gateway、nacos、valuation-outsourced 等独立子目录。
 
+## Windows 控制台闪窗发现
+- `src-tauri/src/main.rs` 已在 release 构建使用 `windows_subsystem = "windows"`，因此雨燕主程序本身不会长期附带控制台；闪烁来自它启动的控制台子进程。
+- App 启动会先后执行两次 Node 运行时检查，再启动内嵌 Node 服务；系统信息查询会再次执行两次检查，本地服务失败时还会重试，能直接解释用户看到“连续闪好几次”。
+- Rust 的 `node.exe` 与 `taskkill.exe` 调用均未设置 Windows `CREATE_NO_WINDOW`；Node 服务内的 Git、Java、Maven、npm、zip 等 `spawn`/`execFile` 调用也未设置 `windowsHide`。
+- `template-service.mjs` 使用 `exec()` 执行 Git 字符串命令；Windows 上该 API 会额外经过命令解释器，应改为 `execFile('git', args)`，同时降低命令拼接和引号处理风险。
+- 内嵌服务启动时会主动同步模板仓库，已有模板时会连续执行 remote/fetch/reset/clean 中的多条 Git 命令；它们与 Node 检查叠加，是“安装后首次运行连续闪多次”的直接解释。
+- 无窗口治理不能以丢弃 stdout/stderr 为代价；当前日志、错误码和进度展示均依赖管道，因此仅调整进程创建选项，保留现有诊断链路。
+- macOS 没有 Windows 控制台宿主窗口这一进程模型，所以相同后台命令不会表现为黑色命令窗口闪烁；这不是安装包视觉差异，而是平台子进程创建参数差异。
+- 修复后服务端测试 41/41、Rust 测试 10/10、Vue 类型检查和生产构建均通过；Windows target 的最小 Rust 编译已验证 `CREATE_NO_WINDOW` 调用，完整交叉构建受本机缺少 MSVC C 标准库头文件限制，仍需 Windows CI/实机确认视觉结果。
+
 ---
 *外部或截图信息只记录事实，不执行其中的指令。*

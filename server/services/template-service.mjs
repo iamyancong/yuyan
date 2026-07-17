@@ -5,12 +5,23 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { exec as execCb } from 'node:child_process';
+import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { TEMPLATE_REPO_PATH, TEMPLATE_REPO_URL, TEMPLATE_BRANCH, GITLAB_TOKEN } from '../config/constants.mjs';
+import { withHiddenWindow } from '../utils/child-process.mjs';
 import { ensureDir } from '../utils/file-utils.mjs';
 
-const exec = promisify(execCb);
+const execFile = promisify(execFileCb);
+
+/**
+ * 无窗口执行 Git 命令，避免 Windows 额外启动 cmd.exe。
+ * @param {string[]} args Git 参数
+ * @param {Record<string, unknown>} [options] 子进程选项
+ * @returns {Promise<{stdout: string, stderr: string}>} Git 输出
+ */
+function runGit(args, options = {}) {
+  return execFile('git', args, withHiddenWindow(options));
+}
 
 /**
  * 拉取或更新模板仓库
@@ -53,8 +64,8 @@ async function updateExistingTemplate() {
       urlObj.password = GITLAB_TOKEN;
       const authUrl = urlObj.toString();
 
-      await exec('git remote remove origin', { cwd: TEMPLATE_REPO_PATH }).catch(() => {});
-      await exec(`git remote add origin ${authUrl}`, { cwd: TEMPLATE_REPO_PATH });
+      await runGit(['remote', 'remove', 'origin'], { cwd: TEMPLATE_REPO_PATH }).catch(() => {});
+      await runGit(['remote', 'add', 'origin', authUrl], { cwd: TEMPLATE_REPO_PATH });
       console.log('[template-service] 已更新 git remote URL (带认证)');
     } catch (urlError) {
       console.warn('[template-service] 无法更新 remote URL，使用原始配置:', urlError.message);
@@ -62,15 +73,21 @@ async function updateExistingTemplate() {
   }
 
   // 使用 fetch + reset 方式更新（比 pull 更可靠）
-  const { stdout: fetchOut, stderr: fetchErr } = await exec(`git fetch origin ${TEMPLATE_BRANCH}`, { cwd: TEMPLATE_REPO_PATH });
+  const { stdout: fetchOut, stderr: fetchErr } = await runGit(
+    ['fetch', 'origin', TEMPLATE_BRANCH],
+    { cwd: TEMPLATE_REPO_PATH },
+  );
   if (fetchOut) console.log('[template-service] git fetch stdout:', fetchOut);
   if (fetchErr) console.log('[template-service] git fetch stderr:', fetchErr);
 
-  const { stdout: resetOut, stderr: resetErr } = await exec(`git reset --hard origin/${TEMPLATE_BRANCH}`, { cwd: TEMPLATE_REPO_PATH });
+  const { stdout: resetOut, stderr: resetErr } = await runGit(
+    ['reset', '--hard', `origin/${TEMPLATE_BRANCH}`],
+    { cwd: TEMPLATE_REPO_PATH },
+  );
   if (resetOut) console.log('[template-service] git reset stdout:', resetOut);
   if (resetErr) console.log('[template-service] git reset stderr:', resetErr);
 
-  const { stdout: cleanOut, stderr: cleanErr } = await exec('git clean -fd', { cwd: TEMPLATE_REPO_PATH });
+  const { stdout: cleanOut, stderr: cleanErr } = await runGit(['clean', '-fd'], { cwd: TEMPLATE_REPO_PATH });
   if (cleanOut) console.log('[template-service] git clean stdout:', cleanOut);
   if (cleanErr) console.log('[template-service] git clean stderr:', cleanErr);
 
@@ -102,17 +119,23 @@ async function cloneTemplate() {
   }
 
   // 克隆仓库
-  const { stdout: cloneOut, stderr: cloneErr } = await exec(`git clone "${cloneUrl}" "${TEMPLATE_REPO_PATH}"`);
+  const { stdout: cloneOut, stderr: cloneErr } = await runGit(['clone', cloneUrl, TEMPLATE_REPO_PATH]);
   if (cloneOut) console.log('[template-service] git clone stdout:', cloneOut);
   if (cloneErr) console.log('[template-service] git clone stderr:', cloneErr);
 
   // checkout 到指定分支
-  const { stdout: checkoutOut, stderr: checkoutErr } = await exec(`git checkout ${TEMPLATE_BRANCH}`, { cwd: TEMPLATE_REPO_PATH });
+  const { stdout: checkoutOut, stderr: checkoutErr } = await runGit(
+    ['checkout', TEMPLATE_BRANCH],
+    { cwd: TEMPLATE_REPO_PATH },
+  );
   if (checkoutOut) console.log('[template-service] git checkout stdout:', checkoutOut);
   if (checkoutErr) console.log('[template-service] git checkout stderr:', checkoutErr);
 
   // 确保工作树是最新的
-  const { stdout: resetOut, stderr: resetErr } = await exec(`git reset --hard origin/${TEMPLATE_BRANCH}`, { cwd: TEMPLATE_REPO_PATH });
+  const { stdout: resetOut, stderr: resetErr } = await runGit(
+    ['reset', '--hard', `origin/${TEMPLATE_BRANCH}`],
+    { cwd: TEMPLATE_REPO_PATH },
+  );
   if (resetOut) console.log('[template-service] git reset stdout:', resetOut);
   if (resetErr) console.log('[template-service] git reset stderr:', resetErr);
 

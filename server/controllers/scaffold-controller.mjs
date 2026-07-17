@@ -10,6 +10,7 @@ import { spawn } from 'node:child_process';
 import { GITLAB_HOST, GITLAB_TOKEN, PORT } from '../config/constants.mjs';
 import { ensureDir, ensureGitignore, cleanup, normalizeBase } from '../utils/file-utils.mjs';
 import { parseGitPushError } from '../utils/error-parser.mjs';
+import { withHiddenWindow } from '../utils/child-process.mjs';
 import { createProject, updateProject, deleteProject, checkTokenPermissions } from '../services/gitlab-service.mjs';
 import { initAndPushRepo } from '../services/git-service.mjs';
 import { pullLatestTemplate, getTemplateScriptPath } from '../services/template-service.mjs';
@@ -81,10 +82,10 @@ function createProgressEmitter(res, streamMode) {
 
 function runCommand(command, args, { cwd, label, onStdout, onStderr } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = spawn(command, args, withHiddenWindow({
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    }));
 
     let stdout = '';
     let stderr = '';

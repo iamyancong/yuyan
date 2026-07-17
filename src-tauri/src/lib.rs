@@ -15,6 +15,21 @@ const DEFAULT_LOCAL_SERVER_PORT: u16 = 3101;
 const LOCAL_SERVER_STARTUP_TIMEOUT: Duration = Duration::from_secs(12);
 const LOCAL_SERVER_STOP_TIMEOUT: Duration = Duration::from_secs(3);
 
+/** Windows 后台控制台进程的无窗口创建标志。 */
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/** 在 Windows 上隐藏后台控制台子进程窗口，同时保留标准输出与错误管道。 */
+#[cfg(target_os = "windows")]
+fn hide_background_command_window(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+/** 非 Windows 平台无需调整后台子进程窗口。 */
+#[cfg(not(target_os = "windows"))]
+fn hide_background_command_window(_command: &mut Command) {}
+
 // 检测本地端口是否可用
 fn is_port_free(port: u16) -> bool {
     std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
@@ -291,7 +306,9 @@ fn parse_node_major_version(version: &str) -> Option<u32> {
 
 /** 检查内嵌 Node 运行时是否满足本地服务要求。 */
 fn check_node_runtime(node_path: &std::path::Path) -> Result<String, String> {
-    let output = Command::new(node_path)
+    let mut version_command = Command::new(node_path);
+    hide_background_command_window(&mut version_command);
+    let output = version_command
         .arg("--version")
         .output()
         .map_err(|error| format!("执行 Node 版本检查失败: {error}"))?;
@@ -308,7 +325,9 @@ fn check_node_runtime(node_path: &std::path::Path) -> Result<String, String> {
         ));
     }
 
-    let sqlite_check = Command::new(node_path)
+    let mut sqlite_command = Command::new(node_path);
+    hide_background_command_window(&mut sqlite_command);
+    let sqlite_check = sqlite_command
         .args([
             "--input-type=module",
             "-e",
@@ -375,7 +394,9 @@ fn terminate_child_tree(child: &mut Child, force: bool) {
         if force {
             args.push("/F".to_string());
         }
-        let _ = Command::new("taskkill").args(args).output();
+        let mut command = Command::new("taskkill");
+        hide_background_command_window(&mut command);
+        let _ = command.args(args).output();
         return;
     }
 
@@ -511,6 +532,7 @@ fn start_node_server(
     println!("==================================================");
 
     let mut command = Command::new(node_path);
+    hide_background_command_window(&mut command);
     command
         .arg(resource_path)
         .env("DEPLOY_DATA_DIR", deploy_data_dir.to_str().unwrap_or(""))

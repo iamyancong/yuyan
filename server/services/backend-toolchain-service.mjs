@@ -20,6 +20,7 @@ import {
 } from './deploy-store.mjs';
 import { parseJavaMajorVersion, redactDeployLog } from './backend-domain.mjs';
 import { execSsh, shellQuote, withSsh } from './ssh-service.mjs';
+import { withHiddenWindow } from '../utils/child-process.mjs';
 
 /**
  * 规范 Java 报告的 CPU 架构名称。
@@ -70,13 +71,18 @@ export function parseJavaDetection(output) {
  */
 function execFileDirect(bin, args, options = {}) {
   return new Promise((resolve, reject) => {
-    execFile(bin, args, { timeout: options.timeoutMs || 15000 }, (error, stdout, stderr) => {
-      if (error) {
-        reject(new Error(`检测本机 JDK执行失败，退出码 ${error.code ?? 'unknown'}\n${redactDeployLog(stderr || stdout || error.message).trim()}`));
-        return;
-      }
-      resolve({ stdout: stdout || '', stderr: stderr || '' });
-    });
+    execFile(
+      bin,
+      args,
+      withHiddenWindow({ timeout: options.timeoutMs || 15000 }),
+      (error, stdout, stderr) => {
+        if (error) {
+          reject(new Error(`检测本机 JDK执行失败，退出码 ${error.code ?? 'unknown'}\n${redactDeployLog(stderr || stdout || error.message).trim()}`));
+          return;
+        }
+        resolve({ stdout: stdout || '', stderr: stderr || '' });
+      },
+    );
   });
 }
 
