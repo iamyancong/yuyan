@@ -1,14 +1,41 @@
 <template>
   <a-config-provider :theme="themeConfig" :locale="zhCN">
     <router-view />
+    <AppSplash v-if="showSplash" @finished="showSplash = false" />
   </a-config-provider>
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue';
 import { useTheme } from '@/hooks/useTheme';
+import { isTauri } from '@/utils/env';
+import AppSplash from '@/components/AppSplash.vue';
 import zhCN from 'ant-design-vue/es/locale/zh_CN';
 
+/** 生产环境当前 WebView 会话已展示开屏动画的标记。 */
+const SPLASH_SHOWN_SESSION_KEY = 'yuyan:splash-shown';
+
+/**
+ * 判断本次页面载入是否需要展示开屏动画。
+ * 浏览器环境不展示；Tauri 开发环境每次载入都展示，生产环境同一 WebView 会话仅首次展示。
+ * @returns 是否展示开屏动画
+ */
+const shouldShowSplash = (): boolean => {
+  if (!isTauri()) return false;
+  if (import.meta.env.DEV) return true;
+
+  try {
+    if (sessionStorage.getItem(SPLASH_SHOWN_SESSION_KEY)) return false;
+    sessionStorage.setItem(SPLASH_SHOWN_SESSION_KEY, 'true');
+  } catch {
+    /** sessionStorage 不可用时保留原有行为，避免冷启动缺少开屏动画。 */
+  }
+
+  return true;
+};
+
 const { themeConfig } = useTheme();
+const showSplash = ref(shouldShowSplash());
 </script>
 
 <style scoped></style>
@@ -21,6 +48,7 @@ body,
   margin: 0;
   padding: 0;
   overflow: hidden;
+  background-color: var(--bg-color, var(--boot-background-color, #f0f2f5));
 }
 
 /* 全局覆盖：dropdown / YTable 操作列「更多」Popover 内的链接按钮走主题色（弹出层 teleport 到 body） */

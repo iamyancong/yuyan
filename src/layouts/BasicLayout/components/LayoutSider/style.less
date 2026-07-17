@@ -1,247 +1,633 @@
-.brand {
-  height: 56px;
-  display: flex;
-  align-items: center;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--border-color-split);
-  margin-bottom: 4px;
-  transition: height 0.2s ease, padding 0.2s ease;
+.ant-layout-sider {
+  position: relative !important;
+  isolation: isolate;
+  overflow: hidden;
+  background: var(--sider-surface) !important;
+  border-right: 1px solid var(--sider-border) !important;
+  box-shadow:
+    inset -1px 0 0 var(--sider-inner-edge),
+    4px 0 18px var(--sider-shadow) !important;
+  transition: width 0.2s cubic-bezier(0.4, 0, 0.2, 1), min-width 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+    max-width 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
 
-  .brand-content {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    cursor: pointer;
-    width: 100%;
-    height: 100%;
+  &::before {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    background:
+      radial-gradient(circle at 20% 5%, var(--sider-orb-primary) 0, transparent 30%),
+      radial-gradient(circle at 90% 64%, var(--sider-orb-secondary) 0, transparent 34%);
+    content: '';
+    pointer-events: none;
   }
+}
+
+.ant-layout-sider.ant-layout-sider-light {
+  --sider-surface: linear-gradient(180deg, #ffffff 0%, #f8f9ff 48%, #f3f6fb 100%);
+  --sider-border: rgba(202, 211, 225, 0.74);
+  --sider-inner-edge: rgba(255, 255, 255, 0.92);
+  --sider-shadow: rgba(79, 70, 229, 0.045);
+  --sider-orb-primary: color-mix(in srgb, var(--theme-primary) 12%, transparent);
+  --sider-orb-secondary: rgba(34, 211, 238, 0.055);
+  --brand-surface: linear-gradient(145deg, rgba(255, 255, 255, 0.94), rgba(246, 244, 255, 0.76));
+  --brand-border: color-mix(in srgb, var(--theme-primary) 11%, rgba(201, 211, 226, 0.64));
+  --brand-shadow: rgba(76, 65, 160, 0.065);
+  --logo-surface: linear-gradient(145deg, rgba(255, 255, 255, 0.96), rgba(236, 231, 255, 0.74));
+  --logo-border: color-mix(in srgb, var(--theme-primary) 10%, rgba(197, 207, 223, 0.62));
+  --logo-shadow: color-mix(in srgb, var(--theme-primary) 13%, transparent);
+  --brand-title: #20273a;
+  --brand-subtitle: #8a91a4;
+  --caption-color: #a0a7b7;
+  --caption-line: linear-gradient(90deg, rgba(148, 163, 184, 0.24), transparent);
+  --menu-text: #5a6376;
+  --menu-text-hover: #30384b;
+  --menu-icon: #727c90;
+  --menu-selected-text: var(--theme-primary);
+  --menu-hover: linear-gradient(110deg, rgba(255, 255, 255, 0.8), rgba(246, 244, 255, 0.64));
+  --menu-selected: linear-gradient(110deg, color-mix(in srgb, var(--theme-primary) 12%, #ffffff), rgba(255, 255, 255, 0.86));
+  --menu-selected-border: color-mix(in srgb, var(--theme-primary) 17%, rgba(207, 216, 232, 0.62));
+  --menu-selected-shadow: color-mix(in srgb, var(--theme-primary) 8%, transparent);
+  --menu-icon-surface: linear-gradient(145deg, rgba(255, 255, 255, 0.86), rgba(240, 242, 248, 0.7));
+  --menu-icon-selected: linear-gradient(145deg, rgba(255, 255, 255, 0.98), color-mix(in srgb, var(--theme-primary) 13%, #ffffff));
+  --menu-icon-border: rgba(218, 226, 238, 0.56);
+  --footer-line: linear-gradient(90deg, transparent, rgba(148, 163, 184, 0.25), transparent);
+  --control-surface: linear-gradient(145deg, rgba(255, 255, 255, 0.93), rgba(239, 242, 249, 0.82));
+  --control-border: rgba(199, 209, 224, 0.62);
+  --control-text: #6c7589;
+  --control-shadow: rgba(64, 70, 98, 0.055);
+}
+
+.ant-layout-sider.ant-layout-sider-dark {
+  --sider-surface: linear-gradient(180deg, #171925 0%, #121522 54%, #0d111c 100%);
+  --sider-border: rgba(255, 255, 255, 0.075);
+  --sider-inner-edge: rgba(255, 255, 255, 0.025);
+  --sider-shadow: rgba(0, 0, 0, 0.24);
+  --sider-orb-primary: color-mix(in srgb, var(--theme-primary) 23%, transparent);
+  --sider-orb-secondary: rgba(34, 211, 238, 0.08);
+  --brand-surface: linear-gradient(145deg, rgba(255, 255, 255, 0.1), rgba(111, 92, 190, 0.08));
+  --brand-border: rgba(255, 255, 255, 0.095);
+  --brand-shadow: rgba(0, 0, 0, 0.18);
+  --logo-surface: linear-gradient(145deg, rgba(255, 255, 255, 0.18), rgba(112, 88, 190, 0.08));
+  --logo-border: rgba(255, 255, 255, 0.12);
+  --logo-shadow: color-mix(in srgb, var(--theme-primary) 23%, transparent);
+  --brand-title: rgba(255, 255, 255, 0.94);
+  --brand-subtitle: rgba(207, 214, 229, 0.54);
+  --caption-color: rgba(192, 201, 219, 0.44);
+  --caption-line: linear-gradient(90deg, rgba(255, 255, 255, 0.12), transparent);
+  --menu-text: #9ca6ba;
+  --menu-text-hover: #f5f7ff;
+  --menu-icon: #9ca7bd;
+  --menu-selected-text: color-mix(in srgb, var(--theme-primary) 54%, #ffffff);
+  --menu-hover: linear-gradient(110deg, rgba(255, 255, 255, 0.07), rgba(124, 92, 210, 0.05));
+  --menu-selected: linear-gradient(110deg, color-mix(in srgb, var(--theme-primary) 28%, rgba(255, 255, 255, 0.08)), rgba(255, 255, 255, 0.055));
+  --menu-selected-border: color-mix(in srgb, var(--theme-primary) 28%, rgba(255, 255, 255, 0.08));
+  --menu-selected-shadow: color-mix(in srgb, var(--theme-primary) 15%, transparent);
+  --menu-icon-surface: linear-gradient(145deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.025));
+  --menu-icon-selected: linear-gradient(145deg, rgba(255, 255, 255, 0.18), color-mix(in srgb, var(--theme-primary) 21%, transparent));
+  --menu-icon-border: rgba(255, 255, 255, 0.085);
+  --footer-line: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+  --control-surface: linear-gradient(145deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.035));
+  --control-border: rgba(255, 255, 255, 0.1);
+  --control-text: #aab4c8;
+  --control-shadow: rgba(0, 0, 0, 0.17);
+}
+
+:deep(.ant-layout-sider-children) {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.brand {
+  flex: 0 0 76px;
+  padding: 10px 10px 8px;
+  transition: flex-basis 0.2s ease, padding 0.2s ease;
 
   &.is-tauri-mac-brand {
-    padding-top: 28px;
-    height: 84px;
+    flex-basis: 104px;
+    padding-top: 38px;
+  }
+}
+
+.brand-content {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 58px;
+  padding: 7px;
+  overflow: hidden;
+  color: inherit;
+  text-align: left;
+  background: var(--brand-surface);
+  border: 1px solid var(--brand-border);
+  border-radius: 17px;
+  box-shadow:
+    0 4px 14px var(--brand-shadow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  cursor: pointer;
+  appearance: none;
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+
+  &::after {
+    position: absolute;
+    top: -22px;
+    left: 36px;
+    width: 86px;
+    height: 34px;
+    background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.32), transparent);
+    border-radius: 50%;
+    transform: rotate(-8deg);
+    content: '';
+    pointer-events: none;
+  }
+
+  &:hover {
+    border-color: color-mix(in srgb, var(--theme-primary) 26%, var(--brand-border));
+    box-shadow:
+      0 6px 17px var(--brand-shadow),
+      inset 0 1px 0 rgba(255, 255, 255, 0.36);
+    transform: translateY(-1px);
+  }
+
+  &:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--theme-primary) 60%, transparent);
+    outline-offset: 2px;
   }
 }
 
 .brand-logo {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
+  position: relative;
+  display: grid;
+  flex: 0 0 42px;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 14px;
+
+  > :deep(.swift-logo) {
+    position: relative;
+    z-index: 3;
+  }
+}
+
+.logo-aura,
+.logo-glass {
+  position: absolute;
+  pointer-events: none;
+}
+
+.logo-aura {
+  inset: -3px;
+  z-index: 0;
+  background: radial-gradient(circle, var(--logo-shadow), transparent 68%);
+  opacity: 0.5;
+}
+
+.logo-glass {
+  inset: 0;
+  z-index: 1;
+  background: var(--logo-surface);
+  border: 1px solid var(--logo-border);
+  border-radius: 14px;
+  box-shadow:
+    0 4px 10px var(--logo-shadow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    inset -5px -6px 10px rgba(49, 46, 129, 0.055);
+
+  &::before,
+  &::after {
+    position: absolute;
+    border-radius: 50%;
+    content: '';
+  }
+
+  &::before {
+    top: 5px;
+    right: 6px;
+    width: 8px;
+    height: 4px;
+    background: rgba(255, 255, 255, 0.74);
+    transform: rotate(-32deg);
+  }
+
+  &::after {
+    right: 5px;
+    bottom: 5px;
+    width: 4px;
+    height: 4px;
+    background: #67e8f9;
+    box-shadow: 0 0 8px rgba(103, 232, 249, 0.82);
+  }
+}
+
+.brand-copy {
   display: flex;
-  align-items: center;
+  min-width: 0;
+  margin-left: 10px;
+  flex-direction: column;
   justify-content: center;
-  font-weight: 700;
-  transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  white-space: nowrap;
 }
 
 .brand-name {
+  overflow: hidden;
+  color: var(--brand-title);
+  font-family: Bahnschrift, 'Avenir Next', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 16px;
   font-weight: 700;
-  letter-spacing: 0.5px;
-  color: var(--text-color);
+  letter-spacing: 0.055em;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.26);
 }
 
-// 1. 亮色（Light）侧边栏：保留玻璃层次，避免整栏实时背景模糊
-&.ant-layout-sider-light {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.97) 0%, rgba(248, 250, 252, 0.94) 100%) !important;
-  border-right: 1px solid rgba(226, 232, 240, 0.7) !important;
-  box-shadow: 
-    inset -1px 0 0 rgba(0, 0, 0, 0.03), 
-    inset 1px 0 0 rgba(255, 255, 255, 0.8) !important; // 内高光立体感
+.brand-signature {
+  display: flex;
+  align-items: center;
+  margin-top: 3px;
+  color: var(--brand-subtitle);
+  font-family: Bahnschrift, 'Avenir Next Condensed', sans-serif;
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.13em;
+  line-height: 1;
 
-  .brand {
-    border-bottom: 1px solid rgba(226, 232, 240, 0.4);
-  }
-
-  .brand-logo {
-    background: linear-gradient(135deg, rgba(255, 255, 255, 0.7) 0%, rgba(240, 242, 245, 0.5) 100%) !important;
-    border: 1px solid rgba(255, 255, 255, 0.9) !important;
-    box-shadow: 
-      0 4px 10px rgba(0, 0, 0, 0.04), 
-      inset 0 1px 0 rgba(255, 255, 255, 0.8) !important;
-    color: var(--theme-primary) !important;
-  }
-
-  .brand-name {
-    color: #1e293b;
-    text-shadow: 0 1px 0 rgba(255, 255, 255, 0.8);
-  }
-
-  :deep(.ant-menu-light) {
-    background: transparent !important;
-    border-inline-end: none !important;
-  }
-
-  // 菜单项卡片 C4D 化
-  :deep(.ant-menu-item) {
-    margin: 4px 6px !important;
-    width: calc(100% - 12px) !important;
-    padding-left: 12px !important;
-    padding-right: 16px !important; // 恢复适度内边距
-    border-radius: 8px !important;
-    height: 40px !important;
-    line-height: 40px !important;
-    color: #475569 !important;
-    border: 1px solid transparent !important;
-    transition:
-      color 0.16s ease,
-      background-color 0.16s ease,
-      border-color 0.16s ease,
-      box-shadow 0.16s ease !important;
-
-    &:hover {
-      background: rgba(255, 255, 255, 0.3) !important;
-      border-color: rgba(255, 255, 255, 0.4) !important;
-      color: var(--theme-primary) !important;
-      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.01) !important;
-    }
-
-    &.ant-menu-item-selected {
-      background: color-mix(in srgb, var(--theme-primary) 14%, rgba(255, 255, 255, 0.72)) !important;
-      color: var(--theme-primary) !important;
-      font-weight: 600 !important;
-      box-shadow: 
-        0 4px 14px var(--theme-primary-shadow-light),
-        inset 0 1px 0 rgba(255, 255, 255, 0.9) !important;
-      border-color: color-mix(in srgb, var(--theme-primary) 22%, transparent) !important;
-
-      &::after {
-        display: none !important;
-      }
-
-      .ant-menu-item-icon {
-        color: var(--theme-primary) !important;
-      }
-    }
-  }
-
-  // 折叠触发器
-  :deep(.ant-layout-sider-trigger) {
-    background: rgba(241, 245, 249, 0.96) !important;
-    border-top: 1px solid rgba(226, 232, 240, 0.6);
-    border-right: 1px solid rgba(226, 232, 240, 0.6);
-    color: #64748b !important;
-    &:hover {
-      background: rgba(226, 232, 240, 0.8) !important;
-      color: var(--theme-primary) !important;
-    }
+  i {
+    width: 4px;
+    height: 4px;
+    margin-right: 5px;
+    background: #67e8f9;
+    border: 1px solid rgba(255, 255, 255, 0.72);
+    border-radius: 50%;
+    box-shadow: 0 0 7px rgba(34, 211, 238, 0.72);
   }
 }
 
-// 2. 暗色（Dark）侧边栏：使用静态渐变代替整栏实时背景模糊
-&.ant-layout-sider-dark {
-  background: linear-gradient(180deg, rgba(20, 20, 20, 0.98) 0%, rgba(15, 23, 42, 0.96) 100%) !important;
-  border-right: 1px solid rgba(255, 255, 255, 0.06) !important;
-  box-shadow: 
-    inset -1px 0 0 rgba(255, 255, 255, 0.02),
-    inset 1px 0 0 rgba(255, 255, 255, 0.05) !important;
+.nav-caption {
+  display: flex;
+  flex: 0 0 26px;
+  align-items: center;
+  padding: 2px 17px 0;
+  color: var(--caption-color);
+  font-family: Bahnschrift, 'Avenir Next', 'PingFang SC', sans-serif;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.18em;
+  transition: flex-basis 0.2s ease, opacity 0.15s ease;
 
-  .brand {
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  }
-
-  .brand-logo {
-    background: linear-gradient(135deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.03) 100%) !important;
-    border: 1px solid rgba(255, 255, 255, 0.15) !important;
-    box-shadow: 
-      0 4px 10px rgba(0, 0, 0, 0.2), 
-      inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
-    color: #ffffff !important;
-  }
-
-  .brand-name {
-    color: rgba(255, 255, 255, 0.95);
-  }
-
-  :deep(.ant-menu-dark) {
-    background: transparent !important;
-  }
-
-  // 菜单项卡片 C4D 化
-  :deep(.ant-menu-item) {
-    margin: 4px 6px !important;
-    width: calc(100% - 12px) !important;
-    padding-left: 12px !important;
-    padding-right: 16px !important; // 恢复适度内边距
-    border-radius: 8px !important;
-    height: 40px !important;
-    line-height: 40px !important;
-    color: #94a3b8 !important;
-    border: 1px solid transparent !important;
-    transition:
-      color 0.16s ease,
-      background-color 0.16s ease,
-      border-color 0.16s ease,
-      box-shadow 0.16s ease !important;
-
-    &:hover {
-      background: rgba(255, 255, 255, 0.06) !important;
-      border-color: rgba(255, 255, 255, 0.02) !important;
-      color: #ffffff !important;
-      
-      .ant-menu-item-icon {
-        color: #ffffff !important;
-      }
-    }
-
-    &.ant-menu-item-selected {
-      background: color-mix(in srgb, var(--theme-primary) 25%, rgba(255, 255, 255, 0.08)) !important;
-      color: #ffffff !important;
-      font-weight: 600 !important;
-      box-shadow: 
-        0 4px 14px var(--theme-primary-shadow),
-        inset 0 1px 0 rgba(255, 255, 255, 0.15) !important;
-      border-color: color-mix(in srgb, var(--theme-primary) 35%, transparent) !important;
-
-      &::after {
-        display: none !important;
-      }
-
-      .ant-menu-item-icon {
-        color: #ffffff !important;
-      }
-    }
-  }
-
-  // 折叠触发器
-  :deep(.ant-layout-sider-trigger) {
-    background: rgba(20, 20, 20, 0.98) !important;
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
-    color: #94a3b8 !important;
-    &:hover {
-      background: rgba(255, 255, 255, 0.08) !important;
-      color: #ffffff !important;
-    }
+  &::after {
+    height: 1px;
+    margin-left: 9px;
+    background: var(--caption-line);
+    content: '';
+    flex: 1;
   }
 }
 
-// 侧边栏折叠时的水平居中适配
-&.ant-layout-sider-collapsed {
-  .brand {
-    padding-left: 0 !important;
-    padding-right: 0 !important;
+:deep(.ant-menu) {
+  min-height: 0;
+  padding: 3px 7px 12px !important;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: transparent !important;
+  border-inline-end: 0 !important;
+  flex: 1;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
   }
-  .brand-content {
-    justify-content: center !important;
+}
+
+:deep(.ant-menu-item) {
+  position: relative;
+  display: flex !important;
+  width: 100% !important;
+  height: 44px !important;
+  margin: 3px 0 !important;
+  padding: 0 10px !important;
+  align-items: center !important;
+  color: var(--menu-text) !important;
+  font-family: Bahnschrift, 'Avenir Next', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 14px !important;
+  font-weight: 530;
+  letter-spacing: 0.018em;
+  line-height: 44px !important;
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  border-radius: 13px !important;
+  box-shadow: none !important;
+  transition: color 0.16s ease, background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease,
+    transform 0.16s ease !important;
+
+  &::after {
+    display: none !important;
   }
 
-  :deep(.ant-menu-item) {
-    display: flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-    padding: 0 !important;
-    text-align: center !important;
-    line-height: normal !important;
+  .ant-menu-item-icon {
+    display: inline-flex !important;
+    width: 28px;
+    min-width: 28px;
+    height: 28px;
+    align-items: center;
+    justify-content: center;
+    color: var(--menu-icon) !important;
+    font-size: 14px !important;
+    line-height: 1 !important;
+    background: var(--menu-icon-surface);
+    border: 1px solid var(--menu-icon-border);
+    border-radius: 9px;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+    transition: color 0.16s ease, background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease,
+      transform 0.18s ease;
+  }
+
+  .ant-menu-title-content {
+    display: flex;
+    min-width: 0;
+    margin-inline-start: 10px !important;
+    align-items: center;
+    flex: 1;
+  }
+
+  &:hover {
+    color: var(--menu-text-hover) !important;
+    background: var(--menu-hover) !important;
+    border-color: var(--menu-icon-border) !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12) !important;
+    transform: translateX(2px);
 
     .ant-menu-item-icon {
+      color: var(--theme-primary) !important;
+      border-color: var(--menu-icon-border);
+      transform: translateY(-1px);
+    }
+  }
+
+  &.ant-menu-item-selected {
+    color: var(--menu-selected-text) !important;
+    font-weight: 650 !important;
+    background: var(--menu-selected) !important;
+    border-color: var(--menu-selected-border) !important;
+    box-shadow:
+      0 4px 13px var(--menu-selected-shadow),
+      inset 0 1px 0 rgba(255, 255, 255, 0.28) !important;
+    transform: none;
+
+    .ant-menu-item-icon {
+      color: var(--menu-selected-text) !important;
+      background: var(--menu-icon-selected);
+      border-color: var(--menu-icon-border);
+      box-shadow:
+        0 2px 7px var(--menu-selected-shadow),
+        inset 0 1px 0 rgba(255, 255, 255, 0.32);
+    }
+  }
+}
+
+.menu-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.sider-footer {
+  position: relative;
+  display: flex;
+  flex: 0 0 68px;
+  padding: 12px 10px;
+  align-items: flex-end;
+
+  &::before {
+    position: absolute;
+    top: 0;
+    right: 10px;
+    left: 10px;
+    height: 1px;
+    background: var(--footer-line);
+    content: '';
+  }
+}
+
+.sider-collapse-control {
+  display: flex;
+  width: 100%;
+  height: 44px;
+  padding: 5px 9px 5px 6px;
+  align-items: center;
+  color: var(--control-text);
+  font-family: Bahnschrift, 'Avenir Next', 'PingFang SC', sans-serif;
+  background: var(--control-surface);
+  border: 1px solid var(--control-border);
+  border-radius: 14px;
+  box-shadow:
+    0 3px 10px var(--control-shadow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  cursor: pointer;
+  appearance: none;
+  transition: color 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+
+  &:hover {
+    color: var(--theme-primary);
+    border-color: color-mix(in srgb, var(--theme-primary) 28%, var(--control-border));
+    box-shadow:
+      0 5px 14px var(--control-shadow),
+      inset 0 1px 0 rgba(255, 255, 255, 0.24);
+    transform: translateY(-1px);
+
+    .collapse-icon {
+      color: var(--theme-primary);
+      transform: scale(1.04);
+    }
+
+    .collapse-signal i:first-child {
+      transform: translateX(-2px);
+    }
+  }
+
+  &:active {
+    transform: translateY(0) scale(0.985);
+  }
+
+  &:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--theme-primary) 60%, transparent);
+    outline-offset: 2px;
+  }
+}
+
+.collapse-icon {
+  display: inline-flex;
+  box-sizing: border-box;
+  width: 32px;
+  min-width: 32px;
+  max-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  max-height: 32px;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+  font-size: 15px;
+  background: var(--menu-icon-surface);
+  border: 1px solid var(--menu-icon-border);
+  border-radius: 10px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  transition: color 0.16s ease, transform 0.18s ease;
+}
+
+.collapse-label {
+  margin-left: 10px;
+  font-size: 12px;
+  font-weight: 590;
+  letter-spacing: 0.06em;
+}
+
+.collapse-signal {
+  display: flex;
+  margin-left: auto;
+  align-items: center;
+  gap: 3px;
+
+  i {
+    display: block;
+    width: 3px;
+    height: 12px;
+    background: currentColor;
+    border-radius: 999px;
+    opacity: 0.22;
+    transition: transform 0.18s ease;
+
+    &:last-child {
+      height: 7px;
+      opacity: 0.45;
+    }
+  }
+}
+
+.ant-layout-sider.ant-layout-sider-collapsed {
+  .brand {
+    padding-right: 10px;
+    padding-left: 10px;
+  }
+
+  .brand-content {
+    width: 42px;
+    height: 42px;
+    margin: 0 auto;
+    justify-content: center;
+    padding: 0;
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+
+    &::after {
+      display: none;
+    }
+
+    &:hover {
+      background: transparent;
+      border-color: transparent;
+      box-shadow: none;
+      transform: none;
+    }
+
+    &:focus-visible {
+      outline: none;
+
+      .brand-logo {
+        outline: 2px solid color-mix(in srgb, var(--theme-primary) 48%, transparent);
+        outline-offset: 2px;
+      }
+    }
+  }
+
+  .nav-caption {
+    flex-basis: 10px;
+    padding: 0;
+    opacity: 0;
+
+    &::after {
+      display: none;
+    }
+  }
+
+  :deep(.ant-menu) {
+    padding-right: 10px !important;
+    padding-left: 10px !important;
+  }
+
+  :deep(.ant-menu-item) {
+    justify-content: center !important;
+    padding: 0 !important;
+
+    .ant-menu-item-icon {
+      width: 32px;
+      min-width: 32px;
+      height: 32px;
       margin: 0 !important;
-      line-height: 1 !important;
     }
 
     .ant-menu-title-content {
-      opacity: 0 !important;
+      display: none !important;
       width: 0 !important;
-      display: inline-block !important;
       margin: 0 !important;
-      overflow: hidden !important;
+      opacity: 0 !important;
     }
+  }
+
+  .sider-footer {
+    justify-content: center;
+    padding-right: 10px;
+    padding-left: 10px;
+  }
+
+  .sider-collapse-control {
+    box-sizing: border-box;
+    width: 32px;
+    min-width: 32px;
+    max-width: 32px;
+    height: 32px;
+    min-height: 32px;
+    max-height: 32px;
+    padding: 0;
+    justify-content: center;
+    flex: 0 0 32px;
+    aspect-ratio: 1;
+    border-radius: 10px;
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+
+    &:hover {
+      background: transparent;
+      border-color: transparent;
+      box-shadow: none;
+      transform: none;
+    }
+
+    &:focus-visible {
+      outline: none;
+
+      .collapse-icon {
+        box-shadow:
+          0 0 0 2px color-mix(in srgb, var(--theme-primary) 42%, transparent),
+          inset 0 1px 0 rgba(255, 255, 255, 0.12);
+      }
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ant-layout-sider,
+  .brand,
+  .brand-content,
+  :deep(.ant-menu-item),
+  :deep(.ant-menu-item-icon),
+  .sider-collapse-control,
+  .collapse-icon {
+    transition-duration: 0.01ms !important;
   }
 }
