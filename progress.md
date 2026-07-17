@@ -13,11 +13,25 @@
 - 首次使用 GNU 风格 `base64 --decode <file>` 被 macOS BSD base64 拒绝；已改用 `base64 -D -i` 完成公开 key id 核对。
 
 ### 阶段 42：配置 GitHub Actions Secrets 与客户端公钥
-- **状态：** in_progress
+- **状态：** complete
 - 已通过当前登录的 GitHub 会话更新 `TAURI_SIGNING_PRIVATE_KEY`，并新增 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`；GitHub Secrets 列表确认两项均存在且保存成功。
 - GitHub 在首次提交旧页面时短暂显示二次认证，重新进入后当前授权会话直接完成保存，因此无需用户额外输入账户密码。
 - 已复核 CI #128：三平台均在 Tauri 打包签名阶段因旧 Secret 不是合法的 base64 私钥而失败；新专用私钥已替换该值并补齐密码 Secret。
-- 下一步：提交新公钥修复并触发 CI，再同步 `yuyan-3.0`。
+- 客户端公钥修复提交 `3a48267` 已推送到 `github/feat/github-actions-build`，触发 GitHub Actions #129。
+
+### 阶段 43：CI 与 Release 验证
+- **状态：** complete
+- GitHub Actions #129 的 prep、Windows、macOS ARM64、macOS Intel 与 release jobs 全部成功。
+- 三个平台的 `Prepare Update Artifact` 均完成 CI 同款 Rust 反向验签，证明生成签名与客户端内置专用公钥匹配。
+- 已发布 prerelease `v1.2.16`：保留 Windows EXE、macOS ARM/Intel DMG，并新增三平台 Updater、对应 `.sig` 与 `latest.json`。
+- `latest.json` 版本为 `1.2.16`，包含 `darwin-aarch64`、`darwin-x86_64`、`windows-x86_64` 三个平台条目与非空签名。
+- CI 自动版本提交 `52ae2c6` 已快进同步到本地主工作区，四处源码版本均为 `1.2.16`。
+
+### 阶段 44：双分支发布闭环
+- **状态：** complete
+- 自动更新实现提交 `75b39c2` 与专用公钥修复提交 `392fe30` 已推送到 `origin/yuyan-3.0`。
+- 内网分支相关更新测试 18/18 通过，`.github/workflows/build-tauri.yml` 保持不存在，GitLab 仍只承担 API/Web 部署职责。
+- 最终进度记录使用 `[skip ci]` 提交同步两个分支；临时 worktree 在分支推送和远端核对后移除。
 
 ## 会话：2026-07-17（更新后自动替换与重启）
 
