@@ -1,5 +1,24 @@
 # 进度日志
 
+## 会话：2026-07-17（yuyan-app 专用签名密钥与双分支发布）
+
+### 阶段 41：生成 yuyan-app 专用 Updater 密钥
+- **状态：** complete
+- 用户已明确授权生成专用密钥并一次性完成 GitHub Secrets、CI 验签和双分支推送。
+- 安全约束：私钥与密码不写入仓库、命令输出或对话；密码保存到 macOS 钥匙串，GitHub 仅通过受保护的 Actions Secrets 接收。
+- 当前客户端提交 `5965417` 已推送；`yuyan-3.0` 的首版同步提交 `75b39c2` 仍只在独立 worktree，本轮会在新公钥确定后补齐并推送。
+- CI #127 因缺少私钥 Secret 失败；#128 使用旧本机 VPN 私钥启动，但该私钥需要未知密码且公钥不匹配，因此不作为正式发布依据。
+- 已生成 `~/.tauri/yuyan-app-updater.key` 与 `.pub`，私钥权限为 `0600`，随机密码已保存到 macOS 钥匙串服务 `cn.yuyan.ops.tauri-updater`。
+- 专用公钥 key id 为 `66E369E53B493EDA`；已更新客户端配置，并对本地 `.app.tar.gz` 完成真实签名，CI 同款 Rust 校验程序返回 `Updater signature matches configured public key`。
+- 首次使用 GNU 风格 `base64 --decode <file>` 被 macOS BSD base64 拒绝；已改用 `base64 -D -i` 完成公开 key id 核对。
+
+### 阶段 42：配置 GitHub Actions Secrets 与客户端公钥
+- **状态：** in_progress
+- 已通过当前登录的 GitHub 会话更新 `TAURI_SIGNING_PRIVATE_KEY`，并新增 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`；GitHub Secrets 列表确认两项均存在且保存成功。
+- GitHub 在首次提交旧页面时短暂显示二次认证，重新进入后当前授权会话直接完成保存，因此无需用户额外输入账户密码。
+- 已复核 CI #128：三平台均在 Tauri 打包签名阶段因旧 Secret 不是合法的 base64 私钥而失败；新专用私钥已替换该值并补齐密码 Secret。
+- 下一步：提交新公钥修复并触发 CI，再同步 `yuyan-3.0`。
+
 ## 会话：2026-07-17（更新后自动替换与重启）
 
 ### 阶段 37：自动替换与重启基线对照
