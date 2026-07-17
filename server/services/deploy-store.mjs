@@ -3269,7 +3269,7 @@ export async function updateJdkDetection(id, detection) {
       detection.javaVersion || '',
       Number(detection.majorVersion || 0) || null,
       detection.vendor || '',
-      detection.arch || process.arch,
+      detection.arch || '',
       detection.status || 'unknown',
       detection.statusOutput || '',
       checkedAt,
@@ -3564,6 +3564,7 @@ export async function getPersistentDeployTask(id) {
     stage: row.stage || '',
     percent: Number(row.percent || 0),
     operator: row.operator || '',
+    logPath: row.log_path || '',
     resultRef: row.result_ref || '',
     error: row.error || '',
     startedAt: row.started_at,
@@ -3586,12 +3587,13 @@ export async function updatePersistentDeployTask(id, patch) {
   const finishedAt = patch.finishedAt ?? (['success', 'failed', 'stopped', 'interrupted'].includes(status) ? now() : current.finishedAt);
   db.prepare(
     `UPDATE deploy_tasks
-     SET status = ?, stage = ?, percent = ?, result_ref = ?, error = ?, heartbeat_at = ?, finished_at = ?
+     SET status = ?, stage = ?, percent = ?, log_path = ?, result_ref = ?, error = ?, heartbeat_at = ?, finished_at = ?
      WHERE id = ?`
   ).run(
     status,
     patch.stage ?? current.stage,
     Number(patch.percent ?? current.percent),
+    patch.logPath ?? current.logPath,
     patch.resultRef ?? current.resultRef,
     patch.error ?? current.error,
     now(),

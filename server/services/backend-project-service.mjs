@@ -25,12 +25,19 @@ import {
   validateOpenApiContent,
   validateRepositoryRelativePath,
 } from './backend-domain.mjs';
+import { scanLocalBuildJdks } from './backend-toolchain-service.mjs';
 
 /** Maven/OpenAPI 默认超时 */
 const DEFAULT_COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
 
 /** OpenAPI 默认超时 */
 const DEFAULT_OPENAPI_TIMEOUT_MS = 15 * 60 * 1000;
+
+/** Maven Wrapper 的 Unix 文件名。 */
+const MAVEN_WRAPPER_UNIX = 'mvnw';
+
+/** Maven Wrapper 的 Windows 文件名。 */
+const MAVEN_WRAPPER_WINDOWS = 'mvnw.cmd';
 
 /**
  * 生成短哈希。
@@ -51,6 +58,72 @@ export function resolveBackendWorkspace(targetId, branch) {
   const branchHash = sha256(String(branch || 'default')).slice(0, 16);
   const workspaceRoot = path.join(DEPLOY_DATA_DIR, 'cache', 'workspaces', String(targetId), branchHash);
   return { workspaceRoot, repoDir: path.join(workspaceRoot, 'repo') };
+}
+
+/**
+ * 判断命令是否以裸 Maven 可执行文件开头。
+ * @param {string} command 命令文本
+ * @returns {boolean} 是否需要检查 Maven Wrapper
+ */
+function startsWithBareMaven(command) {
+  return String(command || '')
+    .split(/\r?\n/)
+    .some((line) => /^\s*mvn(?=\s|$)/.test(line));
+}
+
+/**
+ * 将每行开头的裸 mvn 替换为仓库 Maven Wrapper。
+ * @param {string} command 命令文本
+ * @param {string} wrapperCommand Wrapper 调用命令
+ * @returns {string} 实际执行命令
+ */
+function replaceBareMaven(command, wrapperCommand) {
+  return String(command || '')
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^(\s*)mvn(?=\s|$)/, `$1${wrapperCommand}`))
+    .join('\n');
+}
+
+/**
+ * 为后端 Maven 命令选择仓库内 Wrapper。
+ * @description 仅改写每行开头的裸 `mvn`，显式 `./mvnw`、复合命令和其它构建工具保持原样。
+ * @param {string} command 配置的构建命令
+ * @param {string} cwd 仓库根目录
+ * @param {{onLog?: (level: string, message: string) => void}} options 日志选项
+ * @returns {Promise<string>} 实际执行命令
+ */
+export async function prepareBackendMavenCommand(command, cwd, options = {}) {
+  const configuredCommand = String(command || '').trim();
+  if (!startsWithBareMaven(configuredCommand)) return configuredCommand;
+
+  const wrapperName = process.platform === 'win32' ? MAVEN_WRAPPER_WINDOWS : MAVEN_WRAPPER_UNIX;
+  const wrapperPath = path.join(cwd, wrapperName);
+  const wrapperStat = await fs.stat(wrapperPath).catch(() => null);
+  if (!wrapperStat?.isFile()) return configuredCommand;
+
+  const wrapperCommand = process.platform === 'win32'
+    ? `.\\${MAVEN_WRAPPER_WINDOWS}`
+    : (wrapperStat.mode & 0o111) !== 0
+      ? `./${MAVEN_WRAPPER_UNIX}`
+      : `sh ./${MAVEN_WRAPPER_UNIX}`;
+  const actualCommand = replaceBareMaven(configuredCommand, wrapperCommand);
+  options.onLog?.('info', `检测到构建命令使用裸 mvn，已自动改用仓库 Maven Wrapper：${wrapperCommand}`);
+  return actualCommand;
+}
+
+/**
+ * 获取命令不存在时的可操作诊断信息。
+ * @param {number|null} exitCode 退出码
+ * @param {string} output 标准错误或标准输出
+ * @returns {string} 诊断提示
+ */
+export function getBackendCommandNotFoundHint(exitCode, output) {
+  const text = String(output || '');
+  if (Number(exitCode) !== 127 || !/(?:command\s+not\s+found|not\s+found)/i.test(text)) return '';
+  if (/(?:^|[\s:])mvn(?:[\s:]|$)/i.test(text)) {
+    return '诊断：本机构建环境找不到 Maven（mvn）。请优先使用仓库自带的 ./mvnw；若仓库没有 Maven Wrapper，请安装 Maven 后完全退出并重新打开雨燕。';
+  }
+  return '诊断：构建命令引用了本机 PATH 中不存在的可执行文件，请检查命令拼写、安装位置，并在修改环境变量后完全退出并重新打开雨燕。';
 }
 
 /**
@@ -132,7 +205,8 @@ export function runBackendLocalCommand(command, options = {}) {
         return;
       }
       const suffix = redactDeployLog(stderr || stdout).trim();
-      reject(new Error(`${options.label || '命令'}执行失败，退出码 ${code}${suffix ? `\n${suffix}` : ''}`));
+      const diagnostic = getBackendCommandNotFoundHint(code, suffix);
+      reject(new Error(`${options.label || '命令'}执行失败，退出码 ${code}${suffix ? `\n${suffix}` : ''}${diagnostic ? `\n${diagnostic}` : ''}`));
     });
   });
 }
@@ -369,6 +443,14 @@ export async function generateTargetOpenApi(targetId, options = {}) {
     }
   }
   let jdk = target.buildJdkId ? await getJdk(target.buildJdkId) : null;
+  const hasExecutableJava = jdk
+    ? await fs.access(path.join(jdk.homePath, 'bin', process.platform === 'win32' ? 'java.exe' : 'java')).then(() => true).catch(() => false)
+    : false;
+  if (!jdk || jdk.status !== 'available' || !jdk.majorVersion || !hasExecutableJava) {
+    log('info', '当前 JDK 绑定不可用，正在自动扫描本机 Java 环境', 'openapi');
+    await scanLocalBuildJdks();
+    jdk = target.requiredJdkAlias ? await findJdkByAlias(target.requiredJdkAlias) : null;
+  }
   if ((!jdk || jdk.status !== 'available') && target.requiredJdkAlias) {
     const matched = await findJdkByAlias(target.requiredJdkAlias);
     if (matched) {
@@ -384,7 +466,10 @@ export async function generateTargetOpenApi(targetId, options = {}) {
     log('warning', `[WARN] 本地未找到完全匹配的 Java ${jdk.originalRequiredVersion}，已向下兼容使用 ${jdk.name} 进行构建`, 'openapi');
   }
   log('info', `使用 ${jdk.name} 生成 OpenAPI`, 'openapi');
-  await runBackendLocalCommand(target.openapiCommand, {
+  const openapiCommand = await prepareBackendMavenCommand(target.openapiCommand, workspace.repoDir, {
+    onLog: (level, message) => log(level, message, 'openapi'),
+  });
+  await runBackendLocalCommand(openapiCommand, {
     cwd: workspace.repoDir,
     env,
     signal: options.signal,

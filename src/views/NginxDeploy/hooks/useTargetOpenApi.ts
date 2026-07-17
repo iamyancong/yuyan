@@ -8,8 +8,10 @@ import {
   getOpenApiArtifactContent,
   getOpenApiArtifactDownloadUrl,
   getDeployApiAuthHeaders,
+  scanLocalDeployJdks,
   stopTargetDeploy,
   updateLocalDeployTarget,
+  type BuildJdk,
   type DeployProgressEvent,
   type DeployTarget,
   type OpenApiArtifact,
@@ -21,6 +23,33 @@ interface UseTargetOpenApiParams {
   ensureLoggedIn: () => boolean;
   authState: Readonly<Ref<{ token?: string | null }>>;
 }
+
+/**
+ * 从 Java 别名或版本文本提取主版本。
+ * @param value Java 别名、版本或 JDK 名称
+ * @returns Java 主版本；无法识别时返回 0
+ */
+const parseJavaMajor = (value?: string): number => {
+  const text = String(value || '').trim();
+  const legacyMatch = text.match(/\b1\.(\d+)\b/);
+  if (legacyMatch) return Number(legacyMatch[1]) || 0;
+  return Number(text.match(/\b(\d{1,2})\b/)?.[1] || 0);
+};
+
+/**
+ * 从扫描结果中选择与目标要求匹配的本机构建 JDK。
+ * @param jdks 本机 JDK 扫描结果
+ * @param requiredAlias 目标要求的 Java 别名或版本
+ * @returns 匹配且检测通过的 JDK
+ */
+const findLocalBuildJdk = (jdks: BuildJdk[], requiredAlias?: string): BuildJdk | undefined => {
+  const availableJdks = jdks.filter((jdk) => jdk.status === 'available' && Number(jdk.majorVersion) > 0);
+  const normalizedAlias = String(requiredAlias || '').trim().toLowerCase();
+  const exactName = availableJdks.find((jdk) => jdk.name.trim().toLowerCase() === normalizedAlias);
+  if (exactName) return exactName;
+  const requiredMajor = parseJavaMajor(requiredAlias);
+  return requiredMajor ? availableJdks.find((jdk) => Number(jdk.majorVersion) === requiredMajor) : undefined;
+};
 
 /**
  * 管理后端目标 OpenAPI 的缓存读取、生成、预览和下载。
@@ -96,14 +125,30 @@ export function useTargetOpenApi(params: UseTargetOpenApiParams) {
               cancelText: '取消',
               onOk: async () => {
                 try {
+                  const requiredAlias = String(
+                    remoteTarget.requiredJdkAlias
+                    || target.requiredJdkAlias
+                    || remoteTarget.runtimeJavaVersion
+                    || target.runtimeJavaVersion
+                    || ''
+                  ).trim();
+                  const localJdks = await scanLocalDeployJdks();
+                  const matchedJdk = findLocalBuildJdk(localJdks, requiredAlias);
+                  if (!matchedJdk) {
+                    const requiredMajor = parseJavaMajor(requiredAlias);
+                    throw new Error(`本机未检测到可用的 Java ${requiredMajor || requiredAlias || '构建'} JDK，请先安装对应版本`);
+                  }
                   const payload = {
                     ...target,
                     openapiCommand: remoteTarget.openapiCommand,
                     openapiOutputPath: remoteTarget.openapiOutputPath,
+                    buildJdkId: matchedJdk.id,
+                    jdkId: matchedJdk.id,
+                    requiredJdkAlias: String(matchedJdk.majorVersion),
                   } as any;
                   const updated = await updateLocalDeployTarget(target.id, payload);
                   activeTarget.value = updated;
-                  message.success('配置同步成功');
+                  message.success(`配置同步成功，已自动绑定 ${matchedJdk.name}`);
                   resolve(true);
                 } catch (err: any) {
                   message.error('同步配置到本地失败: ' + (err.message || err));

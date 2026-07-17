@@ -3,7 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { inspectBackendRepository, resolveBackendArtifact } from './backend-project-service.mjs';
+import {
+  getBackendCommandNotFoundHint,
+  inspectBackendRepository,
+  prepareBackendMavenCommand,
+  resolveBackendArtifact,
+} from './backend-project-service.mjs';
 
 /** 创建最小 Maven 多模块测试项目。 */
 async function createFixture() {
@@ -50,4 +55,26 @@ test('Jar 匹配排除 sources/original 并要求唯一', async (t) => {
   assert.equal(artifact.jarName, 'app-1.jar');
   await fs.writeFile(path.join(target, 'app-2.jar'), 'jar2');
   await assert.rejects(() => resolveBackendArtifact(root, 'starter/target/app-*.jar'), /多个文件/);
+});
+
+test('裸 mvn 在仓库存在 Wrapper 时自动改写并保留参数', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'yuyan-maven-wrapper-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const wrapperPath = path.join(root, 'mvnw');
+  await fs.writeFile(wrapperPath, '#!/bin/sh\nexit 0\n');
+  await fs.chmod(wrapperPath, 0o755);
+
+  const logs = [];
+  const command = await prepareBackendMavenCommand('mvn clean package -DskipTests', root, {
+    onLog: (_level, message) => logs.push(message),
+  });
+  assert.equal(command, './mvnw clean package -DskipTests');
+  assert.match(logs.join('\n'), /Maven Wrapper/);
+});
+
+test('Maven 退出码 127 返回可操作诊断', () => {
+  const hint = getBackendCommandNotFoundHint(127, '/bin/sh: mvn: command not found');
+  assert.match(hint, /找不到 Maven/);
+  assert.match(hint, /.\/mvnw/);
+  assert.equal(getBackendCommandNotFoundHint(1, 'BUILD FAILURE'), '');
 });

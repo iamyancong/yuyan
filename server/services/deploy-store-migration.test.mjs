@@ -62,6 +62,13 @@ test('v1/v2/v3 迁移保留前端目标，将历史后端命令标记为 legacy 
     const backendRecords = await store.listRecords({ projectType: 'backend', pageSize: 20 });
     const missingServerRecords = await store.listRecords({ serverId: 999, pageSize: 20 });
     db.prepare(\`INSERT INTO deploy_tasks (target_id,action,status,stage,percent,operator,started_at,heartbeat_at) VALUES (2,'deploy','running','build',30,'tester',?,?)\`).run(ts,ts);
+    const linkedTask = await store.createPersistentDeployTask({ targetId: 2, action: 'deploy', operator: 'tester', startedAt: ts });
+    const updatedTask = await store.updatePersistentDeployTask(linkedTask.id, {
+      status: 'failed',
+      resultRef: String(backendRecords.items[0].id),
+      logPath: backendRecords.items[0].logPath,
+      error: 'build failed',
+    });
     await store.closeDeployDb();
     console.log(JSON.stringify({
       targets: targets.map(x => ({name:x.projectName,type:x.projectType})),
@@ -74,6 +81,7 @@ test('v1/v2/v3 迁移保留前端目标，将历史后端命令标记为 legacy 
         missingServer: missingServerRecords.total,
       },
       recordTypes: allRecords.items.map(x => x.projectType).sort(),
+      taskLogLinked: Boolean(updatedTask.logPath && updatedTask.resultRef),
     }));
   `);
   assert.deepEqual(migrated.versions, [1, 2, 3, 4]);
@@ -86,6 +94,7 @@ test('v1/v2/v3 迁移保留前端目标，将历史后端命令标记为 legacy 
   assert.equal(migrated.config.legacy_start_command, 'nohup java');
   assert.deepEqual(migrated.recordCounts, { all: 2, frontend: 1, backend: 1, missingServer: 0 });
   assert.deepEqual(migrated.recordTypes, ['backend', 'frontend']);
+  assert.equal(migrated.taskLogLinked, true);
 
   const repeated = runStoreScript(root, `
     const store = await import('./server/services/deploy-store.mjs');
