@@ -4,7 +4,7 @@
 在保留既有部署与自动更新缓存架构的前提下，完成服务端预热和本机预下载全程静默、签名更新包就绪后再展示胶囊、用户确认后自动覆盖安装并重启，同时补齐持久化恢复与异常边界。
 
 ## 当前阶段
-阶段 42（进行中）
+阶段 44（已完成）
 
 ## 各阶段
 
@@ -256,20 +256,20 @@
 ### 阶段 42：配置 GitHub Actions Secrets 与客户端公钥
 - [x] 将专用私钥和密码写入 `ycwang-dev/yuyan` Actions Secrets
 - [x] 更新客户端 Tauri 公钥；内网分支在客户端提交后通过 cherry-pick 同步
-- [ ] 提交并推送客户端修复，触发新一轮三平台构建
-- **状态：** in_progress
+- [x] 提交并推送客户端修复，触发新一轮三平台构建
+- **状态：** complete
 
 ### 阶段 43：CI 与 Release 验证
-- [ ] 监控 prep、Windows、macOS ARM/Intel、release jobs
-- [ ] 验证 Release 包含安装包、Updater、签名和 `latest.json`
-- [ ] 确认产物签名与客户端内置公钥一致
-- **状态：** pending
+- [x] 监控 prep、Windows、macOS ARM/Intel、release jobs
+- [x] 验证 Release 包含安装包、Updater、签名和 `latest.json`
+- [x] 确认产物签名与客户端内置公钥一致
+- **状态：** complete
 
 ### 阶段 44：双分支发布闭环
-- [ ] 将最终公钥修复同步到 `yuyan-3.0`
-- [ ] 推送内网分支并确认 GitLab 分支职责未变化
-- [ ] 清理临时 worktree，核对两个远端提交与主工作区状态
-- **状态：** pending
+- [x] 将最终公钥修复同步到 `yuyan-3.0`
+- [x] 推送内网分支并确认 GitLab 分支职责未变化
+- [x] 清理临时 worktree，核对两个远端提交与主工作区状态
+- **状态：** complete
 
 ## 已做决策
 | 决策 | 理由 |
@@ -287,7 +287,7 @@
 | 手动检查保持即时反馈 | 用户主动操作不能表现为无响应，准备和失败状态需要明确说明 |
 | 本机缓存状态绑定版本、资源身份和文件元数据 | 防止连续发布时把旧包误认为新版本，并支持重启恢复 |
 | 保留自研下载、安装阶段接入官方 Updater | 继续获得内网缓存、断点和跨进程恢复，同时用官方平台安装逻辑完成覆盖与自动重启 |
-| Updater 信任 yuyan-vpn 已发布客户端公钥 | 本机现存 `.pub` 与线上公钥不一致，不能作为发布依据；必须由 CI 使用与线上公钥匹配的既有 Secret 签名 |
+| Updater 使用 yuyan-app 独立信任链 | 独立加密私钥进入 GitHub Actions Secrets，客户端只内置对应公钥，避免与 yuyan-vpn 的历史密钥混用 |
 | 安装前重新查询有效版本 | 已撤回版本立即清理；出现更高版本时切换目标而不安装旧包 |
 | 轮询结果使用代次隔离 | 防止旧版本服务器状态或原生状态迟到覆盖当前更新流程 |
 
@@ -343,6 +343,10 @@
 | 完整本地 Tauri 打包在 updater 签名阶段被拦截 | 1 | 已确认前端、Rust release 和 `.app.tar.gz` 均构建成功；本机缺少与固定公钥匹配的私钥，保留安全门禁并由 CI Secret 完成真实签名 |
 | 复用本机 VPN 私钥实签失败 | 1 | 私钥既需要未知密码又与已发布 VPN 公钥不匹配；改为生成 yuyan-app 专用加密密钥并独立托管 |
 | macOS `base64 --decode <file>` 参数格式不兼容 | 1 | 改用 BSD `base64 -D -i <file>` 读取公开 key id，不重复错误命令 |
+| CI #128 三平台均提示 updater 私钥 base64 格式无效 | 1 | 用新生成的 yuyan-app 加密私钥覆盖 GitHub Secret，并新增配套密码 Secret |
+| 直接把配置公钥解码后与 `.pub` 文件逐字节比较失败 | 1 | `.pub` 本身就是 Tauri 使用的 base64 文本；改为规范化文本比较，并以真实产物签名验签作为最终依据 |
+| `yuyan-3.0` worktree 默认 Node 12 不支持 `--test` 且没有独立依赖目录 | 2 | 显式使用 Node 22，并临时链接主工作区依赖完成 18 项更新测试，随后移除链接 |
+| GitHub `releases/latest` 对 prerelease 返回 404 | 1 | 查询 Release 列表并验证最新的 `v1.2.16` prerelease 及全部资产 |
 
 ## 备注
 - 当前工作区已有用户改动，所有修改必须基于现状增量完成。
