@@ -3,7 +3,9 @@ import { computed } from 'vue';
 import { YButton, YMonaco } from '@ycwang-dev/components/lite';
 import { LinkOutlined } from '@ant-design/icons-vue';
 import type { DeployTarget, OpenApiArtifact } from '@/api/deploy';
+import { OPENAPI_JSON_LANGUAGE } from '@/utils/monacoJsonHighlight';
 import { formatDeployDateTime } from '../../constant';
+import { useOpenApiMonacoHighlight } from './hooks/useOpenApiMonacoHighlight';
 import { openExternal } from '@/utils/open';
 
 defineOptions({ name: 'OpenApiDrawer' });
@@ -23,6 +25,7 @@ interface OpenApiDrawerProps {
 }
 
 const props = defineProps<OpenApiDrawerProps>();
+const { monacoRef } = useOpenApiMonacoHighlight(() => props.content);
 const emit = defineEmits<{
   (e: 'update:open', value: boolean): void;
   (e: 'generate'): void;
@@ -137,9 +140,10 @@ const fileSizeText = computed(() => {
 
         <YMonaco
           v-else-if="content"
+          ref="monacoRef"
           key="content"
           :model-value="content"
-          language="json"
+          :language="OPENAPI_JSON_LANGUAGE"
           theme="vs-dark"
           height="calc(100vh - 225px)"
           :readonly="true"

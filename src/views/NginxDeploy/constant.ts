@@ -582,7 +582,7 @@ export const targetFormSchema = {
       'x-component-props': {
         layout: 'horizontal',
         labelAlign: 'right',
-        labelWidth: 130,
+        labelWidth: 160,
       },
       properties: {
         basicSection: {

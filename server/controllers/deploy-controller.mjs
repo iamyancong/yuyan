@@ -213,7 +213,7 @@ function createProgressEmitter(task) {
       void updatePersistentDeployTask(task.persistentId, { stage: event.stage, percent: event.percent });
     } else if (event.type === 'result') {
       const resultRef = event.data?.id ? String(event.data.id) : '';
-      void updatePersistentDeployTask(task.persistentId, { resultRef, percent: 100 });
+      void updatePersistentDeployTask(task.persistentId, { resultRef, logPath: event.data?.logPath || '', percent: 100 });
     } else if (event.type === 'error') {
       void updatePersistentDeployTask(task.persistentId, { error: event.message, stage: event.stage || task.currentStage });
     }
@@ -275,13 +275,21 @@ function startDeployTask(task, runner, emit) {
         status,
         percent: 100,
         resultRef: result?.id ? String(result.id) : '',
+        logPath: result?.logPath || '',
       });
       return result;
     })
     .catch(async (error) => {
       task.error = error instanceof Error ? error.message : String(error);
       if (!hasTaskErrorEvent(task)) emit.error(task.error, task.currentStage);
-      await updatePersistentDeployTask(task.persistentId, { status: 'failed', error: task.error, stage: task.currentStage });
+      const failedRecord = error?.deployRecord || null;
+      await updatePersistentDeployTask(task.persistentId, {
+        status: 'failed',
+        error: task.error,
+        stage: task.currentStage,
+        resultRef: failedRecord?.id ? String(failedRecord.id) : '',
+        logPath: failedRecord?.logPath || '',
+      });
       throw error;
     })
     .finally(() => {

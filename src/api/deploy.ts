@@ -905,15 +905,17 @@ export async function updateLocalDeployTarget(id: number, payload: DeployTargetP
 /** 删除部署目标 */
 export const deleteDeployTarget = (id: number) => client.delete(`/targets/${id}`);
 
-/** 获取发布记录列表 */
+/** 获取中央 API 的发布记录列表。 */
 export const listDeployRecords = (params?: DeployRecordQuery, gitlabToken = '', gitlabHost = '') =>
   client
     .get('/records', { params, headers: gitlabToken ? { 'X-GitLab-Token': gitlabToken, 'X-GitLab-Host': gitlabHost } : undefined })
     .then(unwrap<DeployRecordPage>);
 
-/** 获取发布记录详情 */
+/** 获取中央 API 的发布记录详情。 */
 export const getDeployRecord = (recordId: number, gitlabToken = '', gitlabHost = '') =>
-  client.get(`/records/${recordId}`, { headers: gitlabToken ? { 'X-GitLab-Token': gitlabToken, 'X-GitLab-Host': gitlabHost } : undefined }).then(unwrap<DeployRecord>);
+  client
+    .get(`/records/${recordId}`, { headers: gitlabToken ? { 'X-GitLab-Token': gitlabToken, 'X-GitLab-Host': gitlabHost } : undefined })
+    .then(unwrap<DeployRecord>);
 
 /** 读取 Nginx 配置文件 */
 export const readNginxConf = (targetId: number) => client.get(`/targets/${targetId}/nginx-conf`).then(unwrap<{ path: string; content: string }>);

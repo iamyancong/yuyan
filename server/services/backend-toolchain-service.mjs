@@ -22,22 +22,40 @@ import { parseJavaMajorVersion, redactDeployLog } from './backend-domain.mjs';
 import { execSsh, shellQuote, withSsh } from './ssh-service.mjs';
 
 /**
+ * 规范 Java 报告的 CPU 架构名称。
+ * @param {string} value Java `os.arch` 原始值
+ * @returns {string} 统一架构名称
+ */
+export function normalizeJavaArchitecture(value) {
+  const arch = String(value || '').trim().toLowerCase();
+  if (['aarch64', 'arm64'].includes(arch)) return 'arm64';
+  if (['amd64', 'x86_64', 'x64'].includes(arch)) return 'x64';
+  if (['x86', 'i386', 'i486', 'i586', 'i686'].includes(arch)) return 'x86';
+  return arch;
+}
+
+/**
  * 从 java -version 输出解析检测结果。
  * @param {string} output 命令输出
  * @returns {Object} 检测结果
  */
 export function parseJavaDetection(output) {
   const text = redactDeployLog(output).trim();
-  const version = text.match(/(?:java|openjdk) version ["']([^"']+)/i)?.[1]
-    || text.match(/openjdk\s+([^\s]+)/i)?.[1]
+  const version = text.match(/^\s*java\.version\s*=\s*([^\s]+)\s*$/im)?.[1]
+    || text.match(/^\s*(?:java|openjdk)\s+version\s+["']([^"']+)/im)?.[1]
+    || text.match(/^\s*openjdk\s+([^\s]+)/im)?.[1]
     || '';
-  const vendor = text.split(/\r?\n/).find((line) => /runtime environment|openjdk|java/i.test(line))?.trim() || '';
+  const vendor = text.match(/^\s*java\.vendor\s*=\s*(.+?)\s*$/im)?.[1]
+    || text.split(/\r?\n/).find((line) => /runtime environment/i.test(line))?.trim()
+    || '';
+  const arch = normalizeJavaArchitecture(text.match(/^\s*os\.arch\s*=\s*([^\s]+)\s*$/im)?.[1] || '');
+  const majorVersion = parseJavaMajorVersion(version);
   return {
     javaVersion: version,
-    majorVersion: parseJavaMajorVersion(text),
+    majorVersion,
     vendor,
-    arch: process.arch,
-    status: parseJavaMajorVersion(text) ? 'available' : 'unavailable',
+    arch,
+    status: majorVersion ? 'available' : 'unavailable',
     statusOutput: text,
   };
 }
@@ -74,7 +92,7 @@ export async function testBuildJdk(id) {
   if (!jdk) throw new Error('构建 JDK 不存在');
   try {
     const javaBin = path.join(jdk.homePath, 'bin', process.platform === 'win32' ? 'java.exe' : 'java');
-    const result = await execFileDirect(javaBin, ['-version']);
+    const result = await execFileDirect(javaBin, ['-XshowSettings:properties', '-version']);
     const detection = parseJavaDetection(`${result.stdout}\n${result.stderr}`);
     return updateJdkDetection(id, detection);
   } catch (error) {
@@ -182,7 +200,7 @@ export async function scanLocalBuildJdks() {
     if (!homePath) continue;
     const javaBin = path.join(homePath, 'bin', process.platform === 'win32' ? 'java.exe' : 'java');
     try {
-      const result = await execFileDirect(javaBin, ['-version']);
+      const result = await execFileDirect(javaBin, ['-XshowSettings:properties', '-version']);
       const parsed = parseJavaDetection(`${result.stdout}\n${result.stderr}`);
       const implementor = await readJdkImplementor(homePath);
       const detection = { ...parsed, vendor: implementor || parsed.vendor };
@@ -230,10 +248,10 @@ export async function testServerJavaRuntime(id) {
   try {
     const output = await withSsh(server, async (conn) => {
       const javaBin = path.posix.join(runtime.homePath, 'bin', 'java');
-      const result = await execSsh(conn, `${shellQuote(javaBin)} -version 2>&1`, { label: '检测服务器 JDK' });
+      const result = await execSsh(conn, `${shellQuote(javaBin)} -XshowSettings:properties -version 2>&1`, { label: '检测服务器 JDK' });
       return `${result.stdout}\n${result.stderr}`;
     });
-    const detection = { ...parseJavaDetection(output), arch: '' };
+    const detection = parseJavaDetection(output);
     return updateServerJavaRuntimeDetection(id, detection);
   } catch (error) {
     await updateServerJavaRuntimeDetection(id, { status: 'unavailable', statusOutput: error instanceof Error ? error.message : String(error) });

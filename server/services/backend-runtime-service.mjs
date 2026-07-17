@@ -25,6 +25,7 @@ import {
 } from './deploy-store.mjs';
 import {
   createFileSha256,
+  prepareBackendMavenCommand,
   resolveBackendArtifact,
   runBackendLocalCommand,
   syncBackendWorkspace,
@@ -774,10 +775,18 @@ export async function deployBackendTarget(targetId, payload, emit) {
     if (buildJdk.isDownwardCompatible) {
       log('warning', `[WARN] 本地未找到完全匹配的 Java ${buildJdk.originalRequiredVersion}，已向下兼容使用 ${buildJdk.name} 进行构建`, 'build');
     }
+    const installCommand = target.installCommand
+      ? await prepareBackendMavenCommand(target.installCommand, workspace.repoDir, {
+          onLog: (level, message) => log(level, message, 'install'),
+        })
+      : '';
+    const buildCommand = await prepareBackendMavenCommand(target.buildCommand, workspace.repoDir, {
+      onLog: (level, message) => log(level, message, 'build'),
+    });
     await withBackendBuildSlot(async () => {
-      if (target.installCommand) {
-        stage('install', 28, 'Maven 仓库预热', target.installCommand);
-        await runBackendLocalCommand(target.installCommand, {
+      if (installCommand) {
+        stage('install', 28, 'Maven 仓库预热', installCommand);
+        await runBackendLocalCommand(installCommand, {
           cwd: workspace.repoDir,
           env,
           signal,
@@ -785,8 +794,8 @@ export async function deployBackendTarget(targetId, payload, emit) {
           onLog: (level, message) => log(level, message, 'install'),
         });
       }
-      stage('build', 46, '构建后端 Jar', target.buildCommand);
-      await runBackendLocalCommand(target.buildCommand, {
+      stage('build', 46, '构建后端 Jar', buildCommand);
+      await runBackendLocalCommand(buildCommand, {
         cwd: workspace.repoDir,
         env,
         signal,
@@ -893,6 +902,7 @@ export async function deployBackendTarget(targetId, payload, emit) {
       logs,
       finishedAt: new Date().toISOString(),
     });
+    if (error && typeof error === 'object') error.deployRecord = failed;
     if (signal?.aborted) emit?.result(failed);
     else emit?.error(error instanceof Error ? error.message : String(error), 'error');
     if (signal?.aborted) return failed;

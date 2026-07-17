@@ -1,6 +1,8 @@
 import { createApp } from 'vue';
 import App from './App.vue';
 import router from './router';
+import { configureGlobalMessage } from '@/utils/globalMessage';
+import { configureMonacoJsonHighlight } from '@/utils/monacoJsonHighlight';
 import 'ant-design-vue/dist/reset.css';
 import '@ycwang-dev/components/dist/style.css';
 
@@ -8,7 +10,8 @@ import '@ycwang-dev/components/dist/style.css';
 import 'monaco-editor/esm/vs/language/json/monaco.contribution';
 import 'monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution';
 
-
+configureGlobalMessage();
+configureMonacoJsonHighlight();
 const app = createApp(App);
 app.use(router);
 app.mount('#app');
