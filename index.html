@@ -7,6 +7,29 @@
   <link rel="icon" type="image/svg+xml" href="/yuyan-swift-dark.svg" media="(prefers-color-scheme: dark)" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>雨燕平台</title>
+  <style>
+    html,
+    body,
+    #app {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      background-color: var(--boot-background-color, #f0f2f5);
+    }
+  </style>
+  <script>
+    try {
+      /** 页面脚本加载前读取已保存主题，避免生产 App 重载时出现白屏。 */
+      const storedTheme = JSON.parse(localStorage.getItem('yuyan-ops-theme') || '{}');
+      /** 当前主题对应的 WebView 首帧背景色。 */
+      const bootBackgroundColor = storedTheme?.isDark === true ? '#141414' : '#f0f2f5';
+      document.documentElement.style.setProperty('--boot-background-color', bootBackgroundColor);
+      document.documentElement.style.colorScheme = storedTheme?.isDark === true ? 'dark' : 'light';
+    } catch {
+      document.documentElement.style.setProperty('--boot-background-color', '#f0f2f5');
+      document.documentElement.style.colorScheme = 'light';
+    }
+  </script>
 </head>
 
 <body>
