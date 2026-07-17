@@ -8,6 +8,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { withHiddenWindow } from '../utils/child-process.mjs';
 
 const downloadRegistry = new Map();
 const SCAFFOLD_DOWNLOAD_ROOT = path.join(os.tmpdir(), 'scaffold-downloads');
@@ -102,10 +103,10 @@ export async function handleDownload(req, res) {
     res.setHeader('Content-Disposition', `attachment; filename="${zipFileName}"`);
 
     // 使用系统 zip 命令直接输出到响应流
-    const zipProcess = spawn('zip', ['-r', '-', appName], {
+    const zipProcess = spawn('zip', ['-r', '-', appName], withHiddenWindow({
       cwd: tempRoot,
       stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    }));
 
     zipProcess.stderr.on('data', (data) => {
       console.error('[download-controller] zip stderr:', data.toString());

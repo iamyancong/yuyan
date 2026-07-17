@@ -271,6 +271,25 @@
 - [x] 清理临时 worktree，核对两个远端提交与主工作区状态
 - **状态：** complete
 
+### 阶段 45：Windows 控制台闪窗基线与调用面盘点
+- [x] 确认 release 主进程已使用 Windows GUI 子系统，不是雨燕主窗口自身创建控制台
+- [x] 盘点 Rust 启动 Node、运行时检查、taskkill 与 Node 服务内部 Git/Java/Maven/脚手架子进程
+- [x] 确认闪窗来自后台控制台子进程未设置 Windows 隐藏窗口标志，且启动重试会放大闪烁次数
+- **状态：** complete
+
+### 阶段 46：后台子进程无窗口治理
+- [x] 为 Rust 后台命令统一应用 Windows `CREATE_NO_WINDOW`
+- [x] 为 Node 服务子进程统一应用 `windowsHide: true`
+- [x] 将模板 Git 命令从 shell 字符串改为 `execFile` 参数调用，避免额外启动 `cmd.exe`
+- [x] 增加后台子进程选项单元测试并复查全部运行时调用点
+- **状态：** complete
+
+### 阶段 47：构建验证与 Windows 验收边界
+- [x] 完成 Rust 格式、编译与测试
+- [x] 完成服务端测试、前端类型检查与生产构建
+- [x] 完成 diff 检查，并记录真实 Windows 安装运行的人工验收项
+- **状态：** complete
+
 ## 已做决策
 | 决策 | 理由 |
 |------|------|
@@ -290,6 +309,7 @@
 | Updater 使用 yuyan-app 独立信任链 | 独立加密私钥进入 GitHub Actions Secrets，客户端只内置对应公钥，避免与 yuyan-vpn 的历史密钥混用 |
 | 安装前重新查询有效版本 | 已撤回版本立即清理；出现更高版本时切换目标而不安装旧包 |
 | 轮询结果使用代次隔离 | 防止旧版本服务器状态或原生状态迟到覆盖当前更新流程 |
+| 后台命令按平台隐藏窗口而不丢弃输出 | Windows 使用进程创建标志隐藏控制台，继续保留 stdout/stderr 管道、退出码和诊断日志 |
 
 ## 遇到的错误
 | 错误 | 尝试次数 | 解决方案 |
@@ -347,6 +367,10 @@
 | 直接把配置公钥解码后与 `.pub` 文件逐字节比较失败 | 1 | `.pub` 本身就是 Tauri 使用的 base64 文本；改为规范化文本比较，并以真实产物签名验签作为最终依据 |
 | `yuyan-3.0` worktree 默认 Node 12 不支持 `--test` 且没有独立依赖目录 | 2 | 显式使用 Node 22，并临时链接主工作区依赖完成 18 项更新测试，随后移除链接 |
 | GitHub `releases/latest` 对 prerelease 返回 404 | 1 | 查询 Release 列表并验证最新的 `v1.2.16` prerelease 及全部资产 |
+| Windows 闪窗首个多文件补丁未匹配 deploy-service 导入位置 | 1 | 确认补丁未部分应用，按 Rust、公共工具和各调用文件拆分小补丁 |
+| 系统默认 Node 12 无法运行当前 pnpm | 1 | 使用 Codex 工作区 Node 22 运行服务端测试与现有依赖入口 |
+| 工作区 pnpm 包装器在非 TTY 下尝试清理依赖目录并中止 | 1 | 不改依赖，直接用 Node 22 执行现有 vue-tsc 与 Vite 入口 |
+| macOS 交叉检查 Windows target 被 ring 缺少 MSVC `assert.h` 阻断 | 1 | 保留本机原生完整编译测试，并用 Windows target 最小 Rust 编译验证 `CommandExt::creation_flags` 代码 |
 
 ## 备注
 - 当前工作区已有用户改动，所有修改必须基于现状增量完成。

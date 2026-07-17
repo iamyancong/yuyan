@@ -5,6 +5,7 @@
 
 import { spawn } from 'node:child_process';
 import { GIT_USER_NAME, GIT_USER_EMAIL } from '../config/constants.mjs';
+import { withHiddenWindow } from '../utils/child-process.mjs';
 
 function splitLines(text) {
   return String(text)
@@ -15,10 +16,10 @@ function splitLines(text) {
 
 function runGitCommand(args, projectDir, onLog) {
   return new Promise((resolve, reject) => {
-    const child = spawn('git', args, {
+    const child = spawn('git', args, withHiddenWindow({
       cwd: projectDir,
       stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    }));
 
     let stdout = '';
     let stderr = '';

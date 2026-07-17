@@ -9,6 +9,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { DEPLOY_DATA_DIR, DEPLOY_OPENAPI_DIR } from '../config/constants.mjs';
+import { withHiddenWindow } from '../utils/child-process.mjs';
 import { buildAuthUrl } from './git-service.mjs';
 import { shellQuote } from './ssh-service.mjs';
 import {
@@ -138,13 +139,13 @@ export function runBackendLocalCommand(command, options = {}) {
       reject(new Error('任务已取消'));
       return;
     }
-    const child = spawn(command, {
+    const child = spawn(command, withHiddenWindow({
       cwd: options.cwd,
       shell: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, ...(options.env || {}) },
       detached: process.platform !== 'win32',
-    });
+    }));
     let stdout = '';
     let stderr = '';
     let settled = false;

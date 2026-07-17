@@ -24,6 +24,7 @@ import {
   getJdk,
 } from './deploy-store.mjs';
 import { DEPLOY_BACKUP_KEEP_PER_TARGET, DEPLOY_DATA_DIR, DEPLOY_RECORD_KEEP_PER_PROJECT } from '../config/constants.mjs';
+import { withHiddenWindow } from '../utils/child-process.mjs';
 import {
   execSsh,
   shellQuote,
@@ -682,13 +683,13 @@ function runLocalCommand(command, options = {}) {
       return;
     }
 
-    const child = spawn(command, {
+    const child = spawn(command, withHiddenWindow({
       cwd: options.cwd,
       shell: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, ...(options.env || {}) },
       detached: process.platform !== 'win32',
-    });
+    }));
 
     let stdout = '';
     let stderr = '';
