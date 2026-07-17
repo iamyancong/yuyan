@@ -117,6 +117,46 @@ export function selectLatestCompatibleRelease(releases, platform, arch = 'x86_64
   return candidates[0] || null;
 }
 
+/**
+ * 从 Release 的 latest.json 中解析与当前平台匹配的签名 Updater 资源。
+ * @param {object} release - GitHub Release
+ * @param {object} manifest - latest.json 内容
+ * @param {string} platform - 客户端平台
+ * @param {string} arch - CPU 架构
+ * @returns {{ asset: object, signature: string } | null} 签名资源信息
+ */
+export function resolveCompatibleUpdaterAsset(release, manifest, platform, arch = 'x86_64') {
+  const normalizedPlatform = normalizeUpdatePlatform(platform);
+  const normalizedArch = normalizeUpdateArch(arch);
+  if (!normalizedPlatform || !normalizedArch || !manifest?.platforms) return null;
+
+  const releaseVersion = String(release?.tag_name || '').replace(/^v/, '');
+  const manifestVersion = String(manifest?.version || '').replace(/^v/, '');
+  if (!releaseVersion || releaseVersion !== manifestVersion) return null;
+
+  const entry = manifest.platforms[`${normalizedPlatform}-${normalizedArch}`];
+  const signature = String(entry?.signature || '').trim();
+  if (!entry?.url || !signature || signature.length > 16_384) return null;
+
+  let filename = '';
+  try {
+    const url = new URL(String(entry.url));
+    if (url.protocol !== 'https:' || url.hostname !== 'github.com') return null;
+    filename = decodeURIComponent(path.basename(url.pathname));
+  } catch {
+    return null;
+  }
+
+  const lowerFilename = filename.toLowerCase();
+  const validExtension = normalizedPlatform === 'darwin'
+    ? lowerFilename.endsWith('.app.tar.gz')
+    : lowerFilename.endsWith('.exe');
+  if (!validExtension) return null;
+
+  const asset = (release?.assets || []).find((item) => item?.name === filename);
+  return asset?.id ? { asset, signature } : null;
+}
+
 /** 将客户端平台名称转换为更新清单平台名称。 */
 export function normalizeUpdatePlatform(platform = '') {
   if (platform === 'darwin' || platform === 'mac' || platform === 'macos') return 'darwin';

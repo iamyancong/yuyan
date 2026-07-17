@@ -21,7 +21,7 @@ description: 管理雨燕桌面端版本号、GitHub Actions 自动递增、Taur
 
 ## Release 要求
 
-- GitHub Release 必须同时包含 Windows x86_64 `.exe`、macOS ARM64 `.dmg` 和 macOS Intel x86_64 `.dmg`。
+- GitHub Release 必须同时包含 Windows x86_64 `.exe`、macOS ARM64 `.dmg` 和 macOS Intel x86_64 `.dmg`，以及 `latest.json`、Windows 签名 NSIS `.exe + .sig`、macOS 双架构 `.app.tar.gz + .sig`。
 - 只有 Tag、源码 zip 或 tar.gz 不构成客户端可用更新。
 - Release 可标记 prerelease，但 Tag 必须是可比较的语义版本；旧 hash 后缀版本不得压过更高正式版本。
 - GitLab CI 不打包客户端，不创建 GitHub Release。
@@ -31,7 +31,7 @@ description: 管理雨燕桌面端版本号、GitHub Actions 自动递增、Taur
 1. 确认四处源码版本一致。
 2. 运行服务端版本选择测试和 Vue 类型检查。
 3. 检查 GitHub Actions 的 Windows、macOS ARM64、macOS Intel 和 release jobs。
-4. 检查 Release 资产同时包含 Windows x86_64、macOS ARM64 和 macOS Intel 安装包。
+4. 检查 Release 资产同时包含 Windows x86_64、macOS ARM64、macOS Intel 安装包，以及三平台签名 Updater 资源和 `latest.json`。
 5. 用低一版客户端请求 `/deploy-api/app-update/check`，应返回新版本和下载地址。
 6. 用同版本客户端请求，应返回“已是最新版本”。
 

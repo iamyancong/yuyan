@@ -26,6 +26,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": [
       "nsis",
       "dmg",
@@ -67,6 +68,15 @@
         ],
         "displayLanguageSelector": false,
         "installMode": "currentUser"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFCMjE1OTU0MzYwODBBRUUKUldUdUNnZzJWRmtoRzREU2oyVWNwTUxyTDBCOFhJaGFuaTNyeEFFczZONG1kTEVHTGN5dU9BUEcK",
+      "dangerousInsecureTransportProtocol": true,
+      "windows": {
+        "installMode": "passive"
       }
     }
   }

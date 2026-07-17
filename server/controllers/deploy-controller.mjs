@@ -79,6 +79,7 @@ import {
 import { updateAssetCacheManager } from '../services/app-update-cache-service.mjs';
 import {
   fetchGithubAppReleases,
+  fetchGithubReleaseUpdater,
   mapGithubAssetToCacheAsset,
 } from '../services/app-update-release-service.mjs';
 import { generateTargetOpenApi, inspectBackendTarget } from '../services/backend-project-service.mjs';
@@ -1233,6 +1234,22 @@ function buildGithubUpdateAssetUrls(asset, cacheAware) {
 }
 
 /**
+ * 将更新资源相对路径转换为当前内网 API 的绝对地址。
+ * @param {object} req Express 请求
+ * @param {string} resourcePath 资源相对路径
+ * @returns {string} 绝对下载地址
+ */
+function buildAbsoluteAppUpdateUrl(req, resourcePath) {
+  const forwardedProtocol = String(req.headers['x-forwarded-proto'] || '')
+    .split(',')[0]
+    .trim();
+  const protocol = forwardedProtocol || req.protocol || 'http';
+  const host = req.get('host');
+  if (!host) throw new Error('Updater 请求缺少 Host');
+  return new URL(resourcePath, `${protocol}://${host}`).toString();
+}
+
+/**
  * 构建返回客户端的缓存状态。
  * @param {object} status - 缓存服务状态
  * @param {string} cacheStatusUrl - 状态查询地址
@@ -1263,6 +1280,7 @@ export async function handleCheckAppUpdate(req, res) {
     arch = 'x86_64',
     channel = 'stable',
     cacheAware = '0',
+    updaterCapable = '0',
   } = req.query;
   if (!currentVersion) {
     return sendError(res, new Error('缺少必要参数 currentVersion'), 400);
@@ -1278,7 +1296,14 @@ export async function handleCheckAppUpdate(req, res) {
     }
 
     const manifest = await readPublishedUpdateManifest(normalizedChannel);
-    const manifestAsset = getManifestAsset(manifest, normalizedPlatform, normalizedArch);
+    const manifestPlatformAsset = getManifestAsset(manifest, normalizedPlatform, normalizedArch);
+    const wantsUpdater = String(updaterCapable) === '1';
+    const manifestAsset = wantsUpdater
+      ? manifestPlatformAsset?.updater
+      : manifestPlatformAsset;
+    if (wantsUpdater && manifestAsset && !manifestAsset.signature) {
+      return sendError(res, new Error('更新清单中的 Updater 资源缺少签名'), 503);
+    }
     if (manifest && isNewerAppVersion(currentVersion, manifest.version) && manifestAsset) {
       const validAsset = await validateManifestAsset(
         normalizedChannel,
@@ -1353,10 +1378,28 @@ export async function handleCheckAppUpdate(req, res) {
       });
     }
 
-    const { release: latestRelease, asset: targetAsset } = compatibleRelease;
+    const { release: latestRelease, asset: installerAsset } = compatibleRelease;
     const remoteVersion = latestRelease.tag_name;
 
     if (isNewerAppVersion(currentVersion, remoteVersion)) {
+      let targetAsset = installerAsset;
+      let updaterSignature = '';
+      if (wantsUpdater) {
+        const updater = await fetchGithubReleaseUpdater(
+          latestRelease,
+          normalizedPlatform,
+          normalizedArch
+        );
+        if (!updater?.asset?.id || !updater.signature) {
+          return sendError(
+            res,
+            new Error('新版本尚未发布签名 Updater 资源，已阻止退回手工安装包'),
+            503
+          );
+        }
+        targetAsset = updater.asset;
+        updaterSignature = updater.signature;
+      }
       const cacheAsset = mapGithubAssetToCacheAsset(targetAsset);
       const urls = buildGithubUpdateAssetUrls(cacheAsset, String(cacheAware) === '1');
       const cacheStatus = await updateAssetCacheManager.ensureCached(cacheAsset);
@@ -1373,7 +1416,7 @@ export async function handleCheckAppUpdate(req, res) {
         assetId: cacheAsset.assetId,
         size: Number(targetAsset.size || 0),
         sha256: String(targetAsset.digest || '').replace(/^sha256:/, ''),
-        signature: '',
+        signature: updaterSignature,
         etag: '',
         channel: normalizedChannel,
         target,
@@ -1413,28 +1456,73 @@ export async function handleCheckTauriAppUpdate(req, res) {
   const channel = normalizeUpdateChannel(req.query.channel);
   const platform = normalizeUpdatePlatform(target);
   const normalizedArch = normalizeUpdateArch(arch);
+  if (!platform || !normalizedArch) {
+    return sendError(res, new Error('不支持的客户端平台或架构'), 400);
+  }
   const manifest = await readPublishedUpdateManifest(channel);
-  if (!manifest || !isNewerAppVersion(currentVersion, manifest.version)) {
-    return res.status(204).end();
-  }
-
-  const asset = getManifestAsset(manifest, platform, normalizedArch)?.updater;
-  if (!asset?.filename || !asset?.signature) {
-    return sendError(res, new Error('当前版本尚未发布已签名的 Tauri Updater 资源'), 503);
-  }
   const normalizedTarget = `${platform}-${normalizedArch}`;
-  return res.json({
-    version: String(manifest.version).replace(/^v/, ''),
-    pub_date: manifest.pubDate,
-    notes: manifest.notes || '无更新说明。',
-    url: buildPublishedAssetUrl(
+  const manifestAsset = getManifestAsset(manifest, platform, normalizedArch)?.updater;
+  if (manifestAsset && !manifestAsset.signature) {
+    return sendError(res, new Error('更新清单中的 Updater 资源缺少签名'), 503);
+  }
+  if (manifest && isNewerAppVersion(currentVersion, manifest.version) && manifestAsset) {
+    const validAsset = await validateManifestAsset(
       channel,
       manifest.version,
       normalizedTarget,
-      asset.filename
-    ),
-    signature: asset.signature,
-  });
+      manifestAsset
+    );
+    if (!validAsset) {
+      return sendError(res, new Error('签名 Updater 资源校验失败'), 503);
+    }
+    return res.json({
+      version: String(manifest.version).replace(/^v/, ''),
+      pub_date: manifest.pubDate,
+      notes: manifest.notes || '无更新说明。',
+      url: buildAbsoluteAppUpdateUrl(
+        req,
+        buildPublishedAssetUrl(
+          channel,
+          manifest.version,
+          normalizedTarget,
+          manifestAsset.filename
+        )
+      ),
+      signature: manifestAsset.signature,
+    });
+  }
+  if (manifest && !isNewerAppVersion(currentVersion, manifest.version)) {
+    return res.status(204).end();
+  }
+
+  try {
+    const releases = await fetchGithubAppReleases();
+    const compatible = selectLatestCompatibleRelease(releases, platform, normalizedArch);
+    if (!compatible || !isNewerAppVersion(currentVersion, compatible.release.tag_name)) {
+      return res.status(204).end();
+    }
+    const updater = await fetchGithubReleaseUpdater(
+      compatible.release,
+      platform,
+      normalizedArch
+    );
+    if (!updater?.asset?.id || !updater.signature) {
+      return sendError(res, new Error('当前版本尚未发布已签名的 Tauri Updater 资源'), 503);
+    }
+    const cacheAsset = mapGithubAssetToCacheAsset(updater.asset);
+    const urls = buildGithubUpdateAssetUrls(cacheAsset, true);
+    await updateAssetCacheManager.ensureCached(cacheAsset);
+    return res.json({
+      version: String(compatible.release.tag_name).replace(/^v/, ''),
+      pub_date: compatible.release.published_at || compatible.release.created_at,
+      notes: compatible.release.body || '无更新说明。',
+      url: buildAbsoluteAppUpdateUrl(req, urls.downloadUrl),
+      signature: updater.signature,
+    });
+  } catch (error) {
+    console.error('[Update Proxy] Tauri updater 清单查询失败:', error);
+    return sendError(res, error, 503);
+  }
 }
 
 /**

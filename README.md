@@ -193,15 +193,17 @@ pnpm build
 - `GET  /scaffold-api/download/:appName/:timestamp` —— 下载生成的项目压缩包
 - `POST /scaffold-api/ops/backfill-topics` —— 批量补打 `yuyan-ops` 标签
 - `/deploy-api/servers` · `/targets` · `/records` · `/nginx-instances` · `/nginx-runtime` 等 —— 服务器、部署目标、发布记录、Nginx 实例 / 运行时的增删改查与发布、回滚、Nginx 测试、数据库备份恢复等
-- `/deploy-api/app-update/check`、`/deploy-api/app-update/cache-status`、`/deploy-api/app-update/download-asset`、`/app-updates/*` —— 桌面端更新检测、缓存准备状态和内网 Range 下载；安装和退出由 Tauri 原生层负责
+- `/deploy-api/app-update/check`、`/deploy-api/app-update/tauri/:target/:arch/:currentVersion`、`/deploy-api/app-update/cache-status`、`/deploy-api/app-update/download-asset`、`/app-updates/*` —— 桌面端更新检测、Tauri 签名清单、缓存准备状态和内网 Range 下载
 
-中央 API 会在启动后主动预热 macOS ARM、macOS Intel 和 Windows 安装包。同一 GitHub Asset 只允许一个回源任务，失败可从稳定 `.part` 文件续传，校验大小、SHA-256 与安装包格式后原子落盘。新客户端会先展示“服务器准备更新包”，缓存就绪后再从内网高速下载；旧客户端仍保留实时代理兼容路径。该方案不需要购买签名证书，但中央 API 必须配置只读 `GITHUB_TOKEN`，且缓存目录应挂载到持久卷。
+中央 API 会在启动后主动预热 macOS ARM、macOS Intel 和 Windows 安装包及签名 Updater 资源。同一 GitHub Asset 只允许一个回源任务，失败可从稳定 `.part` 文件续传，校验大小、SHA-256 与安装包格式后原子落盘。新客户端携带 `updaterCapable=1`，下载 `.app.tar.gz` 或签名 NSIS，安装前再次执行 Minisign 验签，再由 Tauri Updater 覆盖当前应用并自动重启；旧客户端仍获得 DMG/EXE 并保留原协议。中央 API 必须配置只读 `GITHUB_TOKEN`，缓存目录应挂载到持久卷。
 
 ---
 
 ## 🤖 持续集成
 
-`.github/workflows/build-tauri.yml` 在指定分支推送或手动触发时，于 `windows-latest` 与 `macos-latest` 上完成 Rust / Node 环境准备、依赖安装与 `pnpm run build`，并上传各平台安装包产物。CI 通过 `PERSONAL_ACCESS_TOKEN` 拉取私有包。
+`.github/workflows/build-tauri.yml` 在指定分支推送或手动触发时，于 Windows、macOS ARM 与 macOS Intel runner 完成 Rust / Node 环境准备、依赖安装与 `pnpm run build`，发布 DMG/EXE、签名 Updater 资源和 `latest.json`。CI 通过 `PERSONAL_ACCESS_TOKEN` 拉取私有包；正式构建还必须配置与客户端内置公钥匹配的 `TAURI_SIGNING_PRIVATE_KEY`（可选密码使用 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`）。流水线会用生成的产物反向验证公私钥匹配，错误密钥会阻止 Release。
+
+更新能力发布时必须先把服务端签名清单与缓存逻辑部署到 `yuyan-3.0`，再发布包含新客户端逻辑的桌面版本。首次从旧客户端迁移到该版本可能仍需按旧流程安装一次；此后版本即可在应用内完成覆盖并自动重启。
 
 ---
 

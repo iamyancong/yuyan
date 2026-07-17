@@ -1,6 +1,6 @@
 ---
 description: 雨燕桌面端更新检测、GitHub Release、内网代理下载和缓存机制
-globs: "src/components/UpdateCapsule/**,src/api/deploy.ts,server/controllers/deploy-controller.mjs,server/services/app-update-service.mjs,src-tauri/src/app_update.rs,.gitlab-ci.yml"
+globs: "src/components/UpdateCapsule/**,src/api/deploy.ts,server/controllers/deploy-controller.mjs,server/services/app-update-*.mjs,src-tauri/src/app_update.rs,src-tauri/tauri.conf.json,scripts/generate-update-manifest*,.github/workflows/build-tauri.yml,.gitlab-ci.yml"
 alwaysApply: false
 ---
 

@@ -1,6 +1,7 @@
 # 发现与决策
 
 ## 需求
+- 自动更新安装包校验完成并由用户确认后，应像 `yuyan-vpn` 一样自动完成应用替换并重新启动，不再要求用户手动打开或替换安装包。
 - 左侧菜单切换需要获得即时选中反馈，页面切换过程应丝滑，避免重页面同步挂载让用户感知为点击卡住。
 - 后端部署必须支持 Java 8/17 等不同版本、构建、版本化上传、受控停止/启动、健康检查和回滚。
 - Gateway 作为后端服务管理；Nacos 保存在线地址、命名空间/分组并监测状态。
@@ -11,6 +12,24 @@
 - 自动流程失败应静默退避，手动检查必须即时反馈准备、失败或已是最新版本。
 
 ## 研究发现
+- `yuyan-vpn` 的自动替换与重启闭环基于 Tauri 官方 Updater：`check()` 获取签名更新，`Update.download()` 下载并验签，用户确认后执行 `Update.install()` 覆盖安装，最后由 `@tauri-apps/plugin-process` 的 `relaunch()` 重启应用。
+- `yuyan-vpn` 在 `tauri.conf.json` 中开启 `createUpdaterArtifacts`、配置固定 updater 公钥和 `latest.json` endpoint，权限包含 `updater:default` 与 `process:allow-restart`；这与单纯打开 `.dmg/.exe` 的行为不同。
+- `yuyan-vpn` 当前前端明确禁用了 Windows 应用内更新，已确认的自动替换重启闭环主要是 macOS 官方 updater 的 `.app.tar.gz + .sig` 路径；不能据此假设 Windows 已完成同等线上验证。
+- `yuyan-app` 既有方案保留自研原生断点下载和安装包校验，安装阶段的能力边界仍需结合其 `app_update.rs`、Tauri 配置和 CI 产物进一步核对。
+- `yuyan-app` 已安装 `tauri-plugin-updater` / `tauri-plugin-process`，权限也已有 `updater:default` 和 `process:allow-restart`，但 Builder 尚未注册 updater plugin，`tauri.conf.json` 没有 `createUpdaterArtifacts`、公钥和 endpoint，因此当前官方 updater 实际未启用。
+- 当前 `install_app_update` 在 Windows 对已下载 NSIS EXE 执行 `/S` 后停止内嵌服务并 `app.exit(0)`；在 macOS 仅通过系统 opener 打开 DMG、停止服务并退出。Windows 安装器可能自行覆盖但没有明确的重启参数/握手，macOS 必然仍需用户拖拽替换。
+- 当前 GitHub Actions 只收集和发布 `.exe/.dmg`，没有设置 `TAURI_SIGNING_PRIVATE_KEY`，也没有上传 `.app.tar.gz/.sig` 或生成 `latest.json`；仓库中的 `prepare-app-update-release.mjs` 尚未接入当前工作流。
+- `yuyan-app` 后端其实已经预留官方 Updater 能力：静态 manifest 支持每个平台的 `updater` 元数据，`handleCheckTauriAppUpdate` 能返回 Tauri 2 所需的 `version/url/signature`，`prepare-app-update-release.mjs` 能复制签名资源并写入清单；缺口集中在 CI 生成/传递签名 updater 产物、客户端注册和实际安装调用。
+- `yuyan-vpn` CI 会强制校验 `TAURI_SIGNING_PRIVATE_KEY`，构建时注入私钥，macOS 上传 `.app.tar.gz + .sig`，Windows 上传 NSIS EXE + `.sig`，并生成 `latest.json`；其自动替换能力依赖这一完整签名产物链，不能只复制前端的 `relaunch()` 调用。
+- `yuyan-app` 的自研下载器具有内网代理、断点续传、持久化和 SHA-256 校验优势；直接全面替换为官方 updater 下载会丢掉现有缓存协议。更合适的方向是让内网静态 manifest 提供签名 updater 资产，并在客户端安装阶段交给官方 Updater 完成验签、覆盖和重启，或评估复用官方 Updater 的完整下载流程。
+- Tauri Updater Rust API 的 `Update.install(bytes)` 可安装外部提供的已下载字节；Windows 会自动追加 NSIS `/UPDATE`、按 passive 模式追加 `/P /R` 并退出当前进程，macOS 会替换当前 App 后返回，适合随后调用 `relaunch()`。
+- `Update.install(bytes)` 本身不重新验签，签名验证通常发生在 `Update.download()`；若继续使用自研断点下载，安装前必须用同一 Minisign 公钥/签名显式验签，再把字节交给官方安装器，不能只依赖服务端下发的 SHA-256。
+- 本机虽存在 `~/.tauri/yuyan-vpn-updater.key`，但其 `.pub` 解码后 key id 为 `B8F4F9C648349396`，与仓库内置公钥 key id `1B21595436080AEE` 不一致；本机文件不能用于正式签名，CI 必须使用与已发布 VPN 客户端公钥匹配的既有线上 Secret。
+- 最终兼容协议：旧客户端不携带 `updaterCapable=1`，继续获得 DMG/EXE；新客户端携带能力标识后只接收签名 updater 资产，避免新代码在缺失签名时退回手工 DMG 路径。
+- GitHub Release 将新增 `latest.json`、macOS 双架构 `.app.tar.gz + .sig` 和 Windows NSIS `.exe + .sig`；中央 API 使用 GitHub Token 读取 `latest.json`、把其中 URL 映射回同 Release 的 Asset，再通过既有单任务缓存代理下载。
+- 安装失败时保留已验签的 completed 本机包以便重试；Windows 由 Updater 在退出前钩子停止内嵌 Node 服务并交给 NSIS 自动重启，macOS 覆盖成功后停止 Node 服务，再由 Rust `app.restart()` 重启。
+- 最终实现会在安装前重新请求动态 Tauri 清单，并严格比对版本、签名和下载资源文件名；随后对本机字节再次执行 Minisign 验证，避免已撤回、已替换或错配资源被安装。
+- 首次从不支持签名 Updater 的旧版客户端迁移到本版本，仍需完成最后一次手动安装；安装过支持本协议的版本后，后续更新即可自动覆盖并重启。
 - 用户二轮截图确认：选中菜单的左侧渐变光条与右侧状态珠表达相同“当前项”语义，叠加整块紫色描边后过度强调；两端标记应同时移除，只保留选中面的颜色、边界和图标变化。
 - 折叠态的双层套壳来自三组材质同时可见：品牌/底部外卡片描边，内部 Logo/折叠图标描边，以及两层独立投影；展开态尚可辨识层级，76px 折叠态会聚合成明显双圈。
 - Header 当前使用 `var(--bg-color-container)` 纯色表面，侧栏使用紫青静态渐变；截图中两者在左上交界处存在明显材质断层。Header 应改为低对比水平渐变、细下边界与轻内高光，并同步暗色主题。

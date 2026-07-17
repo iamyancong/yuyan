@@ -45,7 +45,7 @@ const confirmInstall = () => {
     <template #content>
       <div class="update-ready-panel">
         <div class="update-ready-title">新版本 v{{ latestVersion }} 已准备完成</div>
-        <div class="update-ready-hint">安装程序启动后，雨燕将退出以完成升级。</div>
+        <div class="update-ready-hint">确认后将自动覆盖当前版本并重启</div>
         <div class="update-ready-logs">{{ updateLogs }}</div>
         <div class="update-ready-actions">
           <a-button size="small" @click="popoverOpen = false">稍后</a-button>

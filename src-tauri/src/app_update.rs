@@ -1,4 +1,6 @@
 use crate::LocalServerManager;
+use base64::Engine;
+use minisign_verify::{PublicKey, Signature};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -6,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, State};
-use tauri_plugin_opener::OpenerExt;
+use tauri_plugin_updater::UpdaterExt;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
 const UPDATE_SERVER_HOST: &str = match option_env!("UPDATE_SERVER_HOST") {
@@ -47,6 +49,7 @@ pub struct AppUpdateStatus {
     filename: String,
     expected_sha256: Option<String>,
     expected_etag: Option<String>,
+    expected_signature: Option<String>,
 }
 
 impl Default for AppUpdateStatus {
@@ -67,6 +70,7 @@ impl Default for AppUpdateStatus {
             filename: String::new(),
             expected_sha256: None,
             expected_etag: None,
+            expected_signature: None,
         }
     }
 }
@@ -122,6 +126,7 @@ impl AppUpdateManager {
         total_bytes: Option<u64>,
         expected_sha256: Option<String>,
         expected_etag: Option<String>,
+        expected_signature: Option<String>,
     ) {
         self.cancel_requested.store(false, Ordering::Relaxed);
         *self.lock() = AppUpdateStatus {
@@ -140,6 +145,7 @@ impl AppUpdateManager {
             filename,
             expected_sha256,
             expected_etag,
+            expected_signature,
         };
     }
 
@@ -199,6 +205,15 @@ impl AppUpdateManager {
         state.bytes_per_second = 0;
         state.remaining_seconds = Some(0);
         state.resumable = false;
+    }
+
+    /** 将状态切换为安装中，并保留已校验安装包用于失败重试。 */
+    fn mark_installing(&self) {
+        let mut state = self.lock();
+        state.status = "installing".to_string();
+        state.error = None;
+        state.bytes_per_second = 0;
+        state.remaining_seconds = Some(0);
     }
 
     /** 将状态切换为失败。 */
@@ -297,6 +312,7 @@ async fn cleanup_update_files(
         }
         let is_update_file = name.ends_with(".dmg")
             || name.ends_with(".exe")
+            || name.ends_with(".app.tar.gz")
             || name.ends_with(".part")
             || name.ends_with(".part.etag");
         if is_update_file {
@@ -345,6 +361,14 @@ fn validate_update_identity(version: &str, asset_id: &str) -> Result<(), String>
     Ok(())
 }
 
+/** 校验服务端下发的 Minisign 签名元数据。 */
+fn validate_update_signature_metadata(signature: &str) -> Result<(), String> {
+    if signature.is_empty() || signature.len() > 16_384 {
+        return Err("更新资源缺少有效的 Minisign 签名".to_string());
+    }
+    Ok(())
+}
+
 /** 根据字节数计算下载百分比。 */
 fn calculate_progress(downloaded_bytes: u64, total_bytes: Option<u64>) -> u8 {
     total_bytes
@@ -379,6 +403,27 @@ fn validate_download_url(url: &str) -> Result<reqwest::Url, String> {
     Ok(parsed)
 }
 
+/** 构建 Tauri Updater 动态清单地址，运行时沿用编译期内网代理配置。 */
+fn build_tauri_update_endpoint() -> Result<reqwest::Url, String> {
+    let port = UPDATE_SERVER_PORT_STR
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(3100);
+    reqwest::Url::parse(&format!(
+        "{UPDATE_SERVER_SCHEME}://{UPDATE_SERVER_HOST}:{port}/deploy-api/app-update/tauri/{{{{target}}}}/{{{{arch}}}}/{{{{current_version}}}}"
+    ))
+    .map_err(|error| format!("构建 Updater 清单地址失败: {error}"))
+}
+
+/** 判断动态清单中的下载地址仍指向当前已缓存的同名资源。 */
+fn updater_url_matches_filename(url: &reqwest::Url, filename: &str) -> bool {
+    url.query_pairs()
+        .any(|(key, value)| key == "filename" && value == filename)
+        || url
+            .path_segments()
+            .and_then(|segments| segments.last())
+            .is_some_and(|segment| segment == filename)
+}
+
 /** 校验并规范安装包文件名，防止路径穿越和错误格式。 */
 fn validate_filename(filename: &str) -> Result<&str, String> {
     if filename.is_empty() || filename.len() > 128 {
@@ -398,19 +443,21 @@ fn validate_filename(filename: &str) -> Result<&str, String> {
         return Err("更新安装包文件名包含非法字符".to_string());
     }
 
-    let expected_extension = if cfg!(target_os = "windows") {
-        "exe"
+    let normalized_filename = filename.to_ascii_lowercase();
+    let valid_extension = if cfg!(target_os = "windows") {
+        normalized_filename.ends_with(".exe")
     } else if cfg!(target_os = "macos") {
-        "dmg"
+        normalized_filename.ends_with(".app.tar.gz")
     } else {
         return Err("当前操作系统暂不支持自动安装更新".to_string());
     };
-    let extension = Path::new(filename)
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default();
-    if !extension.eq_ignore_ascii_case(expected_extension) {
-        return Err(format!("当前系统仅允许下载 .{expected_extension} 安装包"));
+    if !valid_extension {
+        let expected = if cfg!(target_os = "windows") {
+            ".exe"
+        } else {
+            ".app.tar.gz"
+        };
+        return Err(format!("当前系统仅允许下载 {expected} 签名更新包"));
     }
 
     Ok(filename)
@@ -451,6 +498,12 @@ fn validate_package_signature(
             return Ok(());
         }
         return Err("下载文件不是有效的 macOS DMG 磁盘映像，请重试".to_string());
+    }
+    if filename.to_ascii_lowercase().ends_with(".app.tar.gz") {
+        if first_bytes == [0x1f, 0x8b] {
+            return Ok(());
+        }
+        return Err("下载文件不是有效的 macOS Tauri Updater 压缩包".to_string());
     }
     Err("无法识别更新安装包格式".to_string())
 }
@@ -523,6 +576,35 @@ async fn validate_package_integrity(
     Err(format!(
         "安装包 SHA-256 校验失败，期望 {expected_digest}，实际 {actual_digest}"
     ))
+}
+
+/** 使用内置稳定公钥验证 Tauri Updater 资源的 Minisign 签名。 */
+fn verify_update_signature(bytes: &[u8], release_signature: &str) -> Result<(), String> {
+    validate_update_signature_metadata(release_signature)?;
+    let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+        .map_err(|error| format!("解析内置 Tauri 配置失败: {error}"))?;
+    let configured_public_key = config
+        .pointer("/plugins/updater/pubkey")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "内置 Tauri 配置缺少 Updater 公钥".to_string())?;
+    let public_key_text = base64::engine::general_purpose::STANDARD
+        .decode(configured_public_key)
+        .map_err(|error| format!("解码 Updater 公钥失败: {error}"))?;
+    let public_key_text = std::str::from_utf8(&public_key_text)
+        .map_err(|error| format!("Updater 公钥格式无效: {error}"))?;
+    let public_key = PublicKey::decode(public_key_text)
+        .map_err(|error| format!("读取 Updater 公钥失败: {error}"))?;
+    let signature_text = base64::engine::general_purpose::STANDARD
+        .decode(release_signature)
+        .map_err(|error| format!("解码 Updater 签名失败: {error}"))?;
+    let signature_text = std::str::from_utf8(&signature_text)
+        .map_err(|error| format!("Updater 签名格式无效: {error}"))?;
+    let signature = Signature::decode(signature_text)
+        .map_err(|error| format!("读取 Updater 签名失败: {error}"))?;
+    public_key
+        .verify(bytes, &signature, true)
+        .map_err(|error| format!("Updater Minisign 签名校验失败: {error}"))?;
+    Ok(())
 }
 
 /** 从磁盘恢复已完成安装包或可续传断点。 */
@@ -640,6 +722,7 @@ async fn download_update(
     expected_size: Option<u64>,
     expected_sha256: Option<String>,
     expected_etag: Option<String>,
+    expected_signature: Option<String>,
     deploy_api_token: Option<String>,
     allow_resume: bool,
 ) -> Result<PathBuf, String> {
@@ -684,6 +767,7 @@ async fn download_update(
         expected_size,
         expected_sha256.clone(),
         expected_etag.clone(),
+        expected_signature,
     );
     persist_update_state(&app, &manager.snapshot()).await?;
     let result = download_to_partial(
@@ -895,10 +979,13 @@ pub async fn start_app_update_download(
     expected_size: Option<u64>,
     sha256: Option<String>,
     etag: Option<String>,
+    signature: Option<String>,
     deploy_api_token: Option<String>,
 ) -> Result<AppUpdateCommandResult, String> {
     manager.ensure_initialized(&app).await?;
     validate_update_identity(&version, &asset_id)?;
+    let signature = signature.filter(|value| !value.is_empty());
+    validate_update_signature_metadata(signature.as_deref().unwrap_or_default())?;
     let safe_filename = validate_filename(&filename)?.to_string();
     let matches_asset = manager.matches_asset(&version, &asset_id, &safe_filename);
     let current_status = manager.snapshot().status;
@@ -944,6 +1031,7 @@ pub async fn start_app_update_download(
             expected_size.filter(|size| *size > 0),
             sha256.filter(|value| !value.is_empty()),
             etag.filter(|value| !value.is_empty()),
+            signature,
             deploy_api_token.filter(|value| !value.is_empty()),
             matches_asset,
         )
@@ -1032,12 +1120,13 @@ pub fn get_app_update_target() -> AppUpdateTarget {
     }
 }
 
-/** 使用系统默认程序打开已下载的更新安装包。 */
+/** 验签已下载的 Updater 资源，覆盖当前应用并自动重启。 */
 #[tauri::command]
 pub async fn install_app_update(
     app: AppHandle,
     manager: State<'_, AppUpdateManager>,
     server_manager: State<'_, LocalServerManager>,
+    deploy_api_token: Option<String>,
 ) -> Result<AppUpdateCommandResult, String> {
     manager.ensure_initialized(&app).await?;
     let snapshot = manager.snapshot();
@@ -1063,39 +1152,72 @@ pub async fn install_app_update(
     )
     .await?;
     validate_package_file(&expected_path, filename).await?;
-
+    let expected_signature = snapshot
+        .expected_signature
+        .as_deref()
+        .ok_or_else(|| "更新资源缺少 Minisign 签名，请重新下载".to_string())?;
+    let endpoint = build_tauri_update_endpoint()?;
+    let mut updater_builder = app
+        .updater_builder()
+        .endpoints(vec![endpoint])
+        .map_err(|error| format!("配置 Updater 清单地址失败: {error}"))?;
+    if let Some(token) = deploy_api_token.filter(|value| !value.is_empty()) {
+        updater_builder = updater_builder
+            .header("X-Deploy-Token", token)
+            .map_err(|error| format!("配置 Updater 鉴权失败: {error}"))?;
+    }
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new(&expected_path)
-            .arg("/S")
-            .spawn()
-            .map_err(|error| format!("拉起静默更新安装程序失败: {error}"))?;
-        // 启动安装程序后，当前应用应该立即退出，以防文件被占用导致更新覆盖失败
-        server_manager.stop("app update install");
-        app.exit(0);
+        let exit_server_manager = server_manager.inner().clone();
+        updater_builder = updater_builder.on_before_exit(move || {
+            exit_server_manager.stop("app update install");
+        });
+    }
+    let updater = updater_builder
+        .build()
+        .map_err(|error| format!("初始化 Tauri Updater 失败: {error}"))?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|error| format!("重新确认签名更新清单失败: {error}"))?
+        .ok_or_else(|| "签名更新已撤回或当前版本已是最新版本".to_string())?;
+    if update.version.trim_start_matches('v') != snapshot.version.trim_start_matches('v') {
+        return Err(format!(
+            "签名更新版本已变化，当前缓存为 {}，服务器返回 {}",
+            snapshot.version, update.version
+        ));
+    }
+    if update.signature != expected_signature {
+        return Err("签名更新元数据已变化，请重新下载".to_string());
+    }
+    if !updater_url_matches_filename(&update.download_url, &snapshot.filename) {
+        return Err("签名更新资源地址与本机缓存不一致，请重新下载".to_string());
     }
 
-    #[cfg(not(target_os = "windows"))]
-    {
-        app.opener()
-            .open_path(expected_path.to_string_lossy().into_owned(), None::<&str>)
-            .map_err(|error| format!("拉起更新安装程序失败: {error}"))?;
-        server_manager.stop("app update install");
-        app.exit(0);
+    let bytes = tokio::fs::read(&expected_path)
+        .await
+        .map_err(|error| format!("读取签名更新资源失败: {error}"))?;
+    verify_update_signature(&bytes, expected_signature)?;
+    manager.mark_installing();
+    persist_update_state(&app, &manager.snapshot()).await?;
+    if let Err(error) = update.install(&bytes) {
+        manager.mark_completed(&expected_path);
+        let _ = persist_update_state(&app, &manager.snapshot()).await;
+        return Err(format!("Tauri Updater 覆盖安装失败: {error}"));
     }
 
-    Ok(AppUpdateCommandResult {
-        success: true,
-        message: "更新安装程序已启动".to_string(),
-    })
+    server_manager.stop("app update installed");
+    app.restart();
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        build_download_request, cleanup_update_files, parse_content_range, validate_download_url,
+        build_download_request, build_tauri_update_endpoint, cleanup_update_files,
+        parse_content_range, updater_url_matches_filename, validate_download_url,
         validate_downloaded_length, validate_filename, validate_package_signature,
-        validate_update_identity, AppUpdateManager, UPDATE_STATE_FILENAME,
+        validate_update_identity, validate_update_signature_metadata, AppUpdateManager,
+        UPDATE_STATE_FILENAME,
     };
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1106,14 +1228,14 @@ mod tests {
             .and_then(|p| p.parse::<u16>().ok())
             .unwrap_or(3100);
         let valid_url = format!(
-            "http://{}:{}/deploy-api/app-update/download-asset?assetId=123&filename=yuyan.dmg",
+            "http://{}:{}/deploy-api/app-update/download-asset?assetId=123&filename=yuyan.app.tar.gz",
             super::UPDATE_SERVER_HOST,
             port
         );
         assert!(validate_download_url(&valid_url).is_ok());
 
         let valid_static_url = format!(
-            "http://{}:{}/app-updates/stable/1.2.3/darwin-aarch64/yuyan.dmg",
+            "http://{}:{}/app-updates/stable/1.2.3/darwin-aarch64/yuyan.app.tar.gz",
             super::UPDATE_SERVER_HOST,
             port
         );
@@ -1137,7 +1259,7 @@ mod tests {
             .unwrap_or(3100);
         let client = reqwest::Client::new();
         let proxy_url = format!(
-            "http://{}:{}/deploy-api/app-update/download-asset?assetId=123&filename=yuyan.dmg",
+            "http://{}:{}/deploy-api/app-update/download-asset?assetId=123&filename=yuyan.app.tar.gz",
             super::UPDATE_SERVER_HOST,
             port
         )
@@ -1155,7 +1277,7 @@ mod tests {
         );
 
         let static_url = format!(
-            "http://{}:{}/app-updates/stable/1.2.3/darwin-aarch64/yuyan.dmg",
+            "http://{}:{}/app-updates/stable/1.2.3/darwin-aarch64/yuyan.app.tar.gz",
             super::UPDATE_SERVER_HOST,
             port
         )
@@ -1174,7 +1296,8 @@ mod tests {
         assert!(validate_filename("yuyan 1.0.0.dmg").is_err());
 
         if cfg!(target_os = "macos") {
-            assert!(validate_filename("yuyan-1.0.0.dmg").is_ok());
+            assert!(validate_filename("yuyan-1.0.0.app.tar.gz").is_ok());
+            assert!(validate_filename("yuyan-1.0.0.dmg").is_err());
             assert!(validate_filename("yuyan-1.0.0.exe").is_err());
         } else if cfg!(target_os = "windows") {
             assert!(validate_filename("yuyan-1.0.0.exe").is_ok());
@@ -1203,6 +1326,7 @@ mod tests {
             Some(1000),
             Some("a".repeat(64)),
             Some("update-etag".to_string()),
+            Some("signed-updater".to_string()),
         );
         manager.set_download_progress(420, Some(1000), 100, true, 1);
         let downloading = manager.snapshot();
@@ -1225,6 +1349,8 @@ mod tests {
         assert!(validate_update_identity("1.2.9-beta.1", "manifest:1.2.9:darwin_aarch64").is_ok());
         assert!(validate_update_identity("../1.2.9", "github:123").is_err());
         assert!(validate_update_identity("1.2.9", "asset/123").is_err());
+        assert!(validate_update_signature_metadata("signed-updater").is_ok());
+        assert!(validate_update_signature_metadata("").is_err());
     }
 
     /** 验证清理旧版本时保留当前安装包、断点和状态文件。 */
@@ -1237,9 +1363,9 @@ mod tests {
         let directory = std::env::temp_dir().join(format!("yuyan-update-cleanup-{unique}"));
         std::fs::create_dir_all(&directory).expect("应创建测试目录");
         for filename in [
-            "current.dmg",
-            "current.dmg.part",
-            "current.dmg.part.etag",
+            "current.app.tar.gz",
+            "current.app.tar.gz.part",
+            "current.app.tar.gz.part.etag",
             "old.dmg",
             "old.exe.part",
             UPDATE_STATE_FILENAME,
@@ -1247,12 +1373,15 @@ mod tests {
             std::fs::write(directory.join(filename), b"test").expect("应写入测试文件");
         }
 
-        tauri::async_runtime::block_on(cleanup_update_files(&directory, Some("current.dmg")))
-            .expect("清理旧更新文件应成功");
+        tauri::async_runtime::block_on(cleanup_update_files(
+            &directory,
+            Some("current.app.tar.gz"),
+        ))
+        .expect("清理旧更新文件应成功");
 
-        assert!(directory.join("current.dmg").is_file());
-        assert!(directory.join("current.dmg.part").is_file());
-        assert!(directory.join("current.dmg.part.etag").is_file());
+        assert!(directory.join("current.app.tar.gz").is_file());
+        assert!(directory.join("current.app.tar.gz.part").is_file());
+        assert!(directory.join("current.app.tar.gz.part.etag").is_file());
         assert!(directory.join(UPDATE_STATE_FILENAME).is_file());
         assert!(!directory.join("old.dmg").exists());
         assert!(!directory.join("old.exe.part").exists());
@@ -1266,12 +1395,32 @@ mod tests {
         assert_eq!(parse_content_range("invalid"), None);
     }
 
-    /** 验证 DMG 和 EXE 关键格式签名。 */
+    /** 验证 DMG、EXE 和 macOS Updater 关键格式签名。 */
     #[test]
     fn validates_package_signatures() {
         assert!(validate_package_signature("yuyan.exe", b"MZ", None).is_ok());
         assert!(validate_package_signature("yuyan.exe", b"PK", None).is_err());
         assert!(validate_package_signature("yuyan.dmg", b"\0\0", Some(b"koly")).is_ok());
         assert!(validate_package_signature("yuyan.dmg", b"\0\0", Some(b"bad!")).is_err());
+        assert!(validate_package_signature("yuyan.app.tar.gz", &[0x1f, 0x8b], None).is_ok());
+        assert!(validate_package_signature("yuyan.app.tar.gz", b"PK", None).is_err());
+    }
+
+    /** 验证动态清单地址变量和资源文件名匹配。 */
+    #[test]
+    fn builds_tauri_endpoint_and_matches_asset_filename() {
+        let endpoint = build_tauri_update_endpoint().expect("应构建动态清单地址");
+        assert!(endpoint.as_str().contains("%7B%7Btarget%7D%7D"));
+        let proxy_url: reqwest::Url = format!(
+            "http://{}:3100/deploy-api/app-update/download-asset?assetId=1&filename=yuyan.app.tar.gz",
+            super::UPDATE_SERVER_HOST
+        )
+        .parse()
+        .expect("代理 URL 应有效");
+        assert!(updater_url_matches_filename(&proxy_url, "yuyan.app.tar.gz"));
+        assert!(!updater_url_matches_filename(
+            &proxy_url,
+            "other.app.tar.gz"
+        ));
     }
 }

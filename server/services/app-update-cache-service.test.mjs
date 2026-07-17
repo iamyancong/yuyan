@@ -26,6 +26,14 @@ function createDmgPayload(size = 1024 * 1024 + 512) {
   return payload;
 }
 
+/** 创建带 Gzip 文件头的 macOS updater 数据。 */
+function createMacUpdaterPayload(size = 1024 * 1024 + 32) {
+  const payload = Buffer.alloc(size, 0x41);
+  payload[0] = 0x1f;
+  payload[1] = 0x8b;
+  return payload;
+}
+
 /** 计算测试数据 SHA-256。 */
 function digestPayload(payload) {
   return crypto.createHash('sha256').update(payload).digest('hex');
@@ -88,6 +96,17 @@ test('DMG 缓存必须包含 UDIF koly 尾部签名', async () => {
     await fs.writeFile(invalidPath, Buffer.alloc(1024 * 1024 + 512));
     assert.equal(validateUpdateAssetSignature(validPath, 'valid.dmg'), true);
     assert.equal(validateUpdateAssetSignature(invalidPath, 'invalid.dmg'), false);
+  });
+});
+
+test('macOS Updater 缓存必须包含 Gzip 文件头', async () => {
+  await withTempCache(async (cacheDir) => {
+    const validPath = path.join(cacheDir, 'valid.app.tar.gz');
+    const invalidPath = path.join(cacheDir, 'invalid.app.tar.gz');
+    await fs.writeFile(validPath, createMacUpdaterPayload());
+    await fs.writeFile(invalidPath, Buffer.alloc(1024 * 1024 + 32));
+    assert.equal(validateUpdateAssetSignature(validPath, 'valid.app.tar.gz'), true);
+    assert.equal(validateUpdateAssetSignature(invalidPath, 'invalid.app.tar.gz'), false);
   });
 });
 

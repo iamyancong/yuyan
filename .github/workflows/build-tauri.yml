@@ -32,6 +32,19 @@ jobs:
         with:
           node-version: 22
 
+      - name: Validate updater signing secret
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo 'Missing repository secret: TAURI_SIGNING_PRIVATE_KEY' >&2
+            exit 1
+          fi
+
+      - name: Test updater manifest generator
+        run: node --test scripts/generate-update-manifest.test.js
+
       - name: Calculate Version
         id: calc
         run: node scripts/bump-version.js
@@ -119,6 +132,8 @@ jobs:
           CI: true
           GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
           NODE_OPTIONS: '--max-old-space-size=4096'
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Verify macOS Bundle Architecture
         if: runner.os == 'macOS'
@@ -136,8 +151,25 @@ jobs:
       - name: Prepare Update Artifact
         shell: bash
         run: |
-          mkdir -p "update-artifact/${{ matrix.update_target }}"
-          cp ${{ matrix.bundle_path }} "update-artifact/${{ matrix.update_target }}/"
+          TARGET_DIR="update-artifact/${{ matrix.update_target }}"
+          VERSION="${{ needs.prep-version.outputs.version }}"
+          mkdir -p "$TARGET_DIR"
+          cp ${{ matrix.bundle_path }} "$TARGET_DIR/"
+          if [ "${{ runner.os }}" = 'Windows' ]; then
+            UPDATER_FILE=$(find src-tauri/target/release/bundle/nsis -maxdepth 1 -name '*.exe' -type f -print -quit)
+            UPDATE_NAME="yuyan_${VERSION}_windows-x86_64-setup.exe"
+          else
+            UPDATER_FILE=$(find src-tauri/target/release/bundle/macos -maxdepth 1 -name '*.app.tar.gz' -type f -print -quit)
+            UPDATE_NAME="yuyan_${VERSION}_${{ matrix.update_target }}.app.tar.gz"
+          fi
+          test -n "$UPDATER_FILE"
+          test -f "${UPDATER_FILE}.sig"
+          cp "$UPDATER_FILE" "$TARGET_DIR/$UPDATE_NAME"
+          cp "${UPDATER_FILE}.sig" "$TARGET_DIR/${UPDATE_NAME}.sig"
+          cargo run \
+            --manifest-path src-tauri/Cargo.toml \
+            --example verify_update_signature \
+            -- "$TARGET_DIR/$UPDATE_NAME" "$TARGET_DIR/${UPDATE_NAME}.sig"
 
       - name: Upload Update Artifact
         uses: actions/upload-artifact@v7
@@ -170,6 +202,21 @@ jobs:
           name: yuyan-macos-x86_64
           path: ./dist-release
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Generate signed updater manifest
+        env:
+          RELEASE_NOTES: ${{ github.event.head_commit.message }}
+        run: >-
+          node scripts/generate-update-manifest.js
+          "${{ needs.prep-version.outputs.version }}"
+          "${{ needs.prep-version.outputs.tag }}"
+          "${{ github.repository }}"
+          ./dist-release
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
@@ -180,15 +227,10 @@ jobs:
           body: |
             ${{ github.event.head_commit.message }}
           files: |
-            ./dist-release/**/*.exe
-            ./dist-release/**/*.dmg
+            ./dist-release/latest.json
+            ./dist-release/**/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 22
 
       - name: Commit and Push version bump
         run: |

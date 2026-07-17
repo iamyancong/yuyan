@@ -3,7 +3,10 @@ import {
   APP_UPDATE_PRELOAD_INITIAL_DELAY_MS,
   APP_UPDATE_PRELOAD_INTERVAL_MS,
 } from '../config/constants.mjs';
-import { selectLatestCompatibleRelease } from './app-update-service.mjs';
+import {
+  resolveCompatibleUpdaterAsset,
+  selectLatestCompatibleRelease,
+} from './app-update-service.mjs';
 import { updateAssetCacheManager } from './app-update-cache-service.mjs';
 
 /** GitHub 托管仓库名。 */
@@ -18,6 +21,12 @@ const APP_UPDATE_PRELOAD_TARGETS = [
 
 /** 当前并发 GitHub Releases 查询。 */
 let activeReleaseRequest = null;
+
+/** 已读取的不可变 GitHub updater manifest。 */
+const updaterManifestCache = new Map();
+
+/** 正在读取的 GitHub updater manifest 请求。 */
+const updaterManifestRequests = new Map();
 
 /** 当前主动预热定时器。 */
 let preloadInterval = null;
@@ -62,6 +71,57 @@ export async function fetchGithubAppReleases() {
 }
 
 /**
+ * 读取指定 Release 中的 latest.json。
+ * @param {object} release GitHub Release
+ * @returns {Promise<object | null>} updater manifest
+ */
+export async function fetchGithubUpdaterManifest(release) {
+  const manifestAsset = (release?.assets || []).find((asset) => asset?.name === 'latest.json');
+  if (!manifestAsset?.id) return null;
+  const cacheKey = String(manifestAsset.id);
+  if (updaterManifestCache.has(cacheKey)) return updaterManifestCache.get(cacheKey);
+  if (updaterManifestRequests.has(cacheKey)) return updaterManifestRequests.get(cacheKey);
+
+  const request = axios.get(
+    `https://api.github.com/repos/${GITHUB_REPO}/releases/assets/${manifestAsset.id}`,
+    {
+      headers: {
+        ...getGithubApiHeaders(),
+        'Accept': 'application/octet-stream',
+      },
+      responseType: 'text',
+      maxContentLength: 1024 * 1024,
+      timeout: 30_000,
+    }
+  ).then((response) => {
+    const manifest = typeof response.data === 'string'
+      ? JSON.parse(response.data)
+      : response.data;
+    if (!manifest?.version || !manifest?.platforms || typeof manifest.platforms !== 'object') {
+      throw new Error('GitHub latest.json 缺少 version 或 platforms');
+    }
+    updaterManifestCache.set(cacheKey, manifest);
+    return manifest;
+  }).finally(() => {
+    updaterManifestRequests.delete(cacheKey);
+  });
+  updaterManifestRequests.set(cacheKey, request);
+  return request;
+}
+
+/**
+ * 解析指定 Release 的签名 updater 资产。
+ * @param {object} release GitHub Release
+ * @param {string} platform 客户端平台
+ * @param {string} arch CPU 架构
+ * @returns {Promise<{ asset: object, signature: string } | null>} 签名资产
+ */
+export async function fetchGithubReleaseUpdater(release, platform, arch) {
+  const manifest = await fetchGithubUpdaterManifest(release);
+  return resolveCompatibleUpdaterAsset(release, manifest, platform, arch);
+}
+
+/**
  * 将 GitHub Asset 转换为缓存服务元数据。
  * @param {object} asset - GitHub Release Asset
  * @returns {object} 缓存资源元数据
@@ -92,8 +152,24 @@ export async function preloadLatestAppUpdateAssets() {
   for (const target of APP_UPDATE_PRELOAD_TARGETS) {
     const compatible = selectLatestCompatibleRelease(releases, target.platform, target.arch);
     if (!compatible?.asset?.id) continue;
-    const asset = mapGithubAssetToCacheAsset(compatible.asset);
-    assets.set(asset.assetId, asset);
+    const installerAsset = mapGithubAssetToCacheAsset(compatible.asset);
+    assets.set(installerAsset.assetId, installerAsset);
+    try {
+      const updater = await fetchGithubReleaseUpdater(
+        compatible.release,
+        target.platform,
+        target.arch
+      );
+      if (updater?.asset?.id) {
+        const updaterAsset = mapGithubAssetToCacheAsset(updater.asset);
+        assets.set(updaterAsset.assetId, updaterAsset);
+      }
+    } catch (error) {
+      console.warn(
+        `[Update Preload] ${target.platform}-${target.arch} 签名资源解析失败:`,
+        error.message || error
+      );
+    }
   }
 
   const statuses = await Promise.all(
@@ -101,7 +177,7 @@ export async function preloadLatestAppUpdateAssets() {
   );
   if (statuses.length > 0) {
     const summary = statuses.map((status) => `${status.filename}:${status.status}`).join(', ');
-    console.log(`[Update Preload] 最新安装包预热状态: ${summary}`);
+    console.log(`[Update Preload] 最新安装包与签名更新资源预热状态: ${summary}`);
   }
   return statuses;
 }

@@ -88,7 +88,7 @@ async function calculateSha256(filePath) {
 }
 
 /**
- * 校验 DMG/EXE 安装包格式签名。
+ * 校验 DMG/EXE/Tauri macOS 压缩包格式签名。
  * @param {string} filePath - 安装包路径
  * @param {string} filename - 安装包文件名
  * @returns {boolean} 是否为受支持的有效安装包格式
@@ -98,7 +98,8 @@ export function validateUpdateAssetSignature(filePath, filename) {
     const stats = fsSync.statSync(filePath);
     if (!stats.isFile() || stats.size <= MIN_UPDATE_ASSET_SIZE) return false;
 
-    const extension = path.extname(filename).toLowerCase();
+    const normalizedFilename = String(filename).toLowerCase();
+    const extension = path.extname(normalizedFilename);
     const descriptor = fsSync.openSync(filePath, 'r');
     try {
       if (extension === '.exe') {
@@ -110,6 +111,11 @@ export function validateUpdateAssetSignature(filePath, filename) {
         const trailer = Buffer.alloc(4);
         fsSync.readSync(descriptor, trailer, 0, trailer.length, stats.size - 512);
         return trailer.equals(Buffer.from('koly'));
+      }
+      if (normalizedFilename.endsWith('.app.tar.gz')) {
+        const header = Buffer.alloc(2);
+        fsSync.readSync(descriptor, header, 0, header.length, 0);
+        return header.equals(Buffer.from([0x1f, 0x8b]));
       }
       return false;
     } finally {

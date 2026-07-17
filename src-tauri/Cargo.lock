@@ -5583,8 +5583,10 @@ dependencies = [
 name = "yuyan-app"
 version = "1.2.15"
 dependencies = [
+ "base64 0.22.1",
  "cocoa",
  "fs2",
+ "minisign-verify",
  "objc",
  "reqwest 0.12.28",
  "serde",
