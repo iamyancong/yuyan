@@ -13,7 +13,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tauri = { version = "2", features = ["default", "image-png"] }
+tauri = { version = "2", features = ["default", "image-png", "tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
