@@ -8,6 +8,8 @@ use tauri::image::Image;
 use tauri::{Emitter, Manager};
 
 mod app_update;
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+mod tray;
 
 const DARK_ICON: &[u8] = include_bytes!("../resources/yuyan_dark_clean.png");
 const LIGHT_ICON: &[u8] = include_bytes!("../resources/yuyan_light_clean.png");
@@ -799,16 +801,22 @@ pub fn run() {
 
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
                 {
-                    // 在 macOS 下，点击叉号不退出，仅隐藏窗口
-                    api.prevent_close();
-                    let _ = window.hide();
+                    if window.label() == "main" {
+                        // 在 macOS 和 Windows 下，点击叉号不退出，仅隐藏主窗口
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
                 }
             }
         })
         .on_menu_event(|app_handle, event| {
             let event_id = event.id().as_ref();
+            #[cfg(target_os = "windows")]
+            if tray::handle_menu_event(app_handle, event_id) {
+                return;
+            }
             if event_id == "check-update" {
                 let _ = app_handle.emit("menu-check-update", ());
             } else if event_id == "about-yuyan" {
@@ -816,6 +824,9 @@ pub fn run() {
             }
         })
         .setup(move |app| {
+            #[cfg(target_os = "windows")]
+            tray::setup(app)?;
+
             #[cfg(target_os = "macos")]
             {
                 use tauri::menu::{Menu, MenuItemBuilder};
