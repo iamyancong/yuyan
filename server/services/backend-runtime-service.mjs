@@ -107,6 +107,84 @@ async function withBackendBuildSlot(runner) {
 }
 
 /**
+ * 在当前设备构建中央部署目标的 Jar，但不读取任何中央 SSH/Nacos 凭据。
+ * @param {Object} target 中央返回的脱敏部署目标
+ * @param {{branch?:string, gitlabToken?:string, signal?:AbortSignal}} payload 构建参数
+ * @param {{stage?:(stage:string, percent:number, message:string, detail?:string)=>void, log?:(level:string, message:string, stage?:string)=>void}} emit 进度输出器
+ * @returns {Promise<{artifactPath:string, artifactName:string, artifactSha256:string, sizeBytes:number, branch:string, commitSha:string, commitMessage:string, commitAuthor:string}>} 构建产物元数据
+ */
+export async function buildBackendArtifactOnDevice(target, payload = {}, emit = {}) {
+  if (!target || target.projectType !== 'backend') throw new Error('后端部署目标不存在');
+  if (!target.repositoryUrl) throw new Error('后端目标未配置 Git 仓库地址');
+  if (!target.buildCommand) throw new Error('后端目标未配置 Maven 构建命令');
+  const requiredJdkAlias = String(target.requiredJdkAlias || '').trim();
+  if (!requiredJdkAlias) throw new Error('后端目标未声明本机构建 JDK 版本');
+  const buildJdk = await findJdkByAlias(requiredJdkAlias);
+  if (!buildJdk || buildJdk.status !== 'available' || !buildJdk.majorVersion) {
+    throw new Error(`当前设备未检测到满足 Java ${requiredJdkAlias} 的构建环境，请先在 Java 环境管理中检测本机 JDK`);
+  }
+  const branch = String(payload.branch || target.defaultBranch || '').trim();
+  if (!branch) throw new Error('后端发布分支不能为空');
+  const signal = payload.signal;
+  const log = (level, message, stage = '') => emit.log?.(level, redactDeployLog(message), stage);
+  emit.stage?.('clone', 12, '设备正在同步后端代码', `${target.projectName || target.id}#${branch}`);
+  const workspace = await syncBackendWorkspace({
+    target,
+    branch,
+    gitlabToken: payload.gitlabToken || '',
+    signal,
+    log,
+  });
+  const env = { JAVA_HOME: buildJdk.homePath, PATH: `${path.join(buildJdk.homePath, 'bin')}:${process.env.PATH}` };
+  if (buildJdk.isDownwardCompatible) {
+    log('warning', `本机未找到完全匹配的 Java ${buildJdk.originalRequiredVersion}，使用 ${buildJdk.name} 构建`, 'build');
+  }
+  const installCommand = target.installCommand
+    ? await prepareBackendMavenCommand(target.installCommand, workspace.repoDir, {
+        onLog: (level, message) => log(level, message, 'install'),
+      })
+    : '';
+  const buildCommand = await prepareBackendMavenCommand(target.buildCommand, workspace.repoDir, {
+    onLog: (level, message) => log(level, message, 'build'),
+  });
+  await withBackendBuildSlot(async () => {
+    if (installCommand) {
+      emit.stage?.('install', 26, '设备正在准备 Maven 依赖', installCommand);
+      await runBackendLocalCommand(installCommand, {
+        cwd: workspace.repoDir,
+        env,
+        signal,
+        label: 'Maven 预热',
+        onLog: (level, message) => log(level, message, 'install'),
+      });
+    }
+    emit.stage?.('build', 42, '设备正在构建后端 Jar', buildCommand);
+    await runBackendLocalCommand(buildCommand, {
+      cwd: workspace.repoDir,
+      env,
+      signal,
+      label: 'Maven 构建',
+      onLog: (level, message) => log(level, message, 'build'),
+    });
+  });
+  const artifact = await resolveBackendArtifact(workspace.repoDir, target.artifactPattern || target.artifactDir);
+  const artifactSha256 = await createFileSha256(artifact.jarPath);
+  const stat = await fsStatSafe(artifact.jarPath);
+  if (!stat?.isFile() || stat.size <= 0) throw new Error('设备构建产物不存在或为空');
+  log('success', `设备构建完成：${artifact.jarName} (${artifactSha256.slice(0, 12)})`, 'build');
+  return {
+    artifactPath: artifact.jarPath,
+    artifactName: normalizePublishedJarName(artifact.jarName),
+    artifactSha256,
+    sizeBytes: stat.size,
+    branch,
+    commitSha: workspace.commitSha,
+    commitMessage: workspace.commitMessage,
+    commitAuthor: workspace.commitAuthor,
+  };
+}
+
+/**
  * 串行执行同一服务器的激活阶段。
  * @param {number} serverId 服务器 ID
  * @param {() => Promise<*>} runner 任务
@@ -906,6 +984,139 @@ export async function deployBackendTarget(targetId, payload, emit) {
     if (signal?.aborted) emit?.result(failed);
     else emit?.error(error instanceof Error ? error.message : String(error), 'error');
     if (signal?.aborted) return failed;
+    throw error;
+  }
+}
+
+/**
+ * 使用设备已构建并由中央校验过的 Jar 执行中央部署。
+ * @param {number} targetId 目标 ID
+ * @param {{artifactPath:string, artifactSha256:string, artifactName:string, commitSha:string, commitMessage?:string, commitAuthor?:string, branch:string, operator:string, signal?:AbortSignal}} payload 产物元数据
+ * @param {Object} emit 进度输出器
+ * @returns {Promise<Object>} 发布记录
+ */
+export async function deployBackendArtifact(targetId, payload, emit) {
+  const context = await getBackendContext(targetId, { requireBuild: false });
+  const { target, server } = context;
+  const operator = String(payload.operator || '').trim() || '未知操作人';
+  const signal = payload.signal;
+  const logs = [];
+  const log = (level, message, stage = '') => {
+    const safeMessage = redactDeployLog(message);
+    logs.push({ level, message: safeMessage, stage, timestamp: new Date().toISOString() });
+    emit?.log(level, safeMessage, stage);
+  };
+  const stage = (key, percent, message, detail = '') => emit?.stage(key, percent, message, detail);
+  const localStat = await fsStatSafe(payload.artifactPath);
+  if (!localStat?.isFile()) throw new Error('中央待部署 Jar 不存在');
+  const actualChecksum = await createFileSha256(payload.artifactPath);
+  if (actualChecksum.toLowerCase() !== String(payload.artifactSha256 || '').toLowerCase()) throw new Error('中央部署前 Jar SHA-256 复核失败');
+  const record = await createRecord({
+    targetId: target.id,
+    projectId: target.projectId,
+    projectName: target.projectName,
+    envName: target.envName || '测试',
+    branch: payload.branch || target.defaultBranch,
+    action: 'deploy',
+    status: 'running',
+    operator,
+    logs,
+  });
+  let backendRelease = null;
+  let previousRelease = null;
+  let controller = null;
+  let activationStarted = false;
+  let restoredPrevious = false;
+  try {
+    previousRelease = await getCurrentBackendRelease(target.id);
+    await updateBackendServiceStatus(target.id, { status: 'deploying', output: '中央正在部署设备构建产物' });
+    stage('validate', 10, '中央发布预检', `Commit ${payload.commitSha}`);
+    log('info', `设备产物已通过 SHA-256 校验：${actualChecksum.slice(0, 12)}`, 'validate');
+    const publishedJarName = normalizePublishedJarName(payload.artifactName || path.basename(payload.artifactPath));
+    const releaseName = createBackendReleaseName();
+    const paths = getBackendRuntimePaths(target);
+    const releaseDir = path.posix.join(paths.releasesDir, releaseName);
+    await withServerActivationLock(server.id, async () => withSsh(server, async (conn) => {
+      controller = await prepareRuntimeController(conn, context, log);
+      await assertNacosAvailable(conn, target);
+      await acquireRemoteDeployLock(conn, controller.paths);
+      try {
+        const disk = await execSsh(conn, `df -Pk ${shellQuote(controller.paths.root)} | awk 'NR==2 {print $4}'`, { label: '检查磁盘空间' });
+        const availableBytes = Number(disk.stdout.trim() || 0) * 1024;
+        if (availableBytes < localStat.size * 2 + 100 * 1024 * 1024) throw new Error('服务器磁盘空间不足，至少需要 Jar 大小两倍加 100MB');
+        stage('upload', 55, '中央上传版本产物', releaseDir);
+        await uploadBackendRelease(conn, { releaseDir, jarName: publishedJarName, paths: controller.paths }, payload.artifactPath, actualChecksum);
+        backendRelease = await createBackendRelease({
+          targetId: target.id,
+          recordId: record.id,
+          releaseName,
+          releaseDir,
+          jarName: publishedJarName,
+          artifactSha256: actualChecksum,
+          commitSha: payload.commitSha,
+        });
+        const beforeStatus = await runControllerAction(conn, controller, 'status');
+        if (parseServiceStatus(controller, beforeStatus) === 'offline') {
+          const portCheck = await execSsh(conn, `if command -v ss >/dev/null 2>&1; then ss -ltn | awk '{print $4}' | grep -Eq '[:.]${target.serverPort}$'; else exit 1; fi`, { allowFailure: true, label: '检查端口占用' });
+          if (portCheck.code === 0) throw new Error(`端口 ${target.serverPort} 已被非当前服务占用`);
+        }
+        stage('stop', 72, '停止旧服务', '优雅停止当前版本');
+        activationStarted = true;
+        await runControllerAction(conn, controller, 'stop');
+        await execSsh(conn, `ln -sfn ${shellQuote(releaseDir)} ${shellQuote(controller.paths.currentLink)}`, { label: '切换 current 版本' });
+        stage('start', 84, '启动新服务', releaseName);
+        await runControllerAction(conn, controller, 'start');
+        stage('health', 93, '验证服务健康', `127.0.0.1:${target.serverPort}`);
+        await waitForRemoteHealth(conn, target, signal, log, context.environment);
+        await activateBackendRelease(backendRelease.id);
+        await updateBackendServiceStatus(target.id, { status: 'online', output: `${controller.mode} · Java ${controller.remoteJavaMajor}` });
+        await pruneBackendReleases(conn, target.id, [backendRelease.id, previousRelease?.id]);
+      } catch (error) {
+        if (backendRelease) await updateBackendReleaseStatus(backendRelease.id, 'failed');
+        if (previousRelease && controller) {
+          log('warn', '新版本启动失败，正在恢复上一版本', 'rollback');
+          await runControllerAction(conn, controller, 'stop').catch(() => {});
+          await execSsh(conn, `ln -sfn ${shellQuote(previousRelease.releaseDir)} ${shellQuote(controller.paths.currentLink)}`, { label: '恢复上一版本' });
+          await runControllerAction(conn, controller, 'start');
+          await waitForRemoteHealth(conn, target, signal, log, context.environment);
+          await activateBackendRelease(previousRelease.id);
+          restoredPrevious = true;
+        }
+        throw error;
+      } finally {
+        await releaseRemoteDeployLock(conn, controller.paths);
+      }
+    }));
+    const success = await updateRecord(record.id, {
+      status: 'success',
+      commitSha: payload.commitSha,
+      commitMessage: payload.commitMessage || '',
+      commitAuthor: payload.commitAuthor || '',
+      releasePath: backendRelease.releaseDir,
+      backupPath: previousRelease?.releaseDir || '',
+      restoredRecordId: record.id,
+      backupRecordId: previousRelease?.recordId || 0,
+      logs,
+      finishedAt: new Date().toISOString(),
+    });
+    stage('finish', 100, '中央部署完成', `${target.projectName} 已在线`);
+    emit?.result(success);
+    return success;
+  } catch (error) {
+    log('error', error instanceof Error ? error.message : String(error), 'error');
+    const previousStillOnline = Boolean(previousRelease && (!activationStarted || restoredPrevious));
+    await updateBackendServiceStatus(target.id, { status: previousStillOnline ? 'online' : 'error', output: error instanceof Error ? error.message : String(error) });
+    await updateRecord(record.id, {
+      status: signal?.aborted ? 'stopped' : 'failed',
+      commitSha: payload.commitSha,
+      commitMessage: payload.commitMessage || '',
+      commitAuthor: payload.commitAuthor || '',
+      releasePath: backendRelease?.releaseDir || '',
+      backupPath: previousRelease?.releaseDir || '',
+      logs,
+      finishedAt: new Date().toISOString(),
+    });
+    emit?.error(error instanceof Error ? error.message : String(error), 'error');
     throw error;
   }
 }

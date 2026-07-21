@@ -10,6 +10,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { execSync } from 'node:child_process';
 import { DEPLOY_DATA_DIR, DEPLOY_DB_PATH, DEPLOY_LOG_DIR, DEPLOY_RECORD_KEEP_PER_PROJECT, DEPLOY_SECRET_KEY, GITLAB_HOST, GITLAB_TOKEN } from '../config/constants.mjs';
 import { normalizeBackendConfig, normalizeBackendServiceName, normalizeHealthCheckPath, parseJavaMajorVersion, validateBackendDeployRoot } from './backend-domain.mjs';
+import { getRequestTeamId } from './request-context.mjs';
 
 let dbInstance = null;
 
@@ -34,12 +35,15 @@ function getCipherKey() {
  * @param {Object} credential - 凭据信息
  * @returns {string} 加密后的 JSON 字符串
  */
-function encryptCredential(credential) {
+function encryptCredential(credential, teamId = getRequestTeamId()) {
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', getCipherKey(), iv);
+  cipher.setAAD(Buffer.from(`yuyan-team:${teamId}`, 'utf8'));
   const encrypted = Buffer.concat([cipher.update(JSON.stringify(credential), 'utf8'), cipher.final()]);
   const tag = cipher.getAuthTag();
   return JSON.stringify({
+    schemaVersion: 2,
+    teamId,
     iv: iv.toString('base64'),
     tag: tag.toString('base64'),
     data: encrypted.toString('base64'),
@@ -51,11 +55,15 @@ function encryptCredential(credential) {
  * @param {string} raw - 加密后的 JSON 字符串
  * @returns {Object} 凭据信息
  */
-function decryptCredential(raw) {
+function decryptCredential(raw, expectedTeamId = getRequestTeamId()) {
   try {
     if (!raw) return {};
     const payload = JSON.parse(raw);
     const decipher = crypto.createDecipheriv('aes-256-gcm', getCipherKey(), Buffer.from(payload.iv, 'base64'));
+    if (payload.schemaVersion >= 2) {
+      if (payload.teamId !== expectedTeamId) throw new Error('凭据不属于当前账号');
+      decipher.setAAD(Buffer.from(`yuyan-team:${expectedTeamId}`, 'utf8'));
+    }
     decipher.setAuthTag(Buffer.from(payload.tag, 'base64'));
     const decrypted = Buffer.concat([decipher.update(Buffer.from(payload.data, 'base64')), decipher.final()]);
     return JSON.parse(decrypted.toString('utf8'));
@@ -614,6 +622,7 @@ function mapServer(row) {
   if (!row) return null;
   return {
     id: row.id,
+    teamId: row.team_id || 'legacy-team',
     name: row.name,
     host: row.host,
     port: row.port,
@@ -669,6 +678,7 @@ function mapNginxInstance(row) {
   const scriptPath = instanceType === 'managed' ? getManagedInstanceScriptPath(row) : row.script_path || '';
   return {
     id: row.id,
+    teamId: row.team_id || 'legacy-team',
     serverId: row.server_id,
     name: row.name,
     instanceType,
@@ -706,6 +716,7 @@ function mapNginxRuntime(row) {
   if (!row) return null;
   return {
     id: row.id,
+    teamId: row.team_id || 'legacy-team',
     serverId: row.server_id,
     baseRoot: row.base_root,
     nginxRoot: row.nginx_root,
@@ -803,6 +814,7 @@ function mapTarget(row) {
   const backendPort = Number(row.server_port || 0);
   return {
     id: row.id,
+    teamId: row.team_id || 'legacy-team',
     projectId: row.project_id,
     projectSource: row.project_source || 'ops',
     projectName: row.project_name,
@@ -890,6 +902,7 @@ function mapRecord(row, options = {}) {
   const action = resolveRecordAction(row);
   return {
     id: row.id,
+    teamId: row.team_id || 'legacy-team',
     targetId: row.target_id,
     projectId: row.project_id,
     projectName: row.project_name,
@@ -1081,6 +1094,27 @@ async function backupDeployDbBeforeBackendMigration(db) {
   if (!stat?.isFile() || stat.size === 0) return '';
   const timestamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
   const backupPath = `${DEPLOY_DB_PATH}.pre-backend-v3-${timestamp}.bak`;
+  await fs.copyFile(DEPLOY_DB_PATH, backupPath);
+  return backupPath;
+}
+
+/**
+ * 在首次多租户迁移前备份中央 SQLite，重复启动不会重复备份。
+ * @param {DatabaseSync} db 数据库实例
+ * @returns {Promise<string>} 备份文件路径，无需备份时为空
+ */
+async function backupDeployDbBeforeMultiTenantMigration(db) {
+  const migrated = hasTable(db, 'schema_migrations')
+    ? Boolean(db.prepare('SELECT version FROM schema_migrations WHERE version = 5').get())
+    : false;
+  if (migrated) return '';
+  const stat = await fs.stat(DEPLOY_DB_PATH).catch(() => null);
+  if (!stat?.isFile() || stat.size === 0) return '';
+  const existing = (await fs.readdir(path.dirname(DEPLOY_DB_PATH)).catch(() => []))
+    .find((name) => name.startsWith(`${path.basename(DEPLOY_DB_PATH)}.pre-multitenant-v5-`) && name.endsWith('.bak'));
+  if (existing) return path.join(path.dirname(DEPLOY_DB_PATH), existing);
+  const timestamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+  const backupPath = `${DEPLOY_DB_PATH}.pre-multitenant-v5-${timestamp}.bak`;
   await fs.copyFile(DEPLOY_DB_PATH, backupPath);
   return backupPath;
 }
@@ -1321,6 +1355,60 @@ function applyBackendSchemaMigration(db) {
   db.prepare('INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (2, ?, ?)').run('backend-environments-and-server-root-v2', now());
   db.prepare('INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (3, ?, ?)').run('backend-runtime-jdk-reference-v3', now());
   db.prepare('INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (4, ?, ?)').run('backend-logical-jdk-alias-v4', now());
+}
+
+/**
+ * 为全部部署领域表增加账号隔离边界，并使用当前请求上下文填充新记录。
+ * @param {DatabaseSync} db 数据库实例
+ */
+function applyMultiTenantSchemaMigration(db) {
+  const tables = [
+    'deploy_servers',
+    'nginx_runtimes',
+    'nginx_instances',
+    'build_jdks',
+    'deploy_targets',
+    'deploy_records',
+    'backend_target_configs',
+    'server_java_runtimes',
+    'deploy_environments',
+    'backend_releases',
+    'openapi_artifacts',
+    'deploy_tasks',
+  ];
+  for (const tableName of tables) {
+    if (!hasTable(db, tableName)) continue;
+    if (!getTableColumns(db, tableName).includes('team_id')) {
+      db.exec(`ALTER TABLE ${tableName} ADD COLUMN team_id TEXT NOT NULL DEFAULT 'legacy-team'`);
+    }
+    const primaryColumn = tableName === 'backend_target_configs' ? 'target_id' : 'id';
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_${tableName}_team ON ${tableName}(team_id, ${primaryColumn})`);
+    db.exec(`DROP TRIGGER IF EXISTS trg_${tableName}_assign_team`);
+  }
+  const inheritedTeamTriggers = [
+    ['nginx_runtimes', 'id', 'server_id', 'deploy_servers'],
+    ['nginx_instances', 'id', 'server_id', 'deploy_servers'],
+    ['deploy_targets', 'id', 'server_id', 'deploy_servers'],
+    ['server_java_runtimes', 'id', 'server_id', 'deploy_servers'],
+    ['deploy_records', 'id', 'target_id', 'deploy_targets'],
+    ['backend_target_configs', 'target_id', 'target_id', 'deploy_targets'],
+    ['backend_releases', 'id', 'target_id', 'deploy_targets'],
+    ['openapi_artifacts', 'id', 'target_id', 'deploy_targets'],
+    ['deploy_tasks', 'id', 'target_id', 'deploy_targets'],
+  ];
+  for (const [tableName, primaryColumn, foreignColumn, parentTable] of inheritedTeamTriggers) {
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS trg_${tableName}_inherit_team
+      AFTER INSERT ON ${tableName}
+      BEGIN
+        UPDATE ${tableName}
+        SET team_id = (SELECT team_id FROM ${parentTable} WHERE id = NEW.${foreignColumn})
+        WHERE ${primaryColumn} = NEW.${primaryColumn};
+      END
+    `);
+  }
+  db.prepare('INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (5, ?, ?)')
+    .run('multi-user-team-boundary-v5', now());
 }
 
 /**
@@ -1588,6 +1676,8 @@ export async function getDeployDb() {
   }
   normalizeDeployRecordVersionFields(dbInstance, { inferLegacyAction: !hadRecordActionColumn });
   applyBackendSchemaMigration(dbInstance);
+  await backupDeployDbBeforeMultiTenantMigration(dbInstance);
+  applyMultiTenantSchemaMigration(dbInstance);
   initializeDefaultJdks(dbInstance);
   return dbInstance;
 }
@@ -1701,7 +1791,7 @@ function createProjectFilters(query = {}, alias = '') {
  * @returns {boolean} 是否存在
  */
 function hasServer(db, serverId) {
-  return Boolean(db.prepare('SELECT id FROM deploy_servers WHERE id = ?').get(Number(serverId)));
+  return Boolean(db.prepare('SELECT id FROM deploy_servers WHERE id = ? AND team_id = ?').get(Number(serverId), getRequestTeamId()));
 }
 
 /**
@@ -1789,8 +1879,8 @@ function isRuntimeDefaultListenPort(db, payload) {
 export async function listServers() {
   const db = await getDeployDb();
   return db
-    .prepare('SELECT * FROM deploy_servers ORDER BY updated_at DESC, id DESC')
-    .all()
+    .prepare('SELECT * FROM deploy_servers WHERE team_id = ? ORDER BY updated_at DESC, id DESC')
+    .all(getRequestTeamId())
     .map((row) => hydrateServer(db, row));
 }
 
@@ -1801,7 +1891,7 @@ export async function listServers() {
  */
 export async function getServerWithCredential(id) {
   const db = await getDeployDb();
-  const row = db.prepare('SELECT * FROM deploy_servers WHERE id = ?').get(Number(id));
+  const row = db.prepare('SELECT * FROM deploy_servers WHERE id = ? AND team_id = ?').get(Number(id), getRequestTeamId());
   if (!row) return null;
   return {
     ...hydrateServer(db, row),
@@ -1825,11 +1915,12 @@ export async function createServer(payload) {
   const result = db
     .prepare(
       `INSERT INTO deploy_servers
-       (name, host, port, username, auth_type, encrypted_secret, use_sudo, default_deploy_root, default_backend_root,
+       (team_id, name, host, port, username, auth_type, encrypted_secret, use_sudo, default_deploy_root, default_backend_root,
         default_nginx_conf_path, nginx_work_dir, nginx_test_command, nginx_reload_command, remark, created_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
+      getRequestTeamId(),
       payload.name,
       payload.host,
       Number(payload.port || 22),
@@ -1860,7 +1951,8 @@ export async function createServer(payload) {
  */
 export async function updateServer(id, payload) {
   const db = await getDeployDb();
-  const current = db.prepare('SELECT * FROM deploy_servers WHERE id = ?').get(Number(id));
+  const teamId = getRequestTeamId();
+  const current = db.prepare('SELECT * FROM deploy_servers WHERE id = ? AND team_id = ?').get(Number(id), teamId);
   if (!current) return null;
   const shouldUpdateCredential = Boolean(payload.password || payload.privateKey || payload.passphrase);
   const credential = shouldUpdateCredential
@@ -1875,7 +1967,7 @@ export async function updateServer(id, payload) {
      SET name = ?, host = ?, port = ?, username = ?, auth_type = ?, encrypted_secret = ?, use_sudo = ?,
          default_deploy_root = ?, default_backend_root = ?, default_nginx_conf_path = ?, nginx_work_dir = ?, nginx_test_command = ?,
          nginx_reload_command = ?, remark = ?, updated_at = ?
-     WHERE id = ?`
+     WHERE id = ? AND team_id = ?`
   ).run(
     payload.name,
     payload.host,
@@ -1892,9 +1984,10 @@ export async function updateServer(id, payload) {
     payload.nginxReloadCommand || current.nginx_reload_command || 'nginx -s reload',
     payload.remark || '',
     now(),
-    Number(id)
+    Number(id),
+    teamId
   );
-  const updated = db.prepare('SELECT * FROM deploy_servers WHERE id = ?').get(Number(id));
+  const updated = db.prepare('SELECT * FROM deploy_servers WHERE id = ? AND team_id = ?').get(Number(id), teamId);
   const systemInstance = db
     .prepare("SELECT id FROM nginx_instances WHERE server_id = ? AND instance_type = 'external' AND name = ? LIMIT 1")
     .get(Number(id), DEFAULT_EXTERNAL_NGINX_INSTANCE_NAME);
@@ -2243,12 +2336,19 @@ export async function updateNginxRuntimeState(serverId, payload = {}) {
 /**
  * 删除服务器
  * @param {number} id - 服务器 ID
+ * @param {{requireEmpty?: boolean}} options 安全删除选项
  * @returns {Promise<Object>} 删除结果
  */
-export async function deleteServer(id) {
+export async function deleteServer(id, options = {}) {
   const db = await getDeployDb();
   const serverId = Number(id);
+  const teamId = getRequestTeamId();
+  const ownedServer = db.prepare('SELECT id FROM deploy_servers WHERE id = ? AND team_id = ?').get(serverId, teamId);
+  if (!ownedServer) return { deletedServers: 0, deletedTargets: 0, deletedInstances: 0, deletedRuntimes: 0, deletedRecords: 0 };
   const targets = db.prepare('SELECT id FROM deploy_targets WHERE server_id = ?').all(serverId);
+  if (options.requireEmpty && targets.length) {
+    throw new Error(`服务器仍被 ${targets.length} 个部署目标引用，请先逐个删除目标`);
+  }
   const recordRows = db
     .prepare(
       `SELECT r.log_path
@@ -2267,7 +2367,7 @@ export async function deleteServer(id) {
     const targetResult = db.prepare('DELETE FROM deploy_targets WHERE server_id = ?').run(serverId);
     const instanceResult = db.prepare('DELETE FROM nginx_instances WHERE server_id = ?').run(serverId);
     const runtimeResult = db.prepare('DELETE FROM nginx_runtimes WHERE server_id = ?').run(serverId);
-    const serverResult = db.prepare('DELETE FROM deploy_servers WHERE id = ?').run(serverId);
+    const serverResult = db.prepare('DELETE FROM deploy_servers WHERE id = ? AND team_id = ?').run(serverId, teamId);
     db.exec('COMMIT');
     await Promise.all(recordRows.map((row) => deleteRecordLogFile(row.log_path)));
     return {
@@ -2291,8 +2391,8 @@ export async function deleteServer(id) {
 export async function listTargets(query = {}) {
   const db = await getDeployDb();
   const { conditions, params } = createProjectFilters(query, 't');
-  const whereParts = [];
-  const queryParams = [...params];
+  const whereParts = ['t.team_id = ?'];
+  const queryParams = [getRequestTeamId(), ...params];
   const projectKeyword = String(query.projectKeyword || query.keyword || query.search || '').trim();
   const branch = String(query.branch || query.defaultBranch || '').trim();
   const serverId = Number(query.serverId || 0);
@@ -2431,9 +2531,9 @@ export async function getTarget(id) {
          LEFT JOIN nginx_instances i ON i.id = t.nginx_instance_id
          LEFT JOIN backend_target_configs b ON b.target_id = t.id
          LEFT JOIN deploy_environments e ON e.id = b.environment_id
-         WHERE t.id = ?`
+         WHERE t.id = ? AND t.team_id = ?`
       )
-      .get(Number(id))
+      .get(Number(id), getRequestTeamId())
   );
 }
 
@@ -2673,7 +2773,8 @@ export async function createTarget(payload) {
  */
 export async function updateTarget(id, payload) {
   const db = await getDeployDb();
-  if (!db.prepare('SELECT id FROM deploy_targets WHERE id = ?').get(Number(id))) return null;
+  const teamId = getRequestTeamId();
+  if (!db.prepare('SELECT id FROM deploy_targets WHERE id = ? AND team_id = ?').get(Number(id), teamId)) return null;
   if (!hasServer(db, payload.serverId)) {
     throw new Error('部署服务器不存在，请先新增独立服务器');
   }
@@ -2700,7 +2801,7 @@ export async function updateTarget(id, payload) {
          enable_nginx_test = ?, enable_nginx_reload = ?, install_command = ?, build_command = ?,
          artifact_dir = ?, preserve_sub_dirs = ?, upload_strategy = ?, visit_url = ?, remark = ?, updated_at = ?,
          project_type = ?, jdk_id = ?, stop_command = ?, start_command = ?, health_check_url = ?
-     WHERE id = ?`
+     WHERE id = ? AND team_id = ?`
   ).run(
     Number(payload.projectId),
     payload.projectSource === 'gitlab' ? 'gitlab' : 'ops',
@@ -2732,7 +2833,8 @@ export async function updateTarget(id, payload) {
     payload.stopCommand || '',
     payload.startCommand || '',
     payload.healthCheckUrl || '',
-    Number(id)
+    Number(id),
+    teamId
   );
   upsertBackendTargetConfig(db, Number(id), payload);
   return getTarget(id);
@@ -2741,11 +2843,20 @@ export async function updateTarget(id, payload) {
 /**
  * 删除部署目标
  * @param {number} id - 部署目标 ID
+ * @param {{rejectRunning?: boolean}} options 安全删除选项
  * @returns {Promise<Object>} 删除结果
  */
-export async function deleteTarget(id) {
+export async function deleteTarget(id, options = {}) {
   const db = await getDeployDb();
   const targetId = Number(id);
+  const teamId = getRequestTeamId();
+  if (!db.prepare('SELECT id FROM deploy_targets WHERE id = ? AND team_id = ?').get(targetId, teamId)) {
+    return { deletedTargets: 0, deletedRecords: 0 };
+  }
+  if (options.rejectRunning) {
+    const runningTask = db.prepare("SELECT id FROM deploy_tasks WHERE target_id = ? AND status = 'running' LIMIT 1").get(targetId);
+    if (runningTask) throw new Error('部署目标仍有运行中的发布或生成任务，无法删除');
+  }
   const recordRows = db.prepare('SELECT log_path FROM deploy_records WHERE target_id = ?').all(targetId);
   db.exec('BEGIN');
   try {
@@ -2754,7 +2865,7 @@ export async function deleteTarget(id) {
     db.prepare('DELETE FROM backend_releases WHERE target_id = ?').run(targetId);
     db.prepare('DELETE FROM backend_target_configs WHERE target_id = ?').run(targetId);
     const recordResult = db.prepare('DELETE FROM deploy_records WHERE target_id = ?').run(targetId);
-    const targetResult = db.prepare('DELETE FROM deploy_targets WHERE id = ?').run(targetId);
+    const targetResult = db.prepare('DELETE FROM deploy_targets WHERE id = ? AND team_id = ?').run(targetId, teamId);
     db.exec('COMMIT');
     await Promise.all(recordRows.map((row) => deleteRecordLogFile(row.log_path)));
     return {
@@ -2862,9 +2973,9 @@ export async function getRecord(id, options = {}) {
       `SELECT r.*, t.project_path, t.repository_url
        FROM deploy_records r
        LEFT JOIN deploy_targets t ON t.id = r.target_id
-       WHERE r.id = ?`
+       WHERE r.id = ? AND r.team_id = ?`
     )
-    .get(Number(id));
+    .get(Number(id), getRequestTeamId());
   const record = mapRecord(row, { includeLogs: false });
   if (!record) return null;
   record.logs = await readRecordLogs(row);
@@ -2962,11 +3073,11 @@ export async function pruneTargetBackupReferences(targetId, keepCount) {
  */
 export async function listRecords(query = {}) {
   const db = await getDeployDb();
-  const params = [];
+  const params = [getRequestTeamId()];
   const page = Math.max(1, Number(query.page || 1));
   const pageSize = Math.min(100, Math.max(1, Number(query.pageSize || query.perPage || 10)));
   const offset = (page - 1) * pageSize;
-  const whereParts = [];
+  const whereParts = ['r.team_id = ?'];
   let fromSql = `
     SELECT r.*, t.project_path, t.repository_url, t.project_type
     FROM deploy_records r
@@ -3054,8 +3165,8 @@ export function closeDeployDb() {
 export async function listJdks() {
   const db = await getDeployDb();
   return db
-    .prepare('SELECT * FROM build_jdks ORDER BY name ASC, id DESC')
-    .all()
+    .prepare('SELECT * FROM build_jdks WHERE team_id = ? ORDER BY name ASC, id DESC')
+    .all(getRequestTeamId())
     .map(mapJdk);
 }
 
@@ -3068,6 +3179,7 @@ function mapJdk(row) {
   if (!row) return null;
   return {
     id: row.id,
+    teamId: row.team_id || 'legacy-team',
     name: row.name,
     homePath: row.home_path,
     javaVersion: row.java_version || '',
@@ -3090,7 +3202,7 @@ function mapJdk(row) {
  */
 export async function getJdk(id) {
   const db = await getDeployDb();
-  const row = db.prepare('SELECT * FROM build_jdks WHERE id = ?').get(Number(id));
+  const row = db.prepare('SELECT * FROM build_jdks WHERE id = ? AND team_id = ?').get(Number(id), getRequestTeamId());
   return mapJdk(row);
 }
 
@@ -3176,10 +3288,11 @@ export async function createJdk(payload) {
   const result = db
     .prepare(
       `INSERT INTO build_jdks
-       (name, home_path, java_version, major_version, vendor, arch, status, status_output, last_checked_at, remark, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (team_id, name, home_path, java_version, major_version, vendor, arch, status, status_output, last_checked_at, remark, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
+      getRequestTeamId(),
       payload.name.trim(),
       payload.homePath.trim(),
       payload.javaVersion || '',
@@ -3418,6 +3531,7 @@ function mapDeployEnvironment(row) {
   if (!row) return null;
   return {
     id: row.id,
+    teamId: row.team_id || 'legacy-team',
     name: row.name,
     nacosServerAddr: row.nacos_server_addr || '',
     nacosConsoleUrl: row.nacos_console_url || '',
@@ -3437,13 +3551,13 @@ function mapDeployEnvironment(row) {
 /** 获取环境依赖配置列表。 */
 export async function listDeployEnvironments() {
   const db = await getDeployDb();
-  return db.prepare('SELECT * FROM deploy_environments ORDER BY name ASC, id ASC').all().map(mapDeployEnvironment);
+  return db.prepare('SELECT * FROM deploy_environments WHERE team_id = ? ORDER BY name ASC, id ASC').all(getRequestTeamId()).map(mapDeployEnvironment);
 }
 
 /** 获取包含解密凭据的环境依赖配置，仅供服务端内部使用。 */
 export async function getDeployEnvironmentWithCredential(id) {
   const db = await getDeployDb();
-  const row = db.prepare('SELECT * FROM deploy_environments WHERE id = ?').get(Number(id));
+  const row = db.prepare('SELECT * FROM deploy_environments WHERE id = ? AND team_id = ?').get(Number(id), getRequestTeamId());
   if (!row) return null;
   return { ...mapDeployEnvironment(row), credential: decryptCredential(row.encrypted_nacos_secret) };
 }
@@ -3461,10 +3575,11 @@ export async function createDeployEnvironment(payload) {
   });
   const result = db.prepare(
     `INSERT INTO deploy_environments
-     (name, nacos_server_addr, nacos_console_url, nacos_namespace, nacos_group, encrypted_nacos_secret,
+     (team_id, name, nacos_server_addr, nacos_console_url, nacos_namespace, nacos_group, encrypted_nacos_secret,
       gateway_target_id, gateway_public_url, status, status_output, last_checked_at, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'unknown', '', '', ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', '', '', ?, ?)`
   ).run(
+    getRequestTeamId(),
     name,
     String(payload.nacosServerAddr || '').trim(),
     String(payload.nacosConsoleUrl || '').trim(),
@@ -3482,7 +3597,8 @@ export async function createDeployEnvironment(payload) {
 /** 更新环境依赖配置。 */
 export async function updateDeployEnvironment(id, payload) {
   const db = await getDeployDb();
-  const current = db.prepare('SELECT * FROM deploy_environments WHERE id = ?').get(Number(id));
+  const teamId = getRequestTeamId();
+  const current = db.prepare('SELECT * FROM deploy_environments WHERE id = ? AND team_id = ?').get(Number(id), teamId);
   if (!current) return null;
   const shouldUpdateSecret = ['username', 'password', 'token'].some((key) => String(payload[key] || '').trim());
   const secret = shouldUpdateSecret
@@ -3492,7 +3608,7 @@ export async function updateDeployEnvironment(id, payload) {
     `UPDATE deploy_environments
      SET name = ?, nacos_server_addr = ?, nacos_console_url = ?, nacos_namespace = ?, nacos_group = ?,
          encrypted_nacos_secret = ?, gateway_target_id = ?, gateway_public_url = ?, updated_at = ?
-     WHERE id = ?`
+     WHERE id = ? AND team_id = ?`
   ).run(
     String(payload.name || current.name).trim(),
     String(payload.nacosServerAddr ?? current.nacos_server_addr ?? '').trim(),
@@ -3503,21 +3619,24 @@ export async function updateDeployEnvironment(id, payload) {
     Number(payload.gatewayTargetId ?? current.gateway_target_id ?? 0) || null,
     String(payload.gatewayPublicUrl ?? current.gateway_public_url ?? '').trim(),
     now(),
-    Number(id)
+    Number(id),
+    teamId
   );
-  return mapDeployEnvironment(db.prepare('SELECT * FROM deploy_environments WHERE id = ?').get(Number(id)));
+  return mapDeployEnvironment(db.prepare('SELECT * FROM deploy_environments WHERE id = ? AND team_id = ?').get(Number(id), teamId));
 }
 
 /** 删除未被后端目标引用的环境依赖配置。 */
 export async function deleteDeployEnvironment(id) {
   const db = await getDeployDb();
+  const teamId = getRequestTeamId();
+  if (!db.prepare('SELECT id FROM deploy_environments WHERE id = ? AND team_id = ?').get(Number(id), teamId)) return { deletedEnvironments: 0 };
   const target = db.prepare(
     `SELECT t.project_name FROM backend_target_configs b
      INNER JOIN deploy_targets t ON t.id = b.target_id
      WHERE b.environment_id = ? LIMIT 1`
   ).get(Number(id));
   if (target) throw new Error(`环境正在被后端项目 ${target.project_name} 使用，无法删除`);
-  const result = db.prepare('DELETE FROM deploy_environments WHERE id = ?').run(Number(id));
+  const result = db.prepare('DELETE FROM deploy_environments WHERE id = ? AND team_id = ?').run(Number(id), teamId);
   return { deletedEnvironments: result.changes || 0 };
 }
 

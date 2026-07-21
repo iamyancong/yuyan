@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { useAuth } from '@/composables/useAuth';
 import UpdateCapsule from '@/components/UpdateCapsule/index.vue';
-import NoticeCapsule from '@/components/NoticeCapsule/index.vue';
+// import NoticeCapsule from '@/components/NoticeCapsule/index.vue';
 import { useAppUpdate } from '@/components/UpdateCapsule/hooks/useAppUpdate';
 import { useTheme } from '@/hooks/useTheme';
+import AiIntegrationTrigger from '@/components/AiIntegrationDrawer/components/AiIntegrationTrigger.vue';
 import {
   BgColorsOutlined,
   UserOutlined,
@@ -22,7 +23,9 @@ defineProps<{
   isTauriClient: boolean;
 }>();
 
-defineEmits<{
+const emit = defineEmits<{
+  /** 触发打开 AI 控制中心抽屉 */
+  (e: 'open-ai-integration'): void;
   /** 触发打开平台设置抽屉 */
   (e: 'openSettings'): void;
   /** 触发打开登录弹窗 */
@@ -46,18 +49,22 @@ const handleLogout = async () => {
   <a-layout-header class="yuyan-layout-header" :class="{ 'is-dark': isDark }">
     <div class="yuyan-layout-header-left" :class="{ 'has-notice': !isTauriClient }">
       <UpdateCapsule v-if="isTauriClient && hasUpdate" />
-      <NoticeCapsule v-if="!isTauriClient" />
+      <!-- <NoticeCapsule v-if="!isTauriClient" /> -->
     </div>
 
     <div v-if="isTauriClient" class="yuyan-layout-header-drag" data-tauri-drag-region />
 
     <div class="yuyan-layout-header-right">
-      <a-tooltip v-if="isTauriClient" title="同步测试环境数据到本地" overlayClassName="header-tooltip">
+      <a-tooltip v-if="isTauriClient" title="刷新当前账号配置" overlayClassName="header-tooltip">
         <a-button type="text" :loading="syncing" class="header-action-btn btn-sync" @click="confirmSyncData">
           <template #icon>
             <SyncOutlined class="action-icon" />
           </template>
         </a-button>
+      </a-tooltip>
+
+      <a-tooltip v-if="isTauriClient" title="AI 集成" overlayClassName="header-tooltip">
+        <AiIntegrationTrigger @open="emit('open-ai-integration')" />
       </a-tooltip>
 
       <a-tooltip title="平台设置" overlayClassName="header-tooltip">

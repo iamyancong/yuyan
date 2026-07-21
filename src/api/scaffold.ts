@@ -70,10 +70,24 @@ export interface CreateMicroAppProgressOptions {
 }
 
 import { getApiBase } from '@/utils/env';
+import { getCachedSecureAccount } from '@/services/secureAuth';
 
 const client = axios.create({ baseURL: getApiBase('/scaffold-api') });
 
-export const createMicroApp = (payload: CreateMicroAppPayload) => client.post('/create', payload);
+/** 返回脚手架远程调用所需的短期身份与实时 GitLab 证明。 */
+export function getScaffoldAuthHeaders(): Record<string, string> {
+  const session = getCachedSecureAccount();
+  if (!session?.accessToken || !session.teamId) return {};
+  return {
+    Authorization: `Bearer ${session.accessToken}`,
+    'X-Yuyan-Team-Id': session.teamId,
+    'X-Yuyan-Client': 'desktop',
+    'X-GitLab-Token': session.gitlabToken,
+    'X-GitLab-Host': session.gitlabHost,
+  };
+}
+
+export const createMicroApp = (payload: CreateMicroAppPayload) => client.post('/create', payload, { headers: getScaffoldAuthHeaders() });
 
 const parseJsonOrText = async (response: Response) => {
   const text = await response.text();
@@ -92,6 +106,7 @@ export async function createMicroAppWithProgress(payload: CreateMicroAppPayload,
     headers: {
       'Content-Type': 'application/json',
       Accept: 'application/x-ndjson',
+      ...getScaffoldAuthHeaders(),
     },
     body: JSON.stringify(payload),
     signal: options.signal,

@@ -550,7 +550,7 @@ export async function handleUpdateServer(req, res) {
  */
 export async function handleDeleteServer(req, res) {
   try {
-    const result = await deleteServer(Number(req.params.id));
+    const result = await deleteServer(Number(req.params.id), { requireEmpty: String(req.query?.requireEmpty || '') === '1' });
     res.json({ success: true, data: result });
   } catch (error) {
     sendError(res, error);
@@ -936,7 +936,7 @@ export async function handleUpdateTarget(req, res) {
  */
 export async function handleDeleteTarget(req, res) {
   try {
-    const result = await deleteTarget(Number(req.params.id));
+    const result = await deleteTarget(Number(req.params.id), { rejectRunning: String(req.query?.safe || '') === '1' });
     res.json({ success: true, data: result });
   } catch (error) {
     sendError(res, error);

@@ -10,6 +10,7 @@ import {
   getDeployRecordShortCommit,
 } from '../../../constant';
 import { formatEmptyText, formatLogItem, getStatusLabel, type RecordSummaryItem } from '../constant';
+import { getGitLabHost } from '@/api/gitlab';
 
 /** YMonaco 日志模式暴露方法 */
 interface MonacoLogViewerExpose {
@@ -48,8 +49,7 @@ export function useRecordLog(props: { open: boolean; record: DeployRecord | null
     const commitSha = record.commitSha;
     if (!commitSha) return '';
 
-    // 1. 优先使用数据库中存储的 projectPath 拼接本地配置的 GitLab Host
-    const gitlabHost = localStorage.getItem('gitlab-host') || 'http://192.168.167.142:8081';
+    const gitlabHost = getGitLabHost();
     const host = gitlabHost.replace(/\/+$/, '').replace(/\/api\/v4$/, '');
     const projectPath = record.projectPath || '';
 

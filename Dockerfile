@@ -5,8 +5,6 @@ ARG NODE_IMAGE=harbor.dm.com/yss-datamiddle/yss-node:22.19.0
 
 # build stage
 FROM ${NODE_IMAGE} AS builder
-ARG VITE_DEPLOY_API_TOKEN
-ENV VITE_DEPLOY_API_TOKEN=${VITE_DEPLOY_API_TOKEN}
 WORKDIR /app
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 RUN corepack enable

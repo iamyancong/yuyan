@@ -1,6 +1,8 @@
 import { message } from 'ant-design-vue';
 import type { Ref } from 'vue';
 import type { CreateMicroAppResponse } from '@/api/scaffold';
+import { getScaffoldAuthHeaders } from '@/api/scaffold';
+import { getApiBase } from '@/utils/env';
 
 /** 脚手架创建结果。 */
 type ScaffoldResult = CreateMicroAppResponse['data'] | null;
@@ -19,7 +21,10 @@ export const useScaffoldDownload = (result: Ref<ScaffoldResult>) => {
     if (!downloadPath) return;
 
     try {
-      const response = await fetch(downloadPath);
+      const resolvedDownloadPath = /^https?:\/\//i.test(downloadPath)
+        ? downloadPath
+        : `${getApiBase('')}${downloadPath.startsWith('/') ? downloadPath : `/${downloadPath}`}`;
+      const response = await fetch(resolvedDownloadPath, { headers: getScaffoldAuthHeaders() });
       if (!response.ok) {
         const text = await response.text();
         let errorMessage = text || '下载失败';

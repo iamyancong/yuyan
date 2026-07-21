@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildArchiveTarCommand } from './nginx-runtime-service.mjs';
+import { buildArchiveTarCommand } from '../nginx-runtime-service.mjs';
 
 /** 创建运行包命令测试配置。 */
 const createConfig = (patch = {}) => ({

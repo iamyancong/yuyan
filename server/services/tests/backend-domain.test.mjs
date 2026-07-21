@@ -9,7 +9,7 @@ import {
   validateBackendServerPort,
   validateOpenApiContent,
   validateRepositoryRelativePath,
-} from './backend-domain.mjs';
+} from '../backend-domain.mjs';
 
 test('解析 Java 8、17 和新版 java -version 输出', () => {
   assert.equal(parseJavaMajorVersion('java version "1.8.0_382"'), 8);

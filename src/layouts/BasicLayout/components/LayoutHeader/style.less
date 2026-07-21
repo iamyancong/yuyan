@@ -111,6 +111,34 @@
   &.btn-settings:hover .action-icon {
     transform: scale(1.04) rotate(36deg);
   }
+
+  &.btn-ai-control {
+    .action-icon {
+      width: 18px;
+      height: 18px;
+    }
+
+    &:hover {
+      border-color: var(--header-control-border);
+      box-shadow:
+        0 3px 9px var(--header-control-shadow),
+        inset 0 1px 0 rgba(255, 255, 255, 0.3);
+
+      .action-icon {
+        color: var(--theme-primary);
+        transform: scale(1.04);
+      }
+    }
+
+    &:focus:not(:focus-visible) {
+      color: inherit;
+      background: var(--header-control-surface);
+      border-color: var(--header-control-border);
+      box-shadow:
+        0 2px 7px var(--header-control-shadow),
+        inset 0 1px 0 rgba(255, 255, 255, 0.28);
+    }
+  }
 }
 
 @keyframes spin-around {
@@ -253,6 +281,12 @@
 
   .header-action-btn .action-icon {
     color: #9ca7bd;
+  }
+
+  .header-action-btn.btn-ai-control {
+    .action-icon {
+      color: #9ca7bd;
+    }
   }
 
   .user-section {

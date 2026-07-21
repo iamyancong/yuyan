@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { handleDownloadAppUpdateAsset } from '../controllers/deploy-controller.mjs';
-import { updateAssetCacheManager } from './app-update-cache-service.mjs';
+import { handleDownloadAppUpdateAsset } from '../../controllers/deploy-controller.mjs';
+import { updateAssetCacheManager } from '../app-update-cache-service.mjs';
 
 /** 测试用更新资源。 */
 const TEST_ASSET = {

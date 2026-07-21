@@ -32,7 +32,7 @@ export const NOTICE_LIST: NoticeItem[] = [
   },
   {
     id: 'client-feature',
-    text: '客户端专属：一键同步测试环境 SQLite 数据库至本地，实现安全隔离的本地化测试。',
+    text: '客户端专属：中央配置按账号安全刷新，本地授权和构建缓存按设备隔离。',
     type: 'info',
     icon: SoundOutlined,
     actionText: '立即体验',
@@ -47,4 +47,3 @@ export const NOTICE_LIST: NoticeItem[] = [
     actionType: 'download',
   },
 ];
-

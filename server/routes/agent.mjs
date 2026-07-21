@@ -1,0 +1,42 @@
+/** Agent Gateway 私有路由。 */
+
+import express from 'express';
+import {
+  handleAgentToolCall,
+  handleApproveAgentOperation,
+  handleCancelAgentOperation,
+  handleDesktopBackendDeploy,
+  handleDesktopOpenApiGenerate,
+  handleGetDesktopOpenApiLatest,
+  handleGetAgentClients,
+  handleGetAgentOperation,
+  handleGetAgentSnapshot,
+  handleInstallAgentClient,
+  handleRejectAgentOperation,
+  handleReadDesktopOpenApi,
+  handleRevokeAgentGrant,
+  handleUninstallAgentClient,
+  handleUpdateAgentSettings,
+  handleUpdateAgentApprovalPolicy,
+} from '../controllers/agent-controller.mjs';
+
+const router = express.Router();
+
+router.post('/tools/:toolName', handleAgentToolCall);
+router.get('/snapshot', handleGetAgentSnapshot);
+router.get('/operations/:id', handleGetAgentOperation);
+router.post('/operations/:id/approve', handleApproveAgentOperation);
+router.post('/operations/:id/reject', handleRejectAgentOperation);
+router.post('/operations/:id/cancel', handleCancelAgentOperation);
+router.post('/desktop/backend-deploy', handleDesktopBackendDeploy);
+router.post('/desktop/openapi/generate', handleDesktopOpenApiGenerate);
+router.get('/desktop/openapi/latest', handleGetDesktopOpenApiLatest);
+router.get('/desktop/openapi/:id', handleReadDesktopOpenApi);
+router.delete('/grants/:id', handleRevokeAgentGrant);
+router.post('/settings', handleUpdateAgentSettings);
+router.put('/approval-policy', handleUpdateAgentApprovalPolicy);
+router.get('/clients', handleGetAgentClients);
+router.post('/clients/:client/install', handleInstallAgentClient);
+router.post('/clients/:client/uninstall', handleUninstallAgentClient);
+
+export default router;

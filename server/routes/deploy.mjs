@@ -5,6 +5,14 @@
 
 import express from 'express';
 import {
+  appendArtifactChunk,
+  cancelCentralOperation,
+  createArtifactJob,
+  finalizeArtifactJob,
+  getCentralOperation,
+  listCentralOperations,
+} from '../services/artifact-job-service.mjs';
+import {
   handleCreateServer,
   handleCreateTarget,
   handleCreateNginxInstance,
@@ -43,8 +51,6 @@ import {
   handleCreateJdk,
   handleUpdateJdk,
   handleDeleteJdk,
-  handleBackupDb,
-  handleRestoreDb,
   handleCheckAppUpdate,
   handleCheckTauriAppUpdate,
   handleGetAppUpdateCacheStatus,
@@ -71,6 +77,39 @@ import {
 } from '../controllers/deploy-controller.mjs';
 
 const router = express.Router();
+
+/** 发送产物 v2 稳定错误。 */
+function sendArtifactError(res, error) {
+  const issue = error?.issues?.[0];
+  res.status(Number(error?.status || (issue ? 400 : 500))).json({
+    success: false,
+    error: {
+      code: String(error?.code || (issue ? 'invalid_request' : 'artifact_job_error')),
+      message: String(issue?.message || error?.message || '产物任务失败'),
+      retryable: false,
+      ...(Number.isSafeInteger(error?.expectedOffset) ? { expectedOffset: error.expectedOffset } : {}),
+    },
+  });
+}
+
+router.post('/artifact-jobs', async (req, res) => {
+  try { res.json({ success: true, data: await createArtifactJob(req.body) }); } catch (error) { sendArtifactError(res, error); }
+});
+router.put('/artifact-jobs/:id/chunks', express.raw({ type: 'application/octet-stream', limit: '8mb' }), async (req, res) => {
+  try { res.json({ success: true, data: await appendArtifactChunk(req.params.id, req.headers['content-range'], req.body) }); } catch (error) { sendArtifactError(res, error); }
+});
+router.post('/artifact-jobs/:id/finalize', async (req, res) => {
+  try { res.json({ success: true, data: await finalizeArtifactJob(req.params.id) }); } catch (error) { sendArtifactError(res, error); }
+});
+router.get('/operations', async (req, res) => {
+  try { res.json({ success: true, data: await listCentralOperations(req.query) }); } catch (error) { sendArtifactError(res, error); }
+});
+router.get('/operations/:id', async (req, res) => {
+  try { res.json({ success: true, data: await getCentralOperation(req.params.id) }); } catch (error) { sendArtifactError(res, error); }
+});
+router.post('/operations/:id/cancel', async (req, res) => {
+  try { res.json({ success: true, data: await cancelCentralOperation(req.params.id) }); } catch (error) { sendArtifactError(res, error); }
+});
 
 router.get('/jdks', handleListJdks);
 router.post('/jdks', handleCreateJdk);
@@ -133,9 +172,9 @@ router.get('/records/:id', handleGetRecord);
 router.post('/records/:id/rollback', handleRollbackRecord);
 router.post('/records/:id/undo-rollback', handleUndoRollbackRecord);
 
-// 数据库备份与恢复同步接口
-router.get('/db/backup', handleBackupDb);
-router.post('/db/restore', express.raw({ type: 'application/octet-stream', limit: '50mb' }), handleRestoreDb);
+// 原始数据库备份/恢复不再对桌面端开放，避免跨用户整库复制。
+router.all('/db/backup', (_req, res) => res.status(410).json({ success: false, error: { code: 'raw_database_sync_removed', message: '原始数据库同步已移除，请刷新当前账号配置' } }));
+router.all('/db/restore', (_req, res) => res.status(410).json({ success: false, error: { code: 'raw_database_sync_removed', message: '原始数据库恢复已移除' } }));
 
 // 自动更新检测与原生下载代理接口
 router.get('/app-update/check', handleCheckAppUpdate);

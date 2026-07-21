@@ -18,18 +18,24 @@ import {
   TEMPLATE_BRANCH,
   DEPLOY_DB_PATH,
   APP_UPDATE_DIR,
-  DEFAULT_DEPLOY_SECRET_KEY,
   DEPLOY_ALLOWED_ORIGINS,
   DEPLOY_API_TOKEN,
   DEPLOY_BIND_HOST,
-  DEPLOY_SECRET_KEY,
+  AGENT_SESSION_TOKEN,
 } from './config/constants.mjs';
 import { pullLatestTemplate, validateTemplate } from './services/template-service.mjs';
 import { startCleanupScheduler } from './utils/cleanup-scheduler.mjs';
 import scaffoldRoutes from './routes/scaffold.mjs';
 import deployRoutes from './routes/deploy.mjs';
 import healthRoutes from './routes/health.mjs';
+import agentRoutes from './routes/agent.mjs';
+import authV2Routes from './routes/auth-v2.mjs';
+import { appendCentralAudit, authorizeCentralV2 } from './services/central-identity-service.mjs';
+import { guardCentralDeployRequest } from './services/central-deploy-guard.mjs';
+import { getRequestContext } from './services/request-context.mjs';
 import { closeDeployDb, getDeployDb } from './services/deploy-store.mjs';
+import { closeAgentDb, getAgentDb } from './services/agent-store.mjs';
+import { timingSafeTokenEqual } from './services/agent-security.mjs';
 import { abortAppUpdateTransfers } from './controllers/deploy-controller.mjs';
 import { startAppUpdatePreloadScheduler } from './services/app-update-release-service.mjs';
 
@@ -52,7 +58,11 @@ function isValidDeployToken(value) {
 
 /** 判断是否为兼容旧版客户端的免鉴权更新包下载请求。 */
 function isPublicAppUpdateDownload(req) {
-  return req.method === 'GET' && req.path === '/app-update/download-asset';
+  return req.method === 'GET' && [
+    '/app-update/download-asset',
+    '/app-update/check',
+    '/app-update/cache-status',
+  ].includes(req.path) || (req.method === 'GET' && req.path.startsWith('/app-update/tauri/'));
 }
 
 /** 非本机部署 API 鉴权中间件。 */
@@ -64,7 +74,54 @@ function authorizeDeployApi(req, res, next) {
     res.status(401).json({ success: false, error: '部署 API 鉴权失败' });
     return;
   }
+  if (!['GET', 'HEAD'].includes(req.method)) {
+    res.status(410).json({
+      success: false,
+      error: {
+        code: 'legacy_api_read_only',
+        message: '旧共享 Token API 已进入只读兼容，请升级客户端并使用 /deploy-api/v2',
+        retryable: false,
+      },
+    });
+    return;
+  }
   next();
+}
+
+/** 仅允许持有本次启动令牌的本机 MCP Sidecar 与雨燕 WebView 访问 Agent Gateway。 */
+function authorizeAgentApi(req, res, next) {
+  if (!isTauriSubprocess || !AGENT_SESSION_TOKEN) {
+    res.status(503).json({ success: false, error: { code: 'agent_gateway_unavailable', message: 'Agent Gateway 仅在雨燕桌面端启用', retryable: true } });
+    return;
+  }
+  const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  const token = String(req.headers['x-yuyan-agent-token'] || bearer);
+  if (!timingSafeTokenEqual(token, AGENT_SESSION_TOKEN)) {
+    res.status(401).json({ success: false, error: { code: 'authorization_failed', message: 'Agent Gateway 会话令牌无效', retryable: true } });
+    return;
+  }
+  next();
+}
+
+/** 远程脚手架接口复用短期账号身份与设备会话门禁。 */
+function authorizeScaffoldApi(req, res, next) {
+  if (isLoopbackBind || isTauriSubprocess) return next();
+  authorizeCentralV2(req, res, () => {
+    const context = getRequestContext();
+    const adminOnly = req.method === 'POST' && req.path.startsWith('/ops/');
+    const writeRequest = !['GET', 'HEAD'].includes(req.method);
+    const allowed = adminOnly ? context.role === 'admin' : !writeRequest || ['operator', 'admin'].includes(context.role);
+    if (!allowed) {
+      res.status(403).json({ success: false, error: { code: 'forbidden_role', message: '当前账号无权执行脚手架操作', retryable: false } });
+      return;
+    }
+    if (writeRequest) {
+      res.once('finish', () => {
+        if (res.statusCode < 400) void appendCentralAudit(context, { action: `${req.method} /scaffold-api${req.path}`, result: 'accepted' }).catch(() => undefined);
+      });
+    }
+    next();
+  });
 }
 
 // 中间件配置
@@ -115,10 +172,19 @@ app.use(
 );
 
 // 脚手架 API 路由
-app.use('/scaffold-api', scaffoldRoutes);
+app.use('/scaffold-api', authorizeScaffoldApi, scaffoldRoutes);
+
+// 多用户、多设备身份与会话接口
+app.use('/api/v2', authV2Routes);
+
+// 中央 v2 部署接口必须使用短期雨燕令牌和账号隔离上下文
+app.use('/deploy-api/v2', authorizeCentralV2, guardCentralDeployRequest, deployRoutes);
 
 // 独立服务器部署 API 路由
 app.use('/deploy-api', authorizeDeployApi, deployRoutes);
+
+// AI 控制平面内部网关，永不复用普通部署 API 的免鉴权规则
+app.use('/agent-api/v1', authorizeAgentApi, agentRoutes);
 
 // SPA history 回退（Express 5 兼容），排除接口与健康检查
 try {
@@ -126,13 +192,13 @@ try {
     history({
       htmlAcceptHeaders: ['text/html', 'application/xhtml+xml'],
       disableDotRule: true,
-      rewrites: [{ from: /^\/(scaffold-api|deploy-api|app-updates|health)(?:\/|$)/, to: (ctx) => ctx.parsedUrl.pathname }],
+      rewrites: [{ from: /^\/(api|scaffold-api|deploy-api|agent-api|app-updates|health)(?:\/|$)/, to: (ctx) => ctx.parsedUrl.pathname }],
     })
   );
 } catch {}
 
 /** 不参与静态资源压缩的路由前缀，避免接口流式响应被缓冲 */
-const noStaticCompressionRoutePattern = /^\/(?:scaffold-api|deploy-api|app-updates|health)(?:\/|$)/;
+const noStaticCompressionRoutePattern = /^\/(?:api|scaffold-api|deploy-api|agent-api|app-updates|health)(?:\/|$)/;
 
 /**
  * 判断当前响应是否允许静态资源压缩。
@@ -176,6 +242,23 @@ try {
     })
   );
 } catch {}
+
+/** API 统一异常兜底，避免 Express 默认 HTML 错误页泄露实现细节。 */
+app.use((error, req, res, next) => {
+  if (!/^\/(?:api|scaffold-api|deploy-api|agent-api|health)(?:\/|$)/.test(req.path)) {
+    next(error);
+    return;
+  }
+  const status = Number(error?.status || 500);
+  res.status(status).json({
+    success: false,
+    error: {
+      code: String(error?.code || 'internal_error'),
+      message: status >= 500 && !error?.code ? '雨燕服务暂时不可用' : String(error?.message || '请求失败'),
+      retryable: status >= 500,
+    },
+  });
+});
 
 /**
  * 启用子进程生命周期守护与自毁机制
@@ -303,6 +386,12 @@ async function shutdown(reason = 'unknown') {
     console.warn('[shutdown] 关闭 SQLite 连接失败:', error);
   }
 
+  try {
+    closeAgentDb();
+  } catch (error) {
+    console.warn('[shutdown] 关闭 Agent SQLite 连接失败:', error);
+  }
+
   process.exit(0);
 }
 
@@ -326,7 +415,6 @@ async function bootstrap() {
 
     if (!isLoopbackBind && !isTauriSubprocess) {
       if (!DEPLOY_API_TOKEN) throw new Error('服务绑定非本机地址时必须配置 DEPLOY_API_TOKEN');
-      if (DEPLOY_SECRET_KEY === DEFAULT_DEPLOY_SECRET_KEY) throw new Error('服务绑定非本机地址时禁止使用默认 DEPLOY_SECRET_KEY');
       if (!DEPLOY_ALLOWED_ORIGINS.length) throw new Error('服务绑定非本机地址时必须配置 DEPLOY_ALLOWED_ORIGINS');
     }
     if (!isTauriSubprocess) {
@@ -342,6 +430,10 @@ async function bootstrap() {
     // 初始化独立服务器部署数据库
     await getDeployDb();
     console.log(`[bootstrap] ✅ 独立服务器部署数据库已就绪: ${DEPLOY_DB_PATH}`);
+    if (isTauriSubprocess && AGENT_SESSION_TOKEN) {
+      getAgentDb();
+      console.log('[bootstrap] ✅ AI 控制平面数据库与 Agent Gateway 已就绪');
+    }
 
     // 根据运行环境动态选择监听地址：
     // - Tauri 桌面端：绑定 127.0.0.1 防止局域网外部访问并规避 Windows 防火墙弹窗

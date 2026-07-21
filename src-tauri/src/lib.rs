@@ -1,5 +1,6 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -8,6 +9,7 @@ use tauri::image::Image;
 use tauri::{Emitter, Manager};
 
 mod app_update;
+mod secure_identity;
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 mod tray;
 
@@ -53,6 +55,8 @@ struct LocalServerInner {
     node_path: Option<String>,
     last_error: Option<String>,
     last_output: String,
+    agent_runtime: Option<AgentRuntimeDescriptor>,
+    agent_runtime_path: Option<PathBuf>,
 }
 
 /** 管理内嵌 Node 服务生命周期。 */
@@ -71,6 +75,26 @@ struct LocalServerStatus {
     node_path: Option<String>,
     last_error: Option<String>,
     last_output: String,
+}
+
+/** MCP Sidecar 用于发现雨燕本机网关的短期运行时描述。 */
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentRuntimeDescriptor {
+    schema_version: u8,
+    app_version: String,
+    pid: u32,
+    port: u16,
+    session_token: String,
+    started_at: String,
+}
+
+/** WebView 读取 Agent Gateway 时所需的本机运行时信息。 */
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentRuntimeStatus {
+    descriptor: AgentRuntimeDescriptor,
+    executable_path: String,
 }
 
 impl LocalServerManager {
@@ -116,6 +140,26 @@ impl LocalServerManager {
         }
     }
 
+    /** 获取供 WebView 访问 Agent Gateway 的运行时信息。 */
+    fn agent_runtime(&self) -> Result<AgentRuntimeStatus, String> {
+        let state = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let descriptor = state
+            .agent_runtime
+            .clone()
+            .ok_or_else(|| "Agent Gateway 尚未就绪".to_string())?;
+        let executable_path = std::env::current_exe()
+            .map_err(|error| format!("无法获取雨燕可执行文件路径: {error}"))?
+            .to_string_lossy()
+            .into_owned();
+        Ok(AgentRuntimeStatus {
+            descriptor,
+            executable_path,
+        })
+    }
+
     /** 记录本地服务启动不可用状态。 */
     fn mark_error(&self, message: String, node_path: Option<&std::path::Path>) {
         let mut state = self
@@ -127,6 +171,10 @@ impl LocalServerManager {
         state.port = DEFAULT_LOCAL_SERVER_PORT;
         state.node_path = node_path.map(|path| path.to_string_lossy().into_owned());
         state.last_error = Some(message);
+        if let Some(runtime_path) = state.agent_runtime_path.take() {
+            let _ = std::fs::remove_file(runtime_path);
+        }
+        state.agent_runtime = None;
     }
 
     /** 记录 Node 子进程最近输出，便于前端诊断展示。 */
@@ -161,6 +209,12 @@ impl LocalServerManager {
             state.last_output.clear();
         }
 
+        let session_token = format!(
+            "{}{}",
+            uuid::Uuid::new_v4().simple(),
+            uuid::Uuid::new_v4().simple()
+        );
+
         while retries < 3 {
             let port = if retries == 0 && is_port_free(DEFAULT_LOCAL_SERVER_PORT) {
                 DEFAULT_LOCAL_SERVER_PORT
@@ -174,8 +228,8 @@ impl LocalServerManager {
                 retries + 1
             );
 
-            match start_node_server(app, node_path, port, self.clone()) {
-                Ok(child) => {
+            match start_node_server(app, node_path, port, &session_token, self.clone()) {
+                Ok((child, runtime_path, runtime_descriptor)) => {
                     let pid = child.id();
                     let mut state = self
                         .inner
@@ -185,6 +239,8 @@ impl LocalServerManager {
                     state.port = port;
                     state.status = "running".to_string();
                     state.last_error = None;
+                    state.agent_runtime = Some(runtime_descriptor);
+                    state.agent_runtime_path = Some(runtime_path);
                     println!("✅ Node 服务启动成功！进程 PID: {pid}，监听端口: {port}");
                     return Ok(port);
                 }
@@ -211,13 +267,18 @@ impl LocalServerManager {
 
     /** 停止内嵌 Node 服务，优先 graceful shutdown，超时后终止进程树。 */
     pub(crate) fn stop(&self, reason: &str) {
-        let mut child = {
+        let (mut child, runtime_path) = {
             let mut state = self
                 .inner
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            state.child.take()
+            state.agent_runtime = None;
+            (state.child.take(), state.agent_runtime_path.take())
         };
+
+        if let Some(runtime_path) = runtime_path {
+            let _ = std::fs::remove_file(runtime_path);
+        }
 
         let Some(mut child) = child.take() else {
             return;
@@ -241,6 +302,60 @@ impl LocalServerManager {
             let _ = child.wait();
         }
     }
+}
+
+/** 使用 0600 权限原子写入运行时描述文件。 */
+fn write_agent_runtime_descriptor(
+    app: &tauri::AppHandle,
+    port: u16,
+    session_token: &str,
+) -> Result<(PathBuf, AgentRuntimeDescriptor), String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("无法获取应用数据目录: {error}"))?;
+    std::fs::create_dir_all(&app_data_dir)
+        .map_err(|error| format!("创建应用数据目录失败: {error}"))?;
+    let runtime_path = app_data_dir.join("agent-runtime.json");
+    let temp_path = app_data_dir.join(format!("agent-runtime.{}.tmp", std::process::id()));
+    let descriptor = AgentRuntimeDescriptor {
+        schema_version: 1,
+        app_version: app.package_info().version.to_string(),
+        pid: std::process::id(),
+        port,
+        session_token: session_token.to_string(),
+        started_at: format!(
+            "{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        ),
+    };
+    let content = serde_json::to_vec_pretty(&descriptor)
+        .map_err(|error| format!("序列化 Agent 运行时描述失败: {error}"))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .mode(0o600)
+            .open(&temp_path)
+            .map_err(|error| format!("创建 Agent 运行时描述失败: {error}"))?;
+        file.write_all(&content)
+            .map_err(|error| format!("写入 Agent 运行时描述失败: {error}"))?;
+        let _ = file.sync_all();
+    }
+    #[cfg(not(unix))]
+    std::fs::write(&temp_path, &content)
+        .map_err(|error| format!("写入 Agent 运行时描述失败: {error}"))?;
+
+    std::fs::rename(&temp_path, &runtime_path)
+        .map_err(|error| format!("替换 Agent 运行时描述失败: {error}"))?;
+    Ok((runtime_path, descriptor))
 }
 
 // 获取 Node.js 可执行文件的路径
@@ -477,8 +592,9 @@ fn start_node_server(
     app: &tauri::AppHandle,
     node_path: &std::path::Path,
     port: u16,
+    session_token: &str,
     server_manager: LocalServerManager,
-) -> Result<Child, String> {
+) -> Result<(Child, PathBuf, AgentRuntimeDescriptor), String> {
     let resource_path = if cfg!(dev) {
         let cwd = std::env::current_dir().unwrap();
         let path1 = cwd.join("server/index.mjs");
@@ -515,6 +631,9 @@ fn start_node_server(
 
     let deploy_data_dir = app_data_dir.join("deploy-data");
     let template_repo_path = app_data_dir.join("yuyan-template");
+    let runtime_descriptor_path = app_data_dir.join("agent-runtime.json");
+    let executable_path =
+        std::env::current_exe().map_err(|error| format!("无法获取雨燕可执行文件路径: {error}"))?;
 
     // 确保需要的目录存在
     std::fs::create_dir_all(&deploy_data_dir)
@@ -533,6 +652,7 @@ fn start_node_server(
     );
     println!("==================================================");
 
+    let local_master_key = secure_identity::get_or_create_local_master_key()?;
     let mut command = Command::new(node_path);
     hide_background_command_window(&mut command);
     command
@@ -542,12 +662,13 @@ fn start_node_server(
             "TEMPLATE_REPO_PATH",
             template_repo_path.to_str().unwrap_or(""),
         )
-        .env(
-            "DEPLOY_SECRET_KEY",
-            "15170bd388b349e5f3f40cb8080ba6d1e82c66f8d097ef7b18e6243ddbb655b6",
-        )
+        .env("DEPLOY_SECRET_KEY", &local_master_key)
+        .env("YUYAN_AGENT_AUDIT_KEY", &local_master_key)
         .env("PORT", port.to_string())
         .env("IS_TAURI_SUBPROCESS", "true")
+        .env("YUYAN_AGENT_SESSION_TOKEN", session_token)
+        .env("YUYAN_RUNTIME_DESCRIPTOR", &runtime_descriptor_path)
+        .env("YUYAN_APP_EXECUTABLE", &executable_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -576,7 +697,14 @@ fn start_node_server(
         return Err(error);
     }
 
-    Ok(child)
+    match write_agent_runtime_descriptor(app, port, session_token) {
+        Ok((runtime_path, descriptor)) => Ok((child, runtime_path, descriptor)),
+        Err(error) => {
+            terminate_child_tree(&mut child, true);
+            let _ = child.wait();
+            Err(error)
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -627,6 +755,14 @@ fn get_local_server_port(state: tauri::State<'_, LocalServerManager>) -> u16 {
 #[tauri::command]
 fn get_local_server_status(state: tauri::State<'_, LocalServerManager>) -> LocalServerStatus {
     state.status()
+}
+
+/** 获取 AI 集成界面访问本机 Agent Gateway 所需的短期运行时信息。 */
+#[tauri::command]
+fn get_agent_runtime(
+    state: tauri::State<'_, LocalServerManager>,
+) -> Result<AgentRuntimeStatus, String> {
+    state.agent_runtime()
 }
 
 #[derive(serde::Serialize)]
@@ -764,6 +900,83 @@ fn reveal_in_file_manager(path: String) -> Result<(), String> {
     }
 }
 
+/** 返回候选列表中第一个存在的文件。 */
+fn first_existing_file(candidates: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    candidates.into_iter().find(|candidate| candidate.is_file())
+}
+
+/** 从当前可执行文件和开发仓库位置解析 MCP 所需的 Node 与入口脚本。 */
+fn resolve_mcp_runtime_files() -> Result<(PathBuf, PathBuf), String> {
+    let current_exe =
+        std::env::current_exe().map_err(|error| format!("无法获取雨燕可执行文件路径: {error}"))?;
+    let binary_name = if cfg!(target_os = "windows") {
+        "node.exe"
+    } else {
+        "node"
+    };
+    let mut node_candidates = Vec::new();
+    let mut script_candidates = Vec::new();
+    if let Ok(configured_node) = std::env::var("YUYAN_NODE_PATH") {
+        node_candidates.push(PathBuf::from(configured_node));
+    }
+    if let Ok(configured_script) = std::env::var("YUYAN_MCP_ENTRY") {
+        script_candidates.push(PathBuf::from(configured_script));
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        node_candidates.push(cwd.join("src-tauri/resources/bin").join(binary_name));
+        node_candidates.push(cwd.join("resources/bin").join(binary_name));
+        script_candidates.push(cwd.join("mcp/dist/index.js"));
+        script_candidates.push(cwd.join("../mcp/dist/index.js"));
+    }
+    for ancestor in current_exe.ancestors().take(8) {
+        node_candidates.push(ancestor.join("resources/bin").join(binary_name));
+        node_candidates.push(ancestor.join("Resources/resources/bin").join(binary_name));
+        script_candidates.push(ancestor.join("mcp/dist/index.js"));
+        script_candidates.push(ancestor.join("_up_/mcp/dist/index.js"));
+        script_candidates.push(ancestor.join("Resources/_up_/mcp/dist/index.js"));
+        script_candidates.push(ancestor.join("Resources/mcp/dist/index.js"));
+    }
+    let node_path = first_existing_file(node_candidates)
+        .or_else(|| {
+            if cfg!(debug_assertions) {
+                Some(PathBuf::from("node"))
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| "安装包中未找到内嵌 Node 运行时".to_string())?;
+    let script_path = first_existing_file(script_candidates)
+        .ok_or_else(|| "安装包中未找到 mcp/dist/index.js，请重新安装或修复雨燕".to_string())?;
+    Ok((node_path, script_path))
+}
+
+/**
+ * 使用当前雨燕可执行文件启动 TypeScript 编译产物形式的 stdio MCP Sidecar。
+ * @description stdout/stderr/stdin 均直接继承，Rust 层不向 stdout 写入任何诊断内容。
+ */
+pub fn run_mcp_sidecar() -> Result<(), String> {
+    let (node_path, script_path) = resolve_mcp_runtime_files()?;
+    let executable_path =
+        std::env::current_exe().map_err(|error| format!("无法获取雨燕可执行文件路径: {error}"))?;
+    let forwarded_args = std::env::args()
+        .skip(1)
+        .filter(|argument| argument != "--mcp")
+        .collect::<Vec<_>>();
+    let status = Command::new(node_path)
+        .arg(script_path)
+        .args(forwarded_args)
+        .env("YUYAN_APP_EXECUTABLE", executable_path)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|error| format!("启动 MCP Sidecar 失败: {error}"))?;
+    if !status.success() {
+        return Err(format!("MCP Sidecar 异常退出: {status}"));
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let local_server_manager = LocalServerManager::default();
@@ -796,7 +1009,13 @@ pub fn run() {
             reveal_in_file_manager,
             get_system_info,
             get_local_server_port,
-            get_local_server_status
+            get_local_server_status,
+            get_agent_runtime,
+            secure_identity::get_or_create_device_identity,
+            secure_identity::sign_device_challenge,
+            secure_identity::save_secure_account,
+            secure_identity::load_active_secure_account,
+            secure_identity::clear_active_secure_account
         ])
 
         .on_window_event(|window, event| {

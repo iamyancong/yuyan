@@ -12,7 +12,9 @@
     "frontend:build": "node --input-type=commonjs -e \"if(!process.env.CI){require('child_process').execSync('npx vue-tsc --noEmit',{stdio:'inherit'})}\" && vite build",
     "frontend:build:ci": "vite build",
     "typecheck": "vue-tsc --noEmit",
-    "test:server": "node --test server/services/*.test.mjs",
+    "test:server": "node --test server/services/tests/*.test.mjs",
+    "mcp:build": "tsc -p mcp/tsconfig.json",
+    "test:mcp": "pnpm run mcp:build && node --test mcp/tests/*.test.mjs",
     "tauri": "tauri"
   },
   "dependencies": {
@@ -21,6 +23,7 @@
     "@babel/parser": "^8.0.0",
     "@babel/traverse": "^8.0.0",
     "@babel/types": "^8.0.0",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "@tauri-apps/api": "^2.6.0",
     "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-opener": "^2.2.0",
@@ -40,7 +43,8 @@
     "ssh2": "^1.17.0",
     "vue": "^3.5.18",
     "vue-router": "^4.0.0",
-    "vxe-pc-ui": "^4.14.29"
+    "vxe-pc-ui": "^4.14.29",
+    "zod": "3.25.76"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.6.2",

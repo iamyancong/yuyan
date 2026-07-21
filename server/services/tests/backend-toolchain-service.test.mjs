@@ -5,7 +5,7 @@ import {
   normalizeJavaArchitecture,
   parseJavaDetection,
   parseMacJavaHomes,
-} from './backend-toolchain-service.mjs';
+} from '../backend-toolchain-service.mjs';
 
 test('解析 macOS java_home 输出中的多个 JDK 路径并去重', () => {
   const output = `Matching Java Virtual Machines (2):

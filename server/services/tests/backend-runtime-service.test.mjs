@@ -6,7 +6,7 @@ import {
   buildPidServiceScript,
   normalizeNacosRuntimeAddress,
   normalizePublishedJarName,
-} from './backend-runtime-service.mjs';
+} from '../backend-runtime-service.mjs';
 
 test('CI 发布文件名移除 SNAPSHOT 且不改变正式版本名', () => {
   assert.equal(
