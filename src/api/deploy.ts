@@ -614,7 +614,14 @@ export const getDeployApiToken = (): string => {
  */
 export const getDeployApiAuthHeaders = (): Record<string, string> => {
   const session = getCachedSecureAccount();
-  if (!session?.accessToken || !session.teamId) return {};
+  if (!session?.gitlabToken || !session.gitlabHost) return {};
+  if (!session.accessToken || !session.teamId) {
+    return {
+      'X-Yuyan-Client': 'web',
+      'X-GitLab-Token': session.gitlabToken,
+      'X-GitLab-Host': session.gitlabHost,
+    };
+  }
   return {
     Authorization: `Bearer ${session.accessToken}`,
     'X-Yuyan-Team-Id': session.teamId,
@@ -1449,6 +1456,7 @@ async function getActiveDeployApiBase(url = '', executionScope?: DeployExecution
       return `${await getActiveLocalServerUrl()}/deploy-api`;
     }
   }
+  if (!isTauri()) return getApiBase('/deploy-api');
   return getApiBase('/deploy-api/v2');
 }
 

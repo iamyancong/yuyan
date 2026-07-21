@@ -15,6 +15,7 @@ import {
   signDeviceChallenge,
   type SecureAccountState,
 } from '@/services/secureAuth';
+import { isTauri } from '@/utils/env';
 
 /** 雨燕展示用户。 */
 export interface User {
@@ -178,7 +179,27 @@ const getCurrentUser = async (): Promise<User | null> => {
   }
 };
 
-/** GitLab PAT 登录并向中央注册当前设备。 */
+/** 构建不包含设备与中央令牌的网页标签页会话。 */
+function createWebSecureState(token: string, host: string, user: User): SecureAccountState {
+  return {
+    accountId: `web:${host}:${user.id}`,
+    deviceId: '',
+    gitlabHost: host,
+    gitlabUserId: user.id,
+    gitlabUsername: user.username,
+    gitlabDisplayName: user.name,
+    gitlabAvatarUrl: user.avatar_url,
+    gitlabToken: token,
+    accessToken: '',
+    refreshToken: '',
+    teamId: '',
+    role: '',
+    accessExpiresAt: '',
+    refreshExpiresAt: '',
+  };
+}
+
+/** GitLab PAT 登录；桌面端注册设备，网页端建立当前标签页会话。 */
 const login = async (token: string, host: string): Promise<boolean> => {
   authState.value.loading = true;
   const normalizedHost = host.trim().replace(/\/+$/, '');
@@ -188,6 +209,14 @@ const login = async (token: string, host: string): Promise<boolean> => {
     updateGitLabClient(normalizedHost);
     const user = await getCurrentUser();
     if (!user) throw new Error('GitLab 令牌或服务器地址无效');
+    if (!isTauri()) {
+      const webState = createWebSecureState(token, normalizedHost, user);
+      await saveSecureAccount(webState);
+      applySecureState(webState, user);
+      await nextTick();
+      message.success(`欢迎回来，${user.name}！`);
+      return true;
+    }
     const device = await getDeviceIdentity();
     const session = await exchangeGitlabIdentity(normalizedHost, token, device);
     const secureState: SecureAccountState = {
