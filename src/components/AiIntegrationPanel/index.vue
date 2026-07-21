@@ -19,7 +19,7 @@ import { useAiSections } from './hooks/useAiSections';
 defineOptions({ name: 'AiIntegrationPanel' });
 
 const {
-  loading, available, appVersion, clients, launcher, snapshot, secureAccount, centralMe, devices,
+  loading, available, gatewayReady, gatewayError, appVersion, clients, launcher, snapshot, secureAccount, centralMe, devices,
   centralAudit, accountApprovalPolicy, identityLoading, accountPolicySaving, recentOperations,
   refresh, changeClient, changeApprovalPolicy, saveAccountApprovalPolicy, decideOperation,
   revokeGrant, revokeDevice, copyGenericConfig,
@@ -34,13 +34,14 @@ const { isSectionExpanded, toggleSection } = useAiSections();
         <strong>连接与权限</strong>
         <span>管理账号设备、MCP 客户端和执行审批</span>
       </div>
-      <span class="ai-gateway-status" :class="{ 'is-ready': available }">
-        <i />{{ available ? `Gateway 已就绪 · v${appVersion || '-'}` : '仅桌面端可用' }}
+      <span class="ai-gateway-status" :class="{ 'is-ready': gatewayReady }" :title="gatewayError">
+        <i />{{ !available ? '仅桌面端可用' : gatewayReady ? `Gateway 已就绪 · v${appVersion}` : 'Gateway 不可用' }}
       </span>
     </div>
 
     <a-spin :spinning="loading && !snapshot">
       <template v-if="available">
+        <a-alert v-if="gatewayError" class="ai-gateway-alert" type="error" :message="`Gateway 加载失败：${gatewayError}`" show-icon />
         <div class="ai-sections">
           <AiSectionShell section-id="ai-section-identity" title="账号与设备" :summary="`${secureAccount?.gitlabUsername || '未登录'} · ${devices.length} 台设备`" :expanded="isSectionExpanded('identity')" @toggle="toggleSection('identity')">
             <template #icon><UserOutlined /></template>

@@ -42,8 +42,11 @@ jobs:
             exit 1
           fi
 
-      - name: Test updater manifest generator
-        run: node --test scripts/generate-update-manifest.test.js
+      - name: Test packaging scripts
+        run: >-
+          node --test
+          scripts/generate-update-manifest.test.js
+          scripts/server-production-dependencies.test.js
 
       - name: Calculate Version
         id: calc
@@ -194,6 +197,16 @@ jobs:
           file "$NODE_BINARY" | tee /tmp/yuyan-node-arch.txt
           grep -q '${{ matrix.expected_arch }}' /tmp/yuyan-app-arch.txt
           grep -q '${{ matrix.expected_arch }}' /tmp/yuyan-node-arch.txt
+
+      - name: Verify macOS Packaged Gateway
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          NODE_BINARY=$(find src-tauri/target/release/bundle/macos -path '*/Contents/Resources/resources/bin/node' -type f -print -quit)
+          SERVER_ENTRY=$(find src-tauri/target/release/bundle/macos -path '*/Contents/Resources/_up_/server/index.mjs' -type f -print -quit)
+          test -n "$NODE_BINARY"
+          test -n "$SERVER_ENTRY"
+          node scripts/verify-packaged-server.mjs "$NODE_BINARY" "$SERVER_ENTRY"
 
       - name: Prepare Update Artifact
         shell: bash
