@@ -122,3 +122,16 @@ test('相同 deviceId 的不同 GitLab 用户仍按账号隔离', async () => {
   const accountContext = { ...principal, client: 'desktop', requestId: 'account-b-policy' };
   assert.deepEqual((await identity.getAccountApprovalPolicy(accountContext)).forcedTools, []);
 });
+
+test('网页 GitLab 凭据校验不要求创建设备身份', async () => {
+  const result = await identity.verifyGitlabCredential({
+    gitlabHost: `${gitlabHost}/api/v4`,
+    gitlabToken: 'token-user-a',
+  });
+  assert.equal(result.gitlabHost, gitlabHost);
+  assert.equal(result.user.username, 'alice');
+  await assert.rejects(
+    () => identity.verifyGitlabCredential({ gitlabHost, gitlabToken: 'invalid-token' }),
+    (error) => error.code === 'gitlab_token_invalid',
+  );
+});

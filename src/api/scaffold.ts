@@ -77,7 +77,14 @@ const client = axios.create({ baseURL: getApiBase('/scaffold-api') });
 /** 返回脚手架远程调用所需的短期身份与实时 GitLab 证明。 */
 export function getScaffoldAuthHeaders(): Record<string, string> {
   const session = getCachedSecureAccount();
-  if (!session?.accessToken || !session.teamId) return {};
+  if (!session?.gitlabToken || !session.gitlabHost) return {};
+  if (!session.accessToken || !session.teamId) {
+    return {
+      'X-Yuyan-Client': 'web',
+      'X-GitLab-Token': session.gitlabToken,
+      'X-GitLab-Host': session.gitlabHost,
+    };
+  }
   return {
     Authorization: `Bearer ${session.accessToken}`,
     'X-Yuyan-Team-Id': session.teamId,

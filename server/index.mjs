@@ -30,7 +30,7 @@ import deployRoutes from './routes/deploy.mjs';
 import healthRoutes from './routes/health.mjs';
 import agentRoutes from './routes/agent.mjs';
 import authV2Routes from './routes/auth-v2.mjs';
-import { appendCentralAudit, authorizeCentralV2 } from './services/central-identity-service.mjs';
+import { appendCentralAudit, authorizeCentralV2, verifyGitlabCredential } from './services/central-identity-service.mjs';
 import { guardCentralDeployRequest } from './services/central-deploy-guard.mjs';
 import { getRequestContext } from './services/request-context.mjs';
 import { closeDeployDb, getDeployDb } from './services/deploy-store.mjs';
@@ -46,6 +46,8 @@ let stopCleanupScheduler = null;
 let stopUpdatePreloadScheduler = null;
 let shuttingDown = false;
 const activeSockets = new Set();
+const WEB_GITLAB_AUTH_TTL_MS = 60_000;
+const webGitlabAuthCache = new Map();
 const isTauriSubprocess = process.env.IS_TAURI_SUBPROCESS === 'true';
 const isLoopbackBind = ['127.0.0.1', '::1', 'localhost'].includes(DEPLOY_BIND_HOST);
 
@@ -54,6 +56,49 @@ function isValidDeployToken(value) {
   const actual = Buffer.from(String(value || ''));
   const expected = Buffer.from(DEPLOY_API_TOKEN);
   return actual.length === expected.length && actual.length > 0 && crypto.timingSafeEqual(actual, expected);
+}
+
+/** 判断请求是否来自网页客户端。 */
+function isWebClientRequest(req) {
+  return String(req.headers['x-yuyan-client'] || '').toLowerCase() === 'web';
+}
+
+/** 从网页请求头或 JSON 请求体中读取 GitLab 凭据。 */
+function getWebGitlabCredential(req) {
+  return {
+    gitlabHost: String(req.headers['x-gitlab-host'] || req.body?.gitlabHost || '').trim(),
+    gitlabToken: String(req.headers['x-gitlab-token'] || req.body?.gitlabToken || '').trim(),
+  };
+}
+
+/** 实时校验网页 GitLab PAT，并短暂缓存成功结果以避免列表请求重复验证。 */
+async function authorizeWebGitlabRequest(req, res, next) {
+  const credential = getWebGitlabCredential(req);
+  const cacheKey = crypto.createHash('sha256')
+    .update(`${credential.gitlabHost}\0${credential.gitlabToken}`)
+    .digest('hex');
+  const cachedUntil = Number(webGitlabAuthCache.get(cacheKey) || 0);
+  try {
+    if (cachedUntil <= Date.now()) {
+      await verifyGitlabCredential(credential);
+      webGitlabAuthCache.set(cacheKey, Date.now() + WEB_GITLAB_AUTH_TTL_MS);
+      if (webGitlabAuthCache.size > 256) {
+        for (const [key, expiresAt] of webGitlabAuthCache) {
+          if (Number(expiresAt) <= Date.now()) webGitlabAuthCache.delete(key);
+        }
+      }
+    }
+    next();
+  } catch (error) {
+    res.status(Number(error?.status) || 401).json({
+      success: false,
+      error: {
+        code: error?.code || 'web_gitlab_auth_failed',
+        message: error?.message || 'GitLab 网页会话验证失败',
+        retryable: false,
+      },
+    });
+  }
 }
 
 /** 判断是否为兼容旧版客户端的免鉴权更新包下载请求。 */
@@ -68,6 +113,10 @@ function isPublicAppUpdateDownload(req) {
 /** 非本机部署 API 鉴权中间件。 */
 function authorizeDeployApi(req, res, next) {
   if (isLoopbackBind || isTauriSubprocess || isPublicAppUpdateDownload(req)) return next();
+  if (isWebClientRequest(req)) {
+    void authorizeWebGitlabRequest(req, res, next);
+    return;
+  }
   const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
   const token = String(req.headers['x-deploy-token'] || bearer);
   if (!isValidDeployToken(token)) {
@@ -106,6 +155,11 @@ function authorizeAgentApi(req, res, next) {
 /** 远程脚手架接口复用短期账号身份与设备会话门禁。 */
 function authorizeScaffoldApi(req, res, next) {
   if (isLoopbackBind || isTauriSubprocess) return next();
+  if (['GET', 'HEAD'].includes(req.method)) return next();
+  if (isWebClientRequest(req)) {
+    void authorizeWebGitlabRequest(req, res, next);
+    return;
+  }
   authorizeCentralV2(req, res, () => {
     const context = getRequestContext();
     const adminOnly = req.method === 'POST' && req.path.startsWith('/ops/');

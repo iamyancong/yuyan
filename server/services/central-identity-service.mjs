@@ -32,9 +32,12 @@ const deviceSchema = z.object({
   platform: z.enum(['macos', 'windows', 'linux', 'ios', 'android']).or(z.string().trim().min(1).max(32)),
 });
 
-export const gitlabExchangeSchema = z.object({
+export const gitlabCredentialSchema = z.object({
   gitlabHost: z.string().url().max(512),
   gitlabToken: z.string().min(8).max(4096),
+});
+
+export const gitlabExchangeSchema = gitlabCredentialSchema.extend({
   device: deviceSchema,
 });
 
@@ -238,6 +241,14 @@ async function fetchGitlabUser(gitlabHost, gitlabToken) {
   const user = await response.json();
   if (!Number(user?.id)) throw new Error('GitLab 未返回有效数字用户 ID');
   return user;
+}
+
+/** 使用 GitLab PAT 校验网页账号，但不创建雨燕设备或中央会话。 */
+export async function verifyGitlabCredential(input) {
+  const parsed = gitlabCredentialSchema.parse(input);
+  const gitlabHost = normalizeGitlabHost(parsed.gitlabHost);
+  const user = await fetchGitlabUser(gitlabHost, parsed.gitlabToken);
+  return { gitlabHost, user };
 }
 
 /**
