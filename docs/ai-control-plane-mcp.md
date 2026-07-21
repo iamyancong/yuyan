@@ -115,6 +115,7 @@ AI 集成面板只把短期会话、当前身份和账号审批策略同步到�
 pnpm mcp:build
 pnpm test:mcp
 pnpm test:server
+pnpm test:central-url
 pnpm typecheck
 pnpm frontend:build:ci
 cd src-tauri && cargo fmt --check && cargo check && cargo test --all-targets
@@ -124,7 +125,7 @@ cd src-tauri && cargo fmt --check && cargo check && cargo test --all-targets
 
 正式远程验收必须使用可丢弃微应用与测试服务器，按“识别 → 授权 → 规划配置 → 自动应用 → 预检 → 自动发布 → 健康/日志 → 回滚 → 人工审批删除”执行。真实删除必须由用户现场确认。
 
-GitHub Actions 正式桌面包要求 `VITE_APP_SERVER_URL` 为 HTTPS；缺失或使用 HTTP 会直接终止构建。正式包不再注入 `VITE_DEPLOY_API_TOKEN` 或测试数据库地址。中央容器必须显式提供持久的随机 `DEPLOY_SECRET_KEY`、允许来源和旧只读更新代理所需的兼容令牌。
+GitHub Actions 桌面包要求 `VITE_APP_SERVER_URL` 使用 HTTPS；仅回环地址与 RFC1918 私网地址允许 HTTP，公网 HTTP 或无效地址会直接终止构建。私网 HTTP 只适用于可信公司局域网或 VPN，账号换票期间的传输安全由该网络边界承担。正式包不再注入 `VITE_DEPLOY_API_TOKEN` 或测试数据库地址。中央容器必须显式提供持久的随机 `DEPLOY_SECRET_KEY`、允许来源和旧只读更新代理所需的兼容令牌。
 
 ## 一期边界
 

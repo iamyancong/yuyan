@@ -92,6 +92,7 @@ jobs:
       - name: Verify frontend, server and MCP
         run: |
           pnpm typecheck
+          pnpm test:central-url
           pnpm test:server
           pnpm test:mcp
           pnpm frontend:build:ci
@@ -158,7 +159,7 @@ jobs:
           CENTRAL_URL: ${{ secrets.VITE_APP_SERVER_URL }}
           GITLAB_HOST: ${{ secrets.VITE_GITLAB_HOST }}
         run: |
-          node --input-type=module -e "const u = new URL(process.env.CENTRAL_URL || ''); if (u.protocol !== 'https:') throw new Error('VITE_APP_SERVER_URL 必须配置为 HTTPS 中央服务')"
+          node --experimental-strip-types --input-type=module -e "import { assertAllowedCentralUrl } from './src/utils/centralUrlPolicy.ts'; assertAllowedCentralUrl(process.env.CENTRAL_URL || '')"
           printf 'VITE_APP_SERVER_URL=%s\n' "$CENTRAL_URL" > .env
           printf 'VITE_GITLAB_HOST=%s\n' "$GITLAB_HOST" >> .env
         shell: bash
