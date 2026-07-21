@@ -35,6 +35,8 @@ import { loadActiveSecureAccount, type SecureAccountState } from '@/services/sec
 export function useAiIntegration() {
   const loading = ref(false);
   const available = ref(isTauri());
+  const gatewayReady = ref(false);
+  const gatewayError = ref('');
   const appVersion = ref('');
   const clients = ref<AgentClientStatus[]>([]);
   const genericConfig = ref<Record<string, unknown> | null>(null);
@@ -52,6 +54,14 @@ export function useAiIntegration() {
 
   const pendingOperations = computed(() => snapshot.value?.operations.items.filter((item) => item.status === 'pending_approval') || []);
   const recentOperations = computed(() => snapshot.value?.operations.items.slice(0, 8) || []);
+
+  /** 将 Tauri 字符串错误与标准 Error 统一为可展示信息。 */
+  const getErrorMessage = (error: unknown) => {
+    if (error instanceof Error) return error.message;
+    if (typeof error === 'string') return error;
+    if (error && typeof error === 'object' && 'message' in error) return String(error.message || '未知错误');
+    return '未知错误';
+  };
 
   /** 刷新系统钥匙串账号以及当前用户的设备清单。 */
   const refreshIdentity = async (force = false) => {
@@ -87,6 +97,7 @@ export function useAiIntegration() {
   const refresh = async (silent = false) => {
     if (!available.value) return;
     if (!silent) loading.value = true;
+    const identityRefresh = refreshIdentity(!silent);
     try {
       const runtime = await getAgentRuntime();
       appVersion.value = runtime.descriptor.appVersion;
@@ -96,10 +107,14 @@ export function useAiIntegration() {
       genericConfig.value = clientResult.genericConfig;
       launcher.value = clientResult.launcher;
       snapshot.value = snapshotResult;
-      await refreshIdentity(!silent);
+      gatewayReady.value = true;
+      gatewayError.value = '';
     } catch (error) {
-      if (!silent) message.error(error instanceof Error ? error.message : 'AI 集成状态加载失败');
+      gatewayReady.value = false;
+      gatewayError.value = getErrorMessage(error);
+      if (!silent) message.error(`Gateway 加载失败：${gatewayError.value}`);
     } finally {
+      await identityRefresh;
       if (!silent) loading.value = false;
     }
   };
@@ -198,7 +213,7 @@ export function useAiIntegration() {
   }
 
   return {
-    loading, available, appVersion, clients, launcher, snapshot, pendingOperations, recentOperations,
+    loading, available, gatewayReady, gatewayError, appVersion, clients, launcher, snapshot, pendingOperations, recentOperations,
     secureAccount, centralMe, devices, centralAudit, accountApprovalPolicy, identityLoading, accountPolicySaving,
     refresh, changeClient, changeApprovalPolicy, saveAccountApprovalPolicy, decideOperation, revokeGrant, revokeDevice, copyGenericConfig,
   };

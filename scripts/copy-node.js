@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { execFileSync, execSync } from 'child_process';
+import { serverProductionDependencies } from './server-production-dependencies.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -122,14 +123,7 @@ try {
     version: "1.0.0",
     private: true,
     type: "module",
-    dependencies: {
-      "axios": "^1.11.0",
-      "compression": "^1.8.1",
-      "connect-history-api-fallback": "^2.0.0",
-      "cors": "^2.8.5",
-      "express": "^5.1.0",
-      "ssh2": "^1.17.0"
-    }
+    dependencies: serverProductionDependencies,
   };
 
   console.log(`\n📦 正在为后端服务准备生产依赖...`);
