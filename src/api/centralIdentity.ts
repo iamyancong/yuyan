@@ -1,6 +1,7 @@
 /** 雨燕中央 v2 身份与设备 API。 */
 
 import { getApiBase } from '@/utils/env';
+import { assertAllowedCentralUrl } from '@/utils/centralUrlPolicy';
 import type { DeviceIdentity, SecureAccountState } from '@/services/secureAuth';
 
 export interface CentralExchangeResult {
@@ -42,14 +43,11 @@ export interface CentralAccountApprovalPolicy {
   forcedTools: string[];
 }
 
-/** 获取中央 API 根地址，正式远程服务必须使用 HTTPS。 */
+/** 获取中央 API 根地址，公网强制 HTTPS，可信私网允许 HTTP。 */
 function getCentralBase(): string {
   const base = getApiBase('').replace(/\/$/, '');
   if (!base) throw new Error('未配置雨燕中央服务地址 VITE_APP_SERVER_URL');
-  const url = new URL(base, window.location.origin);
-  const loopback = ['127.0.0.1', 'localhost', '::1'].includes(url.hostname);
-  if (!loopback && url.protocol !== 'https:') throw new Error('雨燕中央身份服务必须使用 HTTPS');
-  return base;
+  return assertAllowedCentralUrl(base);
 }
 
 /** 解析中央统一响应。 */
