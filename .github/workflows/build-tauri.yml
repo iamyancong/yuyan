@@ -96,6 +96,11 @@ jobs:
           pnpm test:mcp
           pnpm frontend:build:ci
 
+      - name: Prepare Tauri resource directory
+        run: |
+          mkdir -p src-tauri/resources/bin
+          touch src-tauri/resources/bin/placeholder.txt
+
       - name: Verify Rust
         working-directory: src-tauri
         run: |
