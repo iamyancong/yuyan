@@ -118,16 +118,13 @@ jobs:
           - platform: windows-latest
             artifact: yuyan-windows-x86_64
             update_target: windows-x86_64
-            bundle_path: src-tauri/target/release/bundle/nsis/*.exe
           - platform: macos-15
             artifact: yuyan-macos-aarch64
             update_target: darwin-aarch64
-            bundle_path: src-tauri/target/release/bundle/dmg/*.dmg
             expected_arch: arm64
           - platform: macos-15-intel
             artifact: yuyan-macos-x86_64
             update_target: darwin-x86_64
-            bundle_path: src-tauri/target/release/bundle/dmg/*.dmg
             expected_arch: x86_64
 
     runs-on: ${{ matrix.platform }}
@@ -204,16 +201,21 @@ jobs:
           TARGET_DIR="update-artifact/${{ matrix.update_target }}"
           VERSION="${{ needs.prep-version.outputs.version }}"
           mkdir -p "$TARGET_DIR"
-          cp ${{ matrix.bundle_path }} "$TARGET_DIR/"
           if [ "${{ runner.os }}" = 'Windows' ]; then
-            UPDATER_FILE=$(find src-tauri/target/release/bundle/nsis -maxdepth 1 -name '*.exe' -type f -print -quit)
+            BUNDLE_FILE=$(find src-tauri/target/release/bundle/nsis -maxdepth 1 -name '*.exe' -type f -print -quit)
+            BUNDLE_NAME="yuyan_${VERSION}_windows-x86_64-installer.exe"
+            UPDATER_FILE="$BUNDLE_FILE"
             UPDATE_NAME="yuyan_${VERSION}_windows-x86_64-setup.exe"
           else
+            BUNDLE_FILE=$(find src-tauri/target/release/bundle/dmg -maxdepth 1 -name '*.dmg' -type f -print -quit)
+            BUNDLE_NAME="yuyan_${VERSION}_${{ matrix.update_target }}.dmg"
             UPDATER_FILE=$(find src-tauri/target/release/bundle/macos -maxdepth 1 -name '*.app.tar.gz' -type f -print -quit)
             UPDATE_NAME="yuyan_${VERSION}_${{ matrix.update_target }}.app.tar.gz"
           fi
+          test -n "$BUNDLE_FILE"
           test -n "$UPDATER_FILE"
           test -f "${UPDATER_FILE}.sig"
+          cp "$BUNDLE_FILE" "$TARGET_DIR/$BUNDLE_NAME"
           cp "$UPDATER_FILE" "$TARGET_DIR/$UPDATE_NAME"
           cp "${UPDATER_FILE}.sig" "$TARGET_DIR/${UPDATE_NAME}.sig"
           cargo run \
@@ -267,6 +269,30 @@ jobs:
           "${{ github.repository }}"
           ./dist-release
 
+      - name: Validate Release Assets
+        shell: bash
+        run: |
+          VERSION="${{ needs.prep-version.outputs.version }}"
+          EXPECTED_FILES=(
+            "latest.json"
+            "yuyan_${VERSION}_windows-x86_64-installer.exe"
+            "yuyan_${VERSION}_windows-x86_64-setup.exe"
+            "yuyan_${VERSION}_windows-x86_64-setup.exe.sig"
+            "yuyan_${VERSION}_darwin-aarch64.dmg"
+            "yuyan_${VERSION}_darwin-aarch64.app.tar.gz"
+            "yuyan_${VERSION}_darwin-aarch64.app.tar.gz.sig"
+            "yuyan_${VERSION}_darwin-x86_64.dmg"
+            "yuyan_${VERSION}_darwin-x86_64.app.tar.gz"
+            "yuyan_${VERSION}_darwin-x86_64.app.tar.gz.sig"
+          )
+          ACTUAL_COUNT=$(find ./dist-release -type f | wc -l | tr -d ' ')
+          test "$ACTUAL_COUNT" -eq "${#EXPECTED_FILES[@]}"
+          for filename in "${EXPECTED_FILES[@]}"; do
+            MATCH_COUNT=$(find ./dist-release -type f -name "$filename" | wc -l | tr -d ' ')
+            test "$MATCH_COUNT" -eq 1
+          done
+          find ./dist-release -type f -print
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
@@ -278,7 +304,10 @@ jobs:
             ${{ github.event.head_commit.message }}
           files: |
             ./dist-release/latest.json
-            ./dist-release/**/*
+            ./dist-release/**/*.dmg
+            ./dist-release/**/*.exe
+            ./dist-release/**/*.app.tar.gz
+            ./dist-release/**/*.sig
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
