@@ -8,7 +8,7 @@ import {
   inspectBackendRepository,
   prepareBackendMavenCommand,
   resolveBackendArtifact,
-} from './backend-project-service.mjs';
+} from '../backend-project-service.mjs';
 
 /** 创建最小 Maven 多模块测试项目。 */
 async function createFixture() {

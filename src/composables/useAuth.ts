@@ -1,16 +1,22 @@
-import { ref, computed, onMounted, watch, readonly, nextTick } from 'vue';
+import { computed, nextTick, readonly, ref, watch } from 'vue';
 import { message } from 'ant-design-vue';
 import {
-  setGitLabToken,
-  setGitLabHost,
-  getGitLabAuthStatus,
-  getGitLabHost,
-  updateGitLabClient,
   getCurrentUser as getGitLabCurrentUser,
+  setGitLabHost,
+  setGitLabToken,
+  updateGitLabClient,
 } from '@/api/gitlab';
-import type { GitLabUser } from '@/api/gitlab';
+import { exchangeGitlabIdentity, logoutCentralSession, refreshCentralSession } from '@/api/centralIdentity';
+import {
+  clearActiveSecureAccount,
+  getDeviceIdentity,
+  loadActiveSecureAccount,
+  saveSecureAccount,
+  signDeviceChallenge,
+  type SecureAccountState,
+} from '@/services/secureAuth';
 
-// 用户信息接口
+/** 雨燕展示用户。 */
 export interface User {
   id: number;
   username: string;
@@ -22,205 +28,285 @@ export interface User {
   created_at: string;
 }
 
-// 认证状态接口
+/** 当前账号与设备认证状态。 */
 export interface AuthState {
   isAuthenticated: boolean;
   user: User | null;
   token: string | null;
   host: string;
   loading: boolean;
+  accountId: string;
+  deviceId: string;
+  teamId: string;
+  role: 'viewer' | 'operator' | 'admin' | '';
+  accessToken: string;
+  accessExpiresAt: string;
+  centralSessionReady: boolean;
 }
 
-// 同步检查本地认证状态（快速，无网络请求）
-const checkLocalAuth = () => {
-  const token = localStorage.getItem('gitlab-token');
-  const host = getGitLabHost();
-
-  if (token && host) {
-    return { token, host };
-  }
-  return null;
-};
-
-// ---- 全局单例状态（关键修复）----
-// 将认证状态提升到模块作用域，确保所有调用 useAuth() 的地方共享同一份响应式数据
-const initialLocalAuth = checkLocalAuth();
+const defaultHost = import.meta.env.VITE_GITLAB_HOST || '';
 const authState = ref<AuthState>({
   isAuthenticated: false,
   user: null,
-  token: initialLocalAuth?.token || null,
-  host: initialLocalAuth?.host || import.meta.env.VITE_GITLAB_HOST || '',
-  loading: !!initialLocalAuth,
+  token: null,
+  host: defaultHost,
+  loading: true,
+  accountId: '',
+  deviceId: '',
+  teamId: '',
+  role: '',
+  accessToken: '',
+  accessExpiresAt: '',
+  centralSessionReady: false,
 });
 
 let hasInitialized = false;
 let hasSetupWatchers = false;
+let hasSetupSessionRefresh = false;
 
-// 获取当前用户信息
+/** 把 GitLab 用户响应收敛为页面使用的字段。 */
+function mapGitlabUser(user: any): User {
+  return {
+    id: Number(user.id),
+    username: String(user.username || ''),
+    name: String(user.name || user.username || ''),
+    avatar_url: String(user.avatar_url || user.avatarUrl || ''),
+    email: user.email,
+    web_url: String(user.web_url || ''),
+    state: String(user.state || 'active'),
+    created_at: String(user.created_at || ''),
+  };
+}
+
+/** 将安全状态映射到 Vue 单例，不复制刷新令牌。 */
+function applySecureState(state: SecureAccountState, user?: User | null) {
+  authState.value = {
+    isAuthenticated: true,
+    user: user || {
+      id: state.gitlabUserId,
+      username: state.gitlabUsername,
+      name: state.gitlabDisplayName || state.gitlabUsername,
+      avatar_url: state.gitlabAvatarUrl,
+      web_url: '',
+      state: 'active',
+      created_at: '',
+    },
+    token: state.gitlabToken,
+    host: state.gitlabHost,
+    loading: false,
+    accountId: state.accountId,
+    deviceId: state.deviceId || '',
+    teamId: state.teamId,
+    role: state.role,
+    accessToken: state.accessToken,
+    accessExpiresAt: state.accessExpiresAt,
+    centralSessionReady: Boolean(state.accessToken && state.teamId && Date.parse(state.accessExpiresAt) > Date.now()),
+  };
+}
+
+/** 通知 Agent Gateway 立即清空或切换身份，避免内存残留旧 PAT。 */
+async function syncAgentIdentity() {
+  try {
+    const { syncAgentRuntimeSettings } = await import('@/api/agent');
+    await syncAgentRuntimeSettings();
+  } catch {
+    // 本地 Node 尚未就绪时由 AI 控制中心和全局审批宿主稍后重试。
+  }
+}
+
+/** 在访问令牌临近过期时使用设备签名轮换。 */
+async function refreshSecureSessionIfNeeded(state: SecureAccountState): Promise<SecureAccountState> {
+  if (state.accessToken && Date.parse(state.accessExpiresAt) > Date.now() + 2 * 60_000) return state;
+  if (!state.refreshToken || Date.parse(state.refreshExpiresAt) <= Date.now()) {
+    return { ...state, accessToken: '', accessExpiresAt: '' };
+  }
+  const timestamp = Date.now();
+  const nonce = crypto.randomUUID();
+  const payload = `${state.deviceId}.${timestamp}.${nonce}.${state.refreshToken}`;
+  try {
+    const signed = await signDeviceChallenge(payload);
+    const refreshed = await refreshCentralSession({
+      deviceId: state.deviceId,
+      refreshToken: state.refreshToken,
+      timestamp,
+      nonce,
+      signature: signed.signature,
+    });
+    const next = { ...state, ...refreshed };
+    await saveSecureAccount(next);
+    return next;
+  } catch (error: any) {
+    if (error?.status === 401 || error?.code === 'session_expired') {
+      return { ...state, accessToken: '', refreshToken: '', accessExpiresAt: '', refreshExpiresAt: '' };
+    }
+    return state;
+  }
+}
+
+/** 在应用常驻和设备休眠恢复后提前轮换短期访问令牌。 */
+async function maintainCentralSession() {
+  const stored = await loadActiveSecureAccount(true).catch(() => null);
+  if (!stored) return;
+  const refreshed = await refreshSecureSessionIfNeeded(stored);
+  const changed = refreshed.accessToken !== stored.accessToken
+    || refreshed.refreshToken !== stored.refreshToken
+    || refreshed.teamId !== stored.teamId
+    || refreshed.role !== stored.role;
+  if (!changed) return;
+  await saveSecureAccount(refreshed);
+  applySecureState(refreshed, authState.value.user);
+  await syncAgentIdentity();
+}
+
+/** 只注册一次会话续期定时器。 */
+function setupSessionRefresh() {
+  if (hasSetupSessionRefresh || typeof window === 'undefined') return;
+  hasSetupSessionRefresh = true;
+  window.setInterval(() => void maintainCentralSession(), 60_000);
+  window.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') void maintainCentralSession();
+  });
+}
+
+/** 获取当前 GitLab 用户，401 会触发安全登出。 */
 const getCurrentUser = async (): Promise<User | null> => {
   try {
-    const userData = await getGitLabCurrentUser();
-    return {
-      id: userData.id,
-      username: userData.username,
-      name: userData.name,
-      avatar_url: userData.avatar_url,
-      email: userData.email,
-      web_url: userData.web_url,
-      state: userData.state,
-      created_at: userData.created_at,
-    };
+    return mapGitlabUser(await getGitLabCurrentUser());
   } catch (error: any) {
-    if (error.response?.status === 401) {
-      // Token无效，清除认证状态
-      await logout();
-    }
-    console.error('获取用户信息失败:', error);
+    if (error.response?.status === 401) await logout(true);
     return null;
   }
 };
 
-// 登录函数（模块级，避免多实例）
+/** GitLab PAT 登录并向中央注册当前设备。 */
 const login = async (token: string, host: string): Promise<boolean> => {
+  authState.value.loading = true;
+  const normalizedHost = host.trim().replace(/\/+$/, '');
   try {
     setGitLabToken(token);
-    setGitLabHost(host);
-    updateGitLabClient(host);
-
-    authState.value.loading = true;
-
+    setGitLabHost(normalizedHost);
+    updateGitLabClient(normalizedHost);
     const user = await getCurrentUser();
+    if (!user) throw new Error('GitLab 令牌或服务器地址无效');
+    const device = await getDeviceIdentity();
+    const session = await exchangeGitlabIdentity(normalizedHost, token, device);
+    const secureState: SecureAccountState = {
+      accountId: session.accountId,
+      deviceId: session.deviceId,
+      gitlabHost: normalizedHost,
+      gitlabUserId: user.id,
+      gitlabUsername: user.username,
+      gitlabDisplayName: user.name,
+      gitlabAvatarUrl: user.avatar_url,
+      gitlabToken: token,
+      accessToken: session.accessToken,
+      refreshToken: session.refreshToken,
+      teamId: session.teamId,
+      role: session.role,
+      accessExpiresAt: session.accessExpiresAt,
+      refreshExpiresAt: session.refreshExpiresAt,
+    };
+    await saveSecureAccount(secureState);
+    applySecureState(secureState, user);
+    await syncAgentIdentity();
+    await nextTick();
+    message.success(`欢迎回来，${user.name}！`);
+    return true;
+  } catch (error) {
+    setGitLabToken('');
+    setGitLabHost(defaultHost);
+    authState.value.loading = false;
+    throw error;
+  }
+};
 
-    if (user) {
-      authState.value.isAuthenticated = true;
-      authState.value.user = user;
-      authState.value.token = token;
-      authState.value.host = host;
-      authState.value.loading = false;
+/** 登出并清除中央会话、Agent 内存凭据和系统钥匙串账号状态。 */
+const logout = async (silent = false) => {
+  const secureState = await loadActiveSecureAccount().catch(() => null);
+  if (secureState) await logoutCentralSession(secureState).catch(() => undefined);
+  await clearActiveSecureAccount().catch(() => undefined);
+  setGitLabToken('');
+  setGitLabHost(defaultHost);
+  authState.value = {
+    isAuthenticated: false,
+    user: null,
+    token: null,
+    host: defaultHost,
+    loading: false,
+    accountId: '',
+    deviceId: '',
+    teamId: '',
+    role: '',
+    accessToken: '',
+    accessExpiresAt: '',
+    centralSessionReady: false,
+  };
+  await syncAgentIdentity();
+  await nextTick();
+  if (!silent) message.info('已退出登录');
+};
 
-      await nextTick();
-
-      message.success(`欢迎回来，${user.name}！`);
-      return true;
-    } else {
-      message.error('登录失败，令牌或服务器地址无效');
-      await logout();
-      return false;
-    }
-  } catch (error: any) {
-    console.error('登录失败:', error);
-    message.error(error?.response?.data?.message || error?.message || '登录失败');
-    await logout();
+/** 从系统钥匙串恢复当前设备的活动账号。 */
+const checkAuth = async () => {
+  authState.value.loading = true;
+  const stored = await loadActiveSecureAccount(true).catch(() => null);
+  if (!stored) {
+    authState.value.loading = false;
     return false;
   }
-};
-
-// 登出函数（模块级，避免多实例）
-const logout = async () => {
-  setGitLabToken('');
-  setGitLabHost('');
-
-  authState.value.isAuthenticated = false;
-  authState.value.user = null;
-  authState.value.token = null;
-  authState.value.host = import.meta.env.VITE_GITLAB_HOST || '';
-  authState.value.loading = false;
-
+  setGitLabToken(stored.gitlabToken);
+  setGitLabHost(stored.gitlabHost);
+  updateGitLabClient(stored.gitlabHost);
+  const refreshed = await refreshSecureSessionIfNeeded(stored);
+  const remoteUser = await getCurrentUser();
+  applySecureState(refreshed, remoteUser);
+  await syncAgentIdentity();
   await nextTick();
-
-  message.info('已退出登录');
+  return true;
 };
 
-// 检查认证状态
-const checkAuth = async () => {
-  const localAuth = checkLocalAuth();
-
-  if (localAuth) {
-    authState.value.loading = true;
-    updateGitLabClient(localAuth.host);
-    try {
-      const user = await getCurrentUser();
-      if (user) {
-        authState.value.isAuthenticated = true;
-        authState.value.user = user;
-        authState.value.token = localAuth.token;
-        authState.value.host = localAuth.host;
-        authState.value.loading = false;
-        await nextTick();
-      } else {
-        await logout();
-      }
-    } catch (error) {
-      console.error('检查认证状态失败:', error);
-      await logout();
-    }
-  } else {
-    authState.value.isAuthenticated = false;
-    authState.value.user = null;
-    authState.value.token = null;
-    authState.value.host = import.meta.env.VITE_GITLAB_HOST || '';
-    authState.value.loading = false;
-  }
-};
-
-// 初始化（仅一次）
+/** 只初始化一次安全认证。 */
 const initAuth = async () => {
   if (hasInitialized) return;
   hasInitialized = true;
   await checkAuth();
 };
 
-// 设置一次性的全局监听器，派发登录/登出事件，供其他模块兜底联动
+/** 派发全局账号切换事件。 */
 const setupWatchers = () => {
   if (hasSetupWatchers) return;
   hasSetupWatchers = true;
-
   watch(
-    () => authState.value.isAuthenticated,
-    async (newValue, oldValue) => {
-      if (newValue === oldValue) return;
-      const eventDetail = {
-        isLoggedIn: newValue,
-        timestamp: Date.now(),
-        previousState: oldValue,
-        currentState: newValue,
-      };
-
+    () => `${authState.value.accountId}|${authState.value.teamId}|${authState.value.isAuthenticated}`,
+    async (current, previous) => {
+      if (current === previous) return;
       await nextTick();
-      window.dispatchEvent(
-        new CustomEvent('auth-state-changed', {
-          detail: { ...eventDetail, action: newValue ? 'login' : 'logout' },
-        })
-      );
+      window.dispatchEvent(new CustomEvent('auth-state-changed', {
+        detail: {
+          isLoggedIn: authState.value.isAuthenticated,
+          accountId: authState.value.accountId,
+          deviceId: authState.value.deviceId,
+          teamId: authState.value.teamId,
+          action: authState.value.isAuthenticated ? 'login' : 'logout',
+          timestamp: Date.now(),
+        },
+      }));
     }
   );
 };
 
+/** 共享认证单例。 */
 export const useAuth = () => {
-  // 确保只初始化与监听一次
   setupWatchers();
-  // 在微任务队列尽早同步一次本地认证状态
-  nextTick(() => initAuth()).catch((e) => console.error('认证初始化失败:', e));
-
-  // 计算属性
-  const isLoggedIn = computed(() => authState.value.isAuthenticated);
-  const currentUser = computed(() => authState.value.user);
-  const userAvatar = computed(() => authState.value.user?.avatar_url || '');
-  const userName = computed(() => authState.value.user?.name || authState.value.user?.username || '');
-  const authLoading = computed(() => authState.value.loading);
-
+  setupSessionRefresh();
+  nextTick(() => initAuth()).catch((error) => console.error('认证初始化失败:', error));
   return {
-    // 状态
     authState: readonly(authState),
-
-    // 计算属性
-    isLoggedIn,
-    currentUser,
-    userAvatar,
-    userName,
-    authLoading,
-
-    // 方法
+    isLoggedIn: computed(() => authState.value.isAuthenticated),
+    currentUser: computed(() => authState.value.user),
+    userAvatar: computed(() => authState.value.user?.avatar_url || ''),
+    userName: computed(() => authState.value.user?.name || authState.value.user?.username || ''),
+    authLoading: computed(() => authState.value.loading),
     login,
     logout,
     checkAuth,

@@ -129,7 +129,7 @@ export function useNginxDeployServers(params?: UseNginxDeployServersParams) {
    */
   const deleteServer = async (server: DeployServer) => {
     if (!ensureLoggedIn()) return;
-    await deleteDeployServer(server.id);
+    await deleteDeployServer(server.id, server.name);
     message.success('服务器配置已删除');
     await refreshActiveTab({ force: true });
   };

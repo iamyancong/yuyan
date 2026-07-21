@@ -14,6 +14,7 @@ import { withHiddenWindow } from '../utils/child-process.mjs';
 import { createProject, updateProject, deleteProject, checkTokenPermissions } from '../services/gitlab-service.mjs';
 import { initAndPushRepo } from '../services/git-service.mjs';
 import { pullLatestTemplate, getTemplateScriptPath } from '../services/template-service.mjs';
+import { redactAgentValue } from '../services/agent-security.mjs';
 import { getScaffoldArchivePath, registerScaffoldDownload } from './download-controller.mjs';
 
 function isProgressStreamRequest(req) {
@@ -239,7 +240,7 @@ async function syncGeneratedProjectDependencyVersions(projectDir, emit) {
  */
 export async function handleCreateScaffold(req, res) {
   try {
-    console.log('[scaffold-controller] 收到创建请求:', JSON.stringify(req.body || {}, null, 2));
+    console.log('[scaffold-controller] 收到创建请求:', JSON.stringify(redactAgentValue(req.body || {}), null, 2));
 
     // 1. 解析请求参数
     const {

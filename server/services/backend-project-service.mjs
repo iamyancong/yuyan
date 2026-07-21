@@ -432,18 +432,54 @@ export async function inspectBackendTarget(targetId, options = {}) {
 export async function generateTargetOpenApi(targetId, options = {}) {
   const target = await getTarget(targetId);
   if (!target || target.projectType !== 'backend') throw new Error('后端部署目标不存在');
+  return generateOpenApiForTarget(target, {
+    ...options,
+    findCached: (branch, commitSha) => getLatestOpenApiArtifact(target.id, branch, commitSha),
+    persistArtifact: createOpenApiArtifact,
+  });
+}
+
+/**
+ * 使用中央返回的脱敏目标配置在当前设备生成 OpenAPI。
+ * @param {Object} target 脱敏后端目标；id 应使用账号隔离的设备缓存键
+ * @param {Object} options 生成选项
+ * @returns {Promise<Object>} 含本机受控文件路径的产物元数据
+ */
+export async function generateOpenApiFromTargetConfig(target, options = {}) {
+  if (!target || target.projectType !== 'backend') throw new Error('后端部署目标不存在');
+  return generateOpenApiForTarget(target, {
+    ...options,
+    allowConfiguredJdk: false,
+    persistArtifact: async (metadata) => ({
+      id: crypto.randomUUID(),
+      targetId: Number(options.sourceTargetId || 0),
+      projectName: target.projectName,
+      branch: metadata.branch,
+      commitSha: metadata.commitSha,
+      fileName: metadata.fileName,
+      filePath: metadata.filePath,
+      sha256: metadata.sha256,
+      sizeBytes: metadata.sizeBytes,
+      status: 'success',
+      generatedAt: new Date().toISOString(),
+    }),
+  });
+}
+
+/** 使用给定目标配置执行 OpenAPI 领域流程。 */
+async function generateOpenApiForTarget(target, options = {}) {
   if (!target.openapiCommand || !target.openapiOutputPath) throw new Error('请先配置 OpenAPI 生成命令和输出路径');
   const branch = options.branch || target.defaultBranch;
   const log = options.log || (() => {});
   const workspace = await syncBackendWorkspace({ target, branch, gitlabToken: options.gitlabToken, signal: options.signal, log });
-  if (!options.force) {
-    const cached = await getLatestOpenApiArtifact(target.id, branch, workspace.commitSha);
+  if (!options.force && options.findCached) {
+    const cached = await options.findCached(branch, workspace.commitSha);
     if (cached && await fs.stat(cached.filePath).catch(() => null)) {
       log('success', '当前 commit 已存在 OpenAPI 缓存', 'cache');
       return cached;
     }
   }
-  let jdk = target.buildJdkId ? await getJdk(target.buildJdkId) : null;
+  let jdk = options.allowConfiguredJdk !== false && target.buildJdkId ? await getJdk(target.buildJdkId) : null;
   const hasExecutableJava = jdk
     ? await fs.access(path.join(jdk.homePath, 'bin', process.platform === 'win32' ? 'java.exe' : 'java')).then(() => true).catch(() => false)
     : false;
@@ -491,7 +527,7 @@ export async function generateTargetOpenApi(targetId, options = {}) {
   const filePath = path.join(artifactDir, fileName);
   await fs.mkdir(artifactDir, { recursive: true });
   await fs.writeFile(filePath, validated.pretty, 'utf8');
-  const artifact = await createOpenApiArtifact({
+  const artifact = await options.persistArtifact({
     targetId: target.id,
     branch,
     commitSha: workspace.commitSha,

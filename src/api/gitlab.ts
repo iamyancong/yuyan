@@ -291,13 +291,11 @@ class GitLabConfig {
   }
 
   getGitLabHost(): string {
-    // 优先从本地存储获取，否则使用默认值
-    return localStorage.getItem('gitlab-host') || this.gitlabHost;
+    return this.gitlabHost;
   }
 
   setGitLabHost(host: string): void {
-    this.gitlabHost = host;
-    localStorage.setItem('gitlab-host', host);
+    this.gitlabHost = host || import.meta.env.VITE_GITLAB_HOST || '';
   }
 }
 
@@ -317,6 +315,7 @@ const getGitLabBaseURL = () => {
 };
 
 // 创建GitLab API客户端
+let activeGitlabToken = '';
 let gitlabClient = axios.create({
   baseURL: getGitLabBaseURL(),
   timeout: 15000, // 增加超时时间
@@ -346,7 +345,7 @@ export const updateGitLabClient = (host?: string) => {
   // 重新应用拦截器
   gitlabClient.interceptors.request.use(
     (config) => {
-      const token = localStorage.getItem('gitlab-token');
+      const token = activeGitlabToken;
       if (token) {
         config.headers['PRIVATE-TOKEN'] = token;
         config.headers['Authorization'] = `Bearer ${token}`;
@@ -362,7 +361,7 @@ export const updateGitLabClient = (host?: string) => {
     (response) => response,
     (error) => {
       if (error.response?.status === 401) {
-        localStorage.removeItem('gitlab-token');
+        activeGitlabToken = '';
         delete gitlabClient.defaults.headers.common['PRIVATE-TOKEN'];
       }
       return Promise.reject(error);
@@ -373,7 +372,7 @@ export const updateGitLabClient = (host?: string) => {
 // 请求拦截器：添加认证头和动态host
 gitlabClient.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('gitlab-token');
+    const token = activeGitlabToken;
     if (token) {
       config.headers['PRIVATE-TOKEN'] = token;
       // 同时设置Authorization头（某些GitLab版本可能需要）
@@ -403,7 +402,7 @@ gitlabClient.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401) {
       // Token过期或无效
-      localStorage.removeItem('gitlab-token');
+      activeGitlabToken = '';
       // 可以在这里触发重新登录逻辑
     }
     return Promise.reject(error);
@@ -711,11 +710,10 @@ export const getProjectStatistics = async (projectId: number) => {
  * @param token GitLab访问令牌
  */
 export const setGitLabToken = (token: string): void => {
+  activeGitlabToken = token;
   if (token) {
-    localStorage.setItem('gitlab-token', token);
     gitlabClient.defaults.headers.common['PRIVATE-TOKEN'] = token;
   } else {
-    localStorage.removeItem('gitlab-token');
     delete gitlabClient.defaults.headers.common['PRIVATE-TOKEN'];
   }
 };
@@ -725,8 +723,11 @@ export const setGitLabToken = (token: string): void => {
  * @returns 是否已认证
  */
 export const getGitLabAuthStatus = (): boolean => {
-  return !!localStorage.getItem('gitlab-token');
+  return Boolean(activeGitlabToken);
 };
+
+/** 获取仅存在当前进程内存中的 GitLab PAT。 */
+export const getGitLabToken = (): string => activeGitlabToken;
 
 /**
  * 获取GitLab配置实例

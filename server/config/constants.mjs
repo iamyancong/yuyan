@@ -5,6 +5,7 @@
 
 import path from 'node:path';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 
 /** 服务配置目录 */
 const __dirnameResolved = path.dirname(new URL(import.meta.url).pathname);
@@ -66,6 +67,15 @@ export const DEPLOY_DATA_DIR = process.env.DEPLOY_DATA_DIR || path.join(PROJECT_
 /** 独立服务器部署 SQLite 数据库路径 */
 export const DEPLOY_DB_PATH = process.env.DEPLOY_DB_PATH || path.join(DEPLOY_DATA_DIR, 'deploy.sqlite');
 
+/** AI 控制平面 SQLite 数据库路径。 */
+export const AGENT_DB_PATH = process.env.YUYAN_AGENT_DB_PATH || path.join(DEPLOY_DATA_DIR, 'agent.sqlite');
+
+/** Tauri 每次启动注入的 Agent Gateway 会话令牌。 */
+export const AGENT_SESSION_TOKEN = String(process.env.YUYAN_AGENT_SESSION_TOKEN || '').trim();
+
+/** 当前雨燕可执行文件路径，供 MCP 客户端安装器使用。 */
+export const YUYAN_APP_EXECUTABLE = String(process.env.YUYAN_APP_EXECUTABLE || '').trim();
+
 /** 独立服务器部署日志目录 */
 export const DEPLOY_LOG_DIR = process.env.DEPLOY_LOG_DIR || path.join(DEPLOY_DATA_DIR, 'logs');
 
@@ -91,9 +101,35 @@ export const APP_UPDATE_PRELOAD_INITIAL_DELAY_MS = Math.max(
   Number(process.env.APP_UPDATE_PRELOAD_INITIAL_DELAY_MS) || 2_000
 );
 
-/** 部署凭据加密密钥，生产环境必须显式配置 */
-export const DEFAULT_DEPLOY_SECRET_KEY = 'yuyan-ops-local-deploy-secret';
-export const DEPLOY_SECRET_KEY = process.env.DEPLOY_SECRET_KEY || DEFAULT_DEPLOY_SECRET_KEY;
+/**
+ * 解析部署凭据加密密钥。
+ * @description 桌面端由 Rust 从系统钥匙串注入；非本机中央服务必须由部署环境显式提供。
+ */
+function resolveDeploySecretKey() {
+  const configured = String(process.env.DEPLOY_SECRET_KEY || '').trim();
+  if (configured) return configured;
+  const bindHost = String(process.env.HOST || '127.0.0.1').trim().toLowerCase();
+  if (!['127.0.0.1', 'localhost', '::1'].includes(bindHost)) {
+    throw new Error('非本机中央服务必须显式配置随机 DEPLOY_SECRET_KEY，禁止使用共享默认密钥');
+  }
+  fs.mkdirSync(DEPLOY_DATA_DIR, { recursive: true, mode: 0o700 });
+  const keyPath = path.join(DEPLOY_DATA_DIR, '.local-master-key');
+  if (fs.existsSync(keyPath)) return fs.readFileSync(keyPath, 'utf8').trim();
+  const generated = crypto.randomBytes(32).toString('hex');
+  try {
+    fs.writeFileSync(keyPath, generated, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    return generated;
+  } catch (error) {
+    if (error?.code === 'EEXIST') return fs.readFileSync(keyPath, 'utf8').trim();
+    throw error;
+  }
+}
+
+/** 部署凭据与中央审计使用的设备/环境独立密钥。 */
+export const DEPLOY_SECRET_KEY = resolveDeploySecretKey();
+
+/** Agent 审计哈希链密钥，仅用于本机完整性校验。 */
+export const AGENT_AUDIT_KEY = String(process.env.YUYAN_AGENT_AUDIT_KEY || DEPLOY_SECRET_KEY).trim();
 
 /** 非本机部署 API 访问令牌 */
 export const DEPLOY_API_TOKEN = String(process.env.DEPLOY_API_TOKEN || '').trim();

@@ -14,6 +14,7 @@
 | 📋 平台应用列表 | `/ops-projects` | 查看由雨燕创建并打了 `yuyan-ops` 标签的平台微应用，支持查看代码、配置等运维信息。 |
 | 🌐 独立服务器部署 | `/nginx-deploy` | 通过 SSH 将前端产物发布到独立服务器，内置构建、上传、Nginx 站点配置管理、版本备份与一键回滚，并支持「托管式 Nginx 运行时」自动下发。 |
 | 📦 GitLab 仓库列表 | `/projects` | 浏览、搜索 GitLab 仓库，进行仓库相关的批量运维操作。 |
+| 🤖 AI 控制平面 | 顶部 AI 控制中心 | Codex、Cursor、Antigravity 通过本地 stdio MCP 调用雨燕，支持可信项目自动执行、配置差异、发布、回滚、服务控制、受审批删除、任务进度与审计。 |
 
 ### 功能亮点
 
@@ -23,6 +24,7 @@
 - **托管式 Nginx 运行时**：内置多平台 Nginx 运行时资源（`server/assets/nginx-runtime`），可在目标服务器上自动初始化、启动 / 停止 / 重载，无需服务器预装 Nginx。
 - **凭据加密存储**：服务器 SSH 密码 / 私钥使用密钥加密后存入本地 SQLite，数据库支持备份与恢复同步。
 - **明暗主题**：内置主题切换，macOS 下同步切换 Dock 图标。
+- **MCP 安全执行闭环**：外部 Agent 负责理解和规划；雨燕保管凭据并执行受控动作，写操作使用差异预览、参数哈希审批、幂等任务和 HMAC 审计链。
 
 ---
 
@@ -47,6 +49,8 @@
 └───────────────────────────┘   │  · SQLite 持久化 / SSH 操作   │
                                  └───────────────────────────┘
 ```
+
+安装后的雨燕可执行文件同时支持 `--mcp` stdio 模式。Sidecar 根据运行时描述文件连接仅监听 `127.0.0.1` 的 `/agent-api/v1`，雨燕未运行时会自动拉起桌面端。详细架构、工具目录、安全边界和验收方法见 [AI 控制平面与 MCP 文档](docs/ai-control-plane-mcp.md)。
 
 - 前端构建产物（`dist/`）由 Express 静态托管；桌面端由 Tauri 注入本地服务端口，优先使用 `127.0.0.1:3101`，冲突时动态分配。
 - 打包时通过 `scripts/copy-node.js` 将本机 Node 二进制复制进 Tauri 资源目录（macOS 会执行 ad-hoc 签名），保证用户机器无需另装 Node 即可运行（开发模式直接使用系统 Node）。
@@ -94,6 +98,7 @@ yuyan-app/
 │   ├── services/            # Git / GitLab / SSH / 部署 / 模板 等服务
 │   ├── assets/nginx-runtime/# 内置多平台 Nginx 运行时
 │   └── utils/               # 文件、清理、错误解析等工具
+├── mcp/                     # TypeScript stdio MCP Sidecar、严格 Schema 与协议测试
 ├── src-tauri/               # Tauri（Rust）外壳
 │   ├── src/lib.rs           # 启动内嵌 Node、托盘图标、生命周期
 │   ├── tauri.conf.json      # Tauri 配置（窗口 / 打包资源）
@@ -149,6 +154,13 @@ pnpm frontend:dev
 pnpm typecheck
 ```
 
+MCP 构建与协议测试：
+
+```bash
+pnpm mcp:build
+pnpm test:mcp
+```
+
 ### 打包构建
 
 ```bash
@@ -176,11 +188,11 @@ pnpm build
 | `APP_UPDATE_CACHE_DIR` | `${DEPLOY_DATA_DIR}/app-update-cache` | GitHub Release 安装包的内网缓存目录 |
 | `APP_UPDATE_PRELOAD_INTERVAL_MS` | `300000` | 中央 API 主动检查并预热最新安装包的间隔（最低 60 秒） |
 | `APP_UPDATE_PRELOAD_INITIAL_DELAY_MS` | `2000` | 中央 API 启动后首次预热的延迟 |
-| `DEPLOY_SECRET_KEY` | 本地默认值 | **部署凭据加密密钥，生产务必显式配置** |
+| `DEPLOY_SECRET_KEY` | 本机随机生成 | 桌面端从系统钥匙串注入；非本机中央服务必须显式配置独立随机密钥，否则拒绝启动 |
 | `DEPLOY_RECORD_KEEP_PER_PROJECT` | `20` | 每个项目保留的发布记录数 |
 | `DEPLOY_BACKUP_KEEP_PER_TARGET` | `8` | 每个目标保留的远端备份版本数 |
 
-> 打包运行时，Tauri 会自动把部署数据目录与模板缓存目录指向应用数据目录（appData），并注入 `DEPLOY_SECRET_KEY`、动态 `PORT` 等环境变量（见 `src-tauri/src/lib.rs`）。本地服务启动以 `/health` 作为健康检查，不依赖固定 sleep。
+> 打包运行时，Tauri 会自动把部署数据目录与模板缓存目录指向应用数据目录（appData），从 macOS Keychain / Windows Credential Manager 读取每设备主密钥并注入 `DEPLOY_SECRET_KEY`，同时注入动态 `PORT`（见 `src-tauri/src/lib.rs`）。源码和正式桌面包不再包含共享默认密钥。
 
 ---
 
@@ -192,8 +204,11 @@ pnpm build
 - `POST /scaffold-api/create` —— 创建微应用（`?stream=1` 走 NDJSON 流式进度）
 - `GET  /scaffold-api/download/:appName/:timestamp` —— 下载生成的项目压缩包
 - `POST /scaffold-api/ops/backfill-topics` —— 批量补打 `yuyan-ops` 标签
-- `/deploy-api/servers` · `/targets` · `/records` · `/nginx-instances` · `/nginx-runtime` 等 —— 服务器、部署目标、发布记录、Nginx 实例 / 运行时的增删改查与发布、回滚、Nginx 测试、数据库备份恢复等
+- `/api/v2/*` —— GitLab 身份换票、设备签名刷新、设备撤销、账号跨设备审批策略与集中审计
+- `/deploy-api/v2/*` —— 使用短期雨燕令牌和账号隔离上下文的中央部署接口；后端产物支持分块断点上传与中央部署
+- `/deploy-api/servers` · `/targets` · `/records` 等 —— 本机领域接口；远程旧共享 Token 接口仅保留只读兼容，数据库备份/恢复已禁用
 - `/deploy-api/app-update/check`、`/deploy-api/app-update/tauri/:target/:arch/:currentVersion`、`/deploy-api/app-update/cache-status`、`/deploy-api/app-update/download-asset`、`/app-updates/*` —— 桌面端更新检测、Tauri 签名清单、缓存准备状态和内网 Range 下载
+- `/agent-api/v1/*` —— 仅雨燕桌面端启用的 Loopback Agent Gateway；必须使用本次启动会话令牌，禁止作为普通 HTTP API 或远程多用户接口暴露
 
 中央 API 会在启动后主动预热 macOS ARM、macOS Intel 和 Windows 安装包及签名 Updater 资源。同一 GitHub Asset 只允许一个回源任务，失败可从稳定 `.part` 文件续传，校验大小、SHA-256 与安装包格式后原子落盘。新客户端携带 `updaterCapable=1`，下载 `.app.tar.gz` 或签名 NSIS，安装前再次执行 Minisign 验签，再由 Tauri Updater 覆盖当前应用并自动重启；旧客户端仍获得 DMG/EXE 并保留原协议。中央 API 必须配置只读 `GITHUB_TOKEN`，缓存目录应挂载到持久卷。
 

@@ -5,7 +5,7 @@ import {
   isNewerAppVersion,
   resolveCompatibleUpdaterAsset,
   selectLatestCompatibleRelease,
-} from './app-update-service.mjs';
+} from '../app-update-service.mjs';
 
 /** 创建测试用 GitHub Release。 */
 const createRelease = (tagName, assets, options = {}) => ({

@@ -7,6 +7,7 @@ import { OPENAPI_JSON_LANGUAGE } from '@/utils/monacoJsonHighlight';
 import { formatDeployDateTime } from '../../constant';
 import { useOpenApiMonacoHighlight } from './hooks/useOpenApiMonacoHighlight';
 import { openExternal } from '@/utils/open';
+import { getGitLabHost } from '@/api/gitlab';
 
 defineOptions({ name: 'OpenApiDrawer' });
 
@@ -44,7 +45,7 @@ const commitUrl = computed(() => {
   const commitSha = props.artifact?.commitSha || '';
   if (!commitSha) return '';
 
-  const gitlabHost = localStorage.getItem('gitlab-host') || import.meta.env.VITE_GITLAB_HOST || '';
+  const gitlabHost = getGitLabHost();
   const host = gitlabHost.replace(/\/+$/, '').replace(/\/api\/v4$/, '');
   const projectPath = props.target?.projectPath || '';
 

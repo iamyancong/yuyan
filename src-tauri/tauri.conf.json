@@ -4,9 +4,9 @@
   "version": "1.2.18",
   "identifier": "cn.yuyan.ops",
   "build": {
-    "beforeDevCommand": "pnpm run frontend:dev",
+    "beforeDevCommand": "pnpm run mcp:build && pnpm run frontend:dev",
     "devUrl": "http://127.0.0.1:1420",
-    "beforeBuildCommand": "pnpm run frontend:build",
+    "beforeBuildCommand": "pnpm run mcp:build && pnpm run frontend:build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -34,6 +34,7 @@
     ],
     "resources": [
       "../server/**/*",
+      "../mcp/dist/**/*",
       "resources/bin/*"
     ],
     "icon": [

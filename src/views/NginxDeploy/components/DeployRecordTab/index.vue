@@ -15,6 +15,7 @@ import {
 import type { RecordProjectOption, RecordServerOption } from '../../types';
 import DeployRecordFilterBar from './components/DeployRecordFilterBar.vue';
 import ProjectTypeIcon from '../ProjectTypeIcon/index.vue';
+import { getGitLabHost } from '@/api/gitlab';
 
 defineOptions({ name: 'DeployRecordTab' });
 
@@ -109,7 +110,7 @@ const buildCommitUrl = (record: DeployRecord): string => {
   const commitSha = record.commitSha;
   if (!commitSha) return '';
 
-  const gitlabHost = localStorage.getItem('gitlab-host') || import.meta.env.VITE_GITLAB_HOST || '';
+  const gitlabHost = getGitLabHost();
   const host = gitlabHost.replace(/\/+$/, '').replace(/\/api\/v4$/, '');
   const projectPath = record.projectPath || '';
 

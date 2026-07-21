@@ -59,5 +59,5 @@ Tauri 客户端
 
 - 不在前端、URL、日志、仓库或 `tauri.conf.json` 中写入 Token。
 - 不引入 GitHub Actions 到内网的强制 SSH 发布；内网 API 代理缓存是默认路径。
-- 修改版本比较、Release 筛选或缓存逻辑时补充 `server/services/app-update-service.test.mjs`。
+- 修改版本比较、Release 筛选或缓存逻辑时补充 `server/services/tests/app-update-service.test.mjs`。
 - 至少验证：旧版本有更新、同版本无更新、draft 被忽略、平台安装包与签名资源匹配、缺失/错误签名被拒绝、缓存损坏回源、单任务回源、服务端 Range/If-Range 续传、新客户端准备状态和覆盖后重启时序。

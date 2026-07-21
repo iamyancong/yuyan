@@ -51,8 +51,46 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Install Pnpm
+        run: npm install -g pnpm@9
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        env:
+          GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+
+      - name: Verify frontend, server and MCP
+        run: |
+          pnpm typecheck
+          pnpm test:server
+          pnpm test:mcp
+          pnpm frontend:build:ci
+
+      - name: Verify Rust
+        working-directory: src-tauri
+        run: |
+          cargo fmt --check
+          cargo check
+          cargo test
+
   build:
-    needs: prep-version
+    needs: [prep-version, quality]
     strategy:
       fail-fast: false
       matrix:
@@ -97,11 +135,13 @@ jobs:
         run: node scripts/apply-version.js ${{ needs.prep-version.outputs.version }}
 
       - name: Create Env File
+        env:
+          CENTRAL_URL: ${{ secrets.VITE_APP_SERVER_URL }}
+          GITLAB_HOST: ${{ secrets.VITE_GITLAB_HOST }}
         run: |
-          echo "VITE_APP_SERVER_URL=${{ secrets.VITE_APP_SERVER_URL }}" > .env
-          echo "VITE_TEST_DB_SERVER_URL=${{ secrets.VITE_TEST_DB_SERVER_URL }}" >> .env
-          echo "VITE_GITLAB_HOST=${{ secrets.VITE_GITLAB_HOST }}" >> .env
-          echo "VITE_DEPLOY_API_TOKEN=${{ secrets.VITE_DEPLOY_API_TOKEN }}" >> .env
+          node --input-type=module -e "const u = new URL(process.env.CENTRAL_URL || ''); if (u.protocol !== 'https:') throw new Error('VITE_APP_SERVER_URL 必须配置为 HTTPS 中央服务')"
+          printf 'VITE_APP_SERVER_URL=%s\n' "$CENTRAL_URL" > .env
+          printf 'VITE_GITLAB_HOST=%s\n' "$GITLAB_HOST" >> .env
         shell: bash
 
       - name: Install Frontend Dependencies
@@ -111,29 +151,19 @@ jobs:
 
       - name: Build Tauri App
         shell: bash
-        run: |
-          # 从 VITE_APP_SERVER_URL 提取 host 和 port 并传入 Rust 编译
-          URL="${{ secrets.VITE_APP_SERVER_URL }}"
-          if [ -n "$URL" ]; then
-            if [[ "$URL" == https://* ]]; then SCHEME=https; else SCHEME=http; fi
-            HOST_PORT=${URL#*//}
-            HOST=${HOST_PORT%:*}
-            PORT=${HOST_PORT#*:}
-            if [ "$PORT" = "$HOST" ]; then
-              if [ "$SCHEME" = "https" ]; then PORT=443; else PORT=80; fi
-            fi
-            echo "Building with Rust UPDATE_SERVER_SCHEME=$SCHEME UPDATE_SERVER_HOST=$HOST and UPDATE_SERVER_PORT=$PORT"
-            UPDATE_SERVER_SCHEME="$SCHEME" UPDATE_SERVER_HOST="$HOST" UPDATE_SERVER_PORT="$PORT" pnpm run build
-          else
-            echo "Warning: VITE_APP_SERVER_URL is empty, building with defaults"
-            pnpm run build
-          fi
         env:
+          CENTRAL_URL: ${{ secrets.VITE_APP_SERVER_URL }}
           CI: true
           GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
           NODE_OPTIONS: '--max-old-space-size=4096'
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          SCHEME=$(node --input-type=module -e "console.log(new URL(process.env.CENTRAL_URL).protocol.slice(0, -1))")
+          HOST=$(node --input-type=module -e "console.log(new URL(process.env.CENTRAL_URL).hostname)")
+          PORT=$(node --input-type=module -e "const u = new URL(process.env.CENTRAL_URL); console.log(u.port || (u.protocol === 'https:' ? '443' : '80'))")
+          echo "Building with secured central service ($SCHEME, port $PORT)"
+          UPDATE_SERVER_SCHEME="$SCHEME" UPDATE_SERVER_HOST="$HOST" UPDATE_SERVER_PORT="$PORT" pnpm run build
 
       - name: Verify macOS Bundle Architecture
         if: runner.os == 'macOS'

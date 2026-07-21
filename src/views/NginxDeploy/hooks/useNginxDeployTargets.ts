@@ -1089,8 +1089,13 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
           jdk.status === 'available' && 
           String(jdk.majorVersion) === String(payload.requiredJdkAlias)
         );
-        payload.buildJdkId = matchedLocal ? matchedLocal.id : undefined;
-        payload.jdkId = matchedLocal ? matchedLocal.id : undefined;
+        if (!matchedLocal) {
+          message.warning(`当前设备未检测到 Java ${payload.requiredJdkAlias}，请先在 Java 环境管理中扫描`);
+          return;
+        }
+        /** 本机构建 JDK ID 只属于当前设备，不写入账号中央配置；中央只保存稳定版本别名。 */
+        payload.buildJdkId = undefined;
+        payload.jdkId = undefined;
         if (!String(payload.runtimeJavaHome || '').trim().startsWith('/')) {
           message.warning('服务器运行 JAVA_HOME 必须使用绝对路径');
           return;
@@ -1146,7 +1151,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
   const deleteTarget = async (target: DeployTarget) => {
     if (!ensureLoggedIn()) return;
     if (!(await ensureTargetIdle(target, '删除'))) return;
-    await deleteDeployTarget(target.id);
+    await deleteDeployTarget(target.id, target.projectName);
     message.success('部署目标已删除');
     await refreshActiveTab({ force: true });
   };

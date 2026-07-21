@@ -25,6 +25,10 @@ sha2 = "0.10"
 fs2 = "0.4"
 base64 = "0.22"
 minisign-verify = "0.2.5"
+uuid = { version = "1", features = ["v4"] }
+ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+keyring = { version = "3.6.3", default-features = false, features = ["apple-native", "windows-native"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2.7"

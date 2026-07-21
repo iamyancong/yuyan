@@ -1,5 +1,76 @@
 # 进度日志
 
+## 会话：2026-07-21（可信项目免审批、删除工具与稳定启动器）
+
+### 阶段 54：可信项目策略与路径基线
+- **状态：** complete
+- 已重新读取 MCP Builder、Vue3 Best Practices、原型验收与文件规划 Skills，并恢复现有 AI 控制平面上下文。
+- 已将截图整理为四类验收：普通操作免审批开关、破坏性动作强制审批、任务结构化执行说明、通用 stdio 稳定 command 路径。
+- 当前安全决策：默认免审批仅适用于授权仍有效且绑定 workspace 的非破坏性操作；受管目标/服务器删除始终人工确认，服务器存在引用时默认拒绝级联删除。
+- 已完成 operation 状态机、授权验证、客户端配置生成、部署删除 API 与测试基线核对。
+
+### 阶段 55：策略状态机与破坏性工具
+- **状态：** complete
+- 已实现默认开启的可信项目自动执行策略；普通任务自动批准，实际运行前再次校验授权，删除操作不受该开关影响。
+- 已新增部署目标和空闲服务器删除工具，强制名称/身份摘要、幂等键、人工审批、依赖复核和 HMAC 审计。
+- 已为所有成功写任务生成统一 `executionReport`，MCP 与雨燕任务列表均可明确展示实际动作和验证结果。
+
+### 阶段 56：稳定启动器与控制中心交互
+- **状态：** complete
+- 客户端配置改为应用数据目录稳定启动器；启动器原子刷新、Unix 权限 `0700`，支持空格/中文路径和已安装版兜底候选。
+- AI 控制中心新增默认开启的自动执行开关、高危删除说明、同机配置限制、开发态转发提示和执行回执展示。
+
+### 阶段 57：边界测试与交付
+- **状态：** complete
+- `pnpm typecheck`、MCP 5/5、服务端 51/51、`pnpm frontend:build:ci`、Rust fmt/check/test（10/10）通过；仅保留既有大 chunk 与 Objective-C cfg 警告。
+- 额外覆盖授权撤销阻断、服务器引用拒删、删除名称错配、旧直连配置修复、路径含空格、启动器权限和可执行文件缺失。
+- 桌面窗口自动读取连接超时，未完成新界面的自动截图；真实远程删除未执行，必须在可丢弃测试环境由用户现场确认。
+
+
+## 会话：2026-07-20（雨燕 AI 控制平面与 MCP 一期）
+
+### 阶段 48：AI 控制平面基线与契约
+- **状态：** complete
+- 已读取 MCP Builder、Vue3 Best Practices 与文件规划 Skills，并将一期拆分为网关安全、MCP/Tauri、UI 安装审批、测试文档和全量验证五个交付阶段。
+- 已确认本轮只做增量实现，不触碰用户已暂存的 `src/components/AppSplash/style.less`，不执行 commit 或 push。
+- 当前正在核对内嵌服务、部署领域函数、Tauri 子进程生命周期和设置页结构，随后落地可持久化且可审计的外部 Agent 闭环。
+
+### 阶段 49：Agent Gateway、安全存储与异步任务
+- **状态：** complete
+- 新增仅在 Tauri 子进程和有效启动令牌下可用的 `/agent-api/v1`；普通部署 API 的 Loopback 免鉴权规则不会扩散到 Agent Gateway。
+- 新增独立 Agent SQLite，保存真实项目授权、15 分钟配置计划、幂等 operation、阶段日志与 HMAC-SHA256 审计链；审批 30 分钟过期，应用重启会安全终止未完成任务。
+- 外部 Agent 不接触凭据；执行器在雨燕内部复用现有脚手架、中央配置、前后端发布、回滚、服务和 OpenAPI HTTP 领域接口。
+
+### 阶段 50：MCP Sidecar 与 Tauri `--mcp`
+- **状态：** complete
+- 使用 `@modelcontextprotocol/sdk` 1.29.0 与 Zod 3.25.76 实现 18 个严格输入工具，同时返回 `structuredContent` 与兼容 JSON 文本。
+- Tauri 增加 `--mcp` 分流、内嵌 Node/Sidecar 定位、每次启动 64 字符令牌、`0600` 原子运行时描述文件和退出清理。
+- Sidecar 会校验描述文件、PID、令牌与 Gateway 健康状态，雨燕未运行时自动拉起；实际 debug 二进制 `--mcp` 工具列表冒烟返回 18。
+
+### 阶段 51：AI 集成设置、安装与审批界面
+- **状态：** complete
+- 平台设置新增 AI 集成模块，覆盖三客户端安装/修复/卸载、标准 stdio 配置复制、任务进度、项目授权撤销和审计链状态。
+- 新增全局 Trust Gate 审批弹窗，Sidecar 请求授权或写操作时会聚焦雨燕；批准后后台执行，MCP 通过 operation ID 查询。
+- 客户端配置修改前备份并原子替换；Codex 使用托管 TOML 块，Cursor/Antigravity 只合并雨燕 Server，不覆盖用户其他 MCP。
+
+### 阶段 52：自动化测试与接入文档
+- **状态：** complete
+- MCP 5/5 通过：严格 Schema、幂等键、stdio 初始化、18 工具列表、stdout 纯净以及真实 Sidecar → 轮换令牌 → Loopback Gateway。
+- Agent 领域测试 3/3 通过：稳定参数哈希、深度脱敏、真实 Git 根目录、客户端隔离授权、幂等任务和审计篡改检测。
+- 已补充 README 与 `docs/ai-control-plane-mcp.md`；当前继续执行完整服务端、前端、Rust 与 diff 验证。
+- 新增模拟领域执行回归，覆盖配置创建、发布成功、构建失败、审批负载篡改失效、取消、回滚、服务 restart 和 OpenAPI。
+- 新增三客户端安装测试，确认保留已有 MCP、创建备份、修复后状态、精准卸载以及损坏 JSON 拒绝覆盖。
+
+### 阶段 53：全量验证与交付
+- **状态：** complete
+- 项目脚本最终通过：`pnpm test:mcp` 5/5、`pnpm test:server` 48/48、`pnpm typecheck`、`pnpm frontend:build:ci`。
+- Rust 最终通过：`cargo fmt --check`、`cargo check`、`cargo test --all-targets`，10/10；仅保留既有 Objective-C 宏 `unexpected cfg cargo-clippy` 警告。
+- debug 雨燕二进制使用 `--mcp --client generic` 完成真实 stdio 初始化和工具列表冒烟，返回 18 个工具；Vite 构建完成 8023 modules，仅保留既有大 chunk 警告。
+- 最终凭据审计将脚手架请求日志接入统一深度脱敏器，避免 Agent 内部注入的 GitLab Token 进入控制台；修正后服务端 48/48 与 MCP 5/5 再次全量通过。
+- `git diff --check` 通过；本轮未修改、撤销或重新暂存用户已有 `src/components/AppSplash/style.less`，未 commit、未 push。
+- 真实远程发布和回滚未在生产/未知服务器执行；必须由用户提供可丢弃项目和测试服务器，并在雨燕审批界面现场确认。macOS Intel、Windows 安装包的自动拉起与路径修复保留到对应 CI 产物和实机验收。
+
+
 ## 会话：2026-07-17（Windows 控制台闪窗治理）
 
 ### 阶段 45：Windows 控制台闪窗基线与调用面盘点
@@ -427,3 +498,37 @@
   - Vite 生产构建通过，仅有既有大 chunk 提示。
   - Rust 原生层测试 7/7 通过，仅有既有 `objc` 宏 cfg 警告。
   - `git diff --check` 通过；未修改 GitHub Actions 发布职责，未提交或推送。
+# 2026-07-21 AI 授权策略、删除能力与稳定 MCP 启动器
+
+- 已核对 Agent SQLite、项目授权、异步任务状态机与写工具分发逻辑。
+- 确认所有写操作当前默认待审批，且任务成功结果缺少统一执行回执。
+- 下一步：实现持久化审批策略、双重授权校验、破坏性删除工具和稳定启动器。
+
+# 2026-07-21 多用户、多设备与 MCP 隔离
+
+### 阶段 58：基线与迁移契约
+- **状态：** in_progress
+- 已完成：
+  - 读取文件规划、MCP Server 与 Vue3 项目规范。
+  - 核对 GitLab 登录、Agent 运行时、Agent SQLite、中央部署库、Tauri 启动参数和整库同步实现。
+  - 确认正式多人测试的五个阻断项：localStorage PAT、共享中央 Token、无 team_id、整库下发、固定部署密钥。
+- 当前实施顺序：先建立设备身份和可回滚数据库迁移，再切换 Agent 上下文与中央 v2 API，最后移除旧写链和补齐产物上传。
+- 已确认设备安全能力将由 Tauri 原生命令提供；Agent SQLite 采用显式 schema 版本和表重建迁移，旧授权不继承到新身份。
+- 已完成设备身份/签名、账号安全状态和本机主密钥的系统钥匙串实现；桌面 Node 不再使用源码固定密钥。
+- 已新增中央 GitLab 身份交换、15 分钟访问令牌、30 天设备签名刷新、设备撤销和团队成员上下文基础接口。
+- Rust `cargo check` 通过；仅保留项目既有 `objc` 宏 cfg 警告。
+- Agent SQLite 已升级为 v2：授权/策略按账号设备隔离，计划/操作绑定团队，旧授权进入 `legacy-disabled`，身份变化会使未执行任务过期。
+- 前端登录已切到系统钥匙串 + GitLab 实时换票；GitLab PAT 不再写 localStorage，中央请求使用短期 Bearer 和团队 Header。
+- 中央部署核心资源已增加 team_id 迁移、动态团队填充触发器、SQL 过滤和 RBAC/资源归属双重门禁；原始数据库下载/恢复已返回 410。
+- 当前 Node 语法检查、Vue `vue-tsc --noEmit`、Rust fmt/check 均通过。
+- 服务端回归 51 项中 Agent 全链路已恢复通过；迁移测试仅剩版本数量断言已按新增 v5 迁移更新，待下一轮全量复验。
+- 已完成后端“设备构建、中央部署”闭环：4MB 分块断点上传、最终 SHA-256、同目标中央锁、任务取消、跨设备 operation 查询及统一 executionReport。
+- 雨燕部署页不再为后端目标走本地直接 SSH；用户显式发布会创建可审计 Agent 任务，应用重开或另一台设备可从中央 operation 查看进度并请求取消。
+- AI 控制中心已收敛为账号与设备模型，支持撤销其他设备；每个 GitLab 账号自动获得独立中央空间，不再暴露团队切换或 GitLab Group 绑定入口。
+- 当前阶段进入自动化门禁：补双账号/双设备/RBAC/撤销/产物边界测试并运行全量 Vue、Node、MCP、Rust 与构建检查。
+- 已完成团队强制审批、会话级团队切换、短期令牌主动续期、远程脚手架 v2 鉴权和删除名称二次绑定。
+- 已将 OpenAPI 元数据/绝对路径按账号设备隔离，后端继续采用设备构建、中央部署，中央运行任务保留真实用户与设备回执。
+- 已移除正式 Tauri 构建中的测试数据库地址和 `VITE_DEPLOY_API_TOKEN`，中央非本机启动缺少独立 `DEPLOY_SECRET_KEY` 时失败关闭；GitHub Actions 新增完整 quality job。
+- macOS 安全凭据已从多个独立钥匙串项迁移为单一保险箱，并在 Rust 进程内只解锁一次；旧设备身份、主密钥和活动账号首次升级时自动迁移，Windows 保留分项存储以规避 Credential Manager 单条容量限制。
+- 自动化结果：Vue 类型检查和 Vite 生产构建通过；服务端 59/59、MCP 5/5、Rust 11/11 通过；`cargo fmt --check`、`cargo check` 与 `git diff --check` 通过，仅保留既有 objc cfg 和大 chunk 警告。
+- 未替代的外部发布门禁：两个真实 GitLab 用户、两台真实设备、独立测试服务器，以及 GitHub Actions 的 macOS ARM/Intel、Windows 正式签名包仍需现场闭环验证。

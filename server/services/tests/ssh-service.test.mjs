@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
-import { streamSshCommand } from './ssh-service.mjs';
+import { streamSshCommand } from '../ssh-service.mjs';
 
 /**
  * 创建 exit 先于 stdout close 触发的 SSH 连接桩。

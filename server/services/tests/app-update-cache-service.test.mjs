@@ -10,7 +10,7 @@ import {
   normalizeUpdateAsset,
   parseUpdateContentRange,
   validateUpdateAssetSignature,
-} from './app-update-cache-service.mjs';
+} from '../app-update-cache-service.mjs';
 
 /** 创建带 MZ 文件头的测试 EXE 数据。 */
 function createExePayload(size = 1024 * 1024 + 32) {

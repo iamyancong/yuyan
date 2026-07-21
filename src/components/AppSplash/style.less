@@ -83,6 +83,7 @@
   backface-visibility: hidden;
   transform: translate3d(0, 0, 0);
   will-change: transform, opacity;
+  perspective: 400px; /* 激活 3D 空间透视 */
 }
 
 .flying-bird svg {
@@ -90,6 +91,9 @@
   width: 100%;
   height: 100%;
   overflow: visible;
+  transform-origin: center center;
+  /* 翅膀动作更真实：220ms 非对称生物级扑翼循环 */
+  animation: flap 0.22s cubic-bezier(0.25, 0.8, 0.25, 1) infinite;
 }
 
 .speed-line {
@@ -381,6 +385,25 @@
 @keyframes skip-in {
   to {
     opacity: 1;
+  }
+}
+
+@keyframes flap {
+  0% {
+    /* 展翅迎风：翅膀拉平微开，略微后掠 */
+    transform: rotateX(-12deg) rotateY(-3deg) skewY(-2deg) scaleY(1.04);
+  }
+  32% {
+    /* 强力向下拍击：翅膀朝下弯折，高度拉伸，倾角变陡 */
+    transform: rotateX(24deg) rotateY(2deg) skewY(1deg) scaleY(0.96) translateY(-2px);
+  }
+  68% {
+    /* 拍击最底点，准备收折：翅膀向上快速折回，迎风面迅速收窄，高度变矮 */
+    transform: rotateX(54deg) rotateY(6deg) skewY(4deg) scaleY(0.64) translateY(-4px);
+  }
+  100% {
+    /* 复位：返回迎风展翅姿态 */
+    transform: rotateX(-12deg) rotateY(-3deg) skewY(-2deg) scaleY(1.04);
   }
 }
 

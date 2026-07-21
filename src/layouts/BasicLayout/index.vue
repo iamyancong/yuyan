@@ -6,10 +6,12 @@ import { useTheme } from '@/hooks/useTheme';
 import { useAuth } from '@/composables/useAuth';
 import { useNavigation } from './hooks/useNavigation';
 import SettingsDrawer from '@/components/SettingsDrawer/index.vue';
+import AiIntegrationDrawer from '@/components/AiIntegrationDrawer/index.vue';
 import LoginModal from '@/components/LoginModal.vue';
 import LayoutHeader from './components/LayoutHeader.vue';
 import LayoutSider from './components/LayoutSider/index.vue';
 import AboutModal from '@/components/AboutModal/index.vue';
+import AgentApprovalHost from '@/components/AgentApprovalHost/index.vue';
 
 defineOptions({ name: 'BasicLayout' });
 
@@ -21,6 +23,9 @@ const showLoginModal = ref(false);
 
 /** 平台设置抽屉可见性 */
 const openDrawer = ref(false);
+
+/** AI 控制中心抽屉可见性 */
+const openAiDrawer = ref(false);
 
 /** 关于雨燕弹窗可见性 */
 const showAboutModal = ref(false);
@@ -61,6 +66,13 @@ const handleShowLoginModal = () => {
  */
 const handleShowAboutModal = () => {
   showAboutModal.value = true;
+};
+
+/** 打开独立 AI 控制中心并确保平台设置抽屉关闭。 */
+const handleOpenAiIntegration = () => {
+  console.log('[BasicLayout] 打开 AI 控制中心抽屉');
+  openDrawer.value = false;
+  openAiDrawer.value = true;
 };
 
 /**
@@ -127,6 +139,7 @@ onUnmounted(() => {
       <!-- 头部子组件 -->
       <LayoutHeader 
         :isTauriClient="isTauriClient" 
+        @open-ai-integration="handleOpenAiIntegration"
         @openSettings="openDrawer = true" 
         @openLogin="showLoginModal = true" 
         @openAbout="showAboutModal = true"
@@ -148,12 +161,18 @@ onUnmounted(() => {
 
   <!-- 平台设置抽屉 -->
   <SettingsDrawer v-model:open="openDrawer" />
+
+  <!-- AI 控制中心抽屉 -->
+  <AiIntegrationDrawer v-model:open="openAiDrawer" />
   
   <!-- 登录弹窗 -->
   <LoginModal v-model:visible="showLoginModal" @login-success="handleLoginSuccess" />
   
   <!-- 关于雨燕弹窗 -->
   <AboutModal v-model:open="showAboutModal" />
+
+  <!-- 外部 Agent 的全局审批门禁 -->
+  <AgentApprovalHost />
 </template>
 
 <style scoped lang="less">
