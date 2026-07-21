@@ -102,6 +102,9 @@ importers:
       '@types/babel__traverse':
         specifier: ^7.28.0
         version: 7.28.0
+      '@types/node':
+        specifier: ^26.0.0
+        version: 26.0.0
       '@vitejs/plugin-vue':
         specifier: ^6.0.1
         version: 6.0.7(vite@7.3.5(@types/node@26.0.0)(less@4.6.7))(vue@3.5.38(typescript@5.8.3))
