@@ -417,6 +417,12 @@ export interface DeployProgressSnapshot {
   runningCount: number;
 }
 
+/** 当前团队运行中部署目标的聚合快照。 */
+export interface DeployRuntimeSnapshotBatch {
+  items: DeployProgressSnapshot[];
+  checkedAt: string;
+}
+
 interface CentralDeployOperation {
   id: string;
   status: 'uploading' | 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired';
@@ -1020,10 +1026,15 @@ export const syncNginxSite = (targetId: number) => client.post(`/targets/${targe
  * @param projectType 项目类型
  * @returns 发布任务进度快照
  */
-export async function getTargetDeployProgress(targetId: number, projectType: DeployTarget['projectType']) {
+export async function getTargetDeployProgress(
+  targetId: number,
+  projectType: DeployTarget['projectType'],
+  signal?: AbortSignal,
+) {
   if (projectType === 'backend') {
     const data = await client.get('/operations', {
       params: { targetId, status: 'uploading,queued,running', limit: 1 },
+      signal,
     }).then(unwrap<{ items: CentralDeployOperation[] }>);
     const operation = data.items[0];
     if (!operation) {
@@ -1034,8 +1045,12 @@ export async function getTargetDeployProgress(targetId: number, projectType: Dep
     return mapCentralDeployOperation(operation, targetId);
   }
   const url = await getTargetExecutionApiUrl(`/targets/${targetId}/deploy-progress`, projectType);
-  return axios.get(url, { headers: getDeployApiAuthHeaders() }).then(unwrap<DeployProgressSnapshot>);
+  return axios.get(url, { headers: getDeployApiAuthHeaders(), signal }).then(unwrap<DeployProgressSnapshot>);
 }
+
+/** 获取当前团队全部运行中部署目标的聚合快照。 */
+export const listDeployTargetRuntimeSnapshots = (signal?: AbortSignal) =>
+  client.get('/targets/runtime-snapshots', { signal }).then(unwrap<DeployRuntimeSnapshotBatch>);
 
 /**
  * 停止部署目标运行中的发布任务。

@@ -1,4 +1,4 @@
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { message } from 'ant-design-vue';
 import {
   approveAgentOperation,
@@ -30,6 +30,13 @@ import {
   type CentralAccountApprovalPolicy,
 } from '@/api/centralIdentity';
 import { loadActiveSecureAccount, type SecureAccountState } from '@/services/secureAuth';
+import { useAgentEventStream } from '@/composables/useAgentEventStream';
+
+/** AI 控制中心中央身份可见时刷新间隔。 */
+const IDENTITY_REFRESH_INTERVAL = 60_000;
+
+/** Agent 事件触发完整快照刷新的合并窗口。 */
+const SNAPSHOT_EVENT_DEBOUNCE = 1_000;
 
 /** 管理 AI 集成状态、客户端安装与审批动作。 */
 export function useAiIntegration() {
@@ -49,8 +56,16 @@ export function useAiIntegration() {
   const accountApprovalPolicy = ref<CentralAccountApprovalPolicy | null>(null);
   const identityLoading = ref(false);
   const accountPolicySaving = ref(false);
-  let pollTimer: number | undefined;
+  const { eventSequence } = useAgentEventStream();
+  let identityTimer: number | undefined;
+  let snapshotRefreshTimer: number | undefined;
   let lastIdentityRefreshAt = 0;
+  let identityRefreshSequence = 0;
+  let componentActive = false;
+  let snapshotRefreshPromise: Promise<void> | null = null;
+  let snapshotRefreshQueued = false;
+  let snapshotRequestSequence = 0;
+  let fullRefreshSequence = 0;
 
   const pendingOperations = computed(() => snapshot.value?.operations.items.filter((item) => item.status === 'pending_approval') || []);
   const recentOperations = computed(() => snapshot.value?.operations.items.slice(0, 8) || []);
@@ -66,56 +81,126 @@ export function useAiIntegration() {
   /** 刷新平台安全存储账号以及当前用户的设备清单。 */
   const refreshIdentity = async (force = false) => {
     if (!force && Date.now() - lastIdentityRefreshAt < 15_000) return;
+    const sequence = ++identityRefreshSequence;
     lastIdentityRefreshAt = Date.now();
     identityLoading.value = true;
     try {
-      secureAccount.value = await loadActiveSecureAccount(true);
-      if (!secureAccount.value?.accessToken || Date.parse(secureAccount.value.accessExpiresAt) <= Date.now()) {
+      const nextSecureAccount = await loadActiveSecureAccount(true);
+      if (!componentActive || sequence !== identityRefreshSequence) return;
+      secureAccount.value = nextSecureAccount;
+      if (!nextSecureAccount?.accessToken || Date.parse(nextSecureAccount.accessExpiresAt) <= Date.now()) {
         centralMe.value = null;
         devices.value = [];
         centralAudit.value = null;
         accountApprovalPolicy.value = null;
         return;
       }
-      [centralMe.value, devices.value, centralAudit.value, accountApprovalPolicy.value] = await Promise.all([
-        getCentralMe(secureAccount.value),
-        listCentralDevices(secureAccount.value),
-        getCentralAccountAudit(secureAccount.value, 20),
-        getCentralAccountApprovalPolicy(secureAccount.value),
+      const [nextCentralMe, nextDevices, nextCentralAudit, nextAccountApprovalPolicy] = await Promise.all([
+        getCentralMe(nextSecureAccount),
+        listCentralDevices(nextSecureAccount),
+        getCentralAccountAudit(nextSecureAccount, 20),
+        getCentralAccountApprovalPolicy(nextSecureAccount),
       ]);
+      if (!componentActive || sequence !== identityRefreshSequence) return;
+      centralMe.value = nextCentralMe;
+      devices.value = nextDevices;
+      centralAudit.value = nextCentralAudit;
+      accountApprovalPolicy.value = nextAccountApprovalPolicy;
     } catch {
+      if (!componentActive || sequence !== identityRefreshSequence) return;
       centralMe.value = null;
       devices.value = [];
       centralAudit.value = null;
       accountApprovalPolicy.value = null;
     } finally {
-      identityLoading.value = false;
+      if (sequence === identityRefreshSequence) identityLoading.value = false;
     }
+  };
+
+  /** 仅刷新 Agent 控制平面快照，并合并并发事件。 */
+  const refreshAgentSnapshot = async () => {
+    if (!available.value || !componentActive) return;
+    if (snapshotRefreshPromise) {
+      snapshotRefreshQueued = true;
+      await snapshotRefreshPromise;
+      return;
+    }
+    const sequence = ++snapshotRequestSequence;
+    snapshotRefreshPromise = (async () => {
+      try {
+        const nextSnapshot = await getAgentSnapshot();
+        if (!componentActive || sequence !== snapshotRequestSequence) return;
+        snapshot.value = nextSnapshot;
+        gatewayReady.value = true;
+        gatewayError.value = '';
+      } catch (error) {
+        if (!componentActive || sequence !== snapshotRequestSequence) return;
+        gatewayReady.value = false;
+        gatewayError.value = getErrorMessage(error);
+      }
+    })();
+    try {
+      await snapshotRefreshPromise;
+    } finally {
+      snapshotRefreshPromise = null;
+      if (snapshotRefreshQueued && componentActive) {
+        snapshotRefreshQueued = false;
+        void refreshAgentSnapshot();
+      }
+    }
+  };
+
+  /** 将一批 Agent 事件合并为至多每秒一次快照刷新。 */
+  const scheduleAgentSnapshotRefresh = () => {
+    if (!componentActive) return;
+    if (snapshotRefreshTimer) window.clearTimeout(snapshotRefreshTimer);
+    snapshotRefreshTimer = window.setTimeout(() => {
+      snapshotRefreshTimer = undefined;
+      void refreshAgentSnapshot();
+    }, SNAPSHOT_EVENT_DEBOUNCE);
+  };
+
+  /** 安排下一次仅在页面可见时执行的中央身份刷新。 */
+  const scheduleIdentityRefresh = () => {
+    if (identityTimer) window.clearTimeout(identityTimer);
+    identityTimer = undefined;
+    if (!componentActive || document.visibilityState === 'hidden') return;
+    identityTimer = window.setTimeout(async () => {
+      identityTimer = undefined;
+      await refreshIdentity(true);
+      scheduleIdentityRefresh();
+    }, IDENTITY_REFRESH_INTERVAL);
   };
 
   /** 刷新运行时、客户端与控制平面数据。 */
   const refresh = async (silent = false) => {
     if (!available.value) return;
+    const refreshSequence = ++fullRefreshSequence;
     if (!silent) loading.value = true;
     const identityRefresh = refreshIdentity(!silent);
     try {
       const runtime = await getAgentRuntime();
       appVersion.value = runtime.descriptor.appVersion;
       await syncAgentRuntimeSettings();
+      const snapshotSequence = ++snapshotRequestSequence;
       const [clientResult, snapshotResult] = await Promise.all([getAgentClients(), getAgentSnapshot()]);
+      if (!componentActive || refreshSequence !== fullRefreshSequence) return;
       clients.value = clientResult.clients;
       genericConfig.value = clientResult.genericConfig;
       launcher.value = clientResult.launcher;
-      snapshot.value = snapshotResult;
-      gatewayReady.value = true;
-      gatewayError.value = '';
+      if (snapshotSequence === snapshotRequestSequence) {
+        snapshot.value = snapshotResult;
+        gatewayReady.value = true;
+        gatewayError.value = '';
+      }
     } catch (error) {
+      if (!componentActive || refreshSequence !== fullRefreshSequence) return;
       gatewayReady.value = false;
       gatewayError.value = getErrorMessage(error);
       if (!silent) message.error(`Gateway 加载失败：${gatewayError.value}`);
     } finally {
       await identityRefresh;
-      if (!silent) loading.value = false;
+      if (!silent && refreshSequence === fullRefreshSequence) loading.value = false;
     }
   };
 
@@ -124,7 +209,7 @@ export function useAiIntegration() {
     try {
       await updateAgentApprovalPolicy(enabled);
       message.success(enabled ? '已授权项目将默认自动执行普通操作' : '普通写操作已改为逐次审批');
-      await refresh(true);
+      await refreshAgentSnapshot();
     } catch (error) {
       message.error(error instanceof Error ? error.message : '审批策略更新失败');
     }
@@ -163,7 +248,7 @@ export function useAiIntegration() {
       if (action === 'approve') await approveAgentOperation(id);
       else if (action === 'reject') await rejectAgentOperation(id);
       else await cancelAgentOperation(id);
-      await refresh(true);
+      await refreshAgentSnapshot();
     } catch (error) {
       message.error(error instanceof Error ? error.message : '任务操作失败');
     }
@@ -173,7 +258,7 @@ export function useAiIntegration() {
   const revokeGrant = async (id: string) => {
     await revokeAgentGrant(id);
     message.success('项目授权已撤销');
-    await refresh(true);
+    await refreshAgentSnapshot();
   };
 
   /** 撤销另一台设备并刷新中央设备状态。 */
@@ -192,24 +277,51 @@ export function useAiIntegration() {
   };
 
   onMounted(() => {
+    componentActive = true;
     void refresh();
-    pollTimer = window.setInterval(() => void refresh(true), 3000);
+    scheduleIdentityRefresh();
     window.addEventListener('auth-state-changed', handleAuthStateChanged);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
   });
 
   onUnmounted(() => {
-    if (pollTimer) window.clearInterval(pollTimer);
+    componentActive = false;
+    identityRefreshSequence += 1;
+    snapshotRequestSequence += 1;
+    fullRefreshSequence += 1;
+    if (identityTimer) window.clearTimeout(identityTimer);
+    if (snapshotRefreshTimer) window.clearTimeout(snapshotRefreshTimer);
     window.removeEventListener('auth-state-changed', handleAuthStateChanged);
+    document.removeEventListener('visibilitychange', handleVisibilityChange);
   });
+
+  watch(eventSequence, scheduleAgentSnapshotRefresh);
 
   /** 账号切换后立即丢弃旧设备列表并重新读取安全状态。 */
   function handleAuthStateChanged() {
+    snapshotRequestSequence += 1;
+    fullRefreshSequence += 1;
+    loading.value = false;
+    snapshot.value = null;
+    gatewayReady.value = false;
     secureAccount.value = null;
     centralMe.value = null;
     devices.value = [];
     centralAudit.value = null;
     accountApprovalPolicy.value = null;
+    void syncAgentRuntimeSettings().then(refreshAgentSnapshot).catch(() => undefined);
     void refreshIdentity(true);
+  }
+
+  /** 页面恢复可见时立即刷新身份并恢复低频调度。 */
+  function handleVisibilityChange() {
+    if (document.visibilityState === 'hidden') {
+      if (identityTimer) window.clearTimeout(identityTimer);
+      identityTimer = undefined;
+      return;
+    }
+    void refreshIdentity(true);
+    scheduleIdentityRefresh();
   }
 
   return {

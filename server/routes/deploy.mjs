@@ -34,6 +34,7 @@ import {
   handleListRecords,
   handleListServers,
   handleListTargets,
+  handleListTargetRuntimeSnapshots,
   handleReadNginxConfig,
   handleRollbackRecord,
   handleRunNginxInstanceAction,
@@ -148,6 +149,7 @@ router.post('/nginx-instances/:id/actions/:action', handleRunNginxInstanceAction
 router.get('/nginx-instances/:id/next-port', handleGetNextNginxInstancePort);
 
 router.get('/targets', handleListTargets);
+router.get('/targets/runtime-snapshots', handleListTargetRuntimeSnapshots);
 router.post('/targets', handleCreateTarget);
 router.put('/targets/:id', handleUpdateTarget);
 router.delete('/targets/:id', handleDeleteTarget);

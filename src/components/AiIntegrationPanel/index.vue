@@ -81,7 +81,7 @@ const { isSectionExpanded, toggleSection } = useAiSections();
           </AiSectionShell>
         </div>
 
-        <div class="ai-integration__footer"><span>运行状态每 3 秒自动同步</span><YButton size="small" :loading="loading" @click="refresh()">刷新诊断</YButton></div>
+        <div class="ai-integration__footer"><span>运行状态实时同步</span><YButton size="small" :loading="loading" @click="refresh()">刷新诊断</YButton></div>
       </template>
       <a-alert v-else type="info" message="请在雨燕桌面端中配置 AI 集成" show-icon />
     </a-spin>

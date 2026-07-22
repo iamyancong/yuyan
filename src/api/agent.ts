@@ -3,6 +3,7 @@ import { getGitLabHost, getGitLabToken } from '@/api/gitlab';
 import { getCachedSecureAccount } from '@/services/secureAuth';
 import { getCentralAccountApprovalPolicy } from '@/api/centralIdentity';
 import { getApiBase, isTauri } from '@/utils/env';
+import { createSseFrameParser } from './agentStream';
 
 /** Agent 操作状态。 */
 export type AgentOperationStatus = 'pending_approval' | 'queued' | 'running' | 'succeeded' | 'failed' | 'rejected' | 'cancelled' | 'expired';
@@ -42,6 +43,28 @@ export interface AgentOperation {
   approvedBy?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/** 全局审批弹窗使用的轻量任务投影。 */
+export interface AgentPendingApproval {
+  id: string;
+  toolName: string;
+  client: AgentOperation['client'];
+  riskLevel: AgentOperation['riskLevel'];
+  payloadHash: string;
+  executionScope: AgentOperation['executionScope'];
+  approvalSummary?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Agent SSE 变更域。 */
+export type AgentChangeDomain = 'approvals' | 'operations' | 'grants' | 'audit' | 'policy';
+
+/** Agent SSE 事件。 */
+export interface AgentStreamEvent {
+  revision: number;
+  domains: AgentChangeDomain[];
 }
 
 /** Agent 操作的真实账号、设备、隔离空间与客户端。 */
@@ -107,6 +130,11 @@ export interface AgentSnapshot {
 
 let runtimeCache: AgentRuntimeStatus | null = null;
 
+/** 使 Agent Runtime 缓存失效，供本机服务重启后重新发现端口与令牌。 */
+export function invalidateAgentRuntimeCache(): void {
+  runtimeCache = null;
+}
+
 /** 获取并缓存本次启动的 Agent Gateway 运行时信息。 */
 export async function getAgentRuntime(): Promise<AgentRuntimeStatus> {
   if (!isTauri()) throw new Error('AI 集成仅在雨燕桌面端可用');
@@ -117,17 +145,23 @@ export async function getAgentRuntime(): Promise<AgentRuntimeStatus> {
 /** 调用本机 Agent Gateway。 */
 async function requestAgentApi<T>(path: string, options: RequestInit = {}): Promise<T> {
   const runtime = await getAgentRuntime();
-  const response = await fetch(`http://127.0.0.1:${runtime.descriptor.port}/agent-api/v1${path}`, {
-    ...options,
-    headers: {
-      Authorization: `Bearer ${runtime.descriptor.sessionToken}`,
-      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-      ...(options.headers || {}),
-    },
-  });
+  let response: Response;
+  try {
+    response = await fetch(`http://127.0.0.1:${runtime.descriptor.port}/agent-api/v1${path}`, {
+      ...options,
+      headers: {
+        Authorization: `Bearer ${runtime.descriptor.sessionToken}`,
+        ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+        ...(options.headers || {}),
+      },
+    });
+  } catch (error) {
+    invalidateAgentRuntimeCache();
+    throw error;
+  }
   const body = await response.json().catch(() => null);
   if (!response.ok || !body?.success) {
-    if (response.status === 401) runtimeCache = null;
+    if (response.status === 401) invalidateAgentRuntimeCache();
     const error = new Error(body?.error?.message || `Agent Gateway 返回 HTTP ${response.status}`) as Error & {
       code?: string; status?: number; response?: { status: number };
     };
@@ -173,6 +207,59 @@ export async function syncAgentRuntimeSettings(): Promise<void> {
 
 /** 获取 AI 控制平面快照。 */
 export const getAgentSnapshot = () => requestAgentApi<AgentSnapshot>('/snapshot');
+
+/** 获取全局审批弹窗所需的轻量待审批任务。 */
+export const getPendingAgentApprovals = () => requestAgentApi<{ items: AgentPendingApproval[]; total: number }>('/pending-approvals');
+
+/**
+ * 订阅本机 Agent Gateway 变更事件。
+ * @param options 中断信号与事件回调
+ */
+export async function subscribeAgentEvents(options: {
+  signal: AbortSignal;
+  onEvent: (event: AgentStreamEvent, eventName: 'ready' | 'change') => void;
+}): Promise<void> {
+  const runtime = await getAgentRuntime();
+  let response: Response;
+  try {
+    response = await fetch(`http://127.0.0.1:${runtime.descriptor.port}/agent-api/v1/events`, {
+      headers: {
+        Accept: 'text/event-stream',
+        Authorization: `Bearer ${runtime.descriptor.sessionToken}`,
+      },
+      signal: options.signal,
+    });
+  } catch (error) {
+    invalidateAgentRuntimeCache();
+    throw error;
+  }
+  if (!response.ok) {
+    if (response.status === 401) invalidateAgentRuntimeCache();
+    const body = await response.json().catch(() => null);
+    throw new Error(body?.error?.message || `Agent Gateway SSE 返回 HTTP ${response.status}`);
+  }
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('Agent Gateway SSE 响应不支持流式读取');
+  const decoder = new TextDecoder();
+  const parser = createSseFrameParser((frame) => {
+    if (frame.event !== 'ready' && frame.event !== 'change') return;
+    try {
+      const event = JSON.parse(frame.data) as AgentStreamEvent;
+      if (!Number.isFinite(event.revision) || !Array.isArray(event.domains)) return;
+      options.onEvent(event, frame.event);
+    } catch {
+      /** 单个异常事件不应断开后续正常 SSE。 */
+    }
+  });
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) parser.push(decoder.decode(value, { stream: true }));
+  }
+  parser.push(decoder.decode());
+  parser.finish();
+  if (!options.signal.aborted) throw new Error('Agent Gateway SSE 连接已结束');
+}
 
 /** 获取客户端安装状态和标准配置。 */
 export const getAgentClients = () => requestAgentApi<{ clients: AgentClientStatus[]; genericConfig: Record<string, unknown> | null; launcher: AgentLauncherInfo | null }>('/clients');

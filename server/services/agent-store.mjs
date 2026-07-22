@@ -10,12 +10,17 @@ import { DatabaseSync } from 'node:sqlite';
 import { AGENT_AUDIT_KEY, AGENT_DB_PATH } from '../config/constants.mjs';
 import { getAgentRuntimeSettings } from './agent-runtime-service.mjs';
 import { redactAgentValue, stableStringify } from './agent-security.mjs';
+import { publishAgentChange } from './agent-event-service.mjs';
 
 const AGENT_SCHEMA_VERSION = 2;
 const LEGACY_ACCOUNT_ID = 'legacy-disabled';
 const LEGACY_DEVICE_ID = 'legacy-device';
 const LEGACY_TEAM_ID = 'legacy-team';
 let agentDb = null;
+const auditVerificationCache = new Map();
+const MAX_AUDIT_VERIFICATION_CACHE_SIZE = 32;
+const AGENT_APPROVAL_MAX_AGE_MS = 30 * 60_000;
+let pendingExpiryTimer = null;
 
 /** Agent 审批策略默认值。 */
 export const DEFAULT_AGENT_APPROVAL_POLICY = Object.freeze({ autoApproveGrantedProjects: true });
@@ -255,7 +260,36 @@ export function getAgentDb() {
     UPDATE agent_operations SET status = 'failed', error_json = ?, updated_at = ?
     WHERE status IN ('queued', 'running')
   `).run(JSON.stringify({ code: 'app_restarted', message: '雨燕重启，未完成任务已安全终止', retryable: true }), now());
+  scheduleNextPendingAgentExpiry();
   return agentDb;
+}
+
+/** 按数据库中最早待审批任务安排一次性过期检查。 */
+function scheduleNextPendingAgentExpiry() {
+  if (pendingExpiryTimer) clearTimeout(pendingExpiryTimer);
+  pendingExpiryTimer = null;
+  const row = agentDb?.prepare("SELECT created_at FROM agent_operations WHERE status = 'pending_approval' ORDER BY created_at ASC LIMIT 1").get();
+  if (!row?.created_at) return;
+  const expiresAt = Date.parse(row.created_at) + AGENT_APPROVAL_MAX_AGE_MS;
+  if (!Number.isFinite(expiresAt)) return;
+  const delay = Math.max(0, expiresAt - Date.now());
+  pendingExpiryTimer = setTimeout(expireAllPendingAgentOperations, delay);
+  pendingExpiryTimer.unref?.();
+}
+
+/** 过期所有身份中达到默认审批时限的任务，并广播轻量变更。 */
+function expireAllPendingAgentOperations() {
+  pendingExpiryTimer = null;
+  if (!agentDb) return;
+  const expiresBefore = new Date(Date.now() - AGENT_APPROVAL_MAX_AGE_MS).toISOString();
+  const changes = agentDb.prepare(`
+    UPDATE agent_operations SET status = 'expired', error_json = ?, updated_at = ?
+    WHERE status = 'pending_approval' AND created_at <= ?
+  `).run(JSON.stringify({ code: 'approval_expired', message: '审批已过期，请重新发起操作', retryable: true }), now(), expiresBefore).changes;
+  if (changes > 0) {
+    publishAgentChange(['approvals', 'operations']);
+  }
+  scheduleNextPendingAgentExpiry();
 }
 
 /** 读取当前账号与设备的审批策略。 */
@@ -281,13 +315,17 @@ export function updateAgentApprovalPolicy(patch = {}) {
     VALUES (?, ?, 'approval_policy', ?, ?)
     ON CONFLICT(account_id, device_id, key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
   `).run(context.accountId, context.deviceId, JSON.stringify(next), now());
+  publishAgentChange('policy');
   return next;
 }
 
 /** 关闭 Agent SQLite 连接。 */
 export function closeAgentDb() {
+  if (pendingExpiryTimer) clearTimeout(pendingExpiryTimer);
+  pendingExpiryTimer = null;
   agentDb?.close();
   agentDb = null;
+  auditVerificationCache.clear();
 }
 
 /** 保存当前账号/设备生成的 OpenAPI 产物索引，不向中央暴露绝对路径。 */
@@ -357,25 +395,57 @@ export function appendAgentAudit(event) {
     INSERT INTO agent_audit (event_id, account_id, device_id, team_id, previous_hash, entry_hash, body_json, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(eventId, context.accountId, context.deviceId, context.teamId, previousHash, entryHash, bodyJson, createdAt);
+  publishAgentChange('audit');
   return { ...body, previousHash, entryHash };
+}
+
+/** 读取可同时感知当前连接和其他连接写入的 SQLite 变更标记。 */
+function getAgentDbChangeMarkers(db) {
+  const totalChangesRow = db.prepare('SELECT total_changes() AS value').get();
+  const dataVersionRow = db.prepare('PRAGMA data_version').get();
+  return {
+    totalChanges: Number(totalChangesRow?.value || 0),
+    dataVersion: Number(dataVersionRow?.data_version ?? Object.values(dataVersionRow || {})[0] ?? 0),
+  };
+}
+
+/** 写入有界审计校验缓存。 */
+function setAuditVerificationCache(key, value) {
+  auditVerificationCache.delete(key);
+  auditVerificationCache.set(key, value);
+  while (auditVerificationCache.size > MAX_AUDIT_VERIFICATION_CACHE_SIZE) {
+    auditVerificationCache.delete(auditVerificationCache.keys().next().value);
+  }
 }
 
 /** 校验当前账号/设备审计哈希链。 */
 export function verifyAgentAuditChain() {
   const context = getAgentStoreContext();
-  const rows = getAgentDb().prepare('SELECT * FROM agent_audit WHERE account_id = ? AND device_id = ? ORDER BY id ASC')
+  const db = getAgentDb();
+  const cacheKey = `${context.accountId}\u0000${context.deviceId}`;
+  const markers = getAgentDbChangeMarkers(db);
+  const cached = auditVerificationCache.get(cacheKey);
+  if (cached?.totalChanges === markers.totalChanges && cached?.dataVersion === markers.dataVersion) {
+    return cached.result;
+  }
+  const rows = db.prepare('SELECT * FROM agent_audit WHERE account_id = ? AND device_id = ? ORDER BY id ASC')
     .all(context.accountId, context.deviceId);
   let previousHash = 'GENESIS';
+  let result = { valid: true, count: rows.length };
   for (const row of rows) {
     const body = parseJson(row.body_json, {});
     const payload = body?.actor
       ? `${context.accountId}\n${context.deviceId}\n${previousHash}\n${row.body_json}`
       : `${previousHash}\n${row.body_json}`;
     const expected = crypto.createHmac('sha256', AGENT_AUDIT_KEY).update(payload).digest('hex');
-    if (row.previous_hash !== previousHash || row.entry_hash !== expected) return { valid: false, count: rows.length, brokenAt: row.event_id };
+    if (row.previous_hash !== previousHash || row.entry_hash !== expected) {
+      result = { valid: false, count: rows.length, brokenAt: row.event_id };
+      break;
+    }
     previousHash = row.entry_hash;
   }
-  return { valid: true, count: rows.length };
+  setAuditVerificationCache(cacheKey, { ...markers, result });
+  return result;
 }
 
 /** 列出当前账号/设备审计记录。 */
@@ -408,6 +478,7 @@ export function upsertProjectGrant({ client, workspacePath, remoteUrl = '', perm
     ON CONFLICT(account_id, device_id, client, workspace_path, remote_url)
     DO UPDATE SET team_id = excluded.team_id, permissions_json = excluded.permissions_json, status = 'active', updated_at = excluded.updated_at
   `).run(id, context.accountId, context.deviceId, context.teamId, client, workspacePath, remoteUrl, JSON.stringify(permissions), timestamp, timestamp);
+  publishAgentChange('grants');
   return getProjectGrant(client, workspacePath, remoteUrl);
 }
 
@@ -451,6 +522,7 @@ export function revokeProjectGrant(id) {
   const context = getAgentStoreContext();
   const result = getAgentDb().prepare('DELETE FROM agent_project_grants WHERE id = ? AND account_id = ? AND device_id = ?')
     .run(String(id), context.accountId, context.deviceId);
+  if (result.changes > 0) publishAgentChange('grants');
   return { revoked: result.changes > 0 };
 }
 
@@ -501,6 +573,8 @@ export function createAgentOperation(payload) {
   `).run(id, context.accountId, context.deviceId, context.teamId, payload.toolName, payload.client, payload.workspacePath || '', payload.riskLevel,
     payload.payloadHash, payload.executionScope, payload.idempotencyKey, JSON.stringify(redactAgentValue(payload.payload)),
     JSON.stringify(redactAgentValue(payload.approvalSummary || {})), timestamp, timestamp);
+  publishAgentChange(['approvals', 'operations']);
+  scheduleNextPendingAgentExpiry();
   return getAgentOperation(id);
 }
 
@@ -542,25 +616,64 @@ export function listAgentOperations({ status = '', client = '', limit = 50, offs
   return { items, total };
 }
 
+/** 轻量列出当前身份待审批任务，不解析日志、进度或结果。 */
+export function listPendingAgentApprovals(limit = 100) {
+  expirePendingAgentOperations();
+  const db = getAgentDb();
+  const context = getAgentStoreContext();
+  const safeLimit = Math.min(100, Math.max(1, Number(limit || 100)));
+  const rows = db.prepare(`
+    SELECT id, tool_name, client, risk_level, payload_hash, execution_scope,
+           approval_summary_json, created_at, updated_at
+    FROM agent_operations
+    WHERE account_id = ? AND device_id = ? AND team_id = ? AND status = 'pending_approval'
+    ORDER BY created_at ASC LIMIT ?
+  `).all(context.accountId, context.deviceId, context.teamId, safeLimit);
+  return {
+    items: rows.map((row) => ({
+      id: row.id,
+      toolName: row.tool_name,
+      client: row.client,
+      riskLevel: row.risk_level,
+      payloadHash: row.payload_hash,
+      executionScope: row.execution_scope,
+      approvalSummary: parseJson(row.approval_summary_json, undefined),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    })),
+    total: rows.length,
+  };
+}
+
 /** 将当前身份超过审批有效期的任务标记过期。 */
 export function expirePendingAgentOperations(maxAgeMs = 30 * 60_000) {
   const context = getAgentStoreContext();
   const expiresBefore = new Date(Date.now() - maxAgeMs).toISOString();
-  return getAgentDb().prepare(`
+  const changes = getAgentDb().prepare(`
     UPDATE agent_operations SET status = 'expired', error_json = ?, updated_at = ?
     WHERE account_id = ? AND device_id = ? AND team_id = ? AND status = 'pending_approval' AND created_at <= ?
   `).run(JSON.stringify({ code: 'approval_expired', message: '审批已过期，请重新发起操作', retryable: true }), now(),
     context.accountId, context.deviceId, context.teamId, expiresBefore).changes;
+  if (changes > 0) {
+    publishAgentChange(['approvals', 'operations']);
+    scheduleNextPendingAgentExpiry();
+  }
+  return changes;
 }
 
 /** 账号退出、切换或设备撤销时使未开始任务失效。 */
 export function expireAgentOperationsForIdentity(identity, reason = 'identity_changed') {
   if (!identity?.accountId || !identity?.deviceId) return 0;
-  return getAgentDb().prepare(`
+  const changes = getAgentDb().prepare(`
     UPDATE agent_operations SET status = 'expired', error_json = ?, updated_at = ?
     WHERE account_id = ? AND device_id = ? AND status IN ('pending_approval', 'queued')
   `).run(JSON.stringify({ code: reason, message: '账号或设备状态已变化，任务已失效', retryable: true }), now(),
     identity.accountId, identity.deviceId).changes;
+  if (changes > 0) {
+    publishAgentChange(['approvals', 'operations']);
+    scheduleNextPendingAgentExpiry();
+  }
+  return changes;
 }
 
 /** 原子更新当前身份操作状态与公共字段。 */
@@ -577,9 +690,13 @@ export function updateAgentOperation(id, patch) {
   if (!sets.length) return getAgentOperation(id);
   sets.push('updated_at = ?');
   params.push(now(), String(id), context.accountId, context.deviceId, context.teamId);
-  getAgentDb().prepare(`
+  const result = getAgentDb().prepare(`
     UPDATE agent_operations SET ${sets.join(', ')} WHERE id = ? AND account_id = ? AND device_id = ? AND team_id = ?
   `).run(...params);
+  if (result.changes > 0) {
+    publishAgentChange('status' in patch ? ['approvals', 'operations'] : 'operations');
+    if ('status' in patch) scheduleNextPendingAgentExpiry();
+  }
   return getAgentOperation(id);
 }
 
@@ -596,7 +713,11 @@ export function updateAgentOperationInternal(id, patch) {
   if (!sets.length) return getAgentOperationInternal(id);
   sets.push('updated_at = ?');
   params.push(now(), String(id));
-  getAgentDb().prepare(`UPDATE agent_operations SET ${sets.join(', ')} WHERE id = ?`).run(...params);
+  const result = getAgentDb().prepare(`UPDATE agent_operations SET ${sets.join(', ')} WHERE id = ?`).run(...params);
+  if (result.changes > 0) {
+    publishAgentChange('status' in patch ? ['approvals', 'operations'] : 'operations');
+    if ('status' in patch) scheduleNextPendingAgentExpiry();
+  }
   return getAgentOperationInternal(id);
 }
 

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import test, { after } from 'node:test';
 
 const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'yuyan-agent-test-'));
@@ -11,6 +12,7 @@ process.env.DEPLOY_SECRET_KEY = 'agent-control-plane-test-key';
 
 const security = await import('../agent-security.mjs');
 const store = await import('../agent-store.mjs');
+const runtime = await import('../agent-runtime-service.mjs');
 const workspaceService = await import('../agent-workspace-service.mjs');
 
 after(() => {
@@ -79,6 +81,13 @@ test('写操作幂等且审计 HMAC 链可检测篡改', () => {
   const duplicate = store.createAgentOperation(common);
   assert.equal(first.id, duplicate.id);
   assert.equal(first.status, 'pending_approval');
+  const pending = store.listPendingAgentApprovals();
+  const pendingItem = pending.items.find((item) => item.id === first.id);
+  assert.ok(pendingItem);
+  assert.deepEqual(Object.keys(pendingItem).sort(), [
+    'approvalSummary', 'client', 'createdAt', 'executionScope', 'id',
+    'payloadHash', 'riskLevel', 'toolName', 'updatedAt',
+  ]);
 
   store.appendAgentAudit({ action: 'operation_requested', operationId: first.id, token: 'must-not-leak' });
   store.appendAgentAudit({ action: 'operation_approved', operationId: first.id });
@@ -87,6 +96,34 @@ test('写操作幂等且审计 HMAC 链可检测篡改', () => {
   assert.equal(audit.items[1].token, '***');
   store.getAgentDb().prepare("UPDATE agent_audit SET body_json = '{\"tampered\":true}' WHERE id = 1").run();
   assert.equal(store.verifyAgentAuditChain().valid, false);
+  assert.equal(store.expirePendingAgentOperations(0), 1);
+  assert.equal(store.listPendingAgentApprovals().total, 0);
+});
+
+test('审计校验缓存按身份隔离，并能感知外部 SQLite 连接篡改', () => {
+  runtime.updateAgentRuntimeSettings({ accountId: 'cache-account-a', deviceId: 'cache-device-a', teamId: 'cache-team-a' });
+  store.appendAgentAudit({ action: 'cache_account_a_created' });
+  const firstResult = store.verifyAgentAuditChain();
+  const cachedResult = store.verifyAgentAuditChain();
+  assert.equal(firstResult.valid, true);
+  assert.strictEqual(cachedResult, firstResult);
+
+  runtime.updateAgentRuntimeSettings({ accountId: 'cache-account-b', deviceId: 'cache-device-b', teamId: 'cache-team-b' });
+  store.appendAgentAudit({ action: 'cache_account_b_created' });
+  assert.deepEqual(store.verifyAgentAuditChain(), { valid: true, count: 1 });
+
+  const externalDb = new DatabaseSync(process.env.YUYAN_AGENT_DB_PATH);
+  try {
+    externalDb.prepare("UPDATE agent_audit SET body_json = '{\"tamperedExternally\":true}' WHERE account_id = ? AND device_id = ?")
+      .run('cache-account-b', 'cache-device-b');
+  } finally {
+    externalDb.close();
+  }
+  assert.equal(store.verifyAgentAuditChain().valid, false);
+
+  runtime.updateAgentRuntimeSettings({ accountId: 'cache-account-a', deviceId: 'cache-device-a', teamId: 'cache-team-a' });
+  assert.equal(store.verifyAgentAuditChain().valid, true);
+  runtime.updateAgentRuntimeSettings({ accountId: '', deviceId: '', teamId: '' });
 });
 
 test('审批策略默认自动执行普通操作且可以持久化关闭', () => {
