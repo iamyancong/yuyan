@@ -11,6 +11,8 @@ import {
   handleGetAgentClients,
   handleGetAgentOperation,
   handleGetAgentSnapshot,
+  handleAgentEvents,
+  handleListPendingAgentApprovals,
   handleInstallAgentClient,
   handleRejectAgentOperation,
   handleReadDesktopOpenApi,
@@ -24,6 +26,8 @@ const router = express.Router();
 
 router.post('/tools/:toolName', handleAgentToolCall);
 router.get('/snapshot', handleGetAgentSnapshot);
+router.get('/events', handleAgentEvents);
+router.get('/pending-approvals', handleListPendingAgentApprovals);
 router.get('/operations/:id', handleGetAgentOperation);
 router.post('/operations/:id/approve', handleApproveAgentOperation);
 router.post('/operations/:id/reject', handleRejectAgentOperation);

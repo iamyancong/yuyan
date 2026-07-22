@@ -39,17 +39,23 @@ test('同账号双设备共享账号空间但不继承目录授权、设备策�
   store.upsertProjectGrant({ client: 'codex', workspacePath: '/workspace/project', remoteUrl: 'git.example/team/project' });
   store.updateAgentApprovalPolicy({ autoApproveGrantedProjects: false });
   const deviceAOperation = store.createAgentOperation(operation);
+  assert.equal(store.listPendingAgentApprovals().total, 1);
   store.saveDeviceOpenApiArtifact({
     id: 'artifact-device-a', targetId: 8, projectName: 'project', branch: 'dev', commitSha: 'abc123',
     fileName: 'openapi.json', filePath: '/device-a/openapi.json', sha256: 'sha-device-a', sizeBytes: 10,
   });
 
   switchIdentity('gitlab:host:101', 'device-b', 'team-a');
+  assert.equal(store.listPendingAgentApprovals().total, 0);
   assert.equal(store.listProjectGrants().total, 0);
   assert.equal(store.getAgentApprovalPolicy().autoApproveGrantedProjects, true);
   assert.equal(store.getLatestDeviceOpenApiArtifact(8), null);
   const deviceBOperation = store.createAgentOperation(operation);
   assert.notEqual(deviceAOperation.id, deviceBOperation.id);
+  assert.equal(store.listPendingAgentApprovals().total, 1);
+
+  switchIdentity('gitlab:host:101', 'device-a', 'team-other');
+  assert.equal(store.listPendingAgentApprovals().total, 0);
 
   switchIdentity('gitlab:host:101', 'device-a', 'team-a');
   assert.equal(store.listProjectGrants().total, 1);
@@ -62,6 +68,7 @@ test('同一系统设备切换 GitLab 账号后授权、任务和审计完全不
   switchIdentity('gitlab:host:202', 'device-a', 'team-b');
   assert.equal(store.listProjectGrants().total, 0);
   assert.equal(store.listAgentOperations().total, 0);
+  assert.equal(store.listPendingAgentApprovals().total, 0);
   assert.equal(store.listAgentAudit().total, 0);
   assert.equal(store.getLatestDeviceOpenApiArtifact(8), null);
   store.appendAgentAudit({ action: 'account-b-event' });
@@ -69,5 +76,6 @@ test('同一系统设备切换 GitLab 账号后授权、任务和审计完全不
   switchIdentity('gitlab:host:101', 'device-a', 'team-a');
   assert.equal(store.listProjectGrants().total, 1);
   assert.equal(store.listAgentOperations().total, 1);
+  assert.equal(store.listPendingAgentApprovals().total, 1);
   assert.equal(store.listAgentAudit().total, 0);
 });

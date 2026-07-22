@@ -2440,6 +2440,17 @@ export async function listTargets(query = {}) {
 }
 
 /**
+ * 轻量列出当前团队部署目标运行态索引。
+ * @returns {Promise<Array<{id: number, projectType: string}>>} 目标 ID 与项目类型
+ */
+export async function listTargetRuntimeIndex() {
+  const db = await getDeployDb();
+  return db.prepare('SELECT id, project_type FROM deploy_targets WHERE team_id = ? ORDER BY id ASC')
+    .all(getRequestTeamId())
+    .map((row) => ({ id: Number(row.id), projectType: String(row.project_type || 'frontend') }));
+}
+
+/**
  * 解析服务器下一个可用托管站点端口。
  * @param {number} serverId - 服务器 ID
  * @param {number} excludeTargetId - 排除的部署目标 ID

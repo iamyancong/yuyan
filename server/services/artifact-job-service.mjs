@@ -17,6 +17,7 @@ import {
 
 const MAX_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024;
 const ARTIFACT_TTL_MS = 24 * 60 * 60_000;
+const initializedArtifactDatabases = new WeakSet();
 
 const createJobSchema = z.object({
   targetId: z.coerce.number().int().positive(),
@@ -35,8 +36,9 @@ const artifactRoot = path.join(DEPLOY_DATA_DIR, 'artifact-jobs');
 
 /** 初始化产物任务表与同目标运行锁。 */
 async function ensureArtifactSchema() {
-  await ensureCentralIdentitySchema();
   const db = await getDeployDb();
+  if (initializedArtifactDatabases.has(db)) return db;
+  await ensureCentralIdentitySchema();
   db.exec(`
     CREATE TABLE IF NOT EXISTS artifact_jobs (
       id TEXT PRIMARY KEY,
@@ -68,6 +70,7 @@ async function ensureArtifactSchema() {
       ON artifact_jobs(team_id, target_id) WHERE status IN ('uploading', 'ready', 'queued', 'running');
     CREATE INDEX IF NOT EXISTS idx_artifact_jobs_expiry ON artifact_jobs(status, expires_at);
   `);
+  initializedArtifactDatabases.add(db);
   return db;
 }
 
@@ -320,12 +323,9 @@ export async function cancelCentralOperation(operationId) {
   return getCentralOperation(operationId);
 }
 
-/** 查询当前账号的中央操作。 */
-export async function getCentralOperation(operationId) {
-  const db = await ensureArtifactSchema();
-  const context = getRequestContext();
-  const row = db.prepare('SELECT * FROM central_agent_operations WHERE id = ? AND team_id = ?').get(operationId, context.teamId);
-  if (!row) throw Object.assign(new Error('中央操作不存在'), { status: 404, code: 'operation_not_found' });
+/** 将中央操作数据库行映射为公共结构。 */
+function mapCentralOperation(row) {
+  if (!row) return null;
   return {
     id: row.id,
     toolName: row.tool_name,
@@ -338,6 +338,15 @@ export async function getCentralOperation(operationId) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+/** 查询当前账号的中央操作。 */
+export async function getCentralOperation(operationId) {
+  const db = await ensureArtifactSchema();
+  const context = getRequestContext();
+  const row = db.prepare('SELECT * FROM central_agent_operations WHERE id = ? AND team_id = ?').get(operationId, context.teamId);
+  if (!row) throw Object.assign(new Error('中央操作不存在'), { status: 404, code: 'operation_not_found' });
+  return mapCentralOperation(row);
 }
 
 /** 按账号列出中央操作，供其他设备查看共享任务状态。 */
@@ -358,9 +367,18 @@ export async function listCentralOperations(query = {}) {
     }
   }
   const limit = Math.min(100, Math.max(1, Number(query.limit || 20)));
-  const rows = db.prepare(`SELECT id FROM central_agent_operations WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC LIMIT ?`)
+  const rows = db.prepare(`SELECT * FROM central_agent_operations WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC LIMIT ?`)
     .all(...params, limit);
-  const items = [];
-  for (const row of rows) items.push(await getCentralOperation(row.id));
-  return { items };
+  return { items: rows.map(mapCentralOperation) };
+}
+
+/** 一次查询当前团队全部运行中的后端部署操作，供运行态聚合接口使用。 */
+export async function listActiveCentralDeployOperations() {
+  const db = await ensureArtifactSchema();
+  const context = getRequestContext();
+  return db.prepare(`
+    SELECT * FROM central_agent_operations
+    WHERE team_id = ? AND resource_type = 'deploy_target' AND status IN ('uploading', 'queued', 'running')
+    ORDER BY created_at DESC
+  `).all(context.teamId).map(mapCentralOperation);
 }

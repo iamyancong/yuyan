@@ -16,6 +16,7 @@ import {
   listRecords,
   listServers,
   listTargets,
+  listTargetRuntimeIndex,
   updateNginxInstance,
   updateServer,
   updateTarget,
@@ -94,6 +95,8 @@ import {
   testBuildJdk,
   testServerJavaRuntime,
 } from '../services/backend-toolchain-service.mjs';
+import { listActiveCentralDeployOperations } from '../services/artifact-job-service.mjs';
+import { mergeDeployRuntimeSnapshots } from '../services/deploy-runtime-snapshot-service.mjs';
 
 /** GitHub 托管仓库名（主库或 Fork 库） */
 const GITHUB_REPO = process.env.GITHUB_REPOSITORY || 'ycwang-dev/yuyan';
@@ -166,6 +169,15 @@ function serializeDeployTask(task) {
     events: task.events,
     maxConcurrent: MAX_RUNNING_DEPLOY_TASKS,
     runningCount: deployTasksByTargetId.size,
+  };
+}
+
+/** 将进程内任务映射为列表页使用的轻量运行态快照。 */
+function serializeDeployTaskRuntime(task) {
+  const latestStage = [...task.events].reverse().find((event) => event.type === 'stage');
+  return {
+    ...serializeDeployTask(task),
+    events: latestStage ? [latestStage] : [],
   };
 }
 
@@ -870,6 +882,33 @@ export async function handleGetNextNginxRuntimePort(req, res) {
 export async function handleListTargets(req, res) {
   try {
     res.json({ success: true, data: await listTargets(req.query || {}) });
+  } catch (error) {
+    sendError(res, error);
+  }
+}
+
+/** 聚合当前团队全部运行中的部署目标快照。 */
+export async function handleListTargetRuntimeSnapshots(_req, res) {
+  try {
+    const targetIndex = await listTargetRuntimeIndex();
+    const inMemorySnapshots = [];
+    deployTasksByTargetId.forEach((task, targetId) => {
+      if (!task.completed) inMemorySnapshots.push(serializeDeployTaskRuntime({ ...task, targetId: Number(targetId) }));
+    });
+
+    const centralOperations = await listActiveCentralDeployOperations();
+    const items = mergeDeployRuntimeSnapshots({
+      targetIds: targetIndex.map((target) => target.id),
+      inMemorySnapshots,
+      centralOperations,
+    });
+    res.json({
+      success: true,
+      data: {
+        items,
+        checkedAt: new Date().toISOString(),
+      },
+    });
   } catch (error) {
     sendError(res, error);
   }

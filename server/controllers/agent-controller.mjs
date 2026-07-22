@@ -19,8 +19,9 @@ import {
   setAgentApprovalPolicy,
   serializeAgentError,
 } from '../services/agent-command-service.mjs';
-import { expireAgentOperationsForIdentity, getAgentOperation } from '../services/agent-store.mjs';
+import { expireAgentOperationsForIdentity, getAgentOperation, listPendingAgentApprovals } from '../services/agent-store.mjs';
 import { getAgentRuntimeSettings, updateAgentRuntimeSettings } from '../services/agent-runtime-service.mjs';
+import { getAgentEventRevision, subscribeAgentChanges } from '../services/agent-event-service.mjs';
 import {
   getAgentClientStatuses,
   getGenericAgentClientConfig,
@@ -54,6 +55,50 @@ export async function handleGetAgentSnapshot(req, res) {
   } catch (error) {
     sendAgentError(res, error, 500);
   }
+}
+
+/** 获取当前身份待审批任务的轻量投影。 */
+export function handleListPendingAgentApprovals(req, res) {
+  try {
+    res.json({ success: true, data: listPendingAgentApprovals(req.query?.limit) });
+  } catch (error) {
+    sendAgentError(res, error, 500);
+  }
+}
+
+/** 建立 Agent 控制平面变更 SSE。 */
+export function handleAgentEvents(req, res) {
+  res.status(200);
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+
+  /** 写入一个不含业务数据的 SSE 事件。 */
+  const writeEvent = (eventName, event) => {
+    if (res.writableEnded || res.destroyed) return;
+    res.write(`id: ${event.revision}\nevent: ${eventName}\ndata: ${JSON.stringify(event)}\n\n`);
+  };
+
+  const unsubscribe = subscribeAgentChanges((event) => writeEvent('change', event));
+  writeEvent('ready', { revision: getAgentEventRevision(), domains: [] });
+  const heartbeatTimer = setInterval(() => {
+    if (!res.writableEnded && !res.destroyed) res.write(': heartbeat\n\n');
+  }, 30_000);
+  heartbeatTimer.unref?.();
+
+  let cleaned = false;
+  /** 清理当前 SSE 连接资源。 */
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    clearInterval(heartbeatTimer);
+    unsubscribe();
+  };
+  req.once('aborted', cleanup);
+  res.once('close', cleanup);
+  res.once('finish', cleanup);
 }
 
 /** 获取单个任务。 */
