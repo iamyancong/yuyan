@@ -3,6 +3,8 @@ import type {
   DeployServer,
   NginxInstance,
   NginxInstancePayload,
+  NginxArchiveDownloadType,
+  NginxArchiveSiteOption,
   NginxRuntimeAction,
   NginxRuntimePayload,
   NginxRuntimeStatus,
@@ -31,6 +33,11 @@ export interface NginxRuntimeDrawerProps {
   initializing: boolean;
   actionLoading: NginxRuntimeAction | '';
   archiveDownloading: boolean;
+  archiveSelectionOpen: boolean;
+  archiveSelectionLoading: boolean;
+  archiveSelectionType: NginxArchiveDownloadType;
+  archiveConfigPath: string;
+  archiveSites: NginxArchiveSiteOption[];
   instanceFormOpen: boolean;
   instanceFormKey: number;
   instanceSaving: boolean;
@@ -53,6 +60,9 @@ export type NginxRuntimeDrawerEmits = {
   (e: 'init'): void;
   (e: 'action', value: NginxRuntimeAction): void;
   (e: 'downloadArchive', type: 'all' | 'html' | 'conf'): void;
+  (e: 'update:archiveSelectionOpen', value: boolean): void;
+  (e: 'refreshArchiveSites'): void;
+  (e: 'confirmArchiveDownload', value: { type: NginxArchiveDownloadType; siteIds: string[] }): void;
   (e: 'refresh'): void;
 };
 

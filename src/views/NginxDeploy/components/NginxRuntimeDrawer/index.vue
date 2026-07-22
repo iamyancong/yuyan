@@ -7,6 +7,7 @@ import RuntimeFooterBar from './RuntimeFooterBar.vue';
 import RuntimeInstanceNavigator from './RuntimeInstanceNavigator.vue';
 import RuntimePathPreview from './RuntimePathPreview.vue';
 import RuntimeProgressPanel from './RuntimeProgressPanel.vue';
+import ArchiveSiteSelectionModal from './components/ArchiveSiteSelectionModal/index.vue';
 import { useNginxRuntimeDrawerView } from './hooks/useNginxRuntimeDrawerView';
 
 defineOptions({ name: 'NginxRuntimeDrawer' });
@@ -141,6 +142,18 @@ const {
   >
     <YssFormily :key="instanceFormKey" v-model:modelValue="instanceFormModel" :schema="computedInstanceFormSchema" />
   </a-modal>
+
+  <ArchiveSiteSelectionModal
+    :open="archiveSelectionOpen"
+    :loading="archiveSelectionLoading"
+    :downloading="archiveDownloading"
+    :type="archiveSelectionType"
+    :config-path="archiveConfigPath"
+    :sites="archiveSites"
+    @update:open="(value) => emit('update:archiveSelectionOpen', value)"
+    @refresh="emit('refreshArchiveSites')"
+    @confirm="(value) => emit('confirmArchiveDownload', value)"
+  />
 </template>
 
 <style scoped lang="less">
@@ -190,4 +203,3 @@ html[data-theme='dark'] .nginx-runtime-drawer-root {
   }
 }
 </style>
-

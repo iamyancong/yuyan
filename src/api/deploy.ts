@@ -5,6 +5,9 @@ import {
   getLatestDesktopOpenApi,
   readDesktopOpenApi,
 } from '@/api/agent';
+import { consumeNginxArchiveSaveResponse } from './nginxArchiveSaveStream';
+
+export { consumeNginxArchiveSaveResponse } from './nginxArchiveSaveStream';
 
 /** 服务器认证方式 */
 export type DeployAuthType = 'password' | 'privateKey';
@@ -552,6 +555,49 @@ export type NginxRuntimeAction = 'test' | 'start' | 'stop' | 'reload' | 'status'
 /** 托管 Nginx 运行包下载类型 */
 export type NginxArchiveDownloadType = 'all' | 'html' | 'conf';
 
+/** Nginx 归档可选 server 块。 */
+export interface NginxArchiveSiteOption {
+  id: string;
+  order: number;
+  listenPorts: number[];
+  listenValues: string[];
+  roots: string[];
+  serverNames: string[];
+  targetIds: number[];
+  projectNames: string[];
+  canDownloadFiles: boolean;
+}
+
+/** Nginx 归档站点预览响应。 */
+export interface NginxArchiveSitesResponse {
+  configPath: string;
+  revision: string;
+  sites: NginxArchiveSiteOption[];
+}
+
+/** Nginx 归档选择参数。 */
+export interface NginxArchiveSelection {
+  type: NginxArchiveDownloadType;
+  siteIds: string[];
+  revision: string;
+}
+
+/** 原生文件下载实时进度。 */
+export interface NativeFileDownloadProgress {
+  stage: 'connecting' | 'writing' | 'finished';
+  loadedBytes: number;
+  totalBytes?: number | null;
+  fileName?: string | null;
+}
+
+/** 原生文件下载真实落盘结果。 */
+export interface NativeFileDownloadResult {
+  path: string;
+  fileName: string;
+  fileSize: number;
+  sha256: string;
+}
+
 /** 托管 Nginx 操作结果 */
 export interface NginxRuntimeActionResult {
   success: boolean;
@@ -836,8 +882,24 @@ export const runNginxInstanceAction = (instanceId: number, action: NginxRuntimeA
  */
 export const getNginxInstanceArchiveDownloadUrl = async (
   instanceId: number,
-  type: NginxArchiveDownloadType = 'all'
-) => getActiveDeployApiUrl(`/nginx-instances/${instanceId}/archive?type=${encodeURIComponent(type)}`);
+  type: NginxArchiveDownloadType = 'all',
+  selection?: Pick<NginxArchiveSelection, 'siteIds' | 'revision'>
+) => {
+  const query = new URLSearchParams({ type });
+  if (selection?.siteIds?.length) query.set('siteIds', selection.siteIds.join(','));
+  if (selection?.revision) query.set('revision', selection.revision);
+  return getActiveDeployApiUrl(`/nginx-instances/${instanceId}/archive?${query.toString()}`, 'server');
+};
+
+/**
+ * 获取托管 Nginx 主配置中的归档站点选项。
+ * @param instanceId Nginx 实例 ID
+ * @returns 配置版本与可选 server 列表
+ */
+export async function getNginxInstanceArchiveSites(instanceId: number): Promise<NginxArchiveSitesResponse> {
+  const url = await getActiveDeployApiUrl(`/nginx-instances/${instanceId}/archive-sites`, 'server');
+  return axios.get(url, { headers: getDeployApiAuthHeaders() }).then(unwrap<NginxArchiveSitesResponse>);
+}
 
 /**
  * 下载托管 Nginx 实例运行包。
@@ -850,15 +912,21 @@ export async function downloadNginxInstanceArchive(
   instanceId: number,
   type: NginxArchiveDownloadType = 'all',
   onProgress?: (loaded: number) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  selection?: Pick<NginxArchiveSelection, 'siteIds' | 'revision'>
 ): Promise<NginxInstanceArchiveDownload> {
-  const response = await fetch(await getActiveDeployApiUrl(`/nginx-instances/${instanceId}/archive?type=${type}`), {
+  const response = await fetch(await getNginxInstanceArchiveDownloadUrl(instanceId, type, selection), {
     signal,
     headers: getDeployApiAuthHeaders(),
   });
   if (!response.ok) {
     const data = await parseJsonOrText(response);
-    throw new Error(typeof data === 'string' ? data : data?.error || data?.message || '下载运行包失败');
+    const errorMessage = typeof data === 'string'
+      ? data
+      : typeof data?.error === 'string'
+        ? data.error
+        : data?.error?.message || data?.message || '下载运行包失败';
+    throw new Error(errorMessage);
   }
 
   const reader = response.body?.getReader();
@@ -880,6 +948,7 @@ export async function downloadNginxInstanceArchive(
   } else {
     blob = await response.blob();
   }
+  if (blob.size <= 0) throw new Error('中央服务返回了空文件，下载未保存');
 
   return {
     blob,
@@ -919,48 +988,7 @@ export async function saveNginxInstanceArchiveToLocal(
     throw new Error(typeof data === 'string' ? data : data?.error || data?.message || '直写保存文件失败');
   }
 
-  const reader = response.body?.getReader();
-  if (!reader) return;
-
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  /**
-   * 消费一行 SSE data 事件。
-   * @param line 原始行
-   */
-  const consumeEventLine = (line: string) => {
-    const trimmed = line.trim();
-    if (!trimmed || !trimmed.startsWith('data:')) return;
-
-    try {
-      const rawJson = trimmed.slice(5).trim();
-      const data = JSON.parse(rawJson) as NginxArchiveSaveEvent;
-      if (data.error) {
-        throw new Error(data.error);
-      }
-      onEvent?.(data);
-    } catch (e) {
-      if (e instanceof Error && e.message !== 'Unexpected end of JSON input') {
-        throw e;
-      }
-    }
-  };
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-
-    for (const line of lines) {
-      consumeEventLine(line);
-    }
-  }
-  buffer += decoder.decode();
-  if (buffer.trim()) consumeEventLine(buffer);
+  await consumeNginxArchiveSaveResponse(response, onEvent);
 }
 
 /** 获取托管 Nginx 下一个可用端口 */
@@ -1486,7 +1514,7 @@ const LOCAL_EXECUTE_API_PATTERNS = [
   /\/openapi-artifacts\/\d+\/(?:content|download)/i,
   /\/records\/\d+\/(?:rollback|undo-rollback)/i,
   /\/servers\/\d+\/nginx-runtime\/init/i,
-  /\/nginx-instances\/\d+\/(?:init|archive)/i,
+  /\/nginx-instances\/\d+\/init(?:[/?]|$)/i,
   /\/jdks(?:\/|$)/i,
 ];
 

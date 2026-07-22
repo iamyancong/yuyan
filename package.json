@@ -14,7 +14,7 @@
     "typecheck": "vue-tsc --noEmit",
     "test:server": "node --test server/services/tests/*.test.mjs",
     "test:central-url": "node --experimental-strip-types --test src/utils/centralUrlPolicy.test.ts",
-    "test:frontend-utils": "node --experimental-strip-types --test src/api/agentStream.test.ts src/views/NginxDeploy/hooks/targetRuntimePolicy.test.ts",
+    "test:frontend-utils": "node --experimental-strip-types --test src/api/agentStream.test.ts src/api/nginxArchiveSave.test.ts src/views/NginxDeploy/components/NginxRuntimeDrawer/components/ArchiveSiteSelectionModal/selectionPolicy.test.ts src/views/NginxDeploy/hooks/targetRuntimePolicy.test.ts",
     "mcp:build": "tsc -p mcp/tsconfig.json",
     "test:mcp": "pnpm run mcp:build && node --test mcp/tests/*.test.mjs",
     "tauri": "tauri"
