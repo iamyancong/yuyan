@@ -97,6 +97,35 @@ test('同一账号支持多设备、签名刷新、跨设备审批与撤销', as
     processMode: 'pid',
     healthCheckPath: '/actuator/health',
   });
+  const accountCreatedAt = db.prepare('SELECT created_at FROM users WHERE id = ?').get(sessionA.accountId).created_at;
+  const historicalAt = new Date(Date.parse(accountCreatedAt) - 60_000).toISOString();
+  const legacyRecord = await store.createRecord({
+    targetId: legacyTarget.id,
+    projectId: legacyTarget.projectId,
+    projectName: legacyTarget.projectName,
+    envName: legacyTarget.envName,
+    branch: legacyTarget.defaultBranch,
+    status: 'success',
+    operator: 'Alice',
+    startedAt: historicalAt,
+    finishedAt: historicalAt,
+  });
+  db.prepare(`
+    INSERT INTO teams (id, name, status, migration_state, created_at, updated_at)
+    VALUES ('legacy-team', '旧共享空间', 'active', 'bound', ?, ?)
+  `).run(historicalAt, historicalAt);
+  db.prepare(`
+    INSERT INTO users (id, display_name, username, avatar_url, status, created_at, updated_at)
+    VALUES ('legacy-owner', '旧管理员', 'legacy-owner', '', 'active', ?, ?)
+  `).run(historicalAt, historicalAt);
+  db.prepare(`
+    INSERT INTO team_members (team_id, user_id, role, status, created_at, updated_at)
+    VALUES ('legacy-team', 'legacy-owner', 'admin', 'active', ?, ?)
+  `).run(historicalAt, historicalAt);
+  db.prepare(`
+    INSERT INTO team_gitlab_bindings (team_id, gitlab_host, gitlab_group_id, gitlab_group_path, created_at, updated_at)
+    VALUES ('legacy-team', ?, '1', 'legacy/group', ?, ?)
+  `).run(gitlabHost, historicalAt, historicalAt);
   const principalA = await identity.resolveAccessPrincipal(sessionA.accessToken);
   const principalB = await identity.resolveAccessPrincipal(sessionB.accessToken);
   assert.equal(principalA.teamId, 'legacy-team');
@@ -115,7 +144,11 @@ test('同一账号支持多设备、签名刷新、跨设备审批与撤销', as
   assert.equal(restoredTargets[0].teamId, 'legacy-team');
   assert.equal(db.prepare('SELECT team_id FROM deploy_servers WHERE id = ?').get(legacyServer.id).team_id, 'legacy-team');
   assert.equal(db.prepare('SELECT team_id FROM deploy_targets WHERE id = ?').get(legacyTarget.id).team_id, 'legacy-team');
+  assert.equal(db.prepare('SELECT team_id FROM deploy_records WHERE id = ?').get(legacyRecord.id).team_id, 'legacy-team');
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM team_members WHERE team_id = 'legacy-team' AND user_id = ? AND status = 'active'").get(sessionA.accountId).count, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM team_members WHERE team_id = 'legacy-team' AND status = 'active'").get().count, 2);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM team_members WHERE team_id = 'legacy-team' AND user_id = 'legacy-owner' AND status = 'active'").get().count, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM team_gitlab_bindings WHERE team_id = 'legacy-team'").get().count, 1);
   assert.equal(db.prepare("SELECT COUNT(DISTINCT team_id) AS count FROM auth_sessions WHERE user_id = ? AND status = 'active'").get(sessionA.accountId).count, 1);
   assert.equal((await identity.resolveAccessPrincipal(sessionA.accessToken)).teamId, 'legacy-team');
 
@@ -183,6 +216,21 @@ test('相同 deviceId 的不同 GitLab 用户仍按账号隔离', async () => {
   assert.deepEqual((await identity.getAccountApprovalPolicy(accountContext)).forcedTools, []);
 
   const db = await store.getDeployDb();
+  const target = db.prepare('SELECT id, project_id, project_name, env_name, default_branch FROM deploy_targets WHERE team_id = ? LIMIT 1')
+    .get('legacy-team');
+  const bobCreatedAt = db.prepare('SELECT created_at FROM users WHERE id = ?').get(session.accountId).created_at;
+  const forgedAt = new Date(Date.parse(bobCreatedAt) + 60_000).toISOString();
+  await store.createRecord({
+    targetId: target.id,
+    projectId: target.project_id,
+    projectName: target.project_name,
+    envName: target.env_name,
+    branch: target.default_branch,
+    status: 'success',
+    operator: 'Bob',
+    startedAt: forgedAt,
+    finishedAt: forgedAt,
+  });
   db.prepare("UPDATE team_members SET status = 'removed', updated_at = ? WHERE team_id = 'legacy-team'")
     .run(new Date().toISOString());
   const orphanedLegacyPrincipal = await identity.resolveAccessPrincipal(session.accessToken);

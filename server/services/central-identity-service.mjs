@@ -268,8 +268,8 @@ function countBusinessScopeResources(db, scopeId) {
 }
 
 /**
- * 将指定账号设为旧数据空间的唯一管理员。
- * @description 只调整成员与空间状态，不修改业务表 team_id，避免破坏历史凭据的 AES-GCM AAD。
+ * 将已验证账号加入旧数据空间。
+ * @description 保留已有成员、GitLab 绑定和业务表 team_id，避免破坏共享协作与历史凭据的 AES-GCM AAD。
  * @param {import('node:sqlite').DatabaseSync} db 数据库连接
  * @param {string} userId 当前已验证账号 ID
  * @param {string} timestamp 更新时间
@@ -286,21 +286,40 @@ function bindLegacyAccountScope(db, userId, timestamp) {
     VALUES (?, ?, 'admin', 'active', ?, ?)
     ON CONFLICT(team_id, user_id) DO UPDATE SET role = 'admin', status = 'active', updated_at = excluded.updated_at
   `).run(LEGACY_SCOPE_ID, userId, timestamp, timestamp);
-  db.prepare("UPDATE team_members SET status = 'removed', updated_at = ? WHERE team_id = ? AND user_id <> ?")
-    .run(timestamp, LEGACY_SCOPE_ID, userId);
-  db.prepare('DELETE FROM team_gitlab_bindings WHERE team_id = ?').run(LEGACY_SCOPE_ID);
   return { id: LEGACY_SCOPE_ID, role: 'admin' };
 }
 
 /**
- * 判断当前唯一账号能否安全接管尚未绑定的旧数据空间。
+ * 判断账号是否有旧发布记录的明确归属证据。
+ * @description 只接受早于中央账号创建时间的历史记录，防止新记录伪造认领证据。
  * @param {import('node:sqlite').DatabaseSync} db 数据库连接
- * @param {string} personalScopeId 当前账号的个人空间 ID
- * @returns {boolean} 是否允许自动接管
+ * @param {string} userId 当前已验证账号 ID
+ * @returns {boolean} 是否命中历史操作人
  */
-function canAutoClaimLegacyAccountScope(db, personalScopeId) {
+function hasLegacyOperatorEvidence(db, userId) {
+  return Boolean(db.prepare(`
+    SELECT 1
+    FROM users u
+    INNER JOIN deploy_records r ON r.team_id = ?
+    WHERE u.id = ?
+      AND TRIM(COALESCE(r.operator, '')) <> ''
+      AND r.created_at < u.created_at
+      AND LOWER(TRIM(r.operator)) IN (LOWER(TRIM(u.display_name)), LOWER(TRIM(u.username)))
+    LIMIT 1
+  `).get(LEGACY_SCOPE_ID, userId));
+}
+
+/**
+ * 判断当前账号能否安全加入旧数据空间。
+ * @param {import('node:sqlite').DatabaseSync} db 数据库连接
+ * @param {string} userId 当前已验证账号 ID
+ * @param {string} personalScopeId 当前账号的个人空间 ID
+ * @returns {boolean} 是否允许自动加入
+ */
+function canAutoJoinLegacyAccountScope(db, userId, personalScopeId) {
   if (countBusinessScopeResources(db, LEGACY_SCOPE_ID) === 0) return false;
   if (countBusinessScopeResources(db, personalScopeId) > 0) return false;
+  if (hasLegacyOperatorEvidence(db, userId)) return true;
   const activeUsers = Number(db.prepare("SELECT COUNT(*) AS count FROM users WHERE status = 'active'").get()?.count || 0);
   const activeLegacyMembers = Number(db.prepare("SELECT COUNT(*) AS count FROM team_members WHERE team_id = ? AND status = 'active'").get(LEGACY_SCOPE_ID)?.count || 0);
   const legacyBindings = Number(db.prepare('SELECT COUNT(*) AS count FROM team_gitlab_bindings WHERE team_id = ?').get(LEGACY_SCOPE_ID)?.count || 0);
@@ -314,27 +333,16 @@ function canAutoClaimLegacyAccountScope(db, personalScopeId) {
 function ensureAccountScope(db, userId) {
   const personalScopeId = `account-${crypto.createHash('sha256').update(userId).digest('hex').slice(0, 24)}`;
   const timestamp = now();
-  const legacyOwner = db.prepare(`
-    SELECT user_id FROM team_members
-    WHERE team_id = ? AND status = 'active'
-    ORDER BY CASE role WHEN 'admin' THEN 0 ELSE 1 END, created_at ASC
-    LIMIT 1
-  `).get(LEGACY_SCOPE_ID);
-  if (legacyOwner?.user_id === userId) {
-    const legacyState = db.prepare(`
-      SELECT t.migration_state AS migrationState, tm.role,
-        (SELECT COUNT(*) FROM team_members WHERE team_id = ? AND status = 'active') AS activeMembers,
-        (SELECT COUNT(*) FROM team_gitlab_bindings WHERE team_id = ?) AS bindings
-      FROM teams t INNER JOIN team_members tm ON tm.team_id = t.id
-      WHERE t.id = ? AND tm.user_id = ? AND tm.status = 'active'
-    `).get(LEGACY_SCOPE_ID, LEGACY_SCOPE_ID, LEGACY_SCOPE_ID, userId);
-    if (legacyState?.migrationState === 'bound'
-      && legacyState.role === 'admin'
-      && Number(legacyState.activeMembers) === 1
-      && Number(legacyState.bindings) === 0) {
-      return { id: LEGACY_SCOPE_ID, role: 'admin' };
+  const legacyMembership = db.prepare(`
+    SELECT tm.role, t.status AS teamStatus
+    FROM team_members tm INNER JOIN teams t ON t.id = tm.team_id
+    WHERE tm.team_id = ? AND tm.user_id = ? AND tm.status = 'active'
+  `).get(LEGACY_SCOPE_ID, userId);
+  if (legacyMembership) {
+    if (legacyMembership.teamStatus !== 'active' || !ROLES.has(legacyMembership.role)) {
+      return bindLegacyAccountScope(db, userId, timestamp);
     }
-    return bindLegacyAccountScope(db, userId, timestamp);
+    return { id: LEGACY_SCOPE_ID, role: legacyMembership.role };
   }
 
   const personalScope = db.prepare(`
@@ -342,7 +350,7 @@ function ensureAccountScope(db, userId) {
     INNER JOIN team_members tm ON tm.team_id = t.id
     WHERE t.id = ? AND tm.user_id = ? AND tm.status = 'active'
   `).get(personalScopeId, userId);
-  if (!legacyOwner && canAutoClaimLegacyAccountScope(db, personalScopeId)) {
+  if (canAutoJoinLegacyAccountScope(db, userId, personalScopeId)) {
     return bindLegacyAccountScope(db, userId, timestamp);
   }
   if (personalScope) return { id: personalScope.id, role: 'admin' };
