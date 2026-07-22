@@ -5,8 +5,8 @@ import UpdateCapsule from '@/components/UpdateCapsule/index.vue';
 import { useAppUpdate } from '@/components/UpdateCapsule/hooks/useAppUpdate';
 import { useTheme } from '@/hooks/useTheme';
 import AiIntegrationTrigger from '@/components/AiIntegrationDrawer/components/AiIntegrationTrigger.vue';
+import ThemePaintIcon from './LayoutHeader/components/ThemePaintIcon.vue';
 import {
-  BgColorsOutlined,
   UserOutlined,
   LogoutOutlined,
   LoginOutlined,
@@ -70,7 +70,7 @@ const handleLogout = async () => {
       <a-tooltip title="平台设置" overlayClassName="header-tooltip">
         <a-button type="text" class="header-action-btn btn-settings" @click="$emit('openSettings')">
           <template #icon>
-            <BgColorsOutlined class="action-icon" />
+            <ThemePaintIcon class="action-icon" />
           </template>
         </a-button>
       </a-tooltip>
@@ -118,7 +118,7 @@ const handleLogout = async () => {
 
                 <a-menu-divider />
 
-                <a-menu-item key="logout" @click="handleLogout">
+                <a-menu-item key="logout" class="logout-menu-item" @click="handleLogout">
                   <template #icon>
                     <LogoutOutlined />
                   </template>

@@ -20,7 +20,7 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-single-instance = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
-tokio = { version = "1", features = ["fs", "io-util", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "rt", "time"] }
 sha2 = "0.10"
 fs2 = "0.4"
 base64 = "0.22"

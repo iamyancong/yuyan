@@ -51,6 +51,11 @@ const updateRuntimeInstanceForm = (values: Partial<NginxInstancePayload>) => {
     :initializing="serverState.runtimeInitializing.value"
     :action-loading="serverState.runtimeActionLoading.value"
     :archive-downloading="serverState.runtimeArchiveDownloading.value"
+    :archive-selection-open="serverState.archiveSelectionOpen.value"
+    :archive-selection-loading="serverState.archiveSelectionLoading.value"
+    :archive-selection-type="serverState.archiveSelectionType.value"
+    :archive-config-path="serverState.archiveConfigPath.value"
+    :archive-sites="serverState.archiveSites.value"
     :instance-form-open="serverState.runtimeInstanceFormOpen.value"
     :instance-form-key="serverState.runtimeInstanceFormKey.value"
     :instance-saving="serverState.runtimeInstanceSaving.value"
@@ -71,6 +76,9 @@ const updateRuntimeInstanceForm = (values: Partial<NginxInstancePayload>) => {
     @init="serverState.initServerNginxRuntime"
     @action="serverState.runServerNginxRuntimeAction"
     @download-archive="serverState.downloadActiveNginxArchive"
+    @update:archive-selection-open="(value: boolean) => (serverState.archiveSelectionOpen.value = value)"
+    @refresh-archive-sites="serverState.refreshArchiveSites"
+    @confirm-archive-download="serverState.confirmArchiveDownload"
     @refresh="serverState.refreshRuntimeStatus"
   />
 </template>

@@ -1,15 +1,10 @@
-import { reactive, ref, h } from 'vue';
+import { reactive, ref } from 'vue';
 import message from 'ant-design-vue/es/message';
-import notification from 'ant-design-vue/es/notification';
-import Modal from 'ant-design-vue/es/modal';
 import {
   createNginxInstance,
   deleteNginxInstance,
-  saveNginxInstanceArchiveToLocal,
-  getNginxInstanceArchiveDownloadUrl,
   getNginxInstanceStatus,
   initNginxInstanceWithProgress,
-  isLocalServerUnavailableError,
   runNginxInstanceAction,
   updateNginxInstance,
   type DeployProgressEvent,
@@ -19,15 +14,11 @@ import {
   type NginxRuntimeAction,
   type NginxRuntimePayload,
   type NginxRuntimeStatus,
-  type NginxArchiveSaveEvent,
-  type NginxArchiveSaveStage,
 } from '@/api/deploy';
 import type { RefreshActiveTabOptions } from '../types';
 import { getErrorMessage, getPreferredNginxInstance, getVisibleNginxInstances } from '../utils';
 import { createDefaultNginxInstanceForm } from '../components/NginxRuntimeDrawer/constant';
-import { downloadDir } from '@tauri-apps/api/path';
-import { invoke } from '@tauri-apps/api/core';
-import { isTauri } from '@/utils/env';
+import { useNginxArchiveDownload } from './useNginxArchiveDownload';
 
 /** Nginx 运行时抽屉 Hook 参数 */
 interface UseNginxRuntimeDrawerParams {
@@ -35,46 +26,6 @@ interface UseNginxRuntimeDrawerParams {
   refreshActiveTab: (options?: RefreshActiveTabOptions) => Promise<void>;
   refreshServerList: () => Promise<void>;
 }
-
-/** 运行包下载阶段文案 */
-const ARCHIVE_SAVE_STAGE_LABEL: Record<NginxArchiveSaveStage, string> = {
-  preparing: '准备下载',
-  prechecking: '远程预检',
-  packing: '远程打包',
-  writing: '写入磁盘',
-  finished: '下载完成',
-};
-
-/** 自动下载运行包的目录名 */
-const ARCHIVE_DOWNLOAD_DIR_NAME = 'yuyan-runtime-packages';
-
-/**
- * 拼接系统原生路径。
- * @param base 基础目录
- * @param parts 路径片段
- * @returns 拼接后的路径
- */
-const joinNativePath = (base: string, ...parts: string[]) => {
-  const separator = base.includes('\\') ? '\\' : '/';
-  return [base.replace(/[\\/]+$/, ''), ...parts.map((part) => part.replace(/^[\\/]+|[\\/]+$/g, ''))].join(separator);
-};
-
-/**
- * 格式化文件大小。
- * @param bytes 字节数
- * @returns 可读文件大小
- */
-const formatBytes = (bytes: number) => {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB'];
-  let value = bytes;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-  return `${value.toFixed(unitIndex === 0 ? 0 : 2)} ${units[unitIndex]}`;
-};
 
 /**
  * 管理服务器行独立 Nginx 初始化与运行时操作抽屉。
@@ -91,7 +42,6 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
   const runtimeInitializing = ref(false);
   const runtimeActionLoading = ref<NginxRuntimeAction | ''>('');
   const runtimeStatusRequestSeq = ref(0);
-  const runtimeArchiveDownloading = ref(false);
   const runtimeInstanceFormOpen = ref(false);
   const runtimeInstanceFormKey = ref(0);
   const runtimeInstanceSaving = ref(false);
@@ -162,6 +112,24 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
 
   /** 当前选中的 Nginx 实例 */
   const getActiveInstance = () => runtimeInstances.value.find((item) => item.id === activeNginxInstanceId.value) || null;
+
+  const {
+    runtimeArchiveDownloading,
+    archiveSelectionOpen,
+    archiveSelectionLoading,
+    archiveSelectionType,
+    archiveConfigPath,
+    archiveSites,
+    downloadActiveNginxArchive,
+    refreshArchiveSites,
+    confirmArchiveDownload,
+    clearArchiveDownloadState,
+  } = useNginxArchiveDownload({
+    ensureLoggedIn: params.ensureLoggedIn,
+    runtimeServer,
+    runtimeStatus,
+    getActiveInstance,
+  });
 
   /**
    * 更新抽屉内缓存的服务器实例列表。
@@ -387,6 +355,7 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
    * @param instanceId 实例 ID
    */
   const selectNginxInstance = async (instanceId: number) => {
+    clearArchiveDownloadState();
     activeNginxInstanceId.value = Number(instanceId || 0) || null;
     resetRuntimeProgress();
     await refreshRuntimeStatus();
@@ -397,6 +366,7 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
    * @param server 目标服务器
    */
   const switchRuntimeServer = async (server: DeployServer) => {
+    clearArchiveDownloadState();
     runtimeServer.value = server;
     syncRuntimeInstances(server);
     runtimeStatus.value = null;
@@ -476,331 +446,6 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
       message.error(getErrorMessage(error));
     } finally {
       runtimeActionLoading.value = '';
-    }
-  };
-
-  const downloadActiveNginxArchive = async (type: 'all' | 'html' | 'conf' = 'all') => {
-    if (!params.ensureLoggedIn()) return;
-    const instance = getActiveInstance();
-    if (!instance) return;
-    if (instance.instanceType !== 'managed') {
-      message.warning('只有托管 Nginx 实例支持下载运行包');
-      return;
-    }
-    if (!runtimeStatus.value?.initialized) {
-      message.warning('请先初始化托管 Nginx 实例，再下载运行包');
-      return;
-    }
-
-    const typeLabels = {
-      all: '完整运行包',
-      html: '前端静态产物 (HTML)',
-      conf: 'Nginx 配置文件 (nginx.conf)',
-    };
-    const typeLabel = typeLabels[type] || '运行包';
-
-    const sanitizeName = (val: string) => val.trim().replace(/\s+/g, '-').replace(/[\\/:*?"<>|]/g, '-').replace(/-+/g, '-');
-    const serverPart = sanitizeName(runtimeServer.value?.name || runtimeServer.value?.host || 'server');
-    const instancePart = sanitizeName(instance.name || 'instance');
-    const pad = (v: number) => String(v).padStart(2, '0');
-    const d = new Date();
-    const ts = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-    
-    let defaultFileName = '';
-    if (type === 'conf') {
-      defaultFileName = 'nginx.conf';
-    } else {
-      const suffix = type === 'html' ? '-html' : '';
-      defaultFileName = `${serverPart}-${instancePart}${suffix}-${ts}.tar.gz`;
-    }
-
-    /** 触发普通浏览器下载，作为本地直写不可用时的降级方案。 */
-    const triggerBrowserDownload = async () => {
-      const downloadUrl = await getNginxInstanceArchiveDownloadUrl(instance.id, type);
-      const link = document.createElement('a');
-      link.href = downloadUrl;
-      link.download = defaultFileName;
-      link.style.display = 'none';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-    };
-
-    const isTauriClient = isTauri();
-    let filePath = '';
-    if (isTauriClient) {
-      try {
-        const dlDir = await downloadDir();
-        filePath = joinNativePath(dlDir, ARCHIVE_DOWNLOAD_DIR_NAME, defaultFileName);
-      } catch (e) {
-        console.warn('获取默认下载目录失败', e);
-        message.error('获取系统下载目录失败，无法自动保存运行包');
-        return;
-      }
-    }
-
-    if (!isTauriClient) {
-      await triggerBrowserDownload();
-      return;
-    }
-
-    const controller = new AbortController();
-    let isFinished = false;
-    let currentLoaded = 0;
-    let currentStage: NginxArchiveSaveStage = 'preparing';
-    let currentStageMessage = '正在准备自动下载任务';
-    let savedFilePath = filePath;
-    let savedFileName = defaultFileName;
-    let isUpdatingNotification = false;
-
-    const notificationKey = `download-${Date.now()}`;
-
-    /** 展示关闭下载通知时的二次确认。 */
-    const showConfirmModal = () => {
-      if (isFinished) return;
-
-      const confirmModal = Modal.confirm({
-        title: '确认要关闭提示吗？',
-        okText: '终止下载',
-        cancelText: '取消',
-        okButtonProps: { danger: true },
-        content: h('div', null, [
-          h('p', null, '选择“终止下载”将终止本次直写并释放服务器资源。点击“取消”将返回前台下载界面。'),
-          h('p', { style: 'margin-bottom: 12px; color: rgba(0,0,0,0.45); font-size: 12px;' }, '您也可以转为后台静默下载，不会关闭下载进程：'),
-          h('button', {
-            class: 'ant-btn ant-btn-primary ant-btn-sm',
-            onClick: () => {
-              message.info(`已转为后台下载 ${typeLabel}`);
-              confirmModal.destroy();
-            }
-          }, '转为后台运行')
-        ]),
-        onOk() {
-          isFinished = true;
-          controller.abort();
-        },
-        onCancel() {
-          triggerNotification();
-        }
-      });
-    };
-
-    /** 打开关于弹窗查看本地服务诊断信息。 */
-    const openDiagnosticModal = () => {
-      window.dispatchEvent(new CustomEvent('show-about-modal'));
-    };
-
-    /**
-     * 创建下载失败后的操作按钮组。
-     * @param includeFallback 是否展示普通下载按钮
-     */
-    const createFailureActions = (includeFallback = false) => h('div', { style: 'display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px;' }, [
-      h('button', {
-        class: 'ant-btn ant-btn-primary ant-btn-sm',
-        onClick: () => {
-          notification.close(notificationKey);
-          void downloadActiveNginxArchive(type);
-        }
-      }, '重试'),
-      includeFallback
-        ? h('button', {
-            class: 'ant-btn ant-btn-sm',
-            onClick: () => {
-              void triggerBrowserDownload();
-              message.info('已切换为普通下载');
-            }
-          }, '普通下载')
-        : null,
-      h('button', {
-        class: 'ant-btn ant-btn-sm',
-        onClick: openDiagnosticModal,
-      }, '打开诊断信息')
-    ].filter(Boolean));
-
-    /** 将下载错误转成用户可理解的中文文案。 */
-    const formatDownloadErrorMessage = (error: any) => {
-      if (isLocalServerUnavailableError(error)) {
-        return error.message || '本地辅助服务未就绪，已切换为普通下载';
-      }
-      const raw = getErrorMessage(error);
-      if (raw === 'Failed to fetch') {
-        return '网络请求失败，请检查本地辅助服务、内网服务地址或网络连接';
-      }
-      return raw;
-    };
-
-    /** 统一渲染下载进度通知。 */
-    const triggerNotification = () => {
-      if (isFinished) return;
-
-      const stageLabel = ARCHIVE_SAVE_STAGE_LABEL[currentStage] || '下载中';
-      const progressText = currentLoaded > 0 ? formatBytes(currentLoaded) : '处理中';
-      const description = currentLoaded > 0
-        ? `${currentStageMessage}，已写入 ${formatBytes(currentLoaded)}`
-        : currentStageMessage;
-
-      isUpdatingNotification = true;
-
-      notification.info({
-        key: notificationKey,
-        class: 'c4d-download-notification',
-        icon: h('span', { class: 'c4d-status-led is-downloading' }),
-        message: h('div', { style: 'display: flex; justify-content: space-between; align-items: center; width: 100%;' }, [
-          h('span', null, `${stageLabel} ${typeLabel}`),
-          h('span', { class: 'c4d-percent-text' }, progressText)
-        ]),
-        description: h('div', null, [
-          h('span', null, description),
-          h('div', { class: 'c4d-progress-wrapper' }, [
-            h('div', { class: 'c4d-progress-track' }, [
-              h('div', { class: 'c4d-progress-bar is-downloading' })
-            ])
-          ])
-        ]),
-        duration: 0,
-        onClose: () => {
-          if (isUpdatingNotification) {
-            return;
-          }
-          showConfirmModal();
-        }
-      });
-
-      setTimeout(() => {
-        isUpdatingNotification = false;
-      }, 50);
-    };
-
-    /**
-     * 根据服务端 SSE 更新下载状态。
-     * @param event 保存事件
-     */
-    const handleSaveEvent = (event: NginxArchiveSaveEvent) => {
-      if (event.stage) currentStage = event.stage;
-      if (event.message) currentStageMessage = event.message;
-      if (event.loaded !== undefined) currentLoaded = event.loaded;
-      if (event.filePath) savedFilePath = event.filePath;
-      if (event.fileName) savedFileName = event.fileName;
-      if (!event.finished) triggerNotification();
-    };
-
-    triggerNotification();
-
-    runtimeArchiveDownloading.value = true;
-    try {
-      await saveNginxInstanceArchiveToLocal(
-        instance.id,
-        type,
-        filePath,
-        handleSaveEvent,
-        controller.signal
-      );
-
-      isFinished = true;
-      const fileBaseName = savedFileName || savedFilePath.substring(savedFilePath.lastIndexOf(savedFilePath.includes('\\') ? '\\' : '/') + 1);
-
-      const openFolderLink = h('a', {
-        href: 'javascript:;',
-        class: 'c4d-locate-btn',
-        onClick: () => {
-          invoke('reveal_in_file_manager', { path: savedFilePath })
-            .catch(err => message.error(`定位失败: ${err}`));
-        }
-      }, '打开文件位置');
-
-      const successText = '已成功直写保存';
-      const confSuccessText = 'Nginx 配置文件已直写完成';
-
-      if (type === 'conf') {
-        notification.success({
-          key: notificationKey,
-          class: 'c4d-download-notification',
-          icon: h('span', { class: 'c4d-status-led is-success' }),
-          message: h('div', { style: 'display: flex; justify-content: space-between; align-items: center; width: 100%;' }, [
-            h('span', null, '下载已完成'),
-            h('span', { class: 'c4d-percent-text success' }, '100%')
-          ]),
-          description: h('div', null, [
-            h('p', { style: 'margin-bottom: 4px;' }, `${confSuccessText}：${fileBaseName}`),
-            h('div', { class: 'c4d-progress-wrapper', style: 'margin-bottom: 12px;' }, [
-              h('div', { class: 'c4d-progress-track' }, [
-                h('div', { class: 'c4d-progress-bar is-success', style: 'width: 100%' })
-              ])
-            ]),
-            openFolderLink
-          ]),
-          duration: 6,
-          onClose: () => {},
-        });
-      } else {
-        const scriptPath = instance.scriptPath || `${instance.baseRoot}/nginx/yuyan-nginx.sh`;
-        const actionTip = `目标机执行：tar -xzf ${fileBaseName} -C / ；运行 ${scriptPath} start 启动服务。`;
-
-        notification.success({
-          key: notificationKey,
-          class: 'c4d-download-notification',
-          icon: h('span', { class: 'c4d-status-led is-success' }),
-          message: h('div', { style: 'display: flex; justify-content: space-between; align-items: center; width: 100%;' }, [
-            h('span', null, '下载已完成'),
-            h('span', { class: 'c4d-percent-text success' }, '100%')
-          ]),
-          description: h('div', null, [
-            h('p', { style: 'margin-bottom: 4px;' }, `${successText}：${fileBaseName}`),
-            h('p', { style: 'font-size: 12px; color: rgba(0,0,0,0.45); margin-bottom: 8px;' }, actionTip),
-            h('div', { class: 'c4d-progress-wrapper', style: 'margin-bottom: 12px;' }, [
-              h('div', { class: 'c4d-progress-track' }, [
-                h('div', { class: 'c4d-progress-bar is-success', style: 'width: 100%' })
-              ])
-            ]),
-            openFolderLink
-          ]),
-          duration: 10,
-          onClose: () => {},
-        });
-      }
-    } catch (error: any) {
-      isFinished = true;
-      if (error.name === 'AbortError') {
-        message.info(`已取消下载 ${typeLabel}`);
-        notification.close(notificationKey);
-        return;
-      }
-      if (isLocalServerUnavailableError(error)) {
-        await triggerBrowserDownload();
-        notification.warning({
-          key: notificationKey,
-          class: 'c4d-download-notification',
-          icon: h('span', { class: 'c4d-status-led is-error' }),
-          message: '已切换为普通下载',
-          description: h('div', null, [
-            h('p', { style: 'margin-bottom: 8px;' }, formatDownloadErrorMessage(error)),
-            h('p', { style: 'font-size: 12px; color: rgba(0,0,0,0.45); margin-bottom: 8px;' }, '本地直写依赖内嵌 Node 辅助服务；当前服务不可用时，文件仍会通过浏览器下载。'),
-            createFailureActions(true)
-          ]),
-          duration: 8,
-          onClose: () => {},
-        });
-        return;
-      }
-      notification.error({
-        key: notificationKey,
-        class: 'c4d-download-notification',
-        icon: h('span', { class: 'c4d-status-led is-error' }),
-        message: '下载失败',
-        description: h('div', null, [
-          h('p', { style: 'margin-bottom: 8px;' }, formatDownloadErrorMessage(error)),
-          h('div', { class: 'c4d-progress-wrapper' }, [
-            h('div', { class: 'c4d-progress-track' }, [
-              h('div', { class: 'c4d-progress-bar is-error', style: 'width: 100%' })
-            ])
-          ]),
-          createFailureActions(false)
-        ]),
-        duration: 5,
-        onClose: () => {},
-      });
-    } finally {
-      runtimeArchiveDownloading.value = false;
     }
   };
 
@@ -917,6 +562,7 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
     runtimeStatus.value = null;
     runtimeInstanceFormOpen.value = false;
     Object.assign(runtimeInstanceForm, createDefaultNginxInstanceForm());
+    clearArchiveDownloadState();
     resetRuntimeProgress();
   };
 
@@ -930,6 +576,11 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
     runtimeInitializing,
     runtimeActionLoading,
     runtimeArchiveDownloading,
+    archiveSelectionOpen,
+    archiveSelectionLoading,
+    archiveSelectionType,
+    archiveConfigPath,
+    archiveSites,
     runtimeInstanceFormOpen,
     runtimeInstanceFormKey,
     runtimeInstanceSaving,
@@ -944,6 +595,8 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
     initServerNginxRuntime,
     runServerNginxRuntimeAction,
     downloadActiveNginxArchive,
+    refreshArchiveSites,
+    confirmArchiveDownload,
     createServerNginxInstance,
     openEditNginxInstance,
     saveActiveNginxInstance,

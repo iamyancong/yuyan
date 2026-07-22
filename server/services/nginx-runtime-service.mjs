@@ -19,6 +19,7 @@ import {
   getNginxRuntimeByServerId,
   getServerWithCredential,
   getTarget,
+  listTargets,
   resolveNextManagedListenPortByInstance,
   resolveNextManagedListenPort,
   updateNginxInstance,
@@ -34,6 +35,11 @@ import {
   withSsh,
   writeRemoteTextWithBackup,
 } from './ssh-service.mjs';
+import {
+  minimizeArchiveRoots,
+  parseNginxArchiveSites,
+  resolveNginxArchiveSelection,
+} from './nginx-archive-selection.mjs';
 
 /** 托管运行时支持的系统 */
 const SUPPORTED_PLATFORM = 'Linux';
@@ -153,14 +159,16 @@ function sanitizeArchiveFilePart(value, fallback) {
  * @param {Object} instance - Nginx 实例
  * @returns {string} 运行包文件名
  */
-function buildArchiveFileName(server, instance, type = 'all') {
-  if (type === 'conf') {
-    return 'nginx.conf';
-  }
+function buildArchiveFileName(server, instance, type = 'all', sites = []) {
   const serverName = sanitizeArchiveFilePart(server?.name || server?.host, `server-${server?.id || 'unknown'}`);
   const instanceName = sanitizeArchiveFilePart(instance?.name, `nginx-${instance?.id || 'instance'}`);
+  const portPart = [...new Set(sites.flatMap((site) => site.listenPorts || []))].sort((left, right) => left - right).join('-');
+  const selectionSuffix = portPart ? `-${portPart}` : '';
+  if (type === 'conf') {
+    return `${serverName}-${instanceName}${selectionSuffix}-nginx-${formatArchiveTimestamp()}.conf`;
+  }
   const suffix = type === 'html' ? '-html' : '';
-  return `${serverName}-${instanceName}${suffix}-${formatArchiveTimestamp()}.tar.gz`;
+  return `${serverName}-${instanceName}${selectionSuffix}${suffix}-${formatArchiveTimestamp()}.tar.gz`;
 }
 
 /**
@@ -235,6 +243,80 @@ export function buildArchiveTarCommand(config, archiveRoot, type = 'all') {
     );
   }
   return `${sudo}tar -czf - -C / ${buildArchiveExcludeArgs(excludePatterns)} ${shellQuote(archiveRoot)}`;
+}
+
+/**
+ * 构建所选站点运行包的远程预检命令。
+ * @param {Object} config - 运行时配置
+ * @param {string} type - 下载类型
+ * @param {string[]} roots - 所选站点根目录
+ * @returns {string} 预检命令
+ */
+function buildSelectedArchivePrecheckCommand(config, type, roots) {
+  const sudo = config.useSudo ? 'sudo -n ' : '';
+  const checks = [];
+  if (type !== 'conf') {
+    checks.push(`command -v tar >/dev/null 2>&1 || { echo ${shellQuote('远程服务器未安装 tar，无法生成运行包')} >&2; exit 10; }`);
+  }
+  if (type === 'all') {
+    checks.push(`command -v base64 >/dev/null 2>&1 || { echo ${shellQuote('远程服务器未安装 base64，无法生成所选运行包')} >&2; exit 16; }`);
+  }
+  if (config.useSudo) {
+    checks.push(`sudo -n true || { echo ${shellQuote('当前账号无法免密 sudo，无法读取托管 Nginx 目录')} >&2; exit 11; }`);
+  }
+  if (type === 'all') {
+    checks.push(`${sudo}test -d ${shellQuote(config.installRoot)} || { echo ${shellQuote(`Nginx 目录不存在：${config.installRoot}`)} >&2; exit 12; }`);
+    checks.push(`${sudo}test -x ${shellQuote(config.scriptPath)} || { echo ${shellQuote(`管理脚本不存在或不可执行：${config.scriptPath}`)} >&2; exit 15; }`);
+  }
+  if (type !== 'conf') {
+    roots.forEach((root) => {
+      checks.push(`${sudo}test -d ${shellQuote(root)} || { echo ${shellQuote(`站点根目录不存在：${root}`)} >&2; exit 13; }`);
+    });
+  }
+  return checks.join(' && ');
+}
+
+/**
+ * 构建只包含所选站点的 tar 流命令。
+ * @param {Object} config - 运行时配置
+ * @param {string[]} roots - 所选站点根目录
+ * @param {'all'|'html'} type - 下载类型
+ * @param {string} filteredConfig - 裁剪后的 nginx.conf
+ * @returns {string} tar 流命令
+ */
+export function buildSelectedArchiveTarCommand(config, roots, type, filteredConfig = '') {
+  const sudo = config.useSudo ? 'sudo -n ' : '';
+  const selectedRoots = minimizeArchiveRoots(roots);
+  const archiveRoots = type === 'all'
+    ? minimizeArchiveRoots([config.installRoot, ...selectedRoots])
+    : selectedRoots;
+  const archivePaths = archiveRoots.map(resolveArchiveRoot);
+  const excludePatterns = [...ARCHIVE_EXCLUDE_PATTERNS];
+  if (type === 'all') {
+    const installArchiveRoot = resolveArchiveRoot(config.installRoot);
+    excludePatterns.push(
+      ...ARCHIVE_EXCLUDE_DIRS.flatMap((dir) => [`${installArchiveRoot}/${dir}`, `${installArchiveRoot}/${dir}/*`]),
+      resolveArchiveRoot(config.mainConfPath)
+    );
+  }
+  const tarPaths = archivePaths.map(shellQuote).join(' ');
+  if (type === 'html') {
+    return `${sudo}tar -czf - -C / ${buildArchiveExcludeArgs(excludePatterns)} ${tarPaths}`;
+  }
+
+  const configHash = crypto.createHash('sha256').update(filteredConfig).digest('hex').slice(0, 12);
+  const tempFileName = `yuyan-nginx-selected-${configHash}.conf`;
+  const tempFilePath = `/tmp/${tempFileName}`;
+  const tempArchivePath = resolveArchiveRoot(tempFilePath);
+  const destinationArchivePath = resolveArchiveRoot(config.mainConfPath);
+  const encodedConfig = Buffer.from(filteredConfig, 'utf8').toString('base64');
+  const transform = `s|^${tempArchivePath}$|${destinationArchivePath}|`;
+  return [
+    `YUYAN_SELECTED_CONF=${shellQuote(tempFilePath)}`,
+    'trap \'rm -f "$YUYAN_SELECTED_CONF"\' EXIT',
+    `printf %s ${shellQuote(encodedConfig)} | base64 -d > "$YUYAN_SELECTED_CONF"`,
+    `${sudo}tar -czf - -C / ${buildArchiveExcludeArgs(excludePatterns)} --transform=${shellQuote(transform)} ${tarPaths} ${shellQuote(tempArchivePath)}`,
+  ].join(' && ');
 }
 
 // ──────────────────────────────────────────────
@@ -986,32 +1068,67 @@ export async function runNginxInstanceAction(instanceId, action) {
 }
 
 /**
+ * 读取托管实例主配置。
+ * @param {Object} conn - SSH 连接
+ * @param {Object} config - 运行时配置
+ * @returns {Promise<string>} nginx.conf 内容
+ */
+async function readManagedMainConfig(conn, config) {
+  const sudo = config.useSudo ? 'sudo -n ' : '';
+  const result = await execSsh(conn, `${sudo}cat ${shellQuote(config.mainConfPath)}`, {
+    label: '读取 Nginx 主配置',
+  });
+  return result.stdout || '';
+}
+
+/**
+ * 获取托管实例可选的 server 块。
+ * @param {number} instanceId - Nginx 实例 ID
+ * @returns {Promise<Object>} 配置版本与站点列表
+ */
+export async function getNginxInstanceArchiveSites(instanceId) {
+  const { instance, server } = await getNginxInstanceContext(instanceId);
+  if (instance.instanceType !== 'managed') throw new Error('只有托管 Nginx 实例支持下载运行包');
+  const config = resolveRuntimeConfig(instance);
+  const content = await withSsh(server, (conn) => readManagedMainConfig(conn, config));
+  const parsed = parseNginxArchiveSites(content);
+  const targets = await listTargets({ serverId: instance.serverId });
+  const sites = parsed.sites.map((site) => {
+    const matchedTargets = targets.filter((target) => {
+      const deployRoot = path.posix.normalize(String(target.deployRoot || '').trim().replace(/\\/g, '/')).replace(/\/+$/, '');
+      return (deployRoot && site.roots.includes(deployRoot))
+        || (Number(target.listenPort || 0) > 0 && site.listenPorts.includes(Number(target.listenPort)));
+    });
+    return {
+      ...site,
+      targetIds: matchedTargets.map((target) => Number(target.id)),
+      projectNames: [...new Set(matchedTargets.map((target) => String(target.projectName || '').trim()).filter(Boolean))],
+      canDownloadFiles: site.roots.length > 0,
+    };
+  });
+  return {
+    configPath: config.mainConfPath,
+    revision: parsed.revision,
+    sites,
+  };
+}
+
+/**
  * 流式导出托管 Nginx 实例运行包。
  * @param {number} instanceId - Nginx 实例 ID
  * @param {string} type - 下载类型 ('all' | 'html' | 'conf')
  * @param {import('node:stream').Writable} output - 输出流
  * @param {(meta: Object) => void} onReady - 响应头准备回调
+ * @param {{siteIds?: string[], revision?: string}} selection - 可选 server 选择
  * @returns {Promise<Object>} 导出元信息
  */
-export async function streamNginxInstanceArchive(instanceId, type = 'all', output, onReady) {
+export async function streamNginxInstanceArchive(instanceId, type = 'all', output, onReady, selection = {}) {
   const { instance, server } = await getNginxInstanceContext(instanceId);
   if (instance.instanceType !== 'managed') throw new Error('只有托管 Nginx 实例支持下载运行包');
 
   const config = resolveRuntimeConfig(instance);
-  
-  let archiveRoot = '';
-  if (type === 'html') {
-    archiveRoot = resolveArchiveRoot(config.webRoot);
-  } else if (type !== 'conf') {
-    archiveRoot = resolveArchiveRoot(config.baseRoot);
-  }
-
-  const fileName = buildArchiveFileName(server, instance, type);
-  const meta = {
-    fileName,
-    baseRoot: config.baseRoot,
-    scriptPath: config.scriptPath,
-  };
+  const siteIds = (selection.siteIds || []).filter(Boolean);
+  const hasSelection = siteIds.length > 0;
 
   const archiveStream = new PassThrough();
   archiveStream.pipe(output);
@@ -1022,16 +1139,51 @@ export async function streamNginxInstanceArchive(instanceId, type = 'all', outpu
     output.once('close', resolve);
   });
 
-  await withSsh(server, async (conn) => {
-    await execSsh(conn, buildArchivePrecheckCommand(config, type), { label: `预检托管 Nginx 运行包(${type})` });
-    onReady?.(meta);
-    if (type === 'conf') {
+  const meta = await withSsh(server, async (conn) => {
+    let selected = null;
+    let archiveRoot = '';
+    if (hasSelection) {
+      const content = await readManagedMainConfig(conn, config);
+      selected = resolveNginxArchiveSelection(content, { ...selection, siteIds, type });
+      const precheckCommand = buildSelectedArchivePrecheckCommand(config, type, selected.roots);
+      if (precheckCommand) {
+        await execSsh(conn, precheckCommand, {
+          label: `预检所选 Nginx 运行包(${type})`,
+        });
+      }
+    } else {
+      if (type === 'html') {
+        archiveRoot = resolveArchiveRoot(config.webRoot);
+      } else if (type !== 'conf') {
+        archiveRoot = resolveArchiveRoot(config.baseRoot);
+      }
+      await execSsh(conn, buildArchivePrecheckCommand(config, type), { label: `预检托管 Nginx 运行包(${type})` });
+    }
+
+    const currentMeta = {
+      fileName: buildArchiveFileName(server, instance, type, selected?.sites || []),
+      baseRoot: config.baseRoot,
+      scriptPath: config.scriptPath,
+      revision: selected?.revision || '',
+    };
+    onReady?.(currentMeta);
+
+    if (selected && type === 'conf') {
+      archiveStream.end(Buffer.from(selected.filteredConfig, 'utf8'));
+      await outputFinished;
+      return currentMeta;
+    }
+
+    if (!selected && type === 'conf') {
       const sudo = config.useSudo ? 'sudo -n ' : '';
       await streamSshCommand(conn, `${sudo}cat ${shellQuote(config.mainConfPath)}`, archiveStream, {
         label: '导出 Nginx 配置文件',
       });
     } else {
-      await streamSshCommand(conn, buildArchiveTarCommand(config, archiveRoot, type), archiveStream, {
+      const command = selected
+        ? buildSelectedArchiveTarCommand(config, selected.roots, type, selected.filteredConfig)
+        : buildArchiveTarCommand(config, archiveRoot, type);
+      await streamSshCommand(conn, command, archiveStream, {
         label: `导出托管 Nginx 运行包(${type})`,
       });
     }
@@ -1039,6 +1191,7 @@ export async function streamNginxInstanceArchive(instanceId, type = 'all', outpu
     // 数据推送完毕，发送结束符并等待管道数据全数写入网络
     archiveStream.end();
     await outputFinished;
+    return currentMeta;
   });
 
   return meta;

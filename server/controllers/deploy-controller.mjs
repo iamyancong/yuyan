@@ -43,6 +43,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import axios from 'axios';
 import { DEPLOY_DB_PATH } from '../config/constants.mjs';
+import { endArchiveSseWithError } from '../services/archive-sse.mjs';
 
 import {
   deployTarget,
@@ -56,6 +57,7 @@ import {
 import {
   getNextNginxRuntimePort,
   getNextNginxInstancePort,
+  getNginxInstanceArchiveSites,
   getNginxInstanceStatus,
   getNginxRuntimeStatus,
   initializeNginxInstanceRuntime,
@@ -646,6 +648,8 @@ export async function handleGetNginxInstanceStatus(req, res) {
 export async function handleDownloadNginxInstanceArchive(req, res) {
   try {
     const type = req.query.type || 'all';
+    const siteIds = String(req.query.siteIds || '').split(',').map((value) => value.trim()).filter(Boolean);
+    const revision = String(req.query.revision || '').trim();
     await streamNginxInstanceArchive(Number(req.params.id), type, res, ({ fileName, baseRoot, scriptPath }) => {
       res.status(200);
       const contentType = type === 'conf' ? 'text/plain; charset=utf-8' : 'application/octet-stream';
@@ -658,14 +662,25 @@ export async function handleDownloadNginxInstanceArchive(req, res) {
       res.setHeader('X-Nginx-Base-Root', encodeURIComponent(baseRoot || ''));
       res.setHeader('X-Nginx-Script-Path', encodeURIComponent(scriptPath || ''));
       res.flushHeaders?.();
-    });
+    }, { siteIds, revision });
     if (!res.writableEnded) res.end();
   } catch (error) {
     if (res.headersSent) {
       res.destroy(error);
       return;
     }
-    sendError(res, error, 400);
+    sendError(res, error, Number(error?.status || 400));
+  }
+}
+
+/**
+ * 获取托管 Nginx 主配置中的可下载 server 列表。
+ */
+export async function handleListNginxInstanceArchiveSites(req, res) {
+  try {
+    res.json({ success: true, data: await getNginxInstanceArchiveSites(Number(req.params.id)) });
+  } catch (error) {
+    sendError(res, error, Number(error?.status || 400));
   }
 }
 
@@ -678,6 +693,7 @@ export async function handleSaveNginxInstanceArchive(req, res) {
     return sendError(res, new Error('缺少保存文件路径'), 400);
   }
   
+  let isAborted = false;
   try {
     // 设置响应为分块事件流 (SSE)
     res.setHeader('Content-Type', 'text/event-stream');
@@ -686,7 +702,6 @@ export async function handleSaveNginxInstanceArchive(req, res) {
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders?.();
 
-    let isAborted = false;
     req.on('aborted', () => {
       isAborted = true;
     });
@@ -730,11 +745,7 @@ export async function handleSaveNginxInstanceArchive(req, res) {
     if (!res.headersSent) {
       sendError(res, error, 400);
     } else {
-      res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
-      if (typeof res.flush === 'function') {
-        res.flush();
-      }
-      res.end();
+      endArchiveSseWithError(res, error);
     }
   }
 }

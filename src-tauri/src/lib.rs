@@ -9,6 +9,7 @@ use tauri::image::Image;
 use tauri::{Emitter, Manager};
 
 mod app_update;
+mod file_download;
 mod secure_identity;
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 mod tray;
@@ -865,38 +866,64 @@ fn exit_app(app: tauri::AppHandle, server_manager: tauri::State<'_, LocalServerM
 /** 在系统的文件管理器中定位并选中该文件。 */
 #[tauri::command]
 fn reveal_in_file_manager(path: String) -> Result<(), String> {
-    println!("🔍 正在打开文件管理器定位文件: {}", path);
+    let target = std::path::Path::new(&path);
+    if !target.is_file() {
+        return Err(format!("文件不存在或不是普通文件：{path}"));
+    }
+
     #[cfg(target_os = "windows")]
     {
-        Command::new("explorer.exe")
+        let status = Command::new("explorer.exe")
             .arg("/select,")
             .arg(&path)
-            .spawn()
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+            .status()
+            .map_err(|error| format!("启动文件资源管理器失败：{error}"))?;
+        if !status.success() {
+            return Err(format!("文件资源管理器定位文件失败：{status}"));
+        }
+        Ok(())
     }
 
     #[cfg(target_os = "macos")]
     {
-        Command::new("open")
+        let status = Command::new("open")
             .arg("-R")
             .arg(&path)
-            .spawn()
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+            .status()
+            .map_err(|error| format!("启动 Finder 失败：{error}"))?;
+        if !status.success() {
+            return Err(format!("Finder 定位文件失败：{status}"));
+        }
+        Ok(())
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        if let Some(parent) = std::path::Path::new(&path).parent() {
-            Command::new("xdg-open")
-                .arg(parent)
-                .spawn()
-                .map(|_| ())
-                .map_err(|e| e.to_string())
-        } else {
-            Err("无效路径".to_string())
+        let parent = target
+            .parent()
+            .ok_or_else(|| "文件路径没有父目录".to_string())?;
+        let status = Command::new("xdg-open")
+            .arg(parent)
+            .status()
+            .map_err(|error| format!("启动文件管理器失败：{error}"))?;
+        if !status.success() {
+            return Err(format!("文件管理器打开目录失败：{status}"));
         }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod reveal_file_tests {
+    use super::*;
+
+    #[test]
+    fn 不存在的路径无法打开文件位置() {
+        let path = std::env::temp_dir()
+            .join(format!("yuyan-missing-{}", uuid::Uuid::new_v4().simple()))
+            .to_string_lossy()
+            .into_owned();
+        assert!(reveal_in_file_manager(path).is_err());
     }
 }
 
@@ -985,6 +1012,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(app_update::AppUpdateManager::default())
+        .manage(file_download::FileDownloadManager::default())
         .manage(local_server_manager)
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -1005,6 +1033,8 @@ pub fn run() {
             app_update::discard_app_update,
             app_update::get_app_update_target,
             app_update::install_app_update,
+            file_download::start_file_download,
+            file_download::cancel_file_download,
             exit_app,
             reveal_in_file_manager,
             get_system_info,

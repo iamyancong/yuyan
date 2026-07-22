@@ -56,7 +56,9 @@ export const isNotFoundError = (error: any): boolean => {
  * @returns 错误消息
  */
 export function getErrorMessage(error: any): string {
-  return error?.response?.data?.error || error?.response?.data?.message || error?.message || '操作失败';
+  const responseError = error?.response?.data?.error;
+  if (typeof responseError === 'string') return responseError;
+  return responseError?.message || error?.response?.data?.message || error?.message || String(error || '操作失败');
 }
 
 /**
