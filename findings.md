@@ -327,3 +327,13 @@
 - Windows 不需要本地文件保险库，继续使用现有 Credential Manager 分项存储；普通终端用户在两个平台都无需配置 GitHub Secrets，Secrets 只属于发布仓库维护者。
 - Apple Developer 代码签名、公证与 Tauri Updater Minisign 是两条独立信任链；免费方案只取消前者，Updater 私钥与客户端公钥匹配门禁仍必须保留。
 - `keyring` 依赖已只启用 `windows-native` feature；macOS 构建不包含 `apple-native` 钥匙串后端，业务代码的所有 keyring 入口也均被 `cfg(not(target_os = "macos"))` 排除。
+
+# 2026-07-22 中央 legacy-team 数据可见性
+
+- `pnpm dev` 同时运行 3100 独立 Node 与 3101 Tauri 内嵌 Node；两者的本地旧接口均有 9 条 `legacy-team` 目标，但已登录桌面端的普通列表请求固定走中央 `/deploy-api/v2`。
+- `ensureAccountScope` 先返回既有个人 `account-*` 空间，再判断 legacy owner；当身份功能先上线、legacy 数据后迁移时，唯一账号也无法进入 legacy-team，中央查询因此合法返回空数组。
+- `resolveAccessPrincipal` 每次请求都会重新计算账号空间并更新活动会话，因此修复账号空间选择后无需等待客户端升级或令牌过期；内网服务更新后当前客户端刷新页面即可生效。
+- 历史凭据使用 `teamId` 参与 AES-GCM AAD，正确迁移必须保留业务数据的 `legacy-team`，仅绑定唯一已验证账号为该空间管理员。
+- 新库会自动发现一条本机 JDK，它不能作为“存在待接管旧业务数据”的信号；只有服务器、部署目标、发布记录或环境配置会触发单账号接管。
+- 回归用例已确认“修正成员/会话空间、不搬迁业务行”能同时恢复目标列表与历史密文解密。
+- GitHub Actions 的 macOS/Windows 构建只会打包客户端，不会替换当前内网中央服务的身份选择逻辑；该修复必须先进入中央服务部署。

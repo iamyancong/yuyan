@@ -14,6 +14,8 @@ const ACCESS_TTL_MS = 15 * 60_000;
 const REFRESH_TTL_MS = 30 * 24 * 60 * 60_000;
 const SIGNATURE_CLOCK_SKEW_MS = 5 * 60_000;
 const ROLES = new Set(['viewer', 'operator', 'admin']);
+const LEGACY_SCOPE_ID = 'legacy-team';
+const BUSINESS_SCOPE_TABLES = ['deploy_servers', 'deploy_targets', 'deploy_records', 'deploy_environments'];
 const APPROVAL_TOOL_NAMES = new Set([
   'yuyan_apply_project_config',
   'yuyan_create_microapp',
@@ -252,53 +254,103 @@ export async function verifyGitlabCredential(input) {
 }
 
 /**
+ * 统计账号空间中的根业务资源数量。
+ * @description 仅统计能够代表部署数据归属的根表；子表均继承服务器或目标的 team_id。
+ * @param {import('node:sqlite').DatabaseSync} db 数据库连接
+ * @param {string} scopeId 账号空间 ID
+ * @returns {number} 业务资源总数
+ */
+function countBusinessScopeResources(db, scopeId) {
+  return BUSINESS_SCOPE_TABLES.reduce((total, tableName) => {
+    const row = db.prepare(`SELECT COUNT(*) AS count FROM ${tableName} WHERE team_id = ?`).get(scopeId);
+    return total + Number(row?.count || 0);
+  }, 0);
+}
+
+/**
+ * 将指定账号设为旧数据空间的唯一管理员。
+ * @description 只调整成员与空间状态，不修改业务表 team_id，避免破坏历史凭据的 AES-GCM AAD。
+ * @param {import('node:sqlite').DatabaseSync} db 数据库连接
+ * @param {string} userId 当前已验证账号 ID
+ * @param {string} timestamp 更新时间
+ * @returns {{ id: string, role: 'admin' }} 旧数据账号空间
+ */
+function bindLegacyAccountScope(db, userId, timestamp) {
+  db.prepare(`
+    INSERT INTO teams (id, name, status, migration_state, created_at, updated_at)
+    VALUES (?, '账号空间', 'active', 'bound', ?, ?)
+    ON CONFLICT(id) DO UPDATE SET name = '账号空间', status = 'active', migration_state = 'bound', updated_at = excluded.updated_at
+  `).run(LEGACY_SCOPE_ID, timestamp, timestamp);
+  db.prepare(`
+    INSERT INTO team_members (team_id, user_id, role, status, created_at, updated_at)
+    VALUES (?, ?, 'admin', 'active', ?, ?)
+    ON CONFLICT(team_id, user_id) DO UPDATE SET role = 'admin', status = 'active', updated_at = excluded.updated_at
+  `).run(LEGACY_SCOPE_ID, userId, timestamp, timestamp);
+  db.prepare("UPDATE team_members SET status = 'removed', updated_at = ? WHERE team_id = ? AND user_id <> ?")
+    .run(timestamp, LEGACY_SCOPE_ID, userId);
+  db.prepare('DELETE FROM team_gitlab_bindings WHERE team_id = ?').run(LEGACY_SCOPE_ID);
+  return { id: LEGACY_SCOPE_ID, role: 'admin' };
+}
+
+/**
+ * 判断当前唯一账号能否安全接管尚未绑定的旧数据空间。
+ * @param {import('node:sqlite').DatabaseSync} db 数据库连接
+ * @param {string} personalScopeId 当前账号的个人空间 ID
+ * @returns {boolean} 是否允许自动接管
+ */
+function canAutoClaimLegacyAccountScope(db, personalScopeId) {
+  if (countBusinessScopeResources(db, LEGACY_SCOPE_ID) === 0) return false;
+  if (countBusinessScopeResources(db, personalScopeId) > 0) return false;
+  const activeUsers = Number(db.prepare("SELECT COUNT(*) AS count FROM users WHERE status = 'active'").get()?.count || 0);
+  const activeLegacyMembers = Number(db.prepare("SELECT COUNT(*) AS count FROM team_members WHERE team_id = ? AND status = 'active'").get(LEGACY_SCOPE_ID)?.count || 0);
+  const legacyBindings = Number(db.prepare('SELECT COUNT(*) AS count FROM team_gitlab_bindings WHERE team_id = ?').get(LEGACY_SCOPE_ID)?.count || 0);
+  return activeUsers === 1 && activeLegacyMembers === 0 && legacyBindings === 0;
+}
+
+/**
  * 为账号创建不可见的数据隔离空间。
  * @description 继续复用 team_id 数据列以兼容旧库，但产品模型只暴露账号与设备。
  */
 function ensureAccountScope(db, userId) {
   const personalScopeId = `account-${crypto.createHash('sha256').update(userId).digest('hex').slice(0, 24)}`;
+  const timestamp = now();
+  const legacyOwner = db.prepare(`
+    SELECT user_id FROM team_members
+    WHERE team_id = ? AND status = 'active'
+    ORDER BY CASE role WHEN 'admin' THEN 0 ELSE 1 END, created_at ASC
+    LIMIT 1
+  `).get(LEGACY_SCOPE_ID);
+  if (legacyOwner?.user_id === userId) {
+    const legacyState = db.prepare(`
+      SELECT t.migration_state AS migrationState, tm.role,
+        (SELECT COUNT(*) FROM team_members WHERE team_id = ? AND status = 'active') AS activeMembers,
+        (SELECT COUNT(*) FROM team_gitlab_bindings WHERE team_id = ?) AS bindings
+      FROM teams t INNER JOIN team_members tm ON tm.team_id = t.id
+      WHERE t.id = ? AND tm.user_id = ? AND tm.status = 'active'
+    `).get(LEGACY_SCOPE_ID, LEGACY_SCOPE_ID, LEGACY_SCOPE_ID, userId);
+    if (legacyState?.migrationState === 'bound'
+      && legacyState.role === 'admin'
+      && Number(legacyState.activeMembers) === 1
+      && Number(legacyState.bindings) === 0) {
+      return { id: LEGACY_SCOPE_ID, role: 'admin' };
+    }
+    return bindLegacyAccountScope(db, userId, timestamp);
+  }
+
   const personalScope = db.prepare(`
     SELECT t.id, tm.role FROM teams t
     INNER JOIN team_members tm ON tm.team_id = t.id
     WHERE t.id = ? AND tm.user_id = ? AND tm.status = 'active'
   `).get(personalScopeId, userId);
+  if (!legacyOwner && canAutoClaimLegacyAccountScope(db, personalScopeId)) {
+    return bindLegacyAccountScope(db, userId, timestamp);
+  }
   if (personalScope) return { id: personalScope.id, role: 'admin' };
 
   const teamCount = Number(db.prepare('SELECT COUNT(*) AS count FROM teams').get()?.count || 0);
   const memberCount = Number(db.prepare('SELECT COUNT(*) AS count FROM team_members').get()?.count || 0);
-  const timestamp = now();
   if (teamCount === 0 && memberCount === 0) {
-    db.prepare("INSERT INTO teams (id, name, status, migration_state, created_at, updated_at) VALUES ('legacy-team', '账号空间', 'active', 'bound', ?, ?)")
-      .run(timestamp, timestamp);
-    db.prepare("INSERT INTO team_members (team_id, user_id, role, status, created_at, updated_at) VALUES ('legacy-team', ?, 'admin', 'active', ?, ?)")
-      .run(userId, timestamp, timestamp);
-    return { id: 'legacy-team', role: 'admin' };
-  }
-
-  const legacyOwner = db.prepare(`
-    SELECT user_id FROM team_members
-    WHERE team_id = 'legacy-team' AND status = 'active'
-    ORDER BY CASE role WHEN 'admin' THEN 0 ELSE 1 END, created_at ASC
-    LIMIT 1
-  `).get();
-  if (legacyOwner?.user_id === userId) {
-    const legacyState = db.prepare(`
-      SELECT t.migration_state AS migrationState, tm.role,
-        (SELECT COUNT(*) FROM team_members WHERE team_id = 'legacy-team' AND status = 'active') AS activeMembers,
-        (SELECT COUNT(*) FROM team_gitlab_bindings WHERE team_id = 'legacy-team') AS bindings
-      FROM teams t INNER JOIN team_members tm ON tm.team_id = t.id
-      WHERE t.id = 'legacy-team' AND tm.user_id = ? AND tm.status = 'active'
-    `).get(userId);
-    if (legacyState?.migrationState === 'bound' && legacyState.role === 'admin' && Number(legacyState.activeMembers) === 1 && Number(legacyState.bindings) === 0) {
-      return { id: 'legacy-team', role: 'admin' };
-    }
-    db.prepare("UPDATE teams SET name = '账号空间', migration_state = 'bound', updated_at = ? WHERE id = 'legacy-team'").run(timestamp);
-    db.prepare("UPDATE team_members SET role = 'admin', status = 'active', updated_at = ? WHERE team_id = 'legacy-team' AND user_id = ?")
-      .run(timestamp, userId);
-    db.prepare("UPDATE team_members SET status = 'removed', updated_at = ? WHERE team_id = 'legacy-team' AND user_id <> ?")
-      .run(timestamp, userId);
-    db.prepare("DELETE FROM team_gitlab_bindings WHERE team_id = 'legacy-team'").run();
-    return { id: 'legacy-team', role: 'admin' };
+    return bindLegacyAccountScope(db, userId, timestamp);
   }
 
   db.prepare(`

@@ -561,3 +561,31 @@
 - Vue 类型检查、服务端 63/63、MCP 5/5、中央地址策略 4/4 和 Vite 生产构建通过；仅保留既有 `objc` cfg、大 chunk、SQLite 实验特性及本机未设置 `GITHUB_TOKEN` 的警告。
 - 工作流 YAML 解析、付费 Apple Secret 静态排除与 `git diff --check` 通过。Cargo feature 检查确认已禁用 keyring 的 `apple-native` 后端，Windows 仍启用 `windows-native`。
 - 完整 Windows target 交叉编译受本机缺少 MSVC 头文件限制，没有重复尝试；GitHub Actions 的 Windows runner 是正式 EXE 编译门禁。现有 staged 修改与 Nginx 配置改动均未回滚、未重新暂存，本轮未 commit、未 push。
+
+## 会话：2026-07-22（中央 legacy-team 数据可见性修复）
+
+### 阶段 69：中央旧数据归属修复设计
+- **状态：** complete
+- 本机 `3100` 与 Tauri 内嵌 `3101` 均返回 9 条部署目标，且全部属于 `legacy-team`；页面登录后按设计切换到中央 `/deploy-api/v2`，中央查询按当前会话 `team_id` 强制过滤。
+- 根因是账号/设备表已先存在时，`ensureAccountScope` 优先命中个人 `account-*` 空间，随后加入的 legacy 数据不会再由唯一账号接管。
+- 修复约束：不得直接改部署表 `team_id`，否则以 `yuyan-team:legacy-team` 为 AAD 的既有 SSH/Nacos 密文会失效；应只修正 legacy-team 的 owner 成员关系和会话空间。
+- 接管条件确定为：存在 legacy 业务数据、当前账号是唯一有效账号、legacy-team 没有有效成员和 GitLab Group 绑定、当前个人空间没有业务数据。已有 legacy owner 时始终优先返回 legacy-team；其他情形继续使用个人空间。
+
+### 阶段 70：单账号旧空间自动接管实现
+- **状态：** complete
+- 计划在 `ensureAccountScope` 前置 legacy owner/孤儿空间判断；`resolveAccessPrincipal` 已能在每次 v2 请求时批量纠正该账号的活动会话，因此服务端更新后旧客户端无需升级即可刷新生效。
+- 首个定向测试在显式写入旧服务器前即返回 `legacy-team`，说明根资源计数包含了新库会自动产生的记录；下一步核对表计数并排除不能代表历史中央部署数据的资源类型。
+- 已确认新库会自动生成一条本机构建 JDK，因此将 JDK 排除出旧中央业务数据判定；服务器、部署目标、发布记录或环境配置才会触发接管。
+- `ensureAccountScope` 现优先识别已有 legacy owner；孤儿旧空间只允许唯一有效账号且个人空间无业务数据时接管。绑定过程只 upsert `teams/team_members` 并纠正会话，不修改任何部署资源或密文。
+
+### 阶段 71：迁移回归测试
+- **状态：** complete
+- 定向身份测试 3/3 通过，覆盖身份空间先存在、两台设备旧会话即时切换、重复解析幂等，以及第二账号在 legacy owner 被移除后仍不能抢占旧数据。
+- 回归数据包含真实后端部署服务器与目标；纠正后 `listTargets` 能按会话返回目标，旧服务器密码仍可解密，服务器和目标的 `team_id` 依然为 `legacy-team`。
+
+### 阶段 72：全量验证与交付
+- **状态：** complete
+- 服务端全量测试 63/63、MCP 5/5、Vue `vue-tsc --noEmit`、Vite 生产构建和 `git diff --check` 全部通过。
+- 客户端无论本地开发还是 macOS/Windows 安装包，登录后均使用中央 v2 会话访问数据；服务端更新后每次请求都会重新解析并纠正账号空间，不需要为这个问题单独升级客户端。
+- 当前内网运行服务和正在运行的 GitHub CI 尚未包含本次未提交修复；需在提交后重新部署中央服务才会让当前页面恢复数据。
+- 用户现有 `useNginxDeployActions.ts` 改动未编辑、未回滚；本轮没有 commit 或 push。
