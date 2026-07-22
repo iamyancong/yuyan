@@ -15,6 +15,7 @@ import { createProject, updateProject, deleteProject, checkTokenPermissions } fr
 import { initAndPushRepo } from '../services/git-service.mjs';
 import { pullLatestTemplate, getTemplateScriptPath } from '../services/template-service.mjs';
 import { redactAgentValue } from '../services/agent-security.mjs';
+import { validateScaffoldGitlabConfig } from '../services/scaffold-validation.mjs';
 import { getScaffoldArchivePath, registerScaffoldDownload } from './download-controller.mjs';
 
 function isProgressStreamRequest(req) {
@@ -255,13 +256,18 @@ export async function handleCreateScaffold(req, res) {
       createRepo = false,
       gitlabHost = GITLAB_HOST,
       gitlabToken = GITLAB_TOKEN,
-      namespaceId = '2088',
+      namespaceId,
       visibility = 'private',
     } = req.body || {};
 
     // 2. 参数验证
     if (!appName || typeof appName !== 'string') {
       return res.status(400).json({ error: 'appName 必填' });
+    }
+
+    const gitlabConfigError = validateScaffoldGitlabConfig({ createRepo, gitlabHost, gitlabToken, namespaceId });
+    if (gitlabConfigError) {
+      return res.status(400).json({ error: gitlabConfigError });
     }
 
     // 3. 处理 proxyTarget（如果是 localhost，使用实际服务器地址）

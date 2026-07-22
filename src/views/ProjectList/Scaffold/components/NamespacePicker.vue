@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, watch } from 'vue';
 import { message } from 'ant-design-vue';
+import { getNamespaceErrorFeedback } from '../constant';
 import { useGitlabNamespaces, type NamespaceTreeNode } from '../hooks/useGitlabNamespaces';
 
 /** NamespacePicker 组件属性。 */
@@ -8,6 +9,7 @@ interface NamespacePickerProps {
   value?: string;
   disabled?: boolean;
   cacheKey: string;
+  ready?: boolean;
 }
 
 /** NamespacePicker 组件事件。 */
@@ -24,6 +26,7 @@ interface NamespacePickerValue {
 const props = withDefaults(defineProps<NamespacePickerProps>(), {
   value: undefined,
   disabled: false,
+  ready: false,
 });
 const emit = defineEmits<NamespacePickerEmits>();
 
@@ -44,6 +47,7 @@ const {
 } = useGitlabNamespaces();
 
 let lastInvalidValue = '';
+let ensureRequestSeq = 0;
 
 const selectedValue = computed({
   get: () => {
@@ -67,6 +71,9 @@ const namespaceDropdownStyle = computed(() => ({
   maxHeight: '420px',
   overflow: 'auto',
 }));
+
+/** Namespace 选择器占位提示。 */
+const namespacePlaceholder = computed(() => (props.ready ? '搜索或选择 GitLab Group' : '请先完成 GitLab 登录'));
 
 /**
  * 懒加载子分组。
@@ -118,19 +125,41 @@ const getTreeSelectValue = (value?: NamespacePickerValue | string | number): str
  * @param value Namespace ID
  */
 const ensureNamespaceValue = async (value?: string) => {
-  if (!value) return;
+  const requestSeq = (ensureRequestSeq += 1);
+  const requestCacheKey = props.cacheKey;
+  if (!props.ready || !value) return false;
 
   const result = await ensureOptionForId(value);
-  if (result.valid) {
-    lastInvalidValue = '';
-    return;
+  if (
+    result.cancelled ||
+    requestSeq !== ensureRequestSeq ||
+    !props.ready ||
+    props.value !== value ||
+    props.cacheKey !== requestCacheKey
+  ) {
+    return false;
   }
 
-  if (lastInvalidValue !== value) {
-    message.warning('默认 Namespace 不存在或当前 Token 无权访问，请重新选择 GitLab Group');
-    lastInvalidValue = value;
+  if (result.valid) {
+    lastInvalidValue = '';
+    return true;
   }
-  emit('update:value', undefined);
+
+  const feedback = getNamespaceErrorFeedback(result.error);
+  const feedbackKey = `${requestCacheKey}:${value}:${feedback.message}`;
+  if (lastInvalidValue !== feedbackKey) {
+    if (feedback.level === 'error') {
+      message.error(feedback.message);
+    } else {
+      message.warning(feedback.message);
+    }
+    lastInvalidValue = feedbackKey;
+  }
+
+  if (feedback.shouldClearSelection) {
+    emit('update:value', undefined);
+  }
+  return false;
 };
 
 /**
@@ -142,26 +171,31 @@ const handleDropdownVisibleChange = async (open: boolean) => {
     clearSearch();
     return;
   }
+  if (!props.ready) return;
   await onTreeDropdownVisibleChange(open);
-  if (props.value) {
+  const namespaceValid = props.value ? await ensureNamespaceValue(props.value) : false;
+  if (namespaceValid && props.value) {
     await expandToNamespace(props.value);
     await scrollSelectedNodeIntoView();
   }
 };
 
 watch(
-  () => props.value,
-  (value) => ensureNamespaceValue(value),
+  () => [props.value, props.ready, props.cacheKey] as const,
+  ([value, ready, cacheKey], previous) => {
+    const previousCacheKey = previous?.[2];
+    if (previousCacheKey !== undefined && previousCacheKey !== cacheKey) {
+      resetNamespaceCache();
+      lastInvalidValue = '';
+      ensureRequestSeq += 1;
+    }
+    if (!ready) {
+      ensureRequestSeq += 1;
+      return;
+    }
+    void ensureNamespaceValue(value);
+  },
   { immediate: true }
-);
-
-watch(
-  () => props.cacheKey,
-  async () => {
-    resetNamespaceCache();
-    lastInvalidValue = '';
-    await ensureNamespaceValue(props.value);
-  }
 );
 </script>
 
@@ -172,14 +206,14 @@ watch(
       :tree-data="displayTreeData"
       :load-data="handleLoadTreeData"
       :loading="loading"
-      :disabled="disabled"
+      :disabled="disabled || !ready"
       :filter-tree-node="false"
       :field-names="{ label: 'title', value: 'value', children: 'children' }"
       allow-clear
       label-in-value
       show-search
       tree-node-label-prop="label"
-      placeholder="搜索或选择 GitLab Group"
+      :placeholder="namespacePlaceholder"
       style="width: 100%"
       placement="bottomLeft"
       :list-height="340"

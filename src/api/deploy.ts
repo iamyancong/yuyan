@@ -5,6 +5,7 @@ import {
   getLatestDesktopOpenApi,
   readDesktopOpenApi,
 } from '@/api/agent';
+import { buildLocalDeployApiUrl } from '@/api/localDeployUrl';
 import { consumeNginxArchiveSaveResponse } from './nginxArchiveSaveStream';
 
 export { consumeNginxArchiveSaveResponse } from './nginxArchiveSaveStream';
@@ -1575,8 +1576,7 @@ async function getTargetExecutionApiUrl(path: string, projectType: DeployTarget[
  */
 async function getLocalDeployApiUrl(path: string): Promise<string> {
   const baseUrl = await getActiveLocalServerUrl();
-  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-  return `${baseUrl}${normalizedPath}`;
+  return buildLocalDeployApiUrl(baseUrl, path);
 }
 
 /**

@@ -14,6 +14,7 @@ interface VisibilityOption {
 interface GitLabConfigCardProps {
   form: CreateMicroAppPayload & { gitlabToken: string };
   isAuthenticated: boolean;
+  gitlabContextReady: boolean;
   visibilityOptions: VisibilityOption[];
   namespaceCacheKey: string;
 }
@@ -48,12 +49,12 @@ defineProps<GitLabConfigCardProps>();
       />
       <a-row :gutter="[16, 16]">
         <a-col :xs="24">
-          <a-form-item label="GitLab Host" :tooltip="SCAFFOLD_TIPS.gitlabHost">
+          <a-form-item name="gitlabHost" label="GitLab Host" :required="form.createRepo" :tooltip="SCAFFOLD_TIPS.gitlabHost">
             <a-input :disabled="true" v-model:value="form.gitlabHost" :placeholder="isAuthenticated ? '已自动填充登录Host' : '请输入GitLab Host'" />
           </a-form-item>
         </a-col>
         <a-col :xs="24">
-          <a-form-item label="Token" :tooltip="SCAFFOLD_TIPS.gitlabToken">
+          <a-form-item name="gitlabToken" label="Token" :required="form.createRepo" :tooltip="SCAFFOLD_TIPS.gitlabToken">
             <a-input-password
               v-model:value="form.gitlabToken"
               :disabled="isAuthenticated || !form.createRepo"
@@ -63,8 +64,13 @@ defineProps<GitLabConfigCardProps>();
           </a-form-item>
         </a-col>
         <a-col :xs="24">
-          <a-form-item label="Namespace" :tooltip="SCAFFOLD_TIPS.namespaceId">
-            <NamespacePicker v-model:value="form.namespaceId" :disabled="!form.createRepo" :cache-key="namespaceCacheKey" />
+          <a-form-item name="namespaceId" label="Namespace" :required="form.createRepo" :tooltip="SCAFFOLD_TIPS.namespaceId">
+            <NamespacePicker
+              v-model:value="form.namespaceId"
+              :disabled="!form.createRepo"
+              :ready="gitlabContextReady"
+              :cache-key="namespaceCacheKey"
+            />
           </a-form-item>
         </a-col>
         <a-col :xs="24">

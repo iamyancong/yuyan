@@ -19,6 +19,110 @@ export const SCAFFOLD_RULES = {
   activeRule: '规则：以 / 开头，且仅一段路径；允许驼峰(/dmDataSource)或短横线(/data-service)',
 } as const;
 
+/** GitLab Namespace 请求失败后的页面反馈。 */
+export interface NamespaceErrorFeedback {
+  message: string;
+  level: 'warning' | 'error';
+  shouldClearSelection: boolean;
+}
+
+/** 可解析的 GitLab 请求错误结构。 */
+interface GitLabRequestError {
+  code?: string;
+  message?: string;
+  status?: number;
+  response?: {
+    status?: number;
+  };
+}
+
+/**
+ * 将 GitLab Namespace 请求错误映射为稳定、可操作的用户提示。
+ * @param error GitLab 请求错误
+ * @returns 页面反馈与是否清空已选项
+ */
+export function getNamespaceErrorFeedback(error: unknown): NamespaceErrorFeedback {
+  const candidate = error as GitLabRequestError | null;
+  const status = Number(candidate?.response?.status || candidate?.status || 0);
+  const code = String(candidate?.code || '');
+
+  if (code === 'INVALID_NAMESPACE_ID') {
+    return {
+      message: 'Namespace ID 无效，请重新选择 GitLab Group',
+      level: 'warning',
+      shouldClearSelection: true,
+    };
+  }
+
+  if (status === 401) {
+    return {
+      message: 'GitLab 登录已失效，请重新登录后再校验 Namespace',
+      level: 'warning',
+      shouldClearSelection: false,
+    };
+  }
+
+  if (status === 403) {
+    return {
+      message: '当前 Token 无权访问该 Namespace，请重新选择有权限的 GitLab Group',
+      level: 'warning',
+      shouldClearSelection: true,
+    };
+  }
+
+  if (status === 404) {
+    return {
+      message: '该 Namespace 已不存在，请重新选择 GitLab Group',
+      level: 'warning',
+      shouldClearSelection: true,
+    };
+  }
+
+  if (status === 429) {
+    return {
+      message: 'GitLab 请求过于频繁，已保留当前 Namespace，请稍后重试',
+      level: 'warning',
+      shouldClearSelection: false,
+    };
+  }
+
+  if (status >= 500) {
+    return {
+      message: 'GitLab 服务暂时不可用，已保留当前 Namespace，请稍后重试',
+      level: 'error',
+      shouldClearSelection: false,
+    };
+  }
+
+  if (!status || ['ECONNABORTED', 'ERR_NETWORK', 'ETIMEDOUT'].includes(code)) {
+    return {
+      message: '暂时无法连接 GitLab，已保留当前 Namespace，请检查网络或 Host 配置',
+      level: 'error',
+      shouldClearSelection: false,
+    };
+  }
+
+  return {
+    message: '校验 GitLab Namespace 失败，已保留当前选择，请稍后重试',
+    level: 'error',
+    shouldClearSelection: false,
+  };
+}
+
+/**
+ * 生成不暴露 Token 明文的短指纹，用于隔离 Namespace 请求缓存。
+ * @param value 敏感字符串
+ * @returns 稳定短指纹
+ */
+export function createCredentialFingerprint(value: string): string {
+  let hash = 2166136261;
+  for (const character of value) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${value.length}-${(hash >>> 0).toString(16)}`;
+}
+
 export const FRAMEWORK_OPTIONS = [
   { label: 'Vue3 微应用', value: 'vue3' },
   { label: '其他框架微应用', value: 'other', disabled: true },
