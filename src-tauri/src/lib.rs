@@ -1043,6 +1043,13 @@ pub fn run() {
             }
         })
         .setup(move |app| {
+            let app_data_dir = app
+                .path()
+                .app_data_dir()
+                .map_err(|error| std::io::Error::other(format!("无法获取应用数据目录: {error}")))?;
+            secure_identity::initialize_secure_storage(&app_data_dir)
+                .map_err(|error| std::io::Error::other(format!("初始化安全存储失败: {error}")))?;
+
             #[cfg(target_os = "windows")]
             tray::setup(app)?;
 

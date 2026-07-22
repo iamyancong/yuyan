@@ -115,11 +115,50 @@ async function syncAgentIdentity() {
   }
 }
 
+/**
+ * 使用平台安全存储中保存的 GitLab PAT 重新建立中央设备会话。
+ * @description 刷新令牌过期或被服务端撤销时无需用户重新登录；恢复失败则保存只读兼容状态，
+ * 避免后续请求继续携带已经失效的访问令牌。
+ * @param state - 当前安全账号状态
+ * @returns 已恢复或已降级的安全账号状态
+ */
+async function reestablishCentralSession(state: SecureAccountState): Promise<SecureAccountState> {
+  const fallbackState: SecureAccountState = {
+    ...state,
+    accessToken: '',
+    refreshToken: '',
+    accessExpiresAt: '',
+    refreshExpiresAt: '',
+  };
+  if (!isTauri() || !state.gitlabHost || !state.gitlabToken) return fallbackState;
+
+  try {
+    const device = await getDeviceIdentity();
+    const session = await exchangeGitlabIdentity(state.gitlabHost, state.gitlabToken, device);
+    const next: SecureAccountState = {
+      ...state,
+      accountId: session.accountId,
+      deviceId: session.deviceId,
+      accessToken: session.accessToken,
+      refreshToken: session.refreshToken,
+      teamId: session.teamId,
+      role: session.role,
+      accessExpiresAt: session.accessExpiresAt,
+      refreshExpiresAt: session.refreshExpiresAt,
+    };
+    await saveSecureAccount(next);
+    return next;
+  } catch {
+    await saveSecureAccount(fallbackState);
+    return fallbackState;
+  }
+}
+
 /** 在访问令牌临近过期时使用设备签名轮换。 */
 async function refreshSecureSessionIfNeeded(state: SecureAccountState): Promise<SecureAccountState> {
   if (state.accessToken && Date.parse(state.accessExpiresAt) > Date.now() + 2 * 60_000) return state;
   if (!state.refreshToken || Date.parse(state.refreshExpiresAt) <= Date.now()) {
-    return { ...state, accessToken: '', accessExpiresAt: '' };
+    return reestablishCentralSession(state);
   }
   const timestamp = Date.now();
   const nonce = crypto.randomUUID();
@@ -138,7 +177,7 @@ async function refreshSecureSessionIfNeeded(state: SecureAccountState): Promise<
     return next;
   } catch (error: any) {
     if (error?.status === 401 || error?.code === 'session_expired') {
-      return { ...state, accessToken: '', refreshToken: '', accessExpiresAt: '', refreshExpiresAt: '' };
+      return reestablishCentralSession(state);
     }
     return state;
   }
@@ -249,7 +288,7 @@ const login = async (token: string, host: string): Promise<boolean> => {
   }
 };
 
-/** 登出并清除中央会话、Agent 内存凭据和系统钥匙串账号状态。 */
+/** 登出并清除中央会话、Agent 内存凭据和平台安全存储账号状态。 */
 const logout = async (silent = false) => {
   const secureState = await loadActiveSecureAccount().catch(() => null);
   if (secureState) await logoutCentralSession(secureState).catch(() => undefined);
@@ -275,7 +314,7 @@ const logout = async (silent = false) => {
   if (!silent) message.info('已退出登录');
 };
 
-/** 从系统钥匙串恢复当前设备的活动账号。 */
+/** 从平台安全存储恢复当前设备的活动账号。 */
 const checkAuth = async () => {
   authState.value.loading = true;
   const stored = await loadActiveSecureAccount(true).catch(() => null);

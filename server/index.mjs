@@ -38,6 +38,7 @@ import { closeAgentDb, getAgentDb } from './services/agent-store.mjs';
 import { timingSafeTokenEqual } from './services/agent-security.mjs';
 import { abortAppUpdateTransfers } from './controllers/deploy-controller.mjs';
 import { startAppUpdatePreloadScheduler } from './services/app-update-release-service.mjs';
+import { disableDynamicApiCache } from './services/http-cache-policy.mjs';
 
 // 创建 Express 应用
 const app = express();
@@ -198,6 +199,7 @@ app.use((error, _req, res, next) => {
   next(error);
 });
 app.use(express.json({ limit: '2mb' }));
+app.use(disableDynamicApiCache);
 
 // 健康检查路由
 app.use('/health', healthRoutes);

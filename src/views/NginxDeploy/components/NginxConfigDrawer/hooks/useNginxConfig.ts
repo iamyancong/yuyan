@@ -1,4 +1,4 @@
-import { computed, ref, watch } from 'vue';
+import { computed, onScopeDispose, ref, watch } from 'vue';
 import message from 'ant-design-vue/es/message';
 import { readNginxConf } from '@/api/deploy';
 import { getErrorMessage } from '../constant';
@@ -20,6 +20,7 @@ export function useNginxConfig(
   const configPath = ref('');
   const content = ref('');
   const originalContent = ref('');
+  let loadGeneration = 0;
 
   /** 配置内容是否有修改 */
   const isDirty = computed(() => content.value !== originalContent.value);
@@ -32,18 +33,31 @@ export function useNginxConfig(
 
   /** 加载 Nginx 配置文件 */
   const loadConfig = async () => {
-    if (!props.targetId) return;
+    const targetId = props.targetId;
+    if (!targetId) return;
+    const currentGeneration = ++loadGeneration;
     loading.value = true;
     try {
-      const result = await readNginxConf(props.targetId);
+      const result = await readNginxConf(targetId);
+      if (currentGeneration !== loadGeneration || props.targetId !== targetId) return;
       configPath.value = result.path;
       content.value = result.content;
       originalContent.value = result.content;
     } catch (error: any) {
+      if (currentGeneration !== loadGeneration || props.targetId !== targetId) return;
       message.error(error?.response?.data?.error || error?.message || '读取 Nginx 配置文件失败');
     } finally {
-      loading.value = false;
+      if (currentGeneration === loadGeneration) loading.value = false;
     }
+  };
+
+  /** 清空当前配置并使未完成的读取请求失效 */
+  const resetConfig = () => {
+    loadGeneration += 1;
+    loading.value = false;
+    configPath.value = '';
+    content.value = '';
+    originalContent.value = '';
   };
 
   /** 保存配置 */
@@ -69,13 +83,14 @@ export function useNginxConfig(
     () => props.targetId,
     (id) => {
       if (id) void loadConfig();
-      else {
-        configPath.value = '';
-        content.value = '';
-        originalContent.value = '';
-      }
-    }
+      else resetConfig();
+    },
+    { immediate: true }
   );
+
+  onScopeDispose(() => {
+    loadGeneration += 1;
+  });
 
   return {
     loading,

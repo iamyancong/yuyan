@@ -609,26 +609,64 @@ export const getDeployApiToken = (): string => {
 };
 
 /**
- * 获取服务器模式部署 API 鉴权头；Tauri/本机模式通常为空。
- * @returns 部署 API 鉴权头
+ * 判断缓存中的中央访问会话是否仍然可用。
+ * @param session - 当前安全账号
+ * @returns 是否可以调用中央 v2 API
+ */
+function hasUsableCentralSession(session: ReturnType<typeof getCachedSecureAccount>): boolean {
+  return Boolean(
+    session?.accessToken
+    && session.teamId
+    && Number.isFinite(Date.parse(session.accessExpiresAt))
+    && Date.parse(session.accessExpiresAt) > Date.now()
+  );
+}
+
+/**
+ * 获取部署 API 通用请求头；无中央会话时回退为网页 PAT 鉴权。
+ * @returns 部署 API 请求头
  */
 export const getDeployApiAuthHeaders = (): Record<string, string> => {
   const session = getCachedSecureAccount();
-  if (!session?.gitlabToken || !session.gitlabHost) return {};
-  if (!session.accessToken || !session.teamId) {
+  const headers: Record<string, string> = {
+    'Cache-Control': 'no-cache, no-store',
+    Pragma: 'no-cache',
+  };
+
+  if (session?.gitlabToken && session?.gitlabHost) {
+    if (!hasUsableCentralSession(session)) {
+      return {
+        ...headers,
+        'X-Yuyan-Client': 'web',
+        'X-GitLab-Token': session.gitlabToken,
+        'X-GitLab-Host': session.gitlabHost,
+      };
+    }
     return {
-      'X-Yuyan-Client': 'web',
+      ...headers,
+      Authorization: `Bearer ${session.accessToken}`,
+      'X-Yuyan-Team-Id': session.teamId,
+      'X-Yuyan-Client': 'desktop',
       'X-GitLab-Token': session.gitlabToken,
       'X-GitLab-Host': session.gitlabHost,
     };
   }
-  return {
-    Authorization: `Bearer ${session.accessToken}`,
-    'X-Yuyan-Team-Id': session.teamId,
-    'X-Yuyan-Client': 'desktop',
-    'X-GitLab-Token': session.gitlabToken,
-    'X-GitLab-Host': session.gitlabHost,
-  };
+
+  if (!import.meta.env.DEV) return headers;
+  const devTeamId = String(import.meta.env.VITE_DEV_TEAM_ID || '').trim();
+  const devAccessToken = String(import.meta.env.VITE_DEV_ACCESS_TOKEN || '').trim();
+
+  if (devTeamId) {
+    headers['X-Yuyan-Team-Id'] = devTeamId;
+  }
+  if (devAccessToken) {
+    headers.Authorization = `Bearer ${devAccessToken}`;
+  }
+  if (devTeamId && devAccessToken) {
+    headers['X-Yuyan-Client'] = 'desktop';
+  }
+
+  return headers;
 };
 
 client.interceptors.request.use(async (config) => {
@@ -1457,7 +1495,11 @@ async function getActiveDeployApiBase(url = '', executionScope?: DeployExecution
     }
   }
   if (!isTauri()) return getApiBase('/deploy-api');
-  return getApiBase('/deploy-api/v2');
+  const session = getCachedSecureAccount();
+  if (hasUsableCentralSession(session)) {
+    return getApiBase('/deploy-api/v2');
+  }
+  return getApiBase('/deploy-api');
 }
 
 /**

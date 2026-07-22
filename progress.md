@@ -532,3 +532,32 @@
 - macOS 安全凭据已从多个独立钥匙串项迁移为单一保险箱，并在 Rust 进程内只解锁一次；旧设备身份、主密钥和活动账号首次升级时自动迁移，Windows 保留分项存储以规避 Credential Manager 单条容量限制。
 - 自动化结果：Vue 类型检查和 Vite 生产构建通过；服务端 59/59、MCP 5/5、Rust 11/11 通过；`cargo fmt --check`、`cargo check` 与 `git diff --check` 通过，仅保留既有 objc cfg 和大 chunk 警告。
 - 未替代的外部发布门禁：两个真实 GitLab 用户、两台真实设备、独立测试服务器，以及 GitHub Actions 的 macOS ARM/Intel、Windows 正式签名包仍需现场闭环验证。
+# 2026-07-22 免费 macOS 本地保险库与跨平台发布
+
+### 阶段 65：设计与兼容审计
+- **状态：** complete
+- 已读取文件规划与版本发布 Skills，恢复现有计划和工作区差异。
+- 已确认 macOS 钥匙串保险箱覆盖设备身份、本机数据库主密钥和活动账号；Windows 继续使用 Credential Manager。
+- 已确认不能在不读取旧钥匙串的前提下保留旧服务器凭据解密能力；本轮采用用户批准的“升级后重新登录一次”方案，并将在文档中明确本机敏感配置需重新录入。
+- 当前工作区已有一组 staged 修改及用户的 Nginx 配置修改；本轮只增量编辑相关文件，不撤销、不重新暂存。
+- 设计确定：保险库采用 AES-256-GCM、随机 256 位本地密钥、固定 AAD、`0700/0600` 权限和同目录原子替换；密钥与密文同属当前用户权限边界，明确不声称能够抵御同用户恶意进程。
+- 升级不读取也不删除旧钥匙串项；回滚旧版本仍可使用原项。新版本生成新设备身份和主密钥，用户重新登录并按需重新保存本机 SSH/Nacos 敏感配置。
+
+### 阶段 66：跨平台安全存储实现
+- **状态：** complete
+- macOS 已使用 AES-256-GCM 本地保险库保存设备 Ed25519 私钥、本机数据库主密钥和活动账号；目录、密钥与密文权限分别收紧为 `0700/0600/0600`，使用随机 nonce、固定 AAD、1MB 上限与同目录原子替换。
+- Tauri setup 在启动内嵌 Node 前初始化保险库；macOS 编译路径不调用 `keyring::Entry`，不会读取或迁移旧钥匙串。Windows 的 Credential Manager 分项逻辑保持原样。
+- 首轮 `cargo fmt --check` 仅发现新增 Rust 代码的标准排版差异，运行 `cargo fmt` 后 `cargo check` 通过，安全存储定向测试 4/4 通过。
+- macOS 本机完整 Windows target 交叉检查在 `ring` 构建阶段因缺少 MSVC `assert.h` 受阻；依赖树确认 Windows 保留 `keyring`，macOS 单独启用 `aes-gcm`，最终 Windows 编译由现有 GitHub Actions runner 验证。
+
+### 阶段 67：免费发布流程回退
+- **状态：** complete
+- GitHub Actions 已移除 Apple Developer 证书、身份、Apple ID、Team ID 和公证 Secret 门禁，保留 Windows/macOS 双架构构建、Tauri Updater Minisign 产物签名与反向验签。
+- README 与发布/更新 Skills 已同步免费 ad-hoc 方案：终端用户无需配置 Secrets；macOS 首次可能需右键打开，升级后重新登录并重新录入旧主密钥保护的本机敏感配置，Windows 继续直接安装使用。
+
+### 阶段 68：macOS/Windows 验证与交付
+- **状态：** complete
+- Rust `cargo fmt --check`、`cargo check` 与全量测试 14/14 通过；保险库测试覆盖密文无敏感原文、AES-GCM 篡改拒绝、原子持久化和 `0700/0600/0600` 权限。
+- Vue 类型检查、服务端 63/63、MCP 5/5、中央地址策略 4/4 和 Vite 生产构建通过；仅保留既有 `objc` cfg、大 chunk、SQLite 实验特性及本机未设置 `GITHUB_TOKEN` 的警告。
+- 工作流 YAML 解析、付费 Apple Secret 静态排除与 `git diff --check` 通过。Cargo feature 检查确认已禁用 keyring 的 `apple-native` 后端，Windows 仍启用 `windows-native`。
+- 完整 Windows target 交叉编译受本机缺少 MSVC 头文件限制，没有重复尝试；GitHub Actions 的 Windows runner 是正式 EXE 编译门禁。现有 staged 修改与 Nginx 配置改动均未回滚、未重新暂存，本轮未 commit、未 push。

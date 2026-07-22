@@ -28,11 +28,12 @@ minisign-verify = "0.2.5"
 uuid = { version = "1", features = ["v4"] }
 ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
-keyring = { version = "3.6.3", default-features = false, features = ["apple-native", "windows-native"] }
+keyring = { version = "3.6.3", default-features = false, features = ["windows-native"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2.7"
 cocoa = "0.25.0"
+aes-gcm = "0.10"
 
 [profile.release]
 opt-level = "z"       # 针对二进制文件体积进行极致优化（体积小可以大幅提升启动速度和减少磁盘占用）
