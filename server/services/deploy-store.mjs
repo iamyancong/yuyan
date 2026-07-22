@@ -14,6 +14,16 @@ import { getRequestTeamId } from './request-context.mjs';
 
 let dbInstance = null;
 
+/** 服务重启后写入遗留发布记录的说明日志 */
+const DEPLOY_INTERRUPTED_LOG_MESSAGE = '雨燕服务重启，上一次发布任务未正常结束，已自动标记为停止';
+
+/** 服务重启后写入遗留中央任务的错误信息 */
+const CENTRAL_DEPLOY_INTERRUPTED_ERROR = JSON.stringify({
+  code: 'service_restarted',
+  message: '雨燕服务重启，中央部署任务已中断，请重新发布',
+  retryable: true,
+});
+
 /**
  * 生成当前 ISO 时间
  * @returns {string} ISO 时间字符串
@@ -1350,7 +1360,6 @@ function applyBackendSchemaMigration(db) {
   }
 
   migrateLegacyBackendTargets(db);
-  db.prepare("UPDATE deploy_tasks SET status = 'interrupted', error = '雨燕服务重启，任务已中断', finished_at = ? WHERE status = 'running'").run(now());
   db.prepare('INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (1, ?, ?)').run('backend-deployment-v1', now());
   db.prepare('INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (2, ?, ?)').run('backend-environments-and-server-root-v2', now());
   db.prepare('INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (3, ?, ?)').run('backend-runtime-jdk-reference-v3', now());
@@ -1409,6 +1418,75 @@ function applyMultiTenantSchemaMigration(db) {
   }
   db.prepare('INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (5, ?, ?)')
     .run('multi-user-team-boundary-v5', now());
+}
+
+/**
+ * 收口上一个服务进程遗留的运行态任务和发布记录。
+ * @description 进程退出后内存任务无法恢复，若不主动收口，发布历史和中央操作会永久显示执行中。
+ * @param {DatabaseSync} db 数据库实例
+ * @returns {Promise<void>}
+ */
+async function reconcileInterruptedDeployExecutions(db) {
+  const interruptedAt = now();
+  const runningRecords = db
+    .prepare("SELECT id, logs, log_path FROM deploy_records WHERE status = 'running'")
+    .all();
+
+  for (const row of runningRecords) {
+    const storedLogs = await readRecordLogs(row);
+    const logs = Array.isArray(storedLogs) ? storedLogs : [];
+    logs.push({
+      level: 'warn',
+      message: DEPLOY_INTERRUPTED_LOG_MESSAGE,
+      stage: 'interrupted',
+      timestamp: interruptedAt,
+    });
+
+    let logPath = row.log_path || '';
+    let inlineLogs = JSON.stringify(logs);
+    try {
+      logPath = await writeRecordLogs(row.id, logs);
+      inlineLogs = '[]';
+    } catch (error) {
+      console.warn(`[deploy-store] 写入中断发布记录 #${row.id} 的恢复日志失败:`, error);
+    }
+
+    db.prepare(
+      `UPDATE deploy_records
+       SET status = 'stopped', logs = ?, log_path = ?, finished_at = ?
+       WHERE id = ? AND status = 'running'`
+    ).run(inlineLogs, logPath, interruptedAt, Number(row.id));
+  }
+
+  db.prepare(
+    `UPDATE deploy_tasks
+     SET status = 'interrupted', error = ?, heartbeat_at = ?, finished_at = ?
+     WHERE status = 'running'`
+  ).run(DEPLOY_INTERRUPTED_LOG_MESSAGE, interruptedAt, interruptedAt);
+
+  db.prepare(
+    `UPDATE backend_target_configs
+     SET service_status = 'unknown', last_status_output = ?, last_status_at = ?, updated_at = ?
+     WHERE service_status IN ('deploying', 'starting', 'stopping')`
+  ).run(DEPLOY_INTERRUPTED_LOG_MESSAGE, interruptedAt, interruptedAt);
+
+  if (hasTable(db, 'artifact_jobs')) {
+    if (hasTable(db, 'central_agent_operations')) {
+      db.prepare(
+        `UPDATE central_agent_operations
+         SET status = 'failed', error_json = ?, updated_at = ?
+         WHERE id IN (
+           SELECT operation_id FROM artifact_jobs WHERE status IN ('queued', 'running')
+         ) AND status IN ('queued', 'running')`
+      ).run(CENTRAL_DEPLOY_INTERRUPTED_ERROR, interruptedAt);
+    }
+
+    db.prepare(
+      `UPDATE artifact_jobs
+       SET status = 'failed', error_json = ?, updated_at = ?
+       WHERE status IN ('queued', 'running')`
+    ).run(CENTRAL_DEPLOY_INTERRUPTED_ERROR, interruptedAt);
+  }
 }
 
 /**
@@ -1678,6 +1756,7 @@ export async function getDeployDb() {
   applyBackendSchemaMigration(dbInstance);
   await backupDeployDbBeforeMultiTenantMigration(dbInstance);
   applyMultiTenantSchemaMigration(dbInstance);
+  await reconcileInterruptedDeployExecutions(dbInstance);
   initializeDefaultJdks(dbInstance);
   return dbInstance;
 }

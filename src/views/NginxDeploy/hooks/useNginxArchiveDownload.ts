@@ -1,4 +1,5 @@
 import { h, ref, type Ref } from 'vue';
+import { CloseOutlined } from '@ant-design/icons-vue';
 import message from 'ant-design-vue/es/message';
 import notification from 'ant-design-vue/es/notification';
 import { Channel, invoke } from '@tauri-apps/api/core';
@@ -25,6 +26,9 @@ const ARCHIVE_TYPE_LABEL: Record<NginxArchiveDownloadType, string> = {
   html: '前端静态产物',
   conf: 'Nginx 配置文件',
 };
+
+/** 创建可访问的下载通知关闭图标。 */
+const createDownloadNotificationCloseIcon = () => h(CloseOutlined, { 'aria-label': '关闭通知' });
 
 /** Nginx 归档下载 Hook 参数。 */
 interface UseNginxArchiveDownloadParams {
@@ -209,7 +213,7 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
         }, '取消下载'),
       ]),
       duration: 0,
-      closeIcon: h('span'),
+      closeIcon: createDownloadNotificationCloseIcon(),
     });
   };
 
@@ -234,6 +238,7 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
         h('a', { href: 'javascript:;', class: 'c4d-locate-btn', onClick: revealFile }, '打开文件位置'),
       ]),
       duration: 0,
+      closeIcon: createDownloadNotificationCloseIcon(),
     });
   };
 
@@ -255,6 +260,7 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
         }, '刷新配置后重试'),
       ]),
       duration: 0,
+      closeIcon: createDownloadNotificationCloseIcon(),
     });
   };
 
@@ -298,6 +304,7 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
           message: '浏览器下载已开始',
           description: `${browserResult.fileName}（${formatArchiveBytes(browserResult.fileSize)}）`,
           duration: 0,
+          closeIcon: createDownloadNotificationCloseIcon(),
         });
         return;
       }
