@@ -159,6 +159,20 @@ body,
   }
 }
 
+/* Formily 内部可能使用独立的 Ant Design Vue 上下文，Switch 开启态直接消费全局主题变量。 */
+.ant-switch.ant-switch-checked {
+  background: var(--primary-color) !important;
+
+  &:hover:not(.ant-switch-disabled) {
+    background: var(--primary-color-hover) !important;
+  }
+
+  &:focus-visible {
+    outline: 3px solid var(--primary-color-light);
+    outline-offset: 2px;
+  }
+}
+
 /* =====================================================
  * 🔮 C4D风格高级 3D 玻璃拟态 (Glassmorphism) 下载通知卡片
  * 设计语言: 极光渐变、三维微立体、晶莹毛玻璃、温润动效
@@ -220,9 +234,16 @@ body,
   }
 
   .ant-notification-notice-close {
+    z-index: 3;
+    display: grid !important;
+    width: 28px;
+    height: 28px;
+    place-items: center;
     color: var(--text-color-tertiary) !important;
-    top: 18px !important;
-    right: 20px !important;
+    top: 14px !important;
+    right: 14px !important;
+    border-radius: 9px;
+    background: color-mix(in srgb, var(--bg-color-container) 60%, transparent);
     transition: all 0.2s ease;
 
     &:hover {

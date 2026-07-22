@@ -69,6 +69,16 @@ test('v1/v2/v3 迁移保留前端目标，将历史后端命令标记为 legacy 
       logPath: backendRecords.items[0].logPath,
       error: 'build failed',
     });
+    await store.createRecord({
+      targetId: 2,
+      projectId: 2,
+      projectName: 'backend-app',
+      envName: '测试',
+      branch: 'interrupted-test',
+      status: 'running',
+      startedAt: ts,
+      logs: [{ level: 'info', message: '任务开始', stage: 'validate', timestamp: ts }],
+    });
     await store.closeDeployDb();
     console.log(JSON.stringify({
       targets: targets.map(x => ({name:x.projectName,type:x.projectType})),
@@ -99,11 +109,27 @@ test('v1/v2/v3 迁移保留前端目标，将历史后端命令标记为 legacy 
   const repeated = runStoreScript(root, `
     const store = await import('./server/services/deploy-store.mjs');
     const db = await store.getDeployDb();
-    const result = { versions: db.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get().count, configs: db.prepare('SELECT COUNT(*) AS count FROM backend_target_configs').get().count, taskStatus: db.prepare('SELECT status FROM deploy_tasks LIMIT 1').get().status };
+    const interruptedRecordRow = db.prepare("SELECT id, status, finished_at FROM deploy_records WHERE branch = 'interrupted-test'").get();
+    const interruptedRecord = await store.getRecord(interruptedRecordRow.id);
+    const result = {
+      versions: db.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get().count,
+      configs: db.prepare('SELECT COUNT(*) AS count FROM backend_target_configs').get().count,
+      taskStatus: db.prepare('SELECT status FROM deploy_tasks LIMIT 1').get().status,
+      recordStatus: interruptedRecord.status,
+      recordFinished: Boolean(interruptedRecord.finishedAt),
+      recordHasInterruptedLog: interruptedRecord.logs.some((item) => item.stage === 'interrupted' && item.level === 'warn'),
+    };
     await store.closeDeployDb();
     console.log(JSON.stringify(result));
   `);
-  assert.deepEqual(repeated, { versions: 5, configs: 1, taskStatus: 'interrupted' });
+  assert.deepEqual(repeated, {
+    versions: 5,
+    configs: 1,
+    taskStatus: 'interrupted',
+    recordStatus: 'stopped',
+    recordFinished: true,
+    recordHasInterruptedLog: true,
+  });
   const backups = (await fs.readdir(root)).filter((name) => name.includes('.pre-backend-v3-') && name.endsWith('.bak'));
   assert.equal(backups.length, 1);
   const multiTenantBackups = (await fs.readdir(root)).filter((name) => name.includes('.pre-multitenant-v5-') && name.endsWith('.bak'));

@@ -1,144 +1,124 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
-import { ReloadOutlined } from '@ant-design/icons-vue';
-import { YButton } from '@ycwang-dev/components/lite';
-import type { NginxArchiveDownloadType, NginxArchiveSiteOption } from '@/api/deploy';
-import { ARCHIVE_TYPE_OPTIONS, type ArchiveSiteSelectionModalProps } from './constant';
 import {
-  canSubmitArchiveSelection,
-  getSelectableArchiveSites,
-  normalizeArchiveSiteIds,
-} from './selectionPolicy';
+  CloudDownloadOutlined,
+  CodeOutlined,
+  DownloadOutlined,
+  ReloadOutlined,
+} from '@ant-design/icons-vue';
+import { YButton } from '@ycwang-dev/components/lite';
+import ArchiveSiteList from './components/ArchiveSiteList/index.vue';
+import ArchiveTypeSelector from './components/ArchiveTypeSelector/index.vue';
+import type { ArchiveSiteSelectionModalProps } from './constant';
+import { useArchiveSelection } from './hooks/useArchiveSelection';
+
 defineOptions({ name: 'NginxArchiveSiteSelectionModal' });
+
 const props = defineProps<ArchiveSiteSelectionModalProps>();
 const emit = defineEmits<{
   (e: 'update:open', value: boolean): void;
   (e: 'refresh'): void;
-  (e: 'confirm', value: { type: NginxArchiveDownloadType; siteIds: string[] }): void;
+  (e: 'confirm', value: { type: 'all' | 'html' | 'conf'; siteIds: string[] }): void;
 }>();
-const selectedType = ref<NginxArchiveDownloadType>('all');
-const selectedSiteIds = ref<string[]>([]);
-const selectableSites = computed(() => getSelectableArchiveSites(props.sites, selectedType.value));
-const canConfirm = computed(() => canSubmitArchiveSelection(selectedSiteIds.value, props.loading, props.downloading));
-watch(
-  () => props.open,
-  (open) => {
-    if (!open) return;
-    selectedType.value = props.type;
-    selectedSiteIds.value = [];
-  }
-);
-watch([selectedType, () => props.sites], () => {
-  selectedSiteIds.value = normalizeArchiveSiteIds(selectedSiteIds.value, props.sites, selectedType.value);
-});
 
-/** 判断站点在当前下载类型下是否禁用。 */
-const isSiteDisabled = (site: NginxArchiveSiteOption) => selectedType.value !== 'conf' && !site.canDownloadFiles;
-
-/** 切换单个 server 的选中状态。 */
-const toggleSite = (site: NginxArchiveSiteOption, checked: boolean) => {
-  if (isSiteDisabled(site)) return;
-  const next = new Set(selectedSiteIds.value);
-  if (checked) next.add(site.id);
-  else next.delete(site.id);
-  selectedSiteIds.value = [...next];
-};
-
-/** 选中当前类型下全部可下载 server。 */
-const selectAll = () => {
-  selectedSiteIds.value = selectableSites.value.map((site) => site.id);
-};
-
-/** 清空全部选择。 */
-const clearAll = () => {
-  selectedSiteIds.value = [];
-};
-
-/** 提交归档选择。 */
-const confirmSelection = () => {
-  if (!canConfirm.value) return;
-  emit('confirm', { type: selectedType.value, siteIds: selectedSiteIds.value });
-};
+const {
+  canConfirm,
+  clearAll,
+  confirmSelection,
+  selectableSites,
+  selectedArchiveOption,
+  selectedSiteIds,
+  selectedType,
+  selectAll,
+  updateSelectedSiteIds,
+} = useArchiveSelection(props, emit);
 </script>
 
 <template>
   <a-modal
     :open="open"
-    title="选择要下载的 Nginx 项目"
-    width="min(820px, 94vw)"
+    width="min(920px, 94vw)"
+    wrap-class-name="nginx-archive-selection-modal-root"
+    class="nginx-archive-selection-modal"
     :mask-closable="!downloading"
     :closable="!downloading"
     :keyboard="!downloading"
-    class="nginx-archive-selection-modal"
+    :destroy-on-close="false"
     @cancel="emit('update:open', false)"
   >
+    <template #title>
+      <div class="archive-modal-title">
+        <span class="archive-modal-title__icon"><CloudDownloadOutlined /></span>
+        <span class="archive-modal-title__copy">
+          <strong>选择要下载的 Nginx 项目</strong>
+          <small>从在线配置中精准裁剪，只带走这次需要的 server</small>
+        </span>
+        <span class="archive-modal-title__status"><i />安全打包</span>
+      </div>
+    </template>
+
     <a-spin :spinning="loading">
       <div class="archive-selection-content">
-        <div class="archive-selection-config">
-          <div>
-            <span>配置来源</span>
-            <code>{{ configPath || '正在读取主配置…' }}</code>
-          </div>
+        <div class="archive-source-bar">
+          <span class="archive-source-bar__icon"><CodeOutlined /></span>
+          <span class="archive-source-bar__copy">
+            <small>NGINX CONFIG SOURCE</small>
+            <code :title="configPath">{{ configPath || '正在读取主配置…' }}</code>
+          </span>
           <YButton size="small" :disabled="downloading" @click="emit('refresh')">
             <template #icon><ReloadOutlined /></template>
             刷新配置
           </YButton>
         </div>
 
-        <a-radio-group v-model:value="selectedType" class="archive-type-options">
-          <a-radio-button v-for="option in ARCHIVE_TYPE_OPTIONS" :key="option.value" :value="option.value">
-            <strong>{{ option.label }}</strong>
-            <span>{{ option.description }}</span>
-          </a-radio-button>
-        </a-radio-group>
-
-        <div class="archive-selection-toolbar">
-          <div>
-            <strong>选择 server</strong>
-            <span>默认不选择，避免无意下载全部项目</span>
+        <section class="archive-selection-section">
+          <div class="archive-section-heading">
+            <span class="archive-section-heading__index">01</span>
+            <span class="archive-section-heading__copy">
+              <strong>选择交付内容</strong>
+              <small>选择运行级整包，或只下载本次需要的部分</small>
+            </span>
           </div>
-          <div>
-            <YButton size="small" :disabled="!selectableSites.length" @click="selectAll">全选</YButton>
-            <YButton size="small" :disabled="!selectedSiteIds.length" @click="clearAll">清空</YButton>
-          </div>
-        </div>
+          <ArchiveTypeSelector v-model="selectedType" :disabled="downloading" />
+        </section>
 
-        <a-empty v-if="!loading && !sites.length" description="主配置中没有可选择的 server 块" />
-        <div v-else class="archive-site-list">
-          <label
-            v-for="site in sites"
-            :key="site.id"
-            class="archive-site-item"
-            :class="{ 'is-disabled': isSiteDisabled(site), 'is-selected': selectedSiteIds.includes(site.id) }"
-          >
-            <a-checkbox
-              :checked="selectedSiteIds.includes(site.id)"
-              :disabled="isSiteDisabled(site)"
-              @change="(event: any) => toggleSite(site, Boolean(event.target?.checked))"
-            />
-            <div class="archive-site-main">
-              <div class="archive-site-title">
-                <strong>{{ site.listenPorts.length ? site.listenPorts.map((port) => `:${port}`).join('、') : '未声明端口' }}</strong>
-                <a-tag v-for="name in site.projectNames" :key="name" color="purple">{{ name }}</a-tag>
-                <a-tag v-if="!site.canDownloadFiles" color="orange">仅可下载配置</a-tag>
-              </div>
-              <div class="archive-site-meta">
-                <span><b>root</b> {{ site.roots.join('、') || '未配置' }}</span>
-                <span><b>server_name</b> {{ site.serverNames.join('、') || '-' }}</span>
-              </div>
-            </div>
-          </label>
-        </div>
+        <section class="archive-selection-section archive-selection-section--sites">
+          <div class="archive-section-heading archive-section-heading--with-actions">
+            <span class="archive-section-heading__index">02</span>
+            <span class="archive-section-heading__copy">
+              <strong>选择 server</strong>
+              <small>整卡点击即可选择，默认留空以避免误下载全部项目</small>
+            </span>
+            <span class="archive-selection-count">{{ selectedSiteIds.length }} / {{ selectableSites.length }} 已选择</span>
+            <span class="archive-selection-actions">
+              <YButton size="small" :disabled="!selectableSites.length" @click="selectAll">全选</YButton>
+              <YButton size="small" :disabled="!selectedSiteIds.length" @click="clearAll">清空</YButton>
+            </span>
+          </div>
+
+          <ArchiveSiteList
+            :sites="sites"
+            :selected-ids="selectedSiteIds"
+            :type="selectedType"
+            :loading="loading"
+            @update:selected-ids="updateSelectedSiteIds"
+          />
+        </section>
       </div>
     </a-spin>
 
     <template #footer>
       <div class="archive-selection-footer">
-        <span>已选择 {{ selectedSiteIds.length }} 个 server</span>
-        <div>
+        <span class="archive-selection-summary">
+          <small>READY TO EXPORT</small>
+          <strong>{{ selectedArchiveOption.label }} · {{ selectedSiteIds.length }} 个 server</strong>
+        </span>
+        <span class="archive-selection-footer__actions">
           <YButton :disabled="downloading" @click="emit('update:open', false)">取消</YButton>
-          <YButton type="primary" :loading="downloading" :disabled="!canConfirm" @click="confirmSelection">开始下载</YButton>
-        </div>
+          <YButton type="primary" :loading="downloading" :disabled="!canConfirm" @click="confirmSelection">
+            <template #icon><DownloadOutlined /></template>
+            开始下载
+          </YButton>
+        </span>
       </div>
     </template>
   </a-modal>

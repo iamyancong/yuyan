@@ -106,3 +106,44 @@ test('两个账号空间可存在同名项目但列表与 ID 查询互不可见'
   assert.equal(teamATargets.length, 1);
   assert.equal(await inContext(() => store.getTarget(targetB.id)), null);
 });
+
+test('服务重启会收口遗留的中央部署 operation 和发布记录', async () => {
+  const [target] = await inContext(() => store.listTargets({}));
+  const job = await inContext(() => jobs.createArtifactJob({
+    targetId: target.id,
+    fileName: 'backend-restart.jar',
+    sizeBytes: 16,
+    sha256: '0'.repeat(64),
+    commitSha: 'abcdef1234567890',
+    branch: 'restart-test',
+    idempotencyKey: 'artifact-restart-test-0001',
+  }));
+  const record = await inContext(() => store.createRecord({
+    targetId: target.id,
+    projectId: target.projectId,
+    projectName: target.projectName,
+    envName: target.envName,
+    branch: 'restart-test',
+    status: 'running',
+    operator: 'tester',
+    logs: [],
+  }));
+  const db = await store.getDeployDb();
+  const timestamp = new Date().toISOString();
+  db.prepare("UPDATE artifact_jobs SET status = 'running', updated_at = ? WHERE id = ?").run(timestamp, job.id);
+  db.prepare("UPDATE central_agent_operations SET status = 'running', updated_at = ? WHERE id = ?").run(timestamp, job.operationId);
+  store.closeDeployDb();
+
+  const operation = await inContext(() => jobs.getCentralOperation(job.operationId));
+  const recoveredRecord = await inContext(() => store.getRecord(record.id));
+  const reopenedDb = await store.getDeployDb();
+  const recoveredJob = reopenedDb.prepare('SELECT status, error_json FROM artifact_jobs WHERE id = ?').get(job.id);
+
+  assert.equal(operation.status, 'failed');
+  assert.equal(operation.error.code, 'service_restarted');
+  assert.equal(recoveredJob.status, 'failed');
+  assert.equal(JSON.parse(recoveredJob.error_json).code, 'service_restarted');
+  assert.equal(recoveredRecord.status, 'stopped');
+  assert.equal(Boolean(recoveredRecord.finishedAt), true);
+  assert.equal(recoveredRecord.logs.some((item) => item.stage === 'interrupted'), true);
+});

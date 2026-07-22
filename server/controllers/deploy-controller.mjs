@@ -125,6 +125,9 @@ const STOPPABLE_DEPLOY_STAGE_KEYS = new Set(['validate', 'clone', 'install', 'bu
 /** 当前进程内正在执行的部署目标任务 */
 const deployTasksByTargetId = new Map();
 
+/** 关闭服务时等待部署任务收口的最长时间 */
+const DEPLOY_SHUTDOWN_GRACE_MS = 2500;
+
 /**
  * 创建部署目标任务。
  * @param {number} targetId - 部署目标 ID
@@ -313,6 +316,29 @@ function startDeployTask(task, runner, emit) {
   task.promise = promise;
   promise.catch(() => {});
   return promise;
+}
+
+/**
+ * 服务关闭前中止当前进程内的部署任务，并短暂等待终态回写。
+ * @param {string} reason - 中止原因
+ * @returns {Promise<void>}
+ */
+export async function abortRunningDeployTasks(reason = '雨燕服务关闭，发布任务已停止') {
+  const tasks = Array.from(deployTasksByTargetId.values()).filter((task) => !task.completed);
+  if (!tasks.length) return;
+
+  tasks.forEach((task) => {
+    if (!task.controller.signal.aborted) {
+      task.controller.abort(new DeployStoppedError(reason));
+    }
+  });
+
+  const pendingPromises = tasks.map((task) => task.promise).filter(Boolean);
+  if (!pendingPromises.length) return;
+  await Promise.race([
+    Promise.allSettled(pendingPromises),
+    new Promise((resolve) => setTimeout(resolve, DEPLOY_SHUTDOWN_GRACE_MS)),
+  ]);
 }
 
 /**
