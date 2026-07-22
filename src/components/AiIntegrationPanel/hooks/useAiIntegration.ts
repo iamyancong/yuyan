@@ -63,7 +63,7 @@ export function useAiIntegration() {
     return '未知错误';
   };
 
-  /** 刷新系统钥匙串账号以及当前用户的设备清单。 */
+  /** 刷新平台安全存储账号以及当前用户的设备清单。 */
   const refreshIdentity = async (force = false) => {
     if (!force && Date.now() - lastIdentityRefreshAt < 15_000) return;
     lastIdentityRefreshAt = Date.now();

@@ -53,7 +53,7 @@
 安装后的雨燕可执行文件同时支持 `--mcp` stdio 模式。Sidecar 根据运行时描述文件连接仅监听 `127.0.0.1` 的 `/agent-api/v1`，雨燕未运行时会自动拉起桌面端。详细架构、工具目录、安全边界和验收方法见 [AI 控制平面与 MCP 文档](docs/ai-control-plane-mcp.md)。
 
 - 前端构建产物（`dist/`）由 Express 静态托管；桌面端由 Tauri 注入本地服务端口，优先使用 `127.0.0.1:3101`，冲突时动态分配。
-- 打包时通过 `scripts/copy-node.js` 将本机 Node 二进制复制进 Tauri 资源目录（macOS 会执行 ad-hoc 签名），保证用户机器无需另装 Node 即可运行（开发模式直接使用系统 Node）。
+- 打包时通过 `scripts/copy-node.js` 将本机 Node 二进制复制进 Tauri 资源目录，保证用户机器无需另装 Node 即可运行（开发模式直接使用系统 Node）。macOS 免费发布采用 ad-hoc 签名，不依赖 Apple Developer 付费证书；首次打开时可能需要右键选择“打开”。
 
 ### 技术栈
 
@@ -188,11 +188,11 @@ pnpm build
 | `APP_UPDATE_CACHE_DIR` | `${DEPLOY_DATA_DIR}/app-update-cache` | GitHub Release 安装包的内网缓存目录 |
 | `APP_UPDATE_PRELOAD_INTERVAL_MS` | `300000` | 中央 API 主动检查并预热最新安装包的间隔（最低 60 秒） |
 | `APP_UPDATE_PRELOAD_INITIAL_DELAY_MS` | `2000` | 中央 API 启动后首次预热的延迟 |
-| `DEPLOY_SECRET_KEY` | 本机随机生成 | 桌面端从系统钥匙串注入；非本机中央服务必须显式配置独立随机密钥，否则拒绝启动 |
+| `DEPLOY_SECRET_KEY` | 本机随机生成 | macOS 从应用本地加密保险库读取，Windows 从 Credential Manager 读取；非本机中央服务必须显式配置独立随机密钥，否则拒绝启动 |
 | `DEPLOY_RECORD_KEEP_PER_PROJECT` | `20` | 每个项目保留的发布记录数 |
 | `DEPLOY_BACKUP_KEEP_PER_TARGET` | `8` | 每个目标保留的远端备份版本数 |
 
-> 打包运行时，Tauri 会自动把部署数据目录与模板缓存目录指向应用数据目录（appData），从 macOS Keychain / Windows Credential Manager 读取每设备主密钥并注入 `DEPLOY_SECRET_KEY`，同时注入动态 `PORT`（见 `src-tauri/src/lib.rs`）。源码和正式桌面包不再包含共享默认密钥。
+> 打包运行时，Tauri 会自动把部署数据目录与模板缓存目录指向应用数据目录（appData），从平台安全存储读取每设备主密钥并注入 `DEPLOY_SECRET_KEY`，同时注入动态 `PORT`（见 `src-tauri/src/lib.rs`）。macOS 使用 AES-256-GCM 加密的应用本地保险库，Windows 继续使用 Credential Manager；源码和正式桌面包不包含共享默认密钥。
 
 ---
 
@@ -216,7 +216,7 @@ pnpm build
 
 ## 🤖 持续集成
 
-`.github/workflows/build-tauri.yml` 在指定分支推送或手动触发时，于 Windows、macOS ARM 与 macOS Intel runner 完成 Rust / Node 环境准备、依赖安装与 `pnpm run build`，发布 DMG/EXE、签名 Updater 资源和 `latest.json`。CI 通过 `PERSONAL_ACCESS_TOKEN` 拉取私有包；正式构建还必须配置与客户端内置公钥匹配的 `TAURI_SIGNING_PRIVATE_KEY`（可选密码使用 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`）。流水线会用生成的产物反向验证公私钥匹配，错误密钥会阻止 Release。
+`.github/workflows/build-tauri.yml` 在指定分支推送或手动触发时，于 Windows、macOS ARM 与 macOS Intel runner 完成 Rust / Node 环境准备、依赖安装与 `pnpm run build`，发布 DMG/EXE、签名 Updater 资源和 `latest.json`。CI 通过 `PERSONAL_ACCESS_TOKEN` 拉取私有包；正式构建必须配置与客户端内置公钥匹配的 `TAURI_SIGNING_PRIVATE_KEY`（可选密码使用 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`）。该密钥只用于免费的 Tauri Updater 产物验签，不需要 Apple Developer 或 Windows 商业代码签名证书。流水线会用生成的产物反向验证公私钥匹配，错误密钥会阻止 Release。
 
 更新能力发布时必须先把服务端签名清单与缓存逻辑部署到 `yuyan-3.0`，再发布包含新客户端逻辑的桌面版本。首次从旧客户端迁移到该版本可能仍需按旧流程安装一次；此后版本即可在应用内完成覆盖并自动重启。
 
@@ -225,6 +225,9 @@ pnpm build
 ## ❓ 常见问题
 
 - **启动提示「未检测到本地 Node.js 环境」**：开发模式下应用使用系统 Node，请确保 `node` 在 PATH 中；打包版本会内置 Node 二进制，一般无需额外安装。
+- **macOS 每次启动都要求授权钥匙串**：新版本不再访问 macOS 钥匙串，账号、设备私钥和本机数据库密钥改存应用数据目录中的 AES-256-GCM 加密保险库，因此不会再出现该授权弹窗。首次从旧版升级需要重新登录一次；已保存的 SSH、Nacos 等本机敏感配置因旧主密钥无法在不触发钥匙串的前提下恢复，需要重新录入。旧钥匙串项目不会被自动读取或删除，便于必要时回退旧版本。
+- **免费 macOS 包首次无法直接打开**：由于采用 ad-hoc 签名且不做 Apple 公证，首次安装可能被 Gatekeeper 拦截。请在 Finder 中右键应用选择“打开”并确认；之后普通启动即可。Windows 用户仍直接安装 EXE，无需配置任何 GitHub Secret。
+- **本地保险库的安全边界**：保险库密文、随机密钥和目录分别限制为当前系统用户可访问；它能避免明文落盘和普通误读，但不能抵御已经取得同一系统用户权限的恶意程序。高安全环境仍建议使用付费系统代码签名与企业设备管理。
 - **`pnpm install` 报 401 / 找不到 `@ycwang-dev/*`**：未配置 `GITHUB_TOKEN`，或 Token 无 `read:packages` 权限。
 - **创建微应用失败**：检查 `GITLAB_TOKEN`、模板仓库地址与网络连通性（启动日志会给出对应提示）。
 

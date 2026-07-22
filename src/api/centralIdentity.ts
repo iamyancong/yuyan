@@ -54,7 +54,14 @@ function getCentralBase(): string {
 async function requestCentral<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${getCentralBase()}${path}`, {
     ...options,
-    headers: { Accept: 'application/json', ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(options.headers || {}) },
+    cache: 'no-store',
+    headers: {
+      Accept: 'application/json',
+      'Cache-Control': 'no-cache, no-store',
+      Pragma: 'no-cache',
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(options.headers || {}),
+    },
   });
   const body = await response.json().catch(() => null);
   if (!response.ok || !body?.success) {

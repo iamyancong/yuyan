@@ -1,5 +1,14 @@
 # 发现与决策
 
+## 2026-07-22：免费 macOS 本地保险库替代钥匙串
+
+### 已确认边界
+- 当前 macOS `secure-vault-v2` 同时保存 Ed25519 设备私钥、本机数据库主密钥和 GitLab 活动账号；启动内嵌 Node 时会立即读取主密钥，因此仅延迟登录读取不能消除启动弹窗。
+- Windows 使用 `keyring` 的 `windows-native` 分项存储，没有 macOS ad-hoc 更新导致的钥匙串 ACL 身份漂移问题，应保持现有实现。
+- 免费方案不读取旧 macOS 钥匙串，升级后必须重新登录；旧 `DEPLOY_SECRET_KEY` 不可获得意味着本机 SQLite 中已保存的 SSH/Nacos 密文无法继续解密，相关敏感配置需要重新录入，普通目标/列表数据仍可保留。
+- macOS 新保险库应放入 Tauri `app_data_dir`，使用随机本地密钥加密、目录 `0700`、文件 `0600`、同目录临时文件原子替换；该方案防止其他系统用户和偶然明文泄露，但不能抵御当前登录用户权限下的恶意进程。
+- GitHub Actions 继续使用免费 Tauri Updater Minisign 密钥校验更新包；Apple Developer Secrets、Developer ID 和公证门禁需要撤销，macOS 继续 ad-hoc 分发并保留首次右键打开的边界。
+
 ## 2026-07-21：可信项目免审批、破坏性工具与稳定 MCP 启动路径
 
 ### 用户目标与截图验收
@@ -309,3 +318,12 @@
 - 远程 `/scaffold-api` 原先绕过 v2 鉴权，是多租户旁路；现已复用短期身份、GitLab 实时证明、RBAC、迁移只读与中央审计，本机 Tauri 路径保持可用。
 - GitHub Actions 原先仍把测试数据库地址和共享部署 Token 写入正式包；已移除并要求 HTTPS 中央地址，同时加入 Vue、Server、MCP、Rust 全套质量任务。
 - 首次多租户 v5 迁移现在单独生成 `.pre-multitenant-v5-*.bak`，且不会在重复启动时反复备份。
+
+# 2026-07-22 免费 macOS 本地保险库与跨平台发布
+
+- macOS 启动弹窗来自旧实现调用系统钥匙串；仅选择“始终允许”无法稳定覆盖 ad-hoc 更新后的代码身份变化，因此免费方案必须完全移除 macOS 运行时钥匙串访问。
+- 新保险库的 AES 密钥与密文都位于当前用户应用数据目录，主要安全边界是 `0700/0600` 文件权限；加密可避免敏感 JSON 明文落盘，但不抵御已经取得同一系统用户权限的恶意进程。
+- 不读取旧钥匙串就无法取得旧 `DEPLOY_SECRET_KEY`，因此旧 SQLite 中已加密的 SSH/Nacos 等敏感字段无法自动迁移；普通服务器/目标/历史元数据仍保留，用户需重新登录并重新录入敏感字段。
+- Windows 不需要本地文件保险库，继续使用现有 Credential Manager 分项存储；普通终端用户在两个平台都无需配置 GitHub Secrets，Secrets 只属于发布仓库维护者。
+- Apple Developer 代码签名、公证与 Tauri Updater Minisign 是两条独立信任链；免费方案只取消前者，Updater 私钥与客户端公钥匹配门禁仍必须保留。
+- `keyring` 依赖已只启用 `windows-native` feature；macOS 构建不包含 `apple-native` 钥匙串后端，业务代码的所有 keyring 入口也均被 `cfg(not(target_os = "macos"))` 排除。

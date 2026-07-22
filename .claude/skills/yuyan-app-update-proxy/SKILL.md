@@ -51,6 +51,7 @@ Tauri 客户端
 ## 签名与发布
 
 - `tauri.conf.json` 必须固定可信公钥并开启 `createUpdaterArtifacts`；私钥只通过 GitHub Actions `TAURI_SIGNING_PRIVATE_KEY` 注入，禁止写入仓库、日志或客户端。
+- Minisign Updater 签名用于验证更新资源且必须保留；免费发布允许 macOS 使用 ad-hoc 签名，不要求 Apple Developer Secrets。采用 ad-hoc 签名时，持久凭据不得依赖 macOS 钥匙串 ACL，应使用应用本地加密保险库，避免更新后反复授权。
 - Release 必须包含 `latest.json`、macOS ARM/Intel `.app.tar.gz + .sig`、Windows NSIS `.exe + .sig`，同时保留 DMG/EXE 用于首次安装和恢复。
 - CI 必须用生成产物反向验证签名与客户端内置公钥匹配；公私钥不匹配时禁止创建 Release。
 - 服务端先部署签名清单与缓存能力，再发布新客户端；首次从旧协议迁移可能仍需手工安装一次。

@@ -4,7 +4,7 @@
 在保留既有部署与自动更新缓存架构的前提下，完成服务端预热和本机预下载全程静默、签名更新包就绪后再展示胶囊、用户确认后自动覆盖安装并重启，同时补齐持久化恢复与异常边界。
 
 ## 当前阶段
-阶段 57（已完成）
+阶段 66（进行中）
 
 ## 各阶段
 
@@ -392,6 +392,30 @@
 - [x] 执行 Vue、服务端、MCP、Rust 和打包前检查，记录真实多人/远程测试边界
 - **状态：** complete（代码与自动化；真实 GitLab 双用户/双设备/测试服务器验收仍是发布前外部门禁）
 
+### 阶段 65：免费本地保险库设计与兼容边界
+- [x] 复核 macOS 钥匙串、设备身份、本机数据库主密钥与活动账号的依赖关系
+- [x] 设计不读取旧钥匙串的本地加密保险库、文件权限和原子写入协议
+- [x] 明确已有服务器凭据不可直接继承，升级后重新登录/重新录入敏感配置的行为
+- **状态：** complete
+
+### 阶段 66：跨平台安全存储实现
+- [x] macOS 切换为应用数据目录下的本地加密保险库，启动过程不访问钥匙串
+- [x] Windows 保持 Credential Manager 分项存储逻辑不变
+- [x] 初始化存储目录并补齐加密、篡改、权限与持久化测试
+- **状态：** complete
+
+### 阶段 67：免费发布流程回退
+- [x] 移除 GitHub Actions 对 Apple Developer Secrets、Developer ID 和公证的强制要求
+- [x] 恢复 macOS ad-hoc 构建验收，同时保留 Tauri Updater Minisign 验签
+- [x] 同步 README 与项目发布/更新 Skills，明确免费方案和用户迁移步骤
+- **状态：** complete
+
+### 阶段 68：macOS/Windows 验证与交付
+- [x] 运行 Rust fmt/check/test、Vue 类型检查、服务端测试和前端生产构建
+- [x] 检查 macOS 产物不触发钥匙串访问，并验证 Windows 条件编译保持原凭据库路径
+- [x] 检查 staged/unstaged 差异，保护用户现有修改且不提交、不推送
+- **状态：** complete
+
 ## 已做决策
 | 决策 | 理由 |
 |------|------|
@@ -465,6 +489,7 @@
 | 完整本地 Tauri 打包在 updater 签名阶段被拦截 | 1 | 已确认前端、Rust release 和 `.app.tar.gz` 均构建成功；本机缺少与固定公钥匹配的私钥，保留安全门禁并由 CI Secret 完成真实签名 |
 | 复用本机 VPN 私钥实签失败 | 1 | 私钥既需要未知密码又与已发布 VPN 公钥不匹配；改为生成 yuyan-app 专用加密密钥并独立托管 |
 | macOS `base64 --decode <file>` 参数格式不兼容 | 1 | 改用 BSD `base64 -D -i <file>` 读取公开 key id，不重复错误命令 |
+| 本地保险库首轮 `cargo fmt --check` 报告新增 Rust 长行排版差异 | 1 | 运行 `cargo fmt` 做纯机械格式化后再执行编译和测试 |
 | CI #128 三平台均提示 updater 私钥 base64 格式无效 | 1 | 用新生成的 yuyan-app 加密私钥覆盖 GitHub Secret，并新增配套密码 Secret |
 | 直接把配置公钥解码后与 `.pub` 文件逐字节比较失败 | 1 | `.pub` 本身就是 Tauri 使用的 base64 文本；改为规范化文本比较，并以真实产物签名验签作为最终依据 |
 | `yuyan-3.0` worktree 默认 Node 12 不支持 `--test` 且没有独立依赖目录 | 2 | 显式使用 Node 22，并临时链接主工作区依赖完成 18 项更新测试，随后移除链接 |
@@ -473,6 +498,9 @@
 | 系统默认 Node 12 无法运行当前 pnpm | 1 | 使用 Codex 工作区 Node 22 运行服务端测试与现有依赖入口 |
 | 工作区 pnpm 包装器在非 TTY 下尝试清理依赖目录并中止 | 1 | 不改依赖，直接用 Node 22 执行现有 vue-tsc 与 Vite 入口 |
 | macOS 交叉检查 Windows target 被 ring 缺少 MSVC `assert.h` 阻断 | 1 | 保留本机原生完整编译测试，并用 Windows target 最小 Rust 编译验证 `CommandExt::creation_flags` 代码 |
+| 本机完整 Windows target 检查被 ring 缺少 MSVC `assert.h` 阻断 | 1 | 不重复交叉构建；核对 Windows 条件编译仍走原 Credential Manager，并以 GitHub Actions Windows runner 为最终平台构建门禁 |
+| 系统 Ruby 2.6 的 `YAML.load_file/load` 不接受 `aliases:` 关键字参数 | 2 | 工作流不使用 YAML alias，改用普通 `YAML.load(File.read(...))` 完成语法解析，不修改系统 Ruby |
+| 在 `src-tauri` 工作目录读取仓库级 workflow 路径失败 | 1 | Rust 全量测试不受影响；后续仓库级检查统一在项目根目录执行 |
 
 ## 备注
 - 当前工作区已有用户改动，所有修改必须基于现状增量完成。
