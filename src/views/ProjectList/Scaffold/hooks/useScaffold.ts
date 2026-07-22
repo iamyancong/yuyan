@@ -2,7 +2,9 @@ import { reactive, ref, computed, onMounted, onUnmounted, watch, nextTick } from
 import { message } from 'ant-design-vue';
 import type { FormInstance } from 'ant-design-vue';
 import { createMicroAppWithProgress, type CreateMicroAppPayload, type ScaffoldProgressEvent } from '@/api/scaffold';
+import { setGitLabToken, updateGitLabClient } from '@/api/gitlab';
 import { useAuth } from '@/composables/useAuth';
+import { createCredentialFingerprint } from '../constant';
 
 type ScaffoldStageKey = 'validate' | 'pull-template' | 'generate' | 'install-sync-skills' | 'gitlab-create-push' | 'package-download' | 'finalize';
 type ScaffoldStageStatus = 'wait' | 'process' | 'finish' | 'error';
@@ -95,7 +97,7 @@ export function useScaffold() {
   const loading = computed(() => progress.status === 'running');
 
   // 集成认证状态
-  const { isLoggedIn, authState } = useAuth();
+  const { isLoggedIn, authState, authLoading } = useAuth();
 
   const visibilityOptions = [
     { label: 'private', value: 'private' },
@@ -114,7 +116,7 @@ export function useScaffold() {
     createRepo: true,
     gitlabHost: import.meta.env.VITE_GITLAB_HOST || '',
     gitlabToken: '',
-    namespaceId: '2088',
+    namespaceId: undefined,
     visibility: 'private',
     framework: 'vue3',
   });
@@ -257,6 +259,22 @@ export function useScaffold() {
   // 计算属性：是否已登录且有token（确保为布尔值）
   const isAuthenticated = computed(() => !!(isLoggedIn.value && authState.value.token));
 
+  /** GitLab Namespace 请求是否已具备稳定的认证上下文。 */
+  const gitlabContextReady = computed(() => {
+    return !authLoading.value && Boolean(form.gitlabHost?.trim() && form.gitlabToken.trim());
+  });
+
+  /**
+   * Namespace 缓存隔离键，不包含 Token 明文。
+   * 已登录时按账号隔离，手动 Token 模式按凭据指纹隔离。
+   */
+  const namespaceCacheKey = computed(() => {
+    const host = form.gitlabHost?.trim().replace(/\/+$/, '') || '';
+    const accountKey = authState.value.accountId || (authState.value.user?.id ? `gitlab-user-${authState.value.user.id}` : '');
+    const credentialKey = accountKey || `manual-${createCredentialFingerprint(form.gitlabToken)}`;
+    return `${host}::${credentialKey}`;
+  });
+
   // 当认证状态改变时，自动填充token和host
   const updateAuthFields = async () => {
     console.log('更新认证字段，当前认证状态:', {
@@ -272,7 +290,11 @@ export function useScaffold() {
 
       // 只有当值真正发生变化时才更新，避免不必要的响应式触发
       if (form.gitlabToken !== newToken || form.gitlabHost !== newHost) {
-        console.log('更新表单字段:', { newToken, newHost });
+        console.log('更新表单 GitLab 认证字段:', {
+          hostChanged: form.gitlabHost !== newHost,
+          tokenChanged: form.gitlabToken !== newToken,
+          hasToken: Boolean(newToken),
+        });
         form.gitlabToken = newToken;
         form.gitlabHost = newHost;
 
@@ -307,7 +329,10 @@ export function useScaffold() {
   watch(
     () => authState.value.token,
     async (newToken, oldToken) => {
-      console.log('认证Token变化:', { oldToken, newToken });
+      console.log('认证 Token 状态变化:', {
+        hadToken: Boolean(oldToken),
+        hasToken: Boolean(newToken),
+      });
       await updateAuthFields();
     }
   );
@@ -318,6 +343,17 @@ export function useScaffold() {
       console.log('认证Host变化:', { oldHost, newHost });
       await updateAuthFields();
     }
+  );
+
+  // 未登录时允许使用手动 Token，并同步到 GitLab API 客户端。
+  watch(
+    () => [form.gitlabHost, form.gitlabToken, isAuthenticated.value, authLoading.value] as const,
+    ([host, token, authenticated, loadingAuth]) => {
+      if (loadingAuth || authenticated) return;
+      setGitLabToken(token.trim());
+      updateGitLabClient(host?.trim());
+    },
+    { immediate: true }
   );
 
   // 监听全局认证状态变化事件
@@ -381,6 +417,34 @@ export function useScaffold() {
         },
       },
     ],
+    gitlabHost: [
+      {
+        trigger: 'change',
+        validator: (_: unknown, value: string) => {
+          return !form.createRepo || value?.trim() ? Promise.resolve() : Promise.reject(new Error('请先完成 GitLab 登录'));
+        },
+      },
+    ],
+    gitlabToken: [
+      {
+        trigger: 'change',
+        validator: (_: unknown, value: string) => {
+          return !form.createRepo || value?.trim() ? Promise.resolve() : Promise.reject(new Error('请先完成 GitLab 登录或填写 Token'));
+        },
+      },
+    ],
+    namespaceId: [
+      {
+        trigger: 'change',
+        validator: (_: unknown, value?: string) => {
+          if (!form.createRepo) return Promise.resolve();
+          if (!value) return Promise.reject(new Error('请选择 GitLab Namespace'));
+          return /^\d+$/.test(value) && Number(value) > 0
+            ? Promise.resolve()
+            : Promise.reject(new Error('GitLab Namespace ID 无效，请重新选择'));
+        },
+      },
+    ],
   });
 
   const validateAppName = () => {
@@ -419,7 +483,7 @@ export function useScaffold() {
       createRepo: true,
       gitlabHost: currentHost,
       gitlabToken: currentToken,
-      namespaceId: '2088',
+      namespaceId: undefined,
       visibility: 'private',
       framework: 'vue3',
     });
@@ -445,6 +509,11 @@ export function useScaffold() {
    * @description 创建微应用并推送到 GitLab，如果 Git push 失败则视为创建失败
    */
   const handleCreate = async () => {
+    if (form.createRepo && authLoading.value) {
+      message.warning('正在恢复 GitLab 登录状态，请稍后再试');
+      return;
+    }
+
     try {
       await formRef.value?.validate();
     } catch {
@@ -506,6 +575,8 @@ export function useScaffold() {
     validateActiveRule,
     visibilityOptions,
     isAuthenticated,
+    gitlabContextReady,
+    namespaceCacheKey,
     rules,
     formRef,
   };

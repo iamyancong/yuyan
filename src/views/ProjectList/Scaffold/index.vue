@@ -6,7 +6,20 @@ import { FRAMEWORK_OPTIONS } from './constant';
 import ApplicationInfoCard from './components/ApplicationInfoCard.vue';
 import GitLabConfigCard from './components/GitLabConfigCard.vue';
 
-const { form, progress, loading, result, handleCreate, handleReset, visibilityOptions, isAuthenticated, rules, formRef } = useScaffold();
+const {
+  form,
+  progress,
+  loading,
+  result,
+  handleCreate,
+  handleReset,
+  visibilityOptions,
+  isAuthenticated,
+  gitlabContextReady,
+  namespaceCacheKey,
+  rules,
+  formRef,
+} = useScaffold();
 const { handleDownload } = useScaffoldDownload(result);
 
 /** GitOps 配置弹窗体积较大，仅在打开时加载 */
@@ -23,7 +36,6 @@ const currentTemplateLabel = computed(() => {
   const found = frameworkOptions.find((opt) => opt.value === (form.framework as string));
   return found?.label ?? '通用模板';
 });
-const namespaceCacheKey = computed(() => `${form.gitlabHost || ''}::${form.gitlabToken || ''}`);
 
 /**
  * 提交创建微应用。
@@ -100,6 +112,7 @@ const handleGitOpsUpdateOpen = (visible: boolean) => {
         <GitLabConfigCard
           :form="form"
           :is-authenticated="isAuthenticated"
+          :gitlab-context-ready="gitlabContextReady"
           :visibility-options="visibilityOptions"
           :namespace-cache-key="namespaceCacheKey"
         />

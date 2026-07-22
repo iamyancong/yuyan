@@ -31,6 +31,8 @@ export interface NamespaceTreeNode {
 export interface NamespaceEnsureResult {
   valid: boolean;
   group?: GitLabGroup;
+  error?: unknown;
+  cancelled?: boolean;
 }
 
 /** TreeSelect 节点值。 */
@@ -141,7 +143,7 @@ const normalizeNodes = (nodes: NamespaceTreeNode[]): NamespaceTreeNode[] => {
  * @returns Namespace 选择器状态与事件
  */
 export const useGitlabNamespaces = () => {
-  const treeLoading = ref(false);
+  const treeRequestCount = ref(0);
   const searchLoading = ref(false);
   const treeData = ref<NamespaceTreeNode[]>([]);
   const searchTreeData = ref<NamespaceTreeNode[]>([]);
@@ -155,7 +157,9 @@ export const useGitlabNamespaces = () => {
 
   let searchTimer: number | null = null;
   let searchRequestSeq = 0;
+  let cacheGeneration = 0;
 
+  const treeLoading = computed(() => treeRequestCount.value > 0);
   const loading = computed(() => treeLoading.value || searchLoading.value);
   const isSearching = computed(() => !!searchValue.value.trim());
   const displayTreeData = computed(() => (isSearching.value ? searchTreeData.value : treeData.value));
@@ -167,6 +171,23 @@ export const useGitlabNamespaces = () => {
     if (!searchTreeData.value.length) return '未找到匹配的 GitLab Group';
     return '';
   });
+
+  /** 标记一个树数据请求开始。 */
+  const startTreeRequest = () => {
+    treeRequestCount.value += 1;
+  };
+
+  /** 标记一个树数据请求结束。 */
+  const finishTreeRequest = () => {
+    treeRequestCount.value = Math.max(0, treeRequestCount.value - 1);
+  };
+
+  /**
+   * 判断异步结果是否仍属于当前 GitLab 账号上下文。
+   * @param generation 请求发起时的上下文版本
+   * @returns 是否仍可写入状态
+   */
+  const isCurrentGeneration = (generation: number): boolean => generation === cacheGeneration;
 
   /**
    * 写入已知节点缓存，保证选中态可以显示 full_path。
@@ -255,18 +276,22 @@ export const useGitlabNamespaces = () => {
    */
   const loadTopGroups = async () => {
     if (topGroupsLoaded.value) return;
-    treeLoading.value = true;
+    const generation = cacheGeneration;
+    startTreeRequest();
     try {
       const groups = await getTopLevelGroups();
+      if (!isCurrentGeneration(generation)) return;
       const nodes = normalizeNodes(groups.map(mapGroupToNode));
       cacheGroups(groups);
       mergeTreeRootNodes(nodes);
       cacheNodes(nodes);
       topGroupsLoaded.value = true;
     } catch (error) {
-      message.error(error instanceof Error ? error.message : '加载 GitLab 顶层分组失败');
+      if (isCurrentGeneration(generation)) {
+        message.error(error instanceof Error ? error.message : '加载 GitLab 顶层分组失败');
+      }
     } finally {
-      treeLoading.value = false;
+      finishTreeRequest();
     }
   };
 
@@ -276,11 +301,18 @@ export const useGitlabNamespaces = () => {
    * @returns 子节点
    */
   const loadChildren = async (parentId: number): Promise<NamespaceTreeNode[]> => {
-    const groups = await getGroupSubgroups(parentId);
-    const nodes = normalizeNodes(groups.map(mapGroupToNode));
-    cacheGroups(groups);
-    cacheNodes(nodes);
-    return nodes;
+    const generation = cacheGeneration;
+    startTreeRequest();
+    try {
+      const groups = await getGroupSubgroups(parentId);
+      if (!isCurrentGeneration(generation)) return [];
+      const nodes = normalizeNodes(groups.map(mapGroupToNode));
+      cacheGroups(groups);
+      cacheNodes(nodes);
+      return nodes;
+    } finally {
+      finishTreeRequest();
+    }
   };
 
   /**
@@ -289,11 +321,13 @@ export const useGitlabNamespaces = () => {
    * @returns 子节点
    */
   const loadAndAttachChildren = async (parentId: number): Promise<NamespaceTreeNode[]> => {
+    const generation = cacheGeneration;
     const parentValue = String(parentId);
     const existing = findNodeByValue(treeData.value, parentValue);
     if (existing?.children?.length) return existing.children;
 
     const nodes = await loadChildren(parentId);
+    if (!isCurrentGeneration(generation)) return [];
     treeData.value = setNodeChildren(treeData.value, parentValue, nodes);
     return nodes;
   };
@@ -307,9 +341,12 @@ export const useGitlabNamespaces = () => {
     const cached = groupDetailMap.value.get(String(groupId));
     if (cached) return cached;
 
+    const generation = cacheGeneration;
     const group = await getGroupById(groupId);
-    cacheGroups([group]);
-    cacheNodes([mapGroupToNode(group)]);
+    if (isCurrentGeneration(generation)) {
+      cacheGroups([group]);
+      cacheNodes([mapGroupToNode(group)]);
+    }
     return group;
   };
 
@@ -429,22 +466,28 @@ export const useGitlabNamespaces = () => {
     const groupId = Number(id);
     if (!groupId || Number.isNaN(groupId)) return;
 
-    treeLoading.value = true;
+    const generation = cacheGeneration;
+    startTreeRequest();
     try {
       await loadTopGroups();
+      if (!isCurrentGeneration(generation)) return;
       const path = await getGroupPath(groupId);
+      if (!isCurrentGeneration(generation)) return;
       const parentPath = path.slice(0, -1);
 
       for (const group of parentPath) {
         await loadAndAttachChildren(group.id);
+        if (!isCurrentGeneration(generation)) return;
       }
 
       cacheNodes(path.map(mapGroupToNode));
       expandedKeys.value = parentPath.map((group) => String(group.id));
     } catch (error) {
-      message.warning(error instanceof Error ? error.message : '定位默认 Namespace 失败');
+      if (isCurrentGeneration(generation)) {
+        message.warning(error instanceof Error ? error.message : '定位默认 Namespace 失败');
+      }
     } finally {
-      treeLoading.value = false;
+      finishTreeRequest();
     }
   };
 
@@ -463,24 +506,33 @@ export const useGitlabNamespaces = () => {
    */
   const ensureOptionForId = async (id?: number | string | null): Promise<NamespaceEnsureResult> => {
     const groupId = Number(id);
-    if (!groupId || Number.isNaN(groupId)) return { valid: false };
+    if (!groupId || Number.isNaN(groupId)) {
+      return { valid: false, error: { code: 'INVALID_NAMESPACE_ID' } };
+    }
 
     const cached = selectedNodeMap.value.get(String(groupId));
     if (cached) {
       return { valid: true };
     }
 
-    treeLoading.value = true;
+    const generation = cacheGeneration;
+    startTreeRequest();
     try {
       const group = await getGroupById(groupId);
+      if (!isCurrentGeneration(generation)) {
+        return { valid: false, cancelled: true };
+      }
       const node = mapGroupToNode(group);
       cacheGroups([group]);
       cacheNodes([node]);
       return { valid: true, group };
-    } catch {
-      return { valid: false };
+    } catch (error) {
+      if (!isCurrentGeneration(generation)) {
+        return { valid: false, cancelled: true };
+      }
+      return { valid: false, error };
     } finally {
-      treeLoading.value = false;
+      finishTreeRequest();
     }
   };
 
@@ -515,6 +567,7 @@ export const useGitlabNamespaces = () => {
    * 按账号上下文清空缓存。
    */
   const resetNamespaceCache = () => {
+    cacheGeneration += 1;
     clearSearch();
     treeData.value = [];
     selectedNodeMap.value = new Map();

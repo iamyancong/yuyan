@@ -42,14 +42,23 @@ export function useBackendJavaManager(params: UseBackendJavaManagerParams) {
     if (!params.open.value) return;
     loading.value = true;
     try {
-      const [local, remote] = await Promise.all([
+      const [localResult, remoteResult] = await Promise.allSettled([
         listDeployJdks(),
         params.serverId.value ? listServerJavaRuntimes(params.serverId.value) : Promise.resolve([]),
       ]);
-      localJdks.value = local;
-      serverRuntimes.value = remote;
-    } catch (error: any) {
-      message.error(getErrorMessage(error));
+      const errors: string[] = [];
+      if (localResult.status === 'fulfilled') {
+        localJdks.value = localResult.value;
+      } else {
+        errors.push(`本机构建 JDK 加载失败：${getErrorMessage(localResult.reason)}`);
+      }
+      if (remoteResult.status === 'fulfilled') {
+        serverRuntimes.value = remoteResult.value;
+      } else {
+        serverRuntimes.value = [];
+        errors.push(`服务器运行 JDK 加载失败：${getErrorMessage(remoteResult.reason)}`);
+      }
+      if (errors.length) message.error(errors.join('；'));
     } finally {
       loading.value = false;
     }
