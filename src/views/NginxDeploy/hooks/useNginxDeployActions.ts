@@ -158,7 +158,7 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
   }));
 
   const targetActionConfig = computed<YTableActionConfig>(() => ({
-    width: 360,
+    width: 280,
     fixed: 'right',
     buttons: [
       {
