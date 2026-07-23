@@ -92,6 +92,11 @@ export interface AgentApprovalPolicy {
   autoApproveGrantedProjects: boolean;
 }
 
+/** 已结束 Agent 任务的本机保留策略，0 表示永久保留。 */
+export interface AgentOperationRetentionPolicy {
+  retentionDays: 0 | 7 | 30 | 90;
+}
+
 /** 稳定 MCP 启动器信息。 */
 export interface AgentLauncherInfo {
   path: string;
@@ -122,7 +127,8 @@ export interface AgentClientStatus {
 /** AI 控制平面快照。 */
 export interface AgentSnapshot {
   approvalPolicy: AgentApprovalPolicy;
-  operations: { items: AgentOperation[]; total: number };
+  operationRetentionPolicy: AgentOperationRetentionPolicy;
+  operations: { items: AgentOperation[]; total: number; completedTotal: number };
   grants: { items: AgentProjectGrant[]; total: number };
   audit: { items: Array<Record<string, unknown>>; total: number };
   auditChain: { valid: boolean; count: number; brokenAt?: string };
@@ -284,6 +290,24 @@ export const rejectAgentOperation = (id: string) => requestAgentApi<AgentOperati
 
 /** 取消 Agent 操作。 */
 export const cancelAgentOperation = (id: string) => requestAgentApi<AgentOperation>(`/operations/${id}/cancel`, { method: 'POST' });
+
+/** 删除一条已结束 Agent 任务记录。 */
+export const deleteAgentOperation = (id: string) => requestAgentApi<{ deleted: boolean }>(`/operations/${id}`, {
+  method: 'DELETE',
+  body: JSON.stringify({ changedBy: '雨燕桌面端用户' }),
+});
+
+/** 清空当前账号和设备的全部已结束 Agent 任务。 */
+export const clearCompletedAgentOperations = () => requestAgentApi<{ deletedCount: number }>('/operations/completed', {
+  method: 'DELETE',
+  body: JSON.stringify({ changedBy: '雨燕桌面端用户' }),
+});
+
+/** 更新已结束 Agent 任务的本机保留策略。 */
+export const updateAgentOperationRetentionPolicy = (retentionDays: AgentOperationRetentionPolicy['retentionDays']) => requestAgentApi<AgentOperationRetentionPolicy & { deletedCount: number }>('/operation-retention-policy', {
+  method: 'PUT',
+  body: JSON.stringify({ retentionDays, changedBy: '雨燕桌面端用户' }),
+});
 
 /** 查询单个 Agent 任务。 */
 export const getAgentOperation = (id: string) => requestAgentApi<AgentOperation>(`/operations/${id}`);

@@ -8,9 +8,12 @@ import path from 'node:path';
 import { DEPLOY_OPENAPI_DIR, PORT } from '../config/constants.mjs';
 import {
   appendAgentAudit,
+  clearCompletedAgentOperationRecords,
   createAgentOperation,
   createAgentPlan,
+  deleteAgentOperationRecord,
   getAgentApprovalPolicy,
+  getAgentOperationRetentionPolicy,
   getAgentOperation,
   getAgentOperationInternal,
   getAgentOperationPayload,
@@ -24,6 +27,7 @@ import {
   revokeProjectGrant,
   saveDeviceOpenApiArtifact,
   updateAgentApprovalPolicy,
+  updateAgentOperationRetentionPolicy,
   updateAgentOperation,
   updateAgentOperationInternal,
   upsertProjectGrant,
@@ -1181,11 +1185,50 @@ export function getAgentControlPlaneSnapshot(query = {}) {
   const limit = Math.min(100, Math.max(1, Number(query.limit || 50)));
   return {
     approvalPolicy: getAgentApprovalPolicy(),
+    operationRetentionPolicy: getAgentOperationRetentionPolicy(),
     operations: listAgentOperations({ status: VALID_OPERATION_STATUSES.has(query.status) ? query.status : '', limit, offset }),
     grants: listProjectGrants({ limit: 100, offset: 0 }),
     audit: listAgentAudit({ limit: 50, offset: 0 }),
     auditChain: verifyAgentAuditChain(),
   };
+}
+
+/** UI 更新已结束任务的本机保留策略。 */
+export function setAgentOperationRetentionPolicy(retentionDays, changedBy = 'local-user') {
+  const result = updateAgentOperationRetentionPolicy({ retentionDays });
+  appendAgentAudit({
+    action: 'operation_retention_updated',
+    changedBy: String(changedBy).slice(0, 100),
+    retentionDays: result.retentionDays,
+    deletedCount: result.deletedCount,
+  });
+  return result;
+}
+
+/** UI 删除一条已结束任务记录，进行中任务必须先取消或等待结束。 */
+export function removeAgentOperationRecord(operationId, changedBy = 'local-user') {
+  const result = deleteAgentOperationRecord(operationId);
+  if (result.reason === 'not_found') throw new AgentError('operation_not_found', '任务记录不存在或已被清理');
+  if (result.reason === 'active') throw new AgentError('operation_active', '待审批或执行中的任务不能删除，请先取消或等待任务结束');
+  appendAgentAudit({
+    action: 'operation_record_deleted',
+    changedBy: String(changedBy).slice(0, 100),
+    operationId: String(operationId),
+  });
+  return result;
+}
+
+/** UI 清空全部已结束任务，安全审计链和活动任务保持不变。 */
+export function clearCompletedAgentOperationHistory(changedBy = 'local-user') {
+  const result = clearCompletedAgentOperationRecords();
+  if (result.deletedCount > 0) {
+    appendAgentAudit({
+      action: 'completed_operation_records_cleared',
+      changedBy: String(changedBy).slice(0, 100),
+      deletedCount: result.deletedCount,
+    });
+  }
+  return result;
 }
 
 /** UI 更新审批策略并写入审计。 */

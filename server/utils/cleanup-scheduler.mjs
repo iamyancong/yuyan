@@ -6,7 +6,8 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { CLEANUP_INTERVAL_MS, TEMP_FILE_MAX_AGE_MS } from '../config/constants.mjs';
+import { AGENT_SESSION_TOKEN, CLEANUP_INTERVAL_MS, TEMP_FILE_MAX_AGE_MS } from '../config/constants.mjs';
+import { cleanupExpiredAgentOperations } from '../services/agent-store.mjs';
 
 /**
  * 启动定时清理任务
@@ -28,6 +29,12 @@ export function startCleanupScheduler() {
             await fs.rm(dirPath, { recursive: true, force: true });
             console.log(`[cleanup-scheduler] 已清理过期临时目录: ${dir}`);
           }
+        }
+      }
+      if (AGENT_SESSION_TOKEN) {
+        const deletedOperations = cleanupExpiredAgentOperations();
+        if (deletedOperations > 0) {
+          console.log(`[cleanup-scheduler] 已按保留策略清理 ${deletedOperations} 条已结束任务`);
         }
       }
     } catch (error) {

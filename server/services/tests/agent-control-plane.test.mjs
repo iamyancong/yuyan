@@ -14,6 +14,7 @@ const security = await import('../agent-security.mjs');
 const store = await import('../agent-store.mjs');
 const runtime = await import('../agent-runtime-service.mjs');
 const workspaceService = await import('../agent-workspace-service.mjs');
+const commands = await import('../agent-command-service.mjs');
 
 after(() => {
   store.closeAgentDb();
@@ -131,4 +132,61 @@ test('审批策略默认自动执行普通操作且可以持久化关闭', () =>
   assert.equal(store.updateAgentApprovalPolicy({ autoApproveGrantedProjects: false }).autoApproveGrantedProjects, false);
   assert.equal(store.getAgentApprovalPolicy().autoApproveGrantedProjects, false);
   assert.equal(store.updateAgentApprovalPolicy({ autoApproveGrantedProjects: true }).autoApproveGrantedProjects, true);
+});
+
+test('任务记录支持按期限自动清理、单条删除和清空已结束任务', () => {
+  runtime.updateAgentRuntimeSettings({
+    accountId: 'retention-account',
+    deviceId: 'retention-device',
+    teamId: 'retention-team',
+  });
+  /** 创建一条用于验证保留与删除行为的任务。 */
+  const createOperation = (idempotencyKey) => store.createAgentOperation({
+    toolName: 'yuyan_deploy_target',
+    client: 'codex',
+    workspacePath: '/tmp/retention-repo',
+    riskLevel: 'external_effect',
+    executionScope: 'server',
+    idempotencyKey,
+    payloadHash: security.hashAgentPayload({ idempotencyKey }),
+    payload: { idempotencyKey },
+    approvalSummary: { title: idempotencyKey },
+  });
+
+  assert.deepEqual(store.getAgentOperationRetentionPolicy(), { retentionDays: 30 });
+  const expiredCompleted = createOperation('retention-expired');
+  store.updateAgentOperation(expiredCompleted.id, { status: 'failed' });
+  store.getAgentDb().prepare('UPDATE agent_operations SET updated_at = ? WHERE id = ?')
+    .run(new Date(Date.now() - 8 * 24 * 60 * 60_000).toISOString(), expiredCompleted.id);
+  const active = createOperation('retention-active');
+
+  const retentionResult = commands.setAgentOperationRetentionPolicy(7, 'test-user');
+  assert.deepEqual(retentionResult, { retentionDays: 7, deletedCount: 1 });
+  assert.equal(store.getAgentOperation(expiredCompleted.id), null);
+  assert.equal(store.getAgentOperation(active.id)?.status, 'pending_approval');
+  assert.throws(
+    () => commands.removeAgentOperationRecord(active.id, 'test-user'),
+    (error) => error.code === 'operation_active',
+  );
+
+  const removable = createOperation('retention-removable');
+  store.updateAgentOperation(removable.id, { status: 'succeeded' });
+  assert.deepEqual(commands.removeAgentOperationRecord(removable.id, 'test-user'), { deleted: true });
+  assert.equal(store.getAgentOperation(removable.id), null);
+
+  const clearable = createOperation('retention-clearable');
+  store.updateAgentOperation(clearable.id, { status: 'cancelled' });
+  assert.deepEqual(commands.clearCompletedAgentOperationHistory('test-user'), { deletedCount: 1 });
+  assert.equal(store.getAgentOperation(clearable.id), null);
+  assert.equal(store.getAgentOperation(active.id)?.status, 'pending_approval');
+
+  const auditActions = store.listAgentAudit({ limit: 20 }).items.map((item) => item.action);
+  assert.ok(auditActions.includes('operation_retention_updated'));
+  assert.ok(auditActions.includes('operation_record_deleted'));
+  assert.ok(auditActions.includes('completed_operation_records_cleared'));
+  assert.throws(
+    () => commands.setAgentOperationRetentionPolicy(365, 'test-user'),
+    (error) => error.code === 'operation_retention_invalid',
+  );
+  runtime.updateAgentRuntimeSettings({ accountId: '', deviceId: '', teamId: '' });
 });
