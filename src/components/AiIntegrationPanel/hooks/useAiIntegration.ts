@@ -31,6 +31,7 @@ import {
 } from '@/api/centralIdentity';
 import { loadActiveSecureAccount, type SecureAccountState } from '@/services/secureAuth';
 import { useAgentEventStream } from '@/composables/useAgentEventStream';
+import { useAgentOperationMaintenance } from './useAgentOperationMaintenance';
 
 /** AI 控制中心中央身份可见时刷新间隔。 */
 const IDENTITY_REFRESH_INTERVAL = 60_000;
@@ -149,6 +150,15 @@ export function useAiIntegration() {
       }
     }
   };
+
+  const {
+    operationRetentionSaving,
+    completedOperationsClearing,
+    deletingOperationIds,
+    changeOperationRetention,
+    removeOperation,
+    clearCompletedOperations,
+  } = useAgentOperationMaintenance(refreshAgentSnapshot);
 
   /** 将一批 Agent 事件合并为至多每秒一次快照刷新。 */
   const scheduleAgentSnapshotRefresh = () => {
@@ -327,6 +337,9 @@ export function useAiIntegration() {
   return {
     loading, available, gatewayReady, gatewayError, appVersion, clients, launcher, snapshot, pendingOperations, recentOperations,
     secureAccount, centralMe, devices, centralAudit, accountApprovalPolicy, identityLoading, accountPolicySaving,
-    refresh, changeClient, changeApprovalPolicy, saveAccountApprovalPolicy, decideOperation, revokeGrant, revokeDevice, copyGenericConfig,
+    operationRetentionSaving, completedOperationsClearing, deletingOperationIds,
+    refresh, changeClient, changeApprovalPolicy, saveAccountApprovalPolicy, decideOperation,
+    changeOperationRetention, removeOperation, clearCompletedOperations,
+    revokeGrant, revokeDevice, copyGenericConfig,
   };
 }

@@ -1,14 +1,22 @@
 <script setup lang="ts">
+import { DeleteOutlined } from '@ant-design/icons-vue';
 import { YButton } from '@ycwang-dev/components/lite';
 import type { AgentOperation } from '@/api/agent';
-import { AGENT_RISK_LABELS, AGENT_STATUS_META } from '../constant';
+import {
+  AGENT_RISK_LABELS,
+  AGENT_STATUS_META,
+  formatAgentOperationTime,
+  isAgentOperationTerminal,
+} from '../constant';
 
 /** 操作列表属性。 */
-defineProps<{ operations: AgentOperation[] }>();
+defineProps<{ operations: AgentOperation[]; deletingIds?: string[] }>();
 
 const emit = defineEmits<{
   /** 审批或取消任务。 */
   (event: 'decide', id: string, action: 'approve' | 'reject' | 'cancel'): void;
+  /** 删除一条已结束任务。 */
+  (event: 'remove', id: string): void;
 }>();
 
 /** 读取任务的统一执行回执。 */
@@ -27,7 +35,7 @@ const getExecutionReport = (operation: AgentOperation) => operation.result?.exec
         <a-tag :color="AGENT_STATUS_META[item.status].color">{{ AGENT_STATUS_META[item.status].label }}</a-tag>
       </div>
       <div class="ai-operation-item__meta">
-        {{ item.client }} · {{ AGENT_RISK_LABELS[item.riskLevel] }} · {{ item.executionScope === 'local' ? '本机执行' : '中央执行' }}
+        {{ item.client }} · {{ AGENT_RISK_LABELS[item.riskLevel] }} · {{ item.executionScope === 'local' ? '本机执行' : '中央执行' }} · {{ formatAgentOperationTime(item.updatedAt) }}
       </div>
       <pre v-if="item.status === 'pending_approval'">{{ JSON.stringify(item.approvalSummary, null, 2) }}</pre>
       <a-progress v-if="item.progress" :percent="item.progress.percent" size="small" :status="item.status === 'failed' ? 'exception' : 'active'" />
@@ -43,6 +51,18 @@ const getExecutionReport = (operation: AgentOperation) => operation.result?.exec
           <YButton size="small" danger @click="emit('decide', item.id, 'reject')">拒绝</YButton>
         </template>
         <YButton v-else-if="['queued', 'running'].includes(item.status)" size="small" danger @click="emit('decide', item.id, 'cancel')">取消</YButton>
+        <a-popconfirm
+          v-else-if="isAgentOperationTerminal(item.status)"
+          title="删除这条任务记录？"
+          description="删除后无法恢复，但对应安全审计仍会保留。"
+          ok-text="删除"
+          cancel-text="取消"
+          @confirm="emit('remove', item.id)"
+        >
+          <YButton size="small" danger :loading="deletingIds?.includes(item.id)">
+            <DeleteOutlined />删除记录
+          </YButton>
+        </a-popconfirm>
       </div>
     </article>
   </div>

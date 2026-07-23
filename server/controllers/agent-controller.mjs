@@ -8,6 +8,7 @@ import {
   approveAgentOperation,
   abortAgentOperationsForIdentity,
   cancelAgentOperation,
+  clearCompletedAgentOperationHistory,
   createDesktopBackendDeployOperation,
   createDesktopOpenApiOperation,
   executeAgentTool,
@@ -15,8 +16,10 @@ import {
   getDesktopOpenApiArtifact,
   readDesktopOpenApiArtifact,
   rejectAgentOperation,
+  removeAgentOperationRecord,
   revokeAgentProjectGrant,
   setAgentApprovalPolicy,
+  setAgentOperationRetentionPolicy,
   serializeAgentError,
 } from '../services/agent-command-service.mjs';
 import { expireAgentOperationsForIdentity, getAgentOperation, listPendingAgentApprovals } from '../services/agent-store.mjs';
@@ -139,6 +142,30 @@ export async function handleCancelAgentOperation(req, res) {
   }
 }
 
+/** 删除一条已结束任务记录。 */
+export function handleDeleteAgentOperation(req, res) {
+  try {
+    res.json({
+      success: true,
+      data: removeAgentOperationRecord(String(req.params.id || ''), String(req.body?.changedBy || '雨燕桌面端用户')),
+    });
+  } catch (error) {
+    sendAgentError(res, error);
+  }
+}
+
+/** 清空当前身份的全部已结束任务。 */
+export function handleClearCompletedAgentOperations(req, res) {
+  try {
+    res.json({
+      success: true,
+      data: clearCompletedAgentOperationHistory(String(req.body?.changedBy || '雨燕桌面端用户')),
+    });
+  } catch (error) {
+    sendAgentError(res, error);
+  }
+}
+
 /** 从雨燕部署页启动后端设备构建与中央部署。 */
 export async function handleDesktopBackendDeploy(req, res) {
   try {
@@ -222,6 +249,21 @@ export async function handleUpdateAgentApprovalPolicy(req, res) {
       data: setAgentApprovalPolicy(
         { autoApproveGrantedProjects: req.body?.autoApproveGrantedProjects },
         String(req.body?.changedBy || '雨燕桌面端用户')
+      ),
+    });
+  } catch (error) {
+    sendAgentError(res, error);
+  }
+}
+
+/** 更新已结束任务的本机保留策略。 */
+export function handleUpdateAgentOperationRetentionPolicy(req, res) {
+  try {
+    res.json({
+      success: true,
+      data: setAgentOperationRetentionPolicy(
+        req.body?.retentionDays,
+        String(req.body?.changedBy || '雨燕桌面端用户'),
       ),
     });
   } catch (error) {

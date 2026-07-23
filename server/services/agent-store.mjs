@@ -20,10 +20,16 @@ let agentDb = null;
 const auditVerificationCache = new Map();
 const MAX_AUDIT_VERIFICATION_CACHE_SIZE = 32;
 const AGENT_APPROVAL_MAX_AGE_MS = 30 * 60_000;
+const AGENT_OPERATION_RETENTION_SETTING_KEY = 'operation_retention';
+const TERMINAL_AGENT_OPERATION_STATUSES = Object.freeze(['succeeded', 'failed', 'rejected', 'cancelled', 'expired']);
+const VALID_AGENT_OPERATION_RETENTION_DAYS = new Set([0, 7, 30, 90]);
 let pendingExpiryTimer = null;
 
 /** Agent 审批策略默认值。 */
 export const DEFAULT_AGENT_APPROVAL_POLICY = Object.freeze({ autoApproveGrantedProjects: true });
+
+/** Agent 已结束任务默认保留 30 天，0 表示永久保留。 */
+export const DEFAULT_AGENT_OPERATION_RETENTION_POLICY = Object.freeze({ retentionDays: 30 });
 
 /** 获取 ISO 时间。 */
 const now = () => new Date().toISOString();
@@ -36,6 +42,51 @@ const parseJson = (value, fallback) => {
     return fallback;
   }
 };
+
+/** 将任务保留天数收敛到产品支持的固定选项。 */
+const normalizeAgentOperationRetentionDays = (value) => {
+  const days = Number(value);
+  return VALID_AGENT_OPERATION_RETENTION_DAYS.has(days)
+    ? days
+    : DEFAULT_AGENT_OPERATION_RETENTION_POLICY.retentionDays;
+};
+
+/** 读取指定账号和设备的任务保留策略。 */
+function getAgentOperationRetentionPolicyForIdentity(db, accountId, deviceId) {
+  const row = db.prepare(`
+    SELECT value_json FROM agent_settings
+    WHERE account_id = ? AND device_id = ? AND key = ?
+  `).get(accountId, deviceId, AGENT_OPERATION_RETENTION_SETTING_KEY);
+  const saved = parseJson(row?.value_json, {});
+  return { retentionDays: normalizeAgentOperationRetentionDays(saved.retentionDays) };
+}
+
+/** 按各账号设备的保留策略清理已结束任务。 */
+function cleanupExpiredAgentOperationsWithDb(db, { identities, publish = true } = {}) {
+  const targetIdentities = identities || db.prepare(`
+    SELECT DISTINCT account_id, device_id FROM agent_operations
+  `).all();
+  const deleteStatement = db.prepare(`
+    DELETE FROM agent_operations
+    WHERE account_id = ? AND device_id = ?
+      AND status IN (${TERMINAL_AGENT_OPERATION_STATUSES.map(() => '?').join(', ')})
+      AND updated_at <= ?
+  `);
+  let deletedCount = 0;
+  for (const identity of targetIdentities) {
+    const policy = getAgentOperationRetentionPolicyForIdentity(db, identity.account_id, identity.device_id);
+    if (policy.retentionDays === 0) continue;
+    const expiresBefore = new Date(Date.now() - policy.retentionDays * 24 * 60 * 60_000).toISOString();
+    deletedCount += deleteStatement.run(
+      identity.account_id,
+      identity.device_id,
+      ...TERMINAL_AGENT_OPERATION_STATUSES,
+      expiresBefore,
+    ).changes;
+  }
+  if (deletedCount > 0 && publish) publishAgentChange('operations');
+  return deletedCount;
+}
 
 /** 判断数据表是否存在。 */
 const hasTable = (db, tableName) => Boolean(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName));
@@ -260,6 +311,7 @@ export function getAgentDb() {
     UPDATE agent_operations SET status = 'failed', error_json = ?, updated_at = ?
     WHERE status IN ('queued', 'running')
   `).run(JSON.stringify({ code: 'app_restarted', message: '雨燕重启，未完成任务已安全终止', retryable: true }), now());
+  cleanupExpiredAgentOperationsWithDb(agentDb, { publish: false });
   scheduleNextPendingAgentExpiry();
   return agentDb;
 }
@@ -317,6 +369,45 @@ export function updateAgentApprovalPolicy(patch = {}) {
   `).run(context.accountId, context.deviceId, JSON.stringify(next), now());
   publishAgentChange('policy');
   return next;
+}
+
+/** 读取当前账号与设备的已结束任务保留策略。 */
+export function getAgentOperationRetentionPolicy() {
+  const context = getAgentStoreContext();
+  return getAgentOperationRetentionPolicyForIdentity(getAgentDb(), context.accountId, context.deviceId);
+}
+
+/**
+ * 更新当前账号与设备的任务保留策略，并立即清理已过期记录。
+ * @param {{retentionDays?: number}} patch 保留天数，0 表示永久保留
+ * @returns {{retentionDays: number, deletedCount: number}} 生效策略与本次清理数量
+ */
+export function updateAgentOperationRetentionPolicy(patch = {}) {
+  const context = getAgentStoreContext();
+  const retentionDays = Number(patch.retentionDays);
+  if (!VALID_AGENT_OPERATION_RETENTION_DAYS.has(retentionDays)) {
+    const error = new Error('任务保留期限仅支持 7、30、90 天或永久保留');
+    error.code = 'operation_retention_invalid';
+    throw error;
+  }
+  const db = getAgentDb();
+  const policy = { retentionDays };
+  db.prepare(`
+    INSERT INTO agent_settings (account_id, device_id, key, value_json, updated_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(account_id, device_id, key)
+    DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
+  `).run(context.accountId, context.deviceId, AGENT_OPERATION_RETENTION_SETTING_KEY, JSON.stringify(policy), now());
+  const deletedCount = cleanupExpiredAgentOperationsWithDb(db, {
+    identities: [{ account_id: context.accountId, device_id: context.deviceId }],
+  });
+  publishAgentChange('policy');
+  return { ...policy, deletedCount };
+}
+
+/** 按所有账号设备的保留策略执行定时清理。 */
+export function cleanupExpiredAgentOperations() {
+  return cleanupExpiredAgentOperationsWithDb(getAgentDb());
 }
 
 /** 关闭 Agent SQLite 连接。 */
@@ -611,9 +702,48 @@ export function listAgentOperations({ status = '', client = '', limit = 50, offs
   const safeLimit = Math.min(100, Math.max(1, Number(limit)));
   const safeOffset = Math.max(0, Number(offset));
   const total = Number(db.prepare(`SELECT COUNT(*) AS total FROM agent_operations${where}`).get(...params)?.total || 0);
+  const completedTotal = Number(db.prepare(`
+    SELECT COUNT(*) AS total FROM agent_operations
+    WHERE account_id = ? AND device_id = ? AND team_id = ?
+      AND status IN (${TERMINAL_AGENT_OPERATION_STATUSES.map(() => '?').join(', ')})
+  `).get(context.accountId, context.deviceId, context.teamId, ...TERMINAL_AGENT_OPERATION_STATUSES)?.total || 0);
   const items = db.prepare(`SELECT * FROM agent_operations${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
     .all(...params, safeLimit, safeOffset).map(mapOperation);
-  return { items, total };
+  return { items, total, completedTotal };
+}
+
+/**
+ * 删除当前身份的一条已结束任务记录。
+ * @param {string} id 任务 ID
+ * @returns {{deleted: boolean, reason?: 'not_found' | 'active'}} 删除结果
+ */
+export function deleteAgentOperationRecord(id) {
+  const db = getAgentDb();
+  const context = getAgentStoreContext();
+  const row = db.prepare(`
+    SELECT status FROM agent_operations
+    WHERE id = ? AND account_id = ? AND device_id = ? AND team_id = ?
+  `).get(String(id), context.accountId, context.deviceId, context.teamId);
+  if (!row) return { deleted: false, reason: 'not_found' };
+  if (!TERMINAL_AGENT_OPERATION_STATUSES.includes(row.status)) return { deleted: false, reason: 'active' };
+  const result = db.prepare(`
+    DELETE FROM agent_operations
+    WHERE id = ? AND account_id = ? AND device_id = ? AND team_id = ?
+  `).run(String(id), context.accountId, context.deviceId, context.teamId);
+  if (result.changes > 0) publishAgentChange('operations');
+  return { deleted: result.changes > 0 };
+}
+
+/** 清空当前身份的全部已结束任务，待审批和执行中任务不受影响。 */
+export function clearCompletedAgentOperationRecords() {
+  const context = getAgentStoreContext();
+  const result = getAgentDb().prepare(`
+    DELETE FROM agent_operations
+    WHERE account_id = ? AND device_id = ? AND team_id = ?
+      AND status IN (${TERMINAL_AGENT_OPERATION_STATUSES.map(() => '?').join(', ')})
+  `).run(context.accountId, context.deviceId, context.teamId, ...TERMINAL_AGENT_OPERATION_STATUSES);
+  if (result.changes > 0) publishAgentChange('operations');
+  return { deletedCount: result.changes };
 }
 
 /** 轻量列出当前身份待审批任务，不解析日志、进度或结果。 */

@@ -12,6 +12,7 @@ import ClientInstallList from './components/ClientInstallList.vue';
 import ApprovalPolicyCard from './components/ApprovalPolicyCard.vue';
 import GrantList from './components/GrantList.vue';
 import OperationList from './components/OperationList.vue';
+import OperationRetentionBar from './components/OperationRetentionBar.vue';
 import IdentityDeviceCard from './components/IdentityDeviceCard.vue';
 import { useAiIntegration } from './hooks/useAiIntegration';
 import { useAiSections } from './hooks/useAiSections';
@@ -21,7 +22,9 @@ defineOptions({ name: 'AiIntegrationPanel' });
 const {
   loading, available, gatewayReady, gatewayError, appVersion, clients, launcher, snapshot, secureAccount, centralMe, devices,
   centralAudit, accountApprovalPolicy, identityLoading, accountPolicySaving, recentOperations,
+  operationRetentionSaving, completedOperationsClearing, deletingOperationIds,
   refresh, changeClient, changeApprovalPolicy, saveAccountApprovalPolicy, decideOperation,
+  changeOperationRetention, removeOperation, clearCompletedOperations,
   revokeGrant, revokeDevice, copyGenericConfig,
 } = useAiIntegration();
 const { isSectionExpanded, toggleSection } = useAiSections();
@@ -60,7 +63,22 @@ const { isSectionExpanded, toggleSection } = useAiSections();
           <AiSectionShell section-id="ai-section-operations" title="任务与审批" :summary="`${snapshot?.operations.total || 0} 个任务`" :expanded="isSectionExpanded('operations')" @toggle="toggleSection('operations')">
             <template #icon><SafetyCertificateOutlined /></template>
             <ApprovalPolicyCard :policy="snapshot?.approvalPolicy" :account-policy="accountApprovalPolicy" :saving-account-policy="accountPolicySaving" @change="changeApprovalPolicy" @save-account-policy="saveAccountApprovalPolicy" />
-            <OperationList :operations="recentOperations" @decide="decideOperation" />
+            <OperationRetentionBar
+              :retention-days="snapshot?.operationRetentionPolicy.retentionDays ?? 30"
+              :total="snapshot?.operations.total ?? 0"
+              :visible-count="recentOperations.length"
+              :completed-count="snapshot?.operations.completedTotal ?? 0"
+              :saving="operationRetentionSaving"
+              :clearing="completedOperationsClearing"
+              @update-retention="changeOperationRetention"
+              @clear-completed="clearCompletedOperations"
+            />
+            <OperationList
+              :operations="recentOperations"
+              :deleting-ids="deletingOperationIds"
+              @decide="decideOperation"
+              @remove="removeOperation"
+            />
           </AiSectionShell>
 
           <AiSectionShell section-id="ai-section-grants" title="已授权项目" :summary="`${snapshot?.grants.total || 0} 个项目`" :expanded="isSectionExpanded('grants')" @toggle="toggleSection('grants')">

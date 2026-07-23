@@ -1,4 +1,4 @@
-import type { AgentOperationStatus } from '@/api/agent';
+import type { AgentOperation, AgentOperationRetentionPolicy, AgentOperationStatus } from '@/api/agent';
 
 /** AI 控制中心可折叠区域。 */
 export type AiSectionKey = 'identity' | 'clients' | 'operations' | 'grants' | 'audit';
@@ -25,6 +25,34 @@ export const AGENT_RISK_LABELS = {
   external_effect: '外部操作',
   destructive: '高危操作',
 } as const;
+
+/** 已结束任务支持的本机保留期限。 */
+export const AGENT_OPERATION_RETENTION_OPTIONS: Array<{
+  label: string;
+  value: AgentOperationRetentionPolicy['retentionDays'];
+}> = [
+  { label: '保留 7 天', value: 7 },
+  { label: '保留 30 天', value: 30 },
+  { label: '保留 90 天', value: 90 },
+  { label: '永久保留', value: 0 },
+];
+
+/** 判断任务是否已经进入不会继续执行的终态。 */
+export const isAgentOperationTerminal = (status: AgentOperationStatus) => (
+  ['succeeded', 'failed', 'rejected', 'cancelled', 'expired'] as AgentOperationStatus[]
+).includes(status);
+
+/** 将任务更新时间格式化为紧凑的本地时间。 */
+export const formatAgentOperationTime = (value: AgentOperation['updatedAt']) => {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return value;
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(timestamp);
+};
 
 /** 可在当前账号所有设备上强制人工审批的普通写工具。 */
 export const ACCOUNT_APPROVAL_TOOL_OPTIONS = [
