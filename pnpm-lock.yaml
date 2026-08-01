@@ -51,7 +51,7 @@ importers:
         specifier: ^1.1.1
         version: 1.1.1(typescript@5.8.3)
       '@yss-ui/utils':
-        specifier: ^1.0.5
+        specifier: ^1.0.6
         version: 1.0.6
       ant-design-vue:
         specifier: ^4.2.6
