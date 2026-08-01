@@ -52,10 +52,12 @@ async function stopChild(child) {
 
 /** 启动安装包内嵌服务并执行健康检查。 */
 async function main() {
-  const [nodePath, serverPath] = process.argv.slice(2);
-  if (!nodePath || !serverPath) {
+  const [rawNodePath, rawServerPath] = process.argv.slice(2);
+  if (!rawNodePath || !rawServerPath) {
     throw new Error('用法: node scripts/verify-packaged-server.mjs <node-path> <server-entry-path>');
   }
+  const nodePath = path.resolve(rawNodePath);
+  const serverPath = path.resolve(rawServerPath);
   const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'yuyan-packaged-server-'));
   const port = await getAvailablePort();
   let output = '';
