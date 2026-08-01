@@ -6,10 +6,13 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
 /** 启动安装包内嵌 MCP Sidecar，校验依赖可解析且工具列表可用。 */
 async function main() {
-  const [nodePath, mcpEntryPath] = process.argv.slice(2);
-  if (!nodePath || !mcpEntryPath) {
+  const [rawNodePath, rawMcpEntryPath] = process.argv.slice(2);
+  if (!rawNodePath || !rawMcpEntryPath) {
     throw new Error('用法: node scripts/verify-packaged-mcp.mjs <node-path> <mcp-entry-path>');
   }
+
+  const nodePath = path.resolve(rawNodePath);
+  const mcpEntryPath = path.resolve(rawMcpEntryPath);
 
   const transport = new StdioClientTransport({
     command: nodePath,
