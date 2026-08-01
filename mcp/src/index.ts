@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /** 雨燕本地 stdio MCP Server 入口。 */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';

@@ -47,6 +47,7 @@ jobs:
           node --test
           scripts/generate-update-manifest.test.js
           scripts/server-production-dependencies.test.js
+          scripts/mcp-production-dependencies.test.js
 
       - name: Calculate Version
         id: calc
@@ -207,6 +208,16 @@ jobs:
           test -n "$NODE_BINARY"
           test -n "$SERVER_ENTRY"
           node scripts/verify-packaged-server.mjs "$NODE_BINARY" "$SERVER_ENTRY"
+
+      - name: Verify macOS Packaged MCP
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          NODE_BINARY=$(find src-tauri/target/release/bundle/macos -path '*/Contents/Resources/resources/bin/node' -type f -print -quit)
+          MCP_ENTRY=$(find src-tauri/target/release/bundle/macos -path '*/Contents/Resources/_up_/mcp/dist/index.js' -type f -print -quit)
+          test -n "$NODE_BINARY"
+          test -n "$MCP_ENTRY"
+          node scripts/verify-packaged-mcp.mjs "$NODE_BINARY" "$MCP_ENTRY"
 
       - name: Prepare Update Artifact
         shell: bash

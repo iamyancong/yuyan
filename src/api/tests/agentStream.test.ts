@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createSseFrameParser, getAgentReconnectDelay, type SseFrame } from './agentStream.ts';
+import { createSseFrameParser, getAgentReconnectDelay, type SseFrame } from '../agentStream.ts';
 
 test('SSE 解析器支持跨 chunk、CRLF、注释心跳和多行数据', () => {
   const frames: SseFrame[] = [];

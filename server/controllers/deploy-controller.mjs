@@ -15,6 +15,7 @@ import {
   listNginxInstances,
   listRecords,
   listServers,
+  reorderServers,
   listTargets,
   listTargetRuntimeIndex,
   updateNginxInstance,
@@ -498,7 +499,7 @@ function validateNginxInstancePayload(body = {}) {
  * 校验部署目标参数
  * @param {Object} body - 请求体
  */
-function validateTargetPayload(body) {
+async function validateTargetPayload(body) {
   if (body?.projectSource && !['ops', 'gitlab'].includes(String(body.projectSource))) throw new Error('项目来源不合法');
   if (body?.projectType && !['frontend', 'backend'].includes(String(body.projectType))) throw new Error('项目类型不合法');
   if (!body?.projectId) throw new Error('项目 ID 必填');
@@ -526,7 +527,16 @@ function validateTargetPayload(body) {
   if (isBackend) {
     const serverPort = Number(body.serverPort || 0);
     if (!Number.isInteger(serverPort) || serverPort < 1 || serverPort > 65535) throw new Error('后端服务端口必须在 1-65535 之间');
-    if (!Number(body.buildJdkId || body.jdkId || 0)) throw new Error('本机构建 JDK 必填');
+    if (!Number(body.buildJdkId || body.jdkId || 0)) {
+      if (body.requiredJdkAlias) {
+        const matchedLocal = await findJdkByAlias(body.requiredJdkAlias);
+        if (matchedLocal?.id) {
+          body.buildJdkId = matchedLocal.id;
+          body.jdkId = matchedLocal.id;
+        }
+      }
+    }
+    if (!Number(body.buildJdkId || body.jdkId || 0)) throw new Error('本机构建 JDK 必填，请先在 Java 环境管理中扫描或配置本机构建 JDK');
     if (!String(body.runtimeJavaHome || '').trim().startsWith('/')) throw new Error('服务器运行 JAVA_HOME 必须使用绝对路径');
     if (!normalizeCommandText(body.buildCommand)) throw new Error('Maven 构建命令必填');
     if (!String(body.artifactPattern || body.artifactDir || '').trim()) throw new Error('Jar 产物路径必填');
@@ -557,6 +567,17 @@ export async function handleListServers(_req, res) {
     res.json({ success: true, data: await listServers() });
   } catch (error) {
     sendError(res, error);
+  }
+}
+
+/**
+ * 保存服务器展示顺序。
+ */
+export async function handleReorderServers(req, res) {
+  try {
+    res.json({ success: true, data: await reorderServers(req.body?.serverIds) });
+  } catch (error) {
+    sendError(res, error, 400);
   }
 }
 
@@ -956,7 +977,7 @@ export async function handleListTargetRuntimeSnapshots(_req, res) {
  */
 export async function handleCreateTarget(req, res) {
   try {
-    validateTargetPayload(req.body);
+    await validateTargetPayload(req.body);
     const isBackend = req.body.projectType === 'backend';
     res.json({
       success: true,
@@ -985,7 +1006,7 @@ export async function handleCreateTarget(req, res) {
  */
 export async function handleUpdateTarget(req, res) {
   try {
-    validateTargetPayload(req.body);
+    await validateTargetPayload(req.body);
     const isBackend = req.body.projectType === 'backend';
     const target = await updateTarget(Number(req.params.id), {
       ...req.body,

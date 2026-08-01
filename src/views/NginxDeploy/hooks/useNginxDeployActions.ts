@@ -119,20 +119,25 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
   const isTargetRunning = (target: DeployTarget) => Boolean(getTargetRuntimeSnapshot(target)?.running);
 
   const serverActionConfig = computed<YTableActionConfig>(() => ({
-    width: 240,
+    width: 300,
     fixed: 'right',
     buttons: [
       {
         key: 'test',
-        text: '测试',
+        text: '检测连接',
         type: 'link',
-        clickFn: ({ row }) => {
-          void testServer?.(row);
+        confirmProps: { needLoading: true },
+        clickFn: async ({ row }, _button, helpers) => {
+          try {
+            await testServer?.(row);
+          } finally {
+            helpers?.hideLoading?.();
+          }
         },
       },
       {
         key: 'nginx',
-        text: 'Nginx',
+        text: 'Nginx 管理',
         type: 'link',
         clickFn: ({ row }) => {
           void openNginxRuntime?.(row);

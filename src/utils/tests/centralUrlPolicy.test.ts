@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { assertAllowedCentralUrl, isAllowedCentralUrl, isPrivateCentralHostname } from './centralUrlPolicy.ts';
+import { assertAllowedCentralUrl, isAllowedCentralUrl, isPrivateCentralHostname } from '../centralUrlPolicy.ts';
 
 test('允许 HTTPS、回环地址与 RFC1918 私网地址', () => {
   const allowedUrls = [

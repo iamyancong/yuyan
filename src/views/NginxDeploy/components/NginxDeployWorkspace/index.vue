@@ -83,8 +83,10 @@ const handleOpenNginxRuntime = async () => {
         <a-tab-pane key="servers" tab="服务器管理">
           <DeployServerTab
             :loading="lifecycleState.loading.value"
+            :order-saving="serverState.serverOrderSaving.value"
             :servers="serverState.servers.value"
             :action-config="serverActionConfig"
+            @reorder="serverState.reorderServerList"
           />
         </a-tab-pane>
         <a-tab-pane key="records" tab="发布历史">

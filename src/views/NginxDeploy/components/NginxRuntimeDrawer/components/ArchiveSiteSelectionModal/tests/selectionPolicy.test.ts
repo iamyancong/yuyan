@@ -4,7 +4,7 @@ import {
   canSubmitArchiveSelection,
   getSelectableArchiveSites,
   normalizeArchiveSiteIds,
-} from './selectionPolicy.ts';
+} from '../selectionPolicy.ts';
 
 const sites = [
   { id: 'static-site', canDownloadFiles: true },
