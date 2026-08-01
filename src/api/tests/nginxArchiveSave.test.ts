@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { consumeNginxArchiveSaveResponse } from './nginxArchiveSaveStream.ts';
+import { consumeNginxArchiveSaveResponse } from '../nginxArchiveSaveStream.ts';
 
 /** 创建指定 SSE 文本的流式响应。 */
 const createSseResponse = (content: string) => new Response(new ReadableStream({

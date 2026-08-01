@@ -289,11 +289,16 @@ export const formatDeployDateTime = (value?: string | number | null): string => 
 
 /** 服务器表格列 */
 export const serverColumns: YTableColumn[] = [
-  { field: 'name', title: '服务器名称', minWidth: 220, fixed: 'left' },
+  { field: 'name', title: '服务器名称', minWidth: 220 },
   { field: 'host', title: 'IP / 域名', minWidth: 160 },
   { field: 'port', title: '端口', width: 80, align: 'center' },
   { field: 'username', title: '账号', width: 120 },
-  { field: 'authType', title: '认证方式', width: 110 },
+  {
+    field: 'authType',
+    title: '认证方式',
+    width: 110,
+    formatter: ({ row }) => (row.authType === 'privateKey' ? 'SSH 私钥' : '密码'),
+  },
   {
     field: 'nginxRuntime',
     title: 'Nginx 状态',

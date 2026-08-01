@@ -4,13 +4,14 @@ import {
   createDeployServer,
   deleteDeployServer,
   listDeployServers,
+  reorderDeployServers,
   testDeployServer,
   updateDeployServer,
   type DeployServer,
   type DeployServerPayload,
 } from '@/api/deploy';
 import type { FormilyRef, RefreshActiveTabOptions } from '../types';
-import { createDefaultServerForm, getErrorMessage } from '../utils';
+import { createDefaultServerForm, getErrorMessage, getServerConnectionErrorMessage, getServerOrderErrorMessage } from '../utils';
 import { useNginxDeployContext } from './useNginxDeployContext';
 import { useNginxRuntimeDrawer } from './useNginxRuntimeDrawer';
 
@@ -41,6 +42,7 @@ export function useNginxDeployServers(params?: UseNginxDeployServersParams) {
   const refreshActiveTab = params?.refreshActiveTab ?? context?.refreshActiveTab!;
 
   const serverSaving = ref(false);
+  const serverOrderSaving = ref(false);
   const servers = ref<DeployServer[]>([]);
   const serverModalOpen = ref(false);
   const serverFormKey = ref(0);
@@ -62,6 +64,26 @@ export function useNginxDeployServers(params?: UseNginxDeployServersParams) {
   /** 刷新服务器管理列表 */
   const refreshServerList = async () => {
     servers.value = await listDeployServers();
+  };
+
+  /**
+   * 保存服务器拖拽后的展示顺序。
+   * @param orderedServers 排序后的服务器列表
+   */
+  const reorderServerList = async (orderedServers: DeployServer[]) => {
+    if (serverOrderSaving.value) return;
+    const previousServers = [...servers.value];
+    servers.value = [...orderedServers];
+    serverOrderSaving.value = true;
+    try {
+      servers.value = await reorderDeployServers(orderedServers.map((server) => server.id));
+      message.success('服务器顺序已更新，部署服务器下拉将按此顺序展示');
+    } catch (error) {
+      servers.value = previousServers;
+      message.error(getServerOrderErrorMessage(error));
+    } finally {
+      serverOrderSaving.value = false;
+    }
   };
 
   const runtimeState = useNginxRuntimeDrawer({
@@ -135,13 +157,22 @@ export function useNginxDeployServers(params?: UseNginxDeployServersParams) {
   };
 
   /**
-   * 测试服务器连接。
+   * 检测服务器连接。
    * @param server 服务器配置
    */
   const testServer = async (server: DeployServer) => {
     if (!ensureLoggedIn()) return;
-    const result = await testDeployServer(server.id);
-    message.success(result.output || '连接成功');
+    try {
+      const result = await testDeployServer(server.id);
+      const outputLines = String(result.output || '')
+        .split(/\r?\n/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+      const account = [...outputLines].reverse().find((item) => item !== 'yuyan-ops-ready');
+      message.success(account ? `服务器“${server.name}”连接正常，登录账号：${account}` : `服务器“${server.name}”连接正常`);
+    } catch (error) {
+      message.error(getServerConnectionErrorMessage(error, server.name));
+    }
   };
 
   /** 清空服务器管理数据和临时态 */
@@ -154,6 +185,7 @@ export function useNginxDeployServers(params?: UseNginxDeployServersParams) {
 
   return {
     serverSaving,
+    serverOrderSaving,
     servers,
     serverModalOpen,
     serverFormKey,
@@ -162,6 +194,7 @@ export function useNginxDeployServers(params?: UseNginxDeployServersParams) {
     serverForm,
     ...runtimeState,
     refreshServerList,
+    reorderServerList,
     openCreateServer,
     openEditServer,
     saveServer,

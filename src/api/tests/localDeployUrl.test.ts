@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildLocalDeployApiUrl } from './localDeployUrl.ts';
+import { buildLocalDeployApiUrl } from '../localDeployUrl.ts';
 
 test('本地部署接口自动补充 deploy-api 路由前缀', () => {
   assert.equal(

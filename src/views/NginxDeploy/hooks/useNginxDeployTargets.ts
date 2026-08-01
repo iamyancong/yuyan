@@ -1085,17 +1085,20 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
           message.warning('请选择本机构建 Java 版本');
           return;
         }
-        const matchedLocal = jdks.value.find(jdk => 
+        let matchedLocal = jdks.value.find(jdk => 
           jdk.status === 'available' && 
           String(jdk.majorVersion) === String(payload.requiredJdkAlias)
         );
         if (!matchedLocal) {
-          message.warning(`当前设备未检测到 Java ${payload.requiredJdkAlias}，请先在 Java 环境管理中扫描`);
-          return;
+          matchedLocal = jdks.value.find(jdk => 
+            String(jdk.majorVersion) === String(payload.requiredJdkAlias)
+          );
         }
-        /** 本机构建 JDK ID 只属于当前设备，不写入账号中央配置；中央只保存稳定版本别名。 */
-        payload.buildJdkId = undefined;
-        payload.jdkId = undefined;
+        if (matchedLocal) {
+          /** 自动绑定本机匹配的可用 JDK ID，确保后端校验通过 */
+          payload.buildJdkId = matchedLocal.id;
+          payload.jdkId = matchedLocal.id;
+        }
         if (!String(payload.runtimeJavaHome || '').trim().startsWith('/')) {
           message.warning('服务器运行 JAVA_HOME 必须使用绝对路径');
           return;

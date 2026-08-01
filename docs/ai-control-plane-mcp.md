@@ -121,6 +121,8 @@ pnpm frontend:build:ci
 cd src-tauri && cargo fmt --check && cargo check && cargo test --all-targets
 ```
 
+`mcp:build` 会先 TypeScript 编译，再由 `scripts/bundle-mcp.mjs` 将 `@modelcontextprotocol/sdk` 等依赖打进单个 `mcp/dist/index.js`，确保安装包不依赖额外 `node_modules`。CI 在 macOS 产物上会执行 `scripts/verify-packaged-mcp.mjs` 冒烟。
+
 `test:mcp` 覆盖 20 个严格 Schema、破坏性标注、写操作幂等键、stdio 初始化/工具列表/stdout 纯净，以及真实 Sidecar → 轮换令牌 → Loopback Gateway 调用。服务端测试覆盖脱敏、稳定参数哈希、真实 Git 根目录、客户端隔离授权、授权撤销阻断、自动执行、破坏性强制审批、稳定启动器、旧配置修复和 HMAC 审计篡改检测。
 
 正式远程验收必须使用可丢弃微应用与测试服务器，按“识别 → 授权 → 规划配置 → 自动应用 → 预检 → 自动发布 → 健康/日志 → 回滚 → 人工审批删除”执行。真实删除必须由用户现场确认。

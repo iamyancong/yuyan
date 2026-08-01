@@ -633,6 +633,7 @@ function mapServer(row) {
   return {
     id: row.id,
     teamId: row.team_id || 'legacy-team',
+    sortOrder: Number(row.sort_order || 0),
     name: row.name,
     host: row.host,
     port: row.port,
@@ -1421,6 +1422,44 @@ function applyMultiTenantSchemaMigration(db) {
 }
 
 /**
+ * 规范化每个团队的服务器排序值，兼容升级前没有排序字段的历史数据。
+ * @param {DatabaseSync} db 数据库实例
+ */
+function normalizeServerSortOrder(db) {
+  const rows = db
+    .prepare(
+      `SELECT id, team_id
+       FROM deploy_servers
+       ORDER BY team_id ASC,
+                CASE WHEN sort_order > 0 THEN 0 ELSE 1 END ASC,
+                sort_order ASC,
+                updated_at DESC,
+                id DESC`
+    )
+    .all();
+  if (!rows.length) return;
+
+  const update = db.prepare('UPDATE deploy_servers SET sort_order = ? WHERE id = ? AND team_id = ?');
+  let activeTeamId = '';
+  let sortOrder = 0;
+  db.exec('BEGIN');
+  try {
+    rows.forEach((row) => {
+      if (row.team_id !== activeTeamId) {
+        activeTeamId = row.team_id;
+        sortOrder = 0;
+      }
+      sortOrder += 1;
+      update.run(sortOrder, Number(row.id), row.team_id);
+    });
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+/**
  * 收口上一个服务进程遗留的运行态任务和发布记录。
  * @description 进程退出后内存任务无法恢复，若不主动收口，发布历史和中央操作会永久显示执行中。
  * @param {DatabaseSync} db 数据库实例
@@ -1501,6 +1540,7 @@ export async function getDeployDb() {
   dbInstance.exec(`
     CREATE TABLE IF NOT EXISTS deploy_servers (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sort_order INTEGER NOT NULL DEFAULT 0,
       name TEXT NOT NULL,
       host TEXT NOT NULL,
       port INTEGER NOT NULL DEFAULT 22,
@@ -1675,6 +1715,9 @@ export async function getDeployDb() {
   if (!serverColumns.includes('default_nginx_instance_id')) {
     dbInstance.exec('ALTER TABLE deploy_servers ADD COLUMN default_nginx_instance_id INTEGER');
   }
+  if (!serverColumns.includes('sort_order')) {
+    dbInstance.exec('ALTER TABLE deploy_servers ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0');
+  }
   const targetColumns = getTableColumns(dbInstance, 'deploy_targets');
   if (!targetColumns.includes('project_description')) {
     dbInstance.exec('ALTER TABLE deploy_targets ADD COLUMN project_description TEXT');
@@ -1756,6 +1799,7 @@ export async function getDeployDb() {
   applyBackendSchemaMigration(dbInstance);
   await backupDeployDbBeforeMultiTenantMigration(dbInstance);
   applyMultiTenantSchemaMigration(dbInstance);
+  normalizeServerSortOrder(dbInstance);
   await reconcileInterruptedDeployExecutions(dbInstance);
   initializeDefaultJdks(dbInstance);
   return dbInstance;
@@ -1958,9 +2002,50 @@ function isRuntimeDefaultListenPort(db, payload) {
 export async function listServers() {
   const db = await getDeployDb();
   return db
-    .prepare('SELECT * FROM deploy_servers WHERE team_id = ? ORDER BY updated_at DESC, id DESC')
+    .prepare('SELECT * FROM deploy_servers WHERE team_id = ? ORDER BY sort_order ASC, updated_at DESC, id DESC')
     .all(getRequestTeamId())
     .map((row) => hydrateServer(db, row));
+}
+
+/**
+ * 按完整服务器 ID 列表保存当前团队的展示顺序。
+ * @param {number[]} serverIds 排序后的服务器 ID
+ * @returns {Promise<Object[]>} 排序后的服务器列表
+ */
+export async function reorderServers(serverIds) {
+  const normalizedIds = Array.isArray(serverIds) ? serverIds.map(Number) : [];
+  if (!normalizedIds.length || normalizedIds.some((id) => !Number.isSafeInteger(id) || id <= 0)) {
+    throw new Error('服务器排序数据无效，请刷新后重试');
+  }
+  if (new Set(normalizedIds).size !== normalizedIds.length) {
+    throw new Error('服务器排序数据存在重复项，请刷新后重试');
+  }
+
+  const db = await getDeployDb();
+  const teamId = getRequestTeamId();
+  const currentIds = db
+    .prepare('SELECT id FROM deploy_servers WHERE team_id = ?')
+    .all(teamId)
+    .map((row) => Number(row.id));
+  const currentIdSet = new Set(currentIds);
+  const matchesCurrentServers =
+    currentIds.length === normalizedIds.length && normalizedIds.every((id) => currentIdSet.has(id));
+  if (!matchesCurrentServers) {
+    throw new Error('服务器列表已发生变化，请刷新后重新排序');
+  }
+
+  const update = db.prepare('UPDATE deploy_servers SET sort_order = ? WHERE id = ? AND team_id = ?');
+  db.exec('BEGIN');
+  try {
+    normalizedIds.forEach((id, index) => {
+      update.run(index + 1, id, teamId);
+    });
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+  return listServers();
 }
 
 /**
@@ -1986,6 +2071,10 @@ export async function getServerWithCredential(id) {
 export async function createServer(payload) {
   const db = await getDeployDb();
   const ts = now();
+  const teamId = getRequestTeamId();
+  const sortOrder = Number(
+    db.prepare('SELECT COALESCE(MAX(sort_order), 0) + 1 AS value FROM deploy_servers WHERE team_id = ?').get(teamId)?.value || 1
+  );
   const credential = encryptCredential({
     password: payload.password || '',
     privateKey: payload.privateKey || '',
@@ -1994,12 +2083,13 @@ export async function createServer(payload) {
   const result = db
     .prepare(
       `INSERT INTO deploy_servers
-       (team_id, name, host, port, username, auth_type, encrypted_secret, use_sudo, default_deploy_root, default_backend_root,
+       (team_id, sort_order, name, host, port, username, auth_type, encrypted_secret, use_sudo, default_deploy_root, default_backend_root,
         default_nginx_conf_path, nginx_work_dir, nginx_test_command, nginx_reload_command, remark, created_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
-      getRequestTeamId(),
+      teamId,
+      sortOrder,
       payload.name,
       payload.host,
       Number(payload.port || 22),

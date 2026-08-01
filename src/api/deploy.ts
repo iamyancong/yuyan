@@ -43,6 +43,7 @@ export type NginxInstanceType = 'external' | 'managed';
 /** 独立服务器配置 */
 export interface DeployServer {
   id: number;
+  sortOrder: number;
   name: string;
   host: string;
   port: number;
@@ -733,6 +734,14 @@ const unwrap = <T>(response: { data: { data: T } }) => response.data.data;
 
 /** 获取服务器列表 */
 export const listDeployServers = () => client.get('/servers').then(unwrap<DeployServer[]>);
+
+/**
+ * 保存部署服务器顺序。
+ * @param serverIds 排序后的服务器 ID
+ * @returns 排序后的服务器列表
+ */
+export const reorderDeployServers = (serverIds: number[]) =>
+  client.post('/servers/reorder', { serverIds }).then(unwrap<DeployServer[]>);
 
 /** 创建服务器 */
 export const createDeployServer = (payload: DeployServerPayload) => client.post('/servers', payload).then(unwrap<DeployServer>);

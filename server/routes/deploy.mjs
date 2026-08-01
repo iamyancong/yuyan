@@ -34,6 +34,7 @@ import {
   handleListNginxInstances,
   handleListRecords,
   handleListServers,
+  handleReorderServers,
   handleListTargets,
   handleListTargetRuntimeSnapshots,
   handleReadNginxConfig,
@@ -122,6 +123,7 @@ router.post('/jdks/:id/test', handleTestJdk);
 
 router.get('/servers', handleListServers);
 router.post('/servers', handleCreateServer);
+router.post('/servers/reorder', handleReorderServers);
 router.put('/servers/:id', handleUpdateServer);
 router.delete('/servers/:id', handleDeleteServer);
 router.post('/servers/:id/test', handleTestServer);

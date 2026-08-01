@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createCredentialFingerprint, getNamespaceErrorFeedback } from './constant.ts';
+import { createCredentialFingerprint, getNamespaceErrorFeedback } from '../constant.ts';
 
 test('Namespace 权限类错误会提示重新选择并清空失效值', () => {
   const forbidden = getNamespaceErrorFeedback({ response: { status: 403 } });

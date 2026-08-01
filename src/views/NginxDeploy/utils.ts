@@ -62,6 +62,47 @@ export function getErrorMessage(error: any): string {
 }
 
 /**
+ * 将服务器排序接口错误转换为可执行的中文提示。
+ * @param error 接口错误
+ * @returns 中文排序失败提示
+ */
+export function getServerOrderErrorMessage(error: unknown): string {
+  const rawMessage = getErrorMessage(error);
+  const responseStatus = (error as { response?: { status?: number } })?.response?.status;
+  if (responseStatus === 404 || rawMessage.includes('服务器名称必填')) {
+    return '本地部署服务尚未加载服务器排序接口，请重启本地服务后重试';
+  }
+  return /[\u4e00-\u9fff]/.test(rawMessage) ? rawMessage : '服务器顺序保存失败，请检查本地服务状态后重试';
+}
+
+/**
+ * 将常见 SSH 连接错误转换为用户可理解的中文提示。
+ * @param error 接口错误
+ * @param serverName 服务器名称
+ * @returns 中文连接检测失败提示
+ */
+export function getServerConnectionErrorMessage(error: unknown, serverName: string): string {
+  const rawMessage = getErrorMessage(error).toLowerCase();
+  const serverLabel = `服务器“${serverName}”`;
+  if (/authentication|permission denied|all configured authentication methods failed|bad password/.test(rawMessage)) {
+    return `${serverLabel}身份认证失败，请检查登录账号和认证凭据`;
+  }
+  if (/econnrefused|connection refused/.test(rawMessage)) {
+    return `${serverLabel}拒绝连接，请检查 IP、SSH 端口和 SSH 服务状态`;
+  }
+  if (/etimedout|timeout|timed out/.test(rawMessage)) {
+    return `${serverLabel}连接超时，请检查网络、防火墙和 SSH 端口`;
+  }
+  if (/enotfound|getaddrinfo|host not found/.test(rawMessage)) {
+    return `${serverLabel}地址无法解析，请检查 IP 或域名配置`;
+  }
+  if (/no route to host|ehostunreach|enetunreach/.test(rawMessage)) {
+    return `${serverLabel}网络不可达，请检查网络连接和路由配置`;
+  }
+  return `${serverLabel}连接检测失败，请检查服务器地址、网络和认证配置`;
+}
+
+/**
  * 构建默认服务器表单。
  * @returns 服务器表单初始值
  */

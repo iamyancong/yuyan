@@ -7,7 +7,7 @@ import {
   TARGET_RUNTIME_ACTIVE_INTERVAL,
   TARGET_RUNTIME_ERROR_MAX_INTERVAL,
   TARGET_RUNTIME_IDLE_INTERVAL,
-} from './targetRuntimePolicy.ts';
+} from '../targetRuntimePolicy.ts';
 
 test('部署运行态间隔在空闲、运行与失败时自适应', () => {
   assert.equal(getTargetRuntimePollDelay(false, 0), TARGET_RUNTIME_IDLE_INTERVAL);

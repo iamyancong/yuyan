@@ -64,49 +64,51 @@ const handleOpenNginxRuntime = async () => {
           :destroy-inactive-tab-pane="false"
           @change="lifecycleState.handleTabChange"
         >
-          <a-tab-pane key="targets" tab="部署目标">
-            <DeployTargetTab
-              :loading="lifecycleState.loading.value"
-              :repair-loading="targetState.targetBindingRepairing.value"
-              :targets="targetState.runtimeTargets.value"
-              :filter-form="targetState.targetFilterForm"
-              :branch-options="targetState.targetBranchFilterOptions.value"
-              :server-options="targetState.targetServerFilterOptions.value"
-              :action-config="targetActionConfig"
-              @update:filter-form="updateTargetFilterForm"
-              @search="targetState.handleTargetFilterSearch"
-              @reset="targetState.handleTargetFilterReset"
-              @repair-nginx-bindings="targetState.repairManagedNginxBindings"
-              @open-progress="progressState.openTargetProgress"
-            />
-          </a-tab-pane>
-          <a-tab-pane key="servers" tab="服务器管理">
-            <DeployServerTab
-              :loading="lifecycleState.loading.value"
-              :servers="serverState.servers.value"
-              :action-config="serverActionConfig"
-            />
-          </a-tab-pane>
-          <a-tab-pane key="records" tab="发布历史">
-            <DeployRecordTab
-              :active="lifecycleState.activeTabKey.value === 'records'"
-              :loading="lifecycleState.loading.value"
-              :records="recordState.records.value"
-              :action-config="recordActionConfig"
-              :server-filter="recordState.recordServerFilter.value"
-              :project-filter="recordState.recordProjectFilter.value"
-              :branch-filter="recordState.recordBranchFilter.value"
-              :server-options="recordState.recordServerOptions.value"
-              :project-options="recordState.recordProjectOptions.value"
-              :branch-options="recordState.recordBranchOptions.value"
-              :pagination="recordState.recordPagination"
-              @server-change="recordState.handleRecordServerChange"
-              @project-change="recordState.handleRecordProjectChange"
-              @branch-change="recordState.handleRecordBranchChange"
-              @page-change="recordState.handleRecordPageChange"
-              @refresh="lifecycleState.refreshActiveTab"
-            />
-          </a-tab-pane>
+        <a-tab-pane key="targets" tab="部署目标">
+          <DeployTargetTab
+            :loading="lifecycleState.loading.value"
+            :repair-loading="targetState.targetBindingRepairing.value"
+            :targets="targetState.runtimeTargets.value"
+            :filter-form="targetState.targetFilterForm"
+            :branch-options="targetState.targetBranchFilterOptions.value"
+            :server-options="targetState.targetServerFilterOptions.value"
+            :action-config="targetActionConfig"
+            @update:filter-form="updateTargetFilterForm"
+            @search="targetState.handleTargetFilterSearch"
+            @reset="targetState.handleTargetFilterReset"
+            @repair-nginx-bindings="targetState.repairManagedNginxBindings"
+            @open-progress="progressState.openTargetProgress"
+          />
+        </a-tab-pane>
+        <a-tab-pane key="servers" tab="服务器管理">
+          <DeployServerTab
+            :loading="lifecycleState.loading.value"
+            :order-saving="serverState.serverOrderSaving.value"
+            :servers="serverState.servers.value"
+            :action-config="serverActionConfig"
+            @reorder="serverState.reorderServerList"
+          />
+        </a-tab-pane>
+        <a-tab-pane key="records" tab="发布历史">
+          <DeployRecordTab
+            :active="lifecycleState.activeTabKey.value === 'records'"
+            :loading="lifecycleState.loading.value"
+            :records="recordState.records.value"
+            :action-config="recordActionConfig"
+            :server-filter="recordState.recordServerFilter.value"
+            :project-filter="recordState.recordProjectFilter.value"
+            :branch-filter="recordState.recordBranchFilter.value"
+            :server-options="recordState.recordServerOptions.value"
+            :project-options="recordState.recordProjectOptions.value"
+            :branch-options="recordState.recordBranchOptions.value"
+            :pagination="recordState.recordPagination"
+            @server-change="recordState.handleRecordServerChange"
+            @project-change="recordState.handleRecordProjectChange"
+            @branch-change="recordState.handleRecordBranchChange"
+            @page-change="recordState.handleRecordPageChange"
+            @refresh="() => lifecycleState.refreshActiveTab({ force: true, reloadRecordTargets: true })"
+          />
+        </a-tab-pane>
         </a-tabs>
       </YCard>
     </div>
