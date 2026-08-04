@@ -473,7 +473,7 @@ async function buildProjectConfigPlan(workspace, args) {
     buildCommand: String(targetOverrides.buildCommand ?? existing?.buildCommand ?? (isBackend ? (workspace.packageScripts?.includes('mvnw') ? './mvnw -DskipTests package' : 'mvn -DskipTests package') : `${packageManager} build`)),
     artifactDir: String(targetOverrides.artifactDir ?? existing?.artifactDir ?? (isBackend ? 'target/*.jar' : 'dist')),
     preserveSubDirs: String(existing?.preserveSubDirs || ''),
-    uploadStrategy: existing?.uploadStrategy || 'cleanReplace',
+    uploadStrategy: existing?.uploadStrategy || 'overlayKeepAssets',
     visitUrl: String(targetOverrides.visitUrl || existing?.visitUrl || ''),
     remark: String(targetOverrides.remark || existing?.remark || '由雨燕 MCP 规划'),
     projectType,
