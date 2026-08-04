@@ -851,7 +851,7 @@ function mapTarget(row) {
     buildCommand: row.build_command,
     artifactDir: row.artifact_dir,
     preserveSubDirs: row.preserve_sub_dirs || '',
-    uploadStrategy: row.upload_strategy || 'cleanReplace',
+    uploadStrategy: row.upload_strategy || 'overlayKeepAssets',
     visitUrl: row.visit_url || '',
     remark: row.remark || '',
     createdBy: row.created_by || '',
@@ -1650,7 +1650,7 @@ export async function getDeployDb() {
       build_command TEXT NOT NULL,
       artifact_dir TEXT NOT NULL DEFAULT 'dist',
       preserve_sub_dirs TEXT NOT NULL DEFAULT '',
-      upload_strategy TEXT NOT NULL DEFAULT 'cleanReplace',
+      upload_strategy TEXT NOT NULL DEFAULT 'overlayKeepAssets',
       visit_url TEXT,
       remark TEXT,
       created_by TEXT,
@@ -1735,7 +1735,7 @@ export async function getDeployDb() {
     dbInstance.exec("ALTER TABLE deploy_targets ADD COLUMN preserve_sub_dirs TEXT NOT NULL DEFAULT ''");
   }
   if (!targetColumns.includes('upload_strategy')) {
-    dbInstance.exec("ALTER TABLE deploy_targets ADD COLUMN upload_strategy TEXT NOT NULL DEFAULT 'cleanReplace'");
+    dbInstance.exec("ALTER TABLE deploy_targets ADD COLUMN upload_strategy TEXT NOT NULL DEFAULT 'overlayKeepAssets'");
   }
   if (!targetColumns.includes('nginx_site_managed')) {
     dbInstance.exec('ALTER TABLE deploy_targets ADD COLUMN nginx_site_managed INTEGER NOT NULL DEFAULT 0');
@@ -2928,7 +2928,7 @@ export async function createTarget(payload) {
       payload.buildCommand || '',
       payload.artifactDir || '',
       payload.preserveSubDirs || '',
-      payload.uploadStrategy || 'cleanReplace',
+      payload.uploadStrategy || 'overlayKeepAssets',
       payload.visitUrl || '',
       payload.remark || '',
       payload.createdBy || '',
@@ -3004,7 +3004,7 @@ export async function updateTarget(id, payload) {
     payload.buildCommand || '',
     payload.artifactDir || '',
     payload.preserveSubDirs || '',
-    payload.uploadStrategy || 'cleanReplace',
+    payload.uploadStrategy || 'overlayKeepAssets',
     payload.visitUrl || '',
     payload.remark || '',
     now(),

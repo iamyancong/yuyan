@@ -295,8 +295,8 @@ function parsePreserveSubDirs(value) {
  * @param {string} value - 原始策略
  * @returns {'cleanReplace'|'overlayKeepAssets'} 上传策略
  */
-function normalizeUploadStrategy(value) {
-  return value === DEPLOY_UPLOAD_STRATEGIES.overlayKeepAssets ? DEPLOY_UPLOAD_STRATEGIES.overlayKeepAssets : DEPLOY_UPLOAD_STRATEGIES.cleanReplace;
+export function normalizeUploadStrategy(value) {
+  return value === DEPLOY_UPLOAD_STRATEGIES.cleanReplace ? DEPLOY_UPLOAD_STRATEGIES.cleanReplace : DEPLOY_UPLOAD_STRATEGIES.overlayKeepAssets;
 }
 
 /**
@@ -430,11 +430,14 @@ async function resolveArtifactPath(repoDir, artifactDir) {
 /**
  * 生成 tar 打包排除参数。
  * @param {string[]} protectedSubDirs - 保留的顶层子目录
+ * @param {string[]} deferredRootFileNames - 需要延后发布的根目录文件名
  * @returns {string} tar 排除参数
  */
-function buildLocalTarExcludeArgs(protectedSubDirs = []) {
-  return protectedSubDirs
-    .flatMap((name) => [`./${name}`, `./${name}/*`])
+export function buildLocalTarExcludeArgs(protectedSubDirs = [], deferredRootFileNames = []) {
+  return [
+    ...protectedSubDirs.flatMap((name) => [`./${name}`, `./${name}/*`]),
+    ...deferredRootFileNames.map((name) => `./${name}`),
+  ]
     .map((pattern) => `--exclude=${shellQuote(pattern)}`)
     .join(' ');
 }
@@ -489,11 +492,12 @@ async function collectUploadableArtifactFiles(localDir, protectedSubDirs = []) {
  * @param {string} archivePath - 压缩包路径
  * @param {string[]} protectedSubDirs - 需要跳过的顶层目录
  * @param {AbortSignal} signal - 停止信号
+ * @param {string[]} deferredRootFileNames - 需要延后发布的根目录文件名
  * @returns {Promise<void>}
  */
-async function createArtifactArchive(artifactPath, archivePath, protectedSubDirs = [], signal) {
+async function createArtifactArchive(artifactPath, archivePath, protectedSubDirs = [], signal, deferredRootFileNames = []) {
   await fs.rm(archivePath, { force: true }).catch(() => {});
-  const excludeArgs = buildLocalTarExcludeArgs(protectedSubDirs);
+  const excludeArgs = buildLocalTarExcludeArgs(protectedSubDirs, deferredRootFileNames);
   await runLocalCommand(`tar -czf ${shellQuote(archivePath)} ${excludeArgs} -C ${shellQuote(artifactPath)} .`, {
     label: '打包发布产物',
     signal,
@@ -539,6 +543,7 @@ async function extractRemoteArchiveWithSudo(conn, remoteArchivePath, remoteDir) 
  * @param {string[]} options.protectedSubDirs - 需要跳过的顶层目录
  * @param {AbortSignal} options.signal - 停止信号
  * @param {(level: string, message: string, stage?: string) => void} options.log - 日志函数
+ * @param {string[]} options.deferRootFileNames - 需要延后发布的根目录文件名
  * @returns {Promise<number>} 上传文件数量
  */
 async function uploadDirectoryWithSudoTar(conn, artifactPath, remoteDir, options = {}) {
@@ -546,15 +551,29 @@ async function uploadDirectoryWithSudoTar(conn, artifactPath, remoteDir, options
   const archivePath = options.archivePath;
   const releaseName = options.releaseName || createReleaseName();
   const remoteArchivePath = `/tmp/yuyan-deploy-${releaseName}-${Math.random().toString(16).slice(2)}.tar.gz`;
+  const deferRootFileNames = options.deferRootFileNames || [];
+  const deferredTempPaths = [];
   if (!archivePath) throw new Error('sudo 上传产物缺少本地临时压缩包路径');
   const fileCount = await countUploadableArtifactFiles(artifactPath, protectedSubDirs);
 
   try {
-    await createArtifactArchive(artifactPath, archivePath, protectedSubDirs, options.signal);
+    await createArtifactArchive(artifactPath, archivePath, protectedSubDirs, options.signal, deferRootFileNames);
     options.log?.('info', `已打包发布产物：${fileCount} 个文件`, 'upload');
     await uploadFile(conn, archivePath, remoteArchivePath);
     options.log?.('info', `产物包已上传到临时目录：${remoteArchivePath}`, 'upload');
     await extractRemoteArchiveWithSudo(conn, remoteArchivePath, remoteDir);
+    for (const fileName of deferRootFileNames) {
+      const localEntryPath = path.join(artifactPath, fileName);
+      const entryStat = await fs.stat(localEntryPath).catch(() => null);
+      if (!entryStat?.isFile()) continue;
+      const remoteTempPath = `/tmp/yuyan-deploy-entry-${releaseName}-${Math.random().toString(16).slice(2)}-${path.basename(fileName)}`;
+      deferredTempPaths.push(remoteTempPath);
+      await uploadFile(conn, localEntryPath, remoteTempPath);
+      await execSsh(conn, `sudo -n cp ${shellQuote(remoteTempPath)} ${shellQuote(path.posix.join(remoteDir, fileName))}`, {
+        label: `发布入口文件 ${fileName}`,
+      });
+      options.log?.('info', `已最后发布入口文件：${fileName}`, 'upload');
+    }
     return fileCount;
   } finally {
     await fs.rm(archivePath, { force: true }).catch(() => {});
@@ -562,6 +581,12 @@ async function uploadDirectoryWithSudoTar(conn, artifactPath, remoteDir, options
       allowFailure: true,
       label: '清理远程临时产物包',
     }).catch(() => {});
+    if (deferredTempPaths.length) {
+      await execSsh(conn, `rm -f ${deferredTempPaths.map((filePath) => shellQuote(filePath)).join(' ')}`, {
+        allowFailure: true,
+        label: '清理远程入口临时文件',
+      }).catch(() => {});
+    }
   }
 }
 
@@ -1848,6 +1873,7 @@ export async function deployTarget(targetId, payload, emit) {
             protectedSubDirs,
             signal,
             log,
+            deferRootFileNames: ['index.html'],
           });
         } else {
           await uploadDirectory(conn, artifactPath, target.deployRoot, ({ remotePath }) => {
@@ -1855,7 +1881,7 @@ export async function deployTarget(targetId, payload, emit) {
             if (uploaded <= 5 || uploaded % 30 === 0) {
               log('info', `已上传：${remotePath}`, 'upload');
             }
-          }, { excludeTopLevelNames: protectedSubDirs });
+          }, { excludeTopLevelNames: protectedSubDirs, deferRootFileNames: ['index.html'] });
         }
         log('success', `产物上传完成，共 ${uploaded} 个文件`, 'upload');
 

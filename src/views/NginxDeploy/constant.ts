@@ -42,12 +42,12 @@ export const DEFAULT_ARTIFACT_DIR = '';
 export const DEFAULT_PRESERVE_SUB_DIRS = '';
 
 /** 默认静态资源上传策略 */
-export const DEFAULT_UPLOAD_STRATEGY: DeployUploadStrategy = 'cleanReplace';
+export const DEFAULT_UPLOAD_STRATEGY: DeployUploadStrategy = 'overlayKeepAssets';
 
 /** 静态资源上传策略选项 */
 export const UPLOAD_STRATEGY_OPTIONS: Array<{ label: string; value: DeployUploadStrategy }> = [
-  { label: '清空后替换（默认）', value: 'cleanReplace' },
-  { label: '覆盖上传并保留旧资源', value: 'overlayKeepAssets' },
+  { label: '覆盖上传并保留旧资源（默认）', value: 'overlayKeepAssets' },
+  { label: '清空后替换（可能中断已打开页面）', value: 'cleanReplace' },
 ];
 
 /** 静态资源上传策略展示文案 */
@@ -339,7 +339,7 @@ export const targetColumns: YTableColumn[] = [
   { field: 'listenPort', title: '监听端口', width: 90, align: 'center', formatter: ({ row }) => (row.nginxSiteManaged ? row.listenPort || '-' : '-') },
   { field: 'nginxServerName', title: 'server_name', minWidth: 120, formatter: ({ row }) => (row.nginxSiteManaged ? row.nginxServerName || '_' : '-') },
   { field: 'nginxConfPath', title: 'Nginx 配置文件', minWidth: 220 },
-  { field: 'uploadStrategy', title: '上传策略', minWidth: 130, formatter: ({ cellValue }) => UPLOAD_STRATEGY_LABEL_MAP[cellValue as DeployUploadStrategy] || UPLOAD_STRATEGY_LABEL_MAP.cleanReplace },
+  { field: 'uploadStrategy', title: '上传策略', minWidth: 130, formatter: ({ cellValue }) => UPLOAD_STRATEGY_LABEL_MAP[cellValue as DeployUploadStrategy] || UPLOAD_STRATEGY_LABEL_MAP.overlayKeepAssets },
   { field: 'preserveSubDirs', title: '保留子目录', minWidth: 90, formatter: ({ cellValue }) => String(cellValue || '自动识别') },
   // { field: 'envName', title: '环境', width: 90, align: 'center' },
 ];
@@ -1011,7 +1011,7 @@ export const targetFormSchema = {
               'x-decorator-props': {
                 gridSpan: 2,
                 tooltip:
-                  '清空后替换会先清理部署目录再上传新产物；覆盖上传并保留旧资源适合微应用平滑发布，会保留旧 hash 静态资源并按最近发布次数自动清理。',
+                  '覆盖上传并保留旧资源适合微应用平滑发布，会先发布静态资源、最后发布入口文件，并按最近发布次数自动清理旧 hash。清空后替换会删除旧资源，可能导致已打开页面切换路由失败。',
               },
               'x-component': 'Select',
               'x-reactions': {

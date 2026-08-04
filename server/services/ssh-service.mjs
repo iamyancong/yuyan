@@ -371,16 +371,21 @@ export async function ensureRemoteDir(conn, dirPath) {
  * @param {(info: Object) => void} onFile - 文件上传回调
  * @param {Object} options - 上传选项
  * @param {string[]} options.excludeTopLevelNames - 跳过上传的顶层目录或文件名
+ * @param {string[]} options.deferRootFileNames - 延后上传的根目录文件名
  * @returns {Promise<void>}
  */
 export async function uploadDirectory(conn, localDir, remoteDir, onFile, options = {}) {
   const sftp = await getSftp(conn);
   await ensureRemoteDir(conn, remoteDir);
   const excludeTopLevelNames = new Set((options.excludeTopLevelNames || []).map((name) => String(name || '').trim()).filter(Boolean));
+  const deferRootFileNames = new Set((options.deferRootFileNames || []).map((name) => String(name || '').trim()).filter(Boolean));
 
   const walk = async (currentLocal, currentRemote) => {
     await ensureRemoteDir(conn, currentRemote);
-    const entries = await fs.readdir(currentLocal, { withFileTypes: true });
+    const sourceEntries = await fs.readdir(currentLocal, { withFileTypes: true });
+    const entries = currentLocal === localDir
+      ? orderUploadEntries(sourceEntries, deferRootFileNames)
+      : sourceEntries;
     for (const entry of entries) {
       if (currentLocal === localDir && excludeTopLevelNames.has(entry.name)) continue;
       const localPath = path.join(currentLocal, entry.name);
@@ -401,6 +406,22 @@ export async function uploadDirectory(conn, localDir, remoteDir, onFile, options
   };
 
   await walk(localDir, remoteDir);
+}
+
+/**
+ * 将需要延后发布的根目录入口文件排到最后。
+ * @param {import('node:fs').Dirent[]} entries - 当前目录条目
+ * @param {Set<string>} deferFileNames - 需要延后的文件名
+ * @returns {import('node:fs').Dirent[]} 排序后的目录条目
+ */
+export function orderUploadEntries(entries, deferFileNames = new Set()) {
+  const deferred = [];
+  const regular = [];
+  entries.forEach((entry) => {
+    if (entry.isFile() && deferFileNames.has(entry.name)) deferred.push(entry);
+    else regular.push(entry);
+  });
+  return [...regular, ...deferred];
 }
 
 /**

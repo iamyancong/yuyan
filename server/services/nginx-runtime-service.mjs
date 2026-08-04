@@ -505,7 +505,7 @@ async function detectRemoteEnvironment(conn) {
  * @param {Object} config - 运行时配置
  * @returns {string} nginx.conf 内容
  */
-function renderMainNginxConfig(config) {
+export function renderMainNginxConfig(config) {
   return [
     'worker_processes  1;',
     '',
@@ -541,6 +541,19 @@ function renderMainNginxConfig(config) {
     '',
     `        root ${config.webRoot};`,
     '        index index.html index.htm;',
+    '',
+    '        location ~* \\.html$ {',
+    '            expires -1;',
+    '            add_header Cache-Control "no-cache";',
+    '            try_files $uri =404;',
+    '        }',
+    '',
+    '        location ~* \\.(js|mjs|css|map|wasm|png|jpg|jpeg|gif|ico|svg|webp|woff|woff2|ttf|eot|json|txt)$ {',
+    '            expires 1y;',
+    '            add_header Cache-Control "public, max-age=31536000, immutable";',
+    '            access_log off;',
+    '            try_files $uri =404;',
+    '        }',
     '',
     '        location / {',
     '            add_header Cache-Control "no-cache";',
@@ -637,7 +650,7 @@ function normalizeNginxConfigValue(value, label) {
  * @param {Object} target - 部署目标
  * @returns {string} 站点配置
  */
-function renderSiteConfig(target) {
+export function renderSiteConfig(target) {
   const listenPort = Number(target.listenPort || 0);
   if (!Number.isInteger(listenPort) || listenPort < 1 || listenPort > 65535) {
     throw new Error('托管站点监听端口必须在 1-65535 之间');
@@ -665,7 +678,7 @@ function renderSiteConfig(target) {
     '        try_files $uri =404;',
     '    }',
     '',
-    '    location ~* \\.(js|css|png|jpg|jpeg|gif|ico|svg|webp|woff|woff2|ttf|eot|json|txt)$ {',
+    '    location ~* \\.(js|mjs|css|map|wasm|png|jpg|jpeg|gif|ico|svg|webp|woff|woff2|ttf|eot|json|txt)$ {',
     '        expires 1y;',
     '        add_header Cache-Control "public, max-age=31536000, immutable";',
     '        access_log off;',

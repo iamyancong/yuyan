@@ -82,7 +82,7 @@ export function usePublishConfirm(props: PublishConfirmModalProps) {
     { label: '分支', value: branchText.value },
     { label: '服务器', value: props.target?.serverName || '-' },
     { label: '部署根目录', value: props.target?.deployRoot || '-' },
-    { label: '上传策略', value: props.target?.uploadStrategy ? UPLOAD_STRATEGY_LABEL_MAP[props.target.uploadStrategy] : UPLOAD_STRATEGY_LABEL_MAP.cleanReplace },
+    { label: '上传策略', value: props.target?.uploadStrategy ? UPLOAD_STRATEGY_LABEL_MAP[props.target.uploadStrategy] : UPLOAD_STRATEGY_LABEL_MAP.overlayKeepAssets },
     { label: '访问地址', value: props.target?.visitUrl || '未配置' },
     // { label: '环境', value: props.target?.envName || '测试' },
   ]);
