@@ -107,6 +107,7 @@ const progressState = useNginxDeployProgress({
   clearTargetRuntimeSnapshot: targetState.clearTargetRuntimeSnapshot,
 });
 const lifecycleState = useNginxDeployLifecycle({
+  authState,
   isLoggedIn,
   isAuthReady,
   ensureLoggedIn,

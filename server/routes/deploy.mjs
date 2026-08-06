@@ -179,7 +179,7 @@ router.post('/records/:id/rollback', handleRollbackRecord);
 router.post('/records/:id/undo-rollback', handleUndoRollbackRecord);
 
 // 原始数据库备份/恢复不再对桌面端开放，避免跨用户整库复制。
-router.all('/db/backup', (_req, res) => res.status(410).json({ success: false, error: { code: 'raw_database_sync_removed', message: '原始数据库同步已移除，请刷新当前账号配置' } }));
+router.all('/db/backup', (_req, res) => res.status(410).json({ success: false, error: { code: 'raw_database_sync_removed', message: '原始数据库同步已移除，请直接刷新中央数据' } }));
 router.all('/db/restore', (_req, res) => res.status(410).json({ success: false, error: { code: 'raw_database_sync_removed', message: '原始数据库恢复已移除' } }));
 
 // 自动更新检测与原生下载代理接口

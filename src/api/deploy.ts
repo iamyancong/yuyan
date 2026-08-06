@@ -6,9 +6,6 @@ import {
   readDesktopOpenApi,
 } from '@/api/agent';
 import { buildLocalDeployApiUrl } from '@/api/localDeployUrl';
-import { consumeNginxArchiveSaveResponse } from './nginxArchiveSaveStream';
-
-export { consumeNginxArchiveSaveResponse } from './nginxArchiveSaveStream';
 
 /** 服务器认证方式 */
 export type DeployAuthType = 'password' | 'privateKey';
@@ -21,9 +18,6 @@ export type DeployRecordAction = 'deploy' | 'rollback' | 'undoRollback';
 
 /** 部署项目来源 */
 export type DeployProjectSource = 'ops' | 'gitlab';
-
-/** 发布任务执行环境 */
-export type DeployExecutionScope = 'server' | 'local';
 
 /** 静态资源上传策略 */
 export type DeployUploadStrategy = 'cleanReplace' | 'overlayKeepAssets';
@@ -616,21 +610,6 @@ export interface NginxInstanceArchiveDownload {
   scriptPath: string;
 }
 
-/** 托管 Nginx 运行包保存阶段 */
-export type NginxArchiveSaveStage = 'preparing' | 'prechecking' | 'packing' | 'writing' | 'finished';
-
-/** 托管 Nginx 运行包保存事件 */
-export interface NginxArchiveSaveEvent {
-  stage?: NginxArchiveSaveStage;
-  message?: string;
-  loaded?: number;
-  finished?: boolean;
-  filePath?: string;
-  fileName?: string;
-  idleSeconds?: number;
-  error?: string;
-}
-
 /** 托管 Nginx 站点同步结果 */
 export interface NginxSiteSyncResult {
   success: boolean;
@@ -724,7 +703,7 @@ export const getDeployApiAuthHeaders = (): Record<string, string> => {
 };
 
 client.interceptors.request.use(async (config) => {
-  config.baseURL = await getActiveDeployApiBase(config.url || '');
+  config.baseURL = await getActiveDeployApiBase();
   Object.assign(config.headers, getDeployApiAuthHeaders());
   return config;
 });
@@ -898,7 +877,7 @@ export const getNginxInstanceArchiveDownloadUrl = async (
   const query = new URLSearchParams({ type });
   if (selection?.siteIds?.length) query.set('siteIds', selection.siteIds.join(','));
   if (selection?.revision) query.set('revision', selection.revision);
-  return getActiveDeployApiUrl(`/nginx-instances/${instanceId}/archive?${query.toString()}`, 'server');
+  return getActiveDeployApiUrl(`/nginx-instances/${instanceId}/archive?${query.toString()}`);
 };
 
 /**
@@ -907,7 +886,7 @@ export const getNginxInstanceArchiveDownloadUrl = async (
  * @returns 配置版本与可选 server 列表
  */
 export async function getNginxInstanceArchiveSites(instanceId: number): Promise<NginxArchiveSitesResponse> {
-  const url = await getActiveDeployApiUrl(`/nginx-instances/${instanceId}/archive-sites`, 'server');
+  const url = await getActiveDeployApiUrl(`/nginx-instances/${instanceId}/archive-sites`);
   return axios.get(url, { headers: getDeployApiAuthHeaders() }).then(unwrap<NginxArchiveSitesResponse>);
 }
 
@@ -968,39 +947,6 @@ export async function downloadNginxInstanceArchive(
   };
 }
 
-/**
- * 另存为直写：导出托管 Nginx 实例运行包并保存到指定磁盘物理路径。
- * 通过 SSE 流实时接收保存进度。
- * @param instanceId Nginx 实例 ID
- * @param type 下载类型
- * @param filePath 本地保存路径
- * @param onEvent 保存事件回调
- * @param signal 中断信号
- */
-export async function saveNginxInstanceArchiveToLocal(
-  instanceId: number,
-  type: NginxArchiveDownloadType,
-  filePath: string,
-  onEvent?: (event: NginxArchiveSaveEvent) => void,
-  signal?: AbortSignal
-): Promise<void> {
-  const response = await fetch(await getLocalDeployApiUrl(`/deploy-api/nginx-instances/${instanceId}/archive-save`), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ filePath, type }),
-    signal,
-  });
-
-  if (!response.ok) {
-    const data = await parseJsonOrText(response);
-    throw new Error(typeof data === 'string' ? data : data?.error || data?.message || '直写保存文件失败');
-  }
-
-  await consumeNginxArchiveSaveResponse(response, onEvent);
-}
-
 /** 获取托管 Nginx 下一个可用端口 */
 export const getNextNginxRuntimePort = (serverId: number, excludeTargetId = 0) =>
   client.get(`/servers/${serverId}/nginx-runtime/next-port`, { params: excludeTargetId ? { excludeTargetId } : undefined }).then(unwrap<{ port: number }>);
@@ -1017,18 +963,6 @@ export const createDeployTarget = (payload: DeployTargetPayload) => client.post(
 
 /** 更新部署目标 */
 export const updateDeployTarget = (id: number, payload: DeployTargetPayload) => client.put(`/targets/${id}`, payload).then(unwrap<DeployTarget>);
-
-/**
- * 更新桌面端本地数据库中的部署目标。
- * @description 仅用于必须落到内嵌服务的本地配置同步，避免改变普通部署数据默认读取中央服务的行为。
- * @param id 部署目标 ID
- * @param payload 部署目标配置
- * @returns 更新后的本地部署目标
- */
-export async function updateLocalDeployTarget(id: number, payload: DeployTargetPayload): Promise<DeployTarget> {
-  const url = await getActiveDeployApiUrl(`/targets/${id}`, 'local');
-  return axios.put(url, payload, { headers: getDeployApiAuthHeaders() }).then(unwrap<DeployTarget>);
-}
 
 /** 删除部署目标 */
 export const deleteDeployTarget = (id: number, expectedName: string) => client.delete(`/targets/${id}`, { params: { expectedName } });
@@ -1395,16 +1329,6 @@ export async function undoRollbackRecordWithProgress(
   return consumeProgressStream(response, options);
 }
 
-/**
- * 备份/下载指定服务器的数据库文件 (ArrayBuffer)
- * @param {string} serverUrl - 目标服务器基础地址
- * @returns {Promise<ArrayBuffer>} 数据库二进制数据
- */
-export const backupDbFromServer = (serverUrl: string): Promise<ArrayBuffer> => {
-  void serverUrl;
-  return Promise.reject(new Error('原始数据库下载能力已禁用，请使用账号配置 API'));
-};
-
 let activeLocalServerUrl: string | null = null;
 
 /** 本地辅助服务状态。 */
@@ -1507,46 +1431,11 @@ async function getActiveLocalServerUrl(): Promise<string> {
 }
 
 /**
- * 判断桌面端是否显式指定了部署 API 地址。
- * @returns 是否应绕过内嵌本地服务
- */
-function hasCustomDeployApiBase(): boolean {
-  try {
-    return Boolean(window.localStorage.getItem('CUSTOM_API_BASE'));
-  } catch {
-    return false;
-  }
-}
-
-const LOCAL_EXECUTE_API_PATTERNS = [
-  /\/targets\/\d+\/(?:deploy|deploy-progress|deploy\/stop|service-actions\/|service-status|service-logs|inspect|nginx-site\/sync|openapi\/generate)/i,
-  /\/targets\/\d+\/openapi\/latest/i,
-  /\/openapi-artifacts\/\d+\/(?:content|download)/i,
-  /\/records\/\d+\/(?:rollback|undo-rollback)/i,
-  /\/servers\/\d+\/nginx-runtime\/init/i,
-  /\/nginx-instances\/\d+\/init(?:[/?]|$)/i,
-  /\/jdks(?:\/|$)/i,
-];
-
-/** 判断请求路径是否是需要在本地辅助服务中执行的动作类接口 */
-export function isLocalExecuteApi(url: string): boolean {
-  if (!url) return false;
-  return LOCAL_EXECUTE_API_PATTERNS.some((pattern) => pattern.test(url));
-}
-
-/**
- * 获取当前模式实际执行部署任务的 API 根地址。
- * @description 桌面端普通数据请求默认使用中央 API，仅明确的本地执行请求使用内嵌服务；网页端和显式自定义模式使用配置的 API。
- * @param {string} url - 请求 URL 相对路径
- * @param executionScope 显式指定的执行环境
+ * 获取普通部署业务的中央 API 根地址。
+ * @description 不再根据 URL 猜测并回退本地 SQLite；设备能力必须显式调用本机辅助 API。
  * @returns {Promise<string>} 部署 API 根地址
  */
-async function getActiveDeployApiBase(url = '', executionScope?: DeployExecutionScope): Promise<string> {
-  if (isTauri() && !hasCustomDeployApiBase()) {
-    if (executionScope === 'local' || (!executionScope && isLocalExecuteApi(url))) {
-      return `${await getActiveLocalServerUrl()}/deploy-api`;
-    }
-  }
+async function getActiveDeployApiBase(): Promise<string> {
   if (!isTauri()) return getApiBase('/deploy-api');
   const session = getCachedSecureAccount();
   if (hasUsableCentralSession(session)) {
@@ -1558,12 +1447,11 @@ async function getActiveDeployApiBase(url = '', executionScope?: DeployExecution
 /**
  * 构建当前模式的部署 API 完整地址。
  * @param path 部署 API 内部路径
- * @param executionScope 显式指定的执行环境
  * @returns 完整请求地址
  */
-async function getActiveDeployApiUrl(path: string, executionScope?: DeployExecutionScope): Promise<string> {
+async function getActiveDeployApiUrl(path: string): Promise<string> {
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-  const base = await getActiveDeployApiBase(normalizedPath, executionScope);
+  const base = await getActiveDeployApiBase();
   return `${base}${normalizedPath}`;
 }
 
@@ -1575,7 +1463,8 @@ async function getActiveDeployApiUrl(path: string, executionScope?: DeployExecut
  * @returns 完整请求地址
  */
 async function getTargetExecutionApiUrl(path: string, projectType: DeployTarget['projectType']): Promise<string> {
-  return getActiveDeployApiUrl(path, 'server');
+  void projectType;
+  return getActiveDeployApiUrl(path);
 }
 
 /**
@@ -1587,16 +1476,6 @@ async function getLocalDeployApiUrl(path: string): Promise<string> {
   const baseUrl = await getActiveLocalServerUrl();
   return buildLocalDeployApiUrl(baseUrl, path);
 }
-
-/**
- * 还原二进制数据库数据到本地服务
- * @param {ArrayBuffer} data - 数据库二进制数据
- * @returns {Promise<{ success: boolean; message: string }>} 操作结果
- */
-export const restoreDbToLocal = async (data: ArrayBuffer): Promise<{ success: boolean; message: string }> => {
-  void data;
-  throw new Error('原始数据库恢复能力已禁用，请使用“刷新账号配置”');
-};
 
 /**
  * 向内网发布服务器代理接口查询新版本信息

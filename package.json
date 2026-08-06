@@ -14,7 +14,7 @@
     "typecheck": "vue-tsc --noEmit",
     "test:server": "node --test server/services/tests/*.test.mjs",
     "test:central-url": "node --experimental-strip-types --test src/utils/tests/centralUrlPolicy.test.ts",
-    "test:frontend-utils": "node --experimental-strip-types --test src/api/tests/agentStream.test.ts src/api/tests/localDeployUrl.test.ts src/api/tests/nginxArchiveSave.test.ts src/views/NginxDeploy/components/NginxRuntimeDrawer/components/ArchiveSiteSelectionModal/tests/selectionPolicy.test.ts src/views/NginxDeploy/hooks/tests/targetRuntimePolicy.test.ts src/views/ProjectList/Scaffold/tests/constant.test.ts",
+    "test:frontend-utils": "node --experimental-strip-types --test src/api/tests/agentStream.test.ts src/api/tests/localDeployUrl.test.ts src/api/tests/nginxArchiveSave.test.ts src/services/tests/centralDataRefresh.test.ts src/views/NginxDeploy/components/NginxRuntimeDrawer/components/ArchiveSiteSelectionModal/tests/selectionPolicy.test.ts src/views/NginxDeploy/hooks/tests/targetRuntimePolicy.test.ts src/views/ProjectList/Scaffold/tests/constant.test.ts",
     "mcp:build": "tsc -p mcp/tsconfig.json && node scripts/bundle-mcp.mjs",
     "test:mcp": "pnpm run mcp:build && node --test mcp/tests/*.test.mjs",
     "tauri": "tauri"

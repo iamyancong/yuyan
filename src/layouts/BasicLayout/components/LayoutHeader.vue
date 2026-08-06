@@ -55,7 +55,7 @@ const handleLogout = async () => {
     <div v-if="isTauriClient" class="yuyan-layout-header-drag" data-tauri-drag-region />
 
     <div class="yuyan-layout-header-right">
-      <a-tooltip v-if="isTauriClient" title="刷新当前账号配置" overlayClassName="header-tooltip">
+      <a-tooltip v-if="isTauriClient && isLoggedIn" title="刷新中央数据" overlayClassName="header-tooltip">
         <a-button type="text" :loading="syncing" class="header-action-btn btn-sync" @click="confirmSyncData">
           <template #icon>
             <SyncOutlined class="action-icon" />

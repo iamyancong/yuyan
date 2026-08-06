@@ -58,6 +58,25 @@ const handleOpenNginxRuntime = async () => {
 
     <div class="deploy-tabs-wrapper">
       <YCard class="nginx-deploy-main-card" :padding="0">
+        <a-alert
+          v-if="lifecycleState.refreshError.value"
+          class="central-data-status"
+          type="error"
+          show-icon
+          message="中央部署数据不可用"
+          :description="lifecycleState.refreshError.value"
+        />
+        <a-alert
+          v-else-if="lifecycleState.activeTabKey.value === 'targets'
+            && lifecycleState.tabLoadedFlags.value.targets
+            && !lifecycleState.loading.value
+            && !targetState.allTargets.value.length"
+          class="central-data-status"
+          type="info"
+          show-icon
+          message="暂无中央部署数据"
+          description="当前共享部署工作区还没有服务器部署目标。"
+        />
         <a-tabs
           v-model:activeKey="lifecycleState.activeTabKey.value"
           :animated="{ inkBar: true, tabPane: false }"

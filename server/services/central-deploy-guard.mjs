@@ -93,7 +93,7 @@ export async function guardCentralDeployRequest(req, res, next) {
       const db = await getDeployDb();
       const resource = db.prepare(lookup.sql).get(lookup.id, context.teamId);
       if (!resource) {
-        deny(res, 404, 'resource_not_found', '资源不存在或不属于当前账号');
+        deny(res, 404, 'resource_not_found', '资源不存在或不属于中央部署工作区');
         return;
       }
       if (!isDestructiveNameConfirmed(req.method, lookup.type, req.query?.expectedName, resource.name)) {
