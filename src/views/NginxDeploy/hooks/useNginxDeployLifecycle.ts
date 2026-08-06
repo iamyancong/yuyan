@@ -1,10 +1,14 @@
-import { ref, watch, type Ref } from 'vue';
+import { onScopeDispose, ref, watch, type Ref } from 'vue';
+import message from 'ant-design-vue/es/message';
+import { registerCentralDataRefreshHandler } from '@/services/centralDataRefresh';
 import type { NginxDeployTabKey, RefreshActiveTabOptions } from '../types';
+import { getErrorMessage } from '../utils';
 
 import { useNginxDeployContext } from './useNginxDeployContext';
 
 /** 部署中心生命周期 Hook 参数 */
 interface UseNginxDeployLifecycleParams {
+  authState?: Readonly<Ref<{ accountId?: string; teamId?: string; isAuthenticated?: boolean }>>;
   isLoggedIn?: Ref<boolean>;
   isAuthReady?: () => boolean;
   ensureLoggedIn?: () => boolean;
@@ -34,6 +38,7 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
   };
   const context = getContext();
 
+  const authState = params?.authState ?? context?.authState;
   const isLoggedIn = params?.isLoggedIn ?? context?.isLoggedIn!;
   const isAuthReady = () => {
     if (params?.isAuthReady) return params.isAuthReady();
@@ -57,6 +62,7 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
   const clearDataHandlers = params?.clearDataHandlers ?? [];
 
   const loading = ref(false);
+  const refreshError = ref('');
   const activeTabKey = ref<NginxDeployTabKey>('targets');
   const tabLoadedFlags = ref<Record<NginxDeployTabKey, boolean>>({
     targets: false,
@@ -65,10 +71,19 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
   });
   let activeRefreshSequence = 0;
 
+  /**
+   * 展示自动加载中央部署数据时的真实错误。
+   * @param error 请求错误
+   */
+  const reportRefreshError = (error: unknown) => {
+    message.error(`中央部署数据加载失败：${getErrorMessage(error)}`);
+  };
+
   /** 清空当前页面所有数据和临时态 */
   const clearData = () => {
     activeRefreshSequence += 1;
     loading.value = false;
+    refreshError.value = '';
     tabLoadedFlags.value = {
       targets: false,
       servers: false,
@@ -95,17 +110,26 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
     if (shouldShowLoading) {
       loading.value = true;
     }
+    if (refreshSequence === activeRefreshSequence) {
+      refreshError.value = '';
+    }
     try {
       if (tabKey === 'servers') {
         await refreshServerList();
       } else if (tabKey === 'records') {
         await refreshRecordList(options);
       } else {
+        await refreshServerList();
         await refreshTargetList();
       }
       if (refreshSequence === activeRefreshSequence) {
         tabLoadedFlags.value[tabKey] = true;
       }
+    } catch (error) {
+      if (refreshSequence === activeRefreshSequence) {
+        refreshError.value = getErrorMessage(error);
+      }
+      throw error;
     } finally {
       if (shouldShowLoading && refreshSequence === activeRefreshSequence) {
         loading.value = false;
@@ -124,7 +148,7 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
       return;
     }
     requestAnimationFrame(() => {
-      void refreshActiveTab();
+      void refreshActiveTab().catch(reportRefreshError);
     });
   };
 
@@ -135,8 +159,13 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
   const initPage = async () => {
     const loggedIn = await initAuthCheck();
     if (loggedIn) {
-      await refreshActiveTab();
-      return true;
+      try {
+        await refreshActiveTab();
+        return true;
+      } catch (error) {
+        reportRefreshError(error);
+        return false;
+      }
     }
     openLoginModal();
     return false;
@@ -154,19 +183,29 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
     });
   };
 
-  watch(isLoggedIn, (newValue, oldValue) => {
-    if (!newValue) {
+  watch(() => [
+    isLoggedIn.value ? 'logged-in' : 'logged-out',
+    authState?.value?.accountId || '',
+    authState?.value?.teamId || '',
+  ].join('|'), (newIdentity, oldIdentity) => {
+    if (!isLoggedIn.value) {
       clearData();
       return;
     }
-    if (newValue && !oldValue && isAuthReady()) {
-      void refreshActiveTab();
+    if (newIdentity !== oldIdentity && isAuthReady()) {
+      clearData();
+      void refreshActiveTab().catch(reportRefreshError);
     }
   });
 
+  const unregisterCentralRefresh = registerCentralDataRefreshHandler(() => refreshActiveTab({ force: true }));
+  onScopeDispose(unregisterCentralRefresh);
+
   return {
     loading,
+    refreshError,
     activeTabKey,
+    tabLoadedFlags,
     clearData,
     clearTabCache,
     refreshActiveTab,

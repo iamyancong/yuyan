@@ -32,8 +32,8 @@ import agentRoutes from './routes/agent.mjs';
 import authV2Routes from './routes/auth-v2.mjs';
 import { appendCentralAudit, authorizeCentralV2, verifyGitlabCredential } from './services/central-identity-service.mjs';
 import { guardCentralDeployRequest } from './services/central-deploy-guard.mjs';
-import { getRequestContext } from './services/request-context.mjs';
-import { closeDeployDb, getDeployDb } from './services/deploy-store.mjs';
+import { getRequestContext, useSharedDeployWorkspace } from './services/request-context.mjs';
+import { closeDeployDb, getDeployDb, migrateCentralDeployWorkspace } from './services/deploy-store.mjs';
 import { closeAgentDb, getAgentDb } from './services/agent-store.mjs';
 import { timingSafeTokenEqual } from './services/agent-security.mjs';
 import { abortAppUpdateTransfers, abortRunningDeployTasks } from './controllers/deploy-controller.mjs';
@@ -233,8 +233,8 @@ app.use('/scaffold-api', authorizeScaffoldApi, scaffoldRoutes);
 // 多用户、多设备身份与会话接口
 app.use('/api/v2', authV2Routes);
 
-// 中央 v2 部署接口必须使用短期雨燕令牌和账号隔离上下文
-app.use('/deploy-api/v2', authorizeCentralV2, guardCentralDeployRequest, deployRoutes);
+// 中央 v2 部署接口使用短期雨燕令牌，部署业务统一进入全员共享中央工作区
+app.use('/deploy-api/v2', authorizeCentralV2, useSharedDeployWorkspace, guardCentralDeployRequest, deployRoutes);
 
 // 独立服务器部署 API 路由
 app.use('/deploy-api', authorizeDeployApi, deployRoutes);
@@ -483,18 +483,24 @@ async function bootstrap() {
       await initializeTemplateRepository();
     }
 
-    // 启动定时清理任务
-    stopCleanupScheduler = startCleanupScheduler();
-    if (!isTauriSubprocess) {
-      stopUpdatePreloadScheduler = startAppUpdatePreloadScheduler();
-    }
-
     // 初始化独立服务器部署数据库
     await getDeployDb();
+    if (!isTauriSubprocess) {
+      const migration = await migrateCentralDeployWorkspace();
+      if (migration.migrated) {
+        console.log(`[bootstrap] ✅ 中央共享部署工作区 v6 迁移完成，凭据换绑 ${migration.reencryptedCredentials} 条，备份：${migration.backupPath || '无需备份'}`);
+      }
+    }
     console.log(`[bootstrap] ✅ 独立服务器部署数据库已就绪: ${DEPLOY_DB_PATH}`);
     if (isTauriSubprocess && AGENT_SESSION_TOKEN) {
       getAgentDb();
       console.log('[bootstrap] ✅ AI 控制平面数据库与 Agent Gateway 已就绪');
+    }
+
+    // 数据库迁移完成后再启动后台调度，避免任务读到迁移中的中间状态
+    stopCleanupScheduler = startCleanupScheduler();
+    if (!isTauriSubprocess) {
+      stopUpdatePreloadScheduler = startAppUpdatePreloadScheduler();
     }
 
     // 根据运行环境动态选择监听地址：

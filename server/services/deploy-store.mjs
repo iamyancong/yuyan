@@ -10,7 +10,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { execSync } from 'node:child_process';
 import { DEPLOY_DATA_DIR, DEPLOY_DB_PATH, DEPLOY_LOG_DIR, DEPLOY_RECORD_KEEP_PER_PROJECT, DEPLOY_SECRET_KEY, GITLAB_HOST, GITLAB_TOKEN } from '../config/constants.mjs';
 import { normalizeBackendConfig, normalizeBackendServiceName, normalizeHealthCheckPath, parseJavaMajorVersion, validateBackendDeployRoot } from './backend-domain.mjs';
-import { getRequestTeamId } from './request-context.mjs';
+import { getRequestTeamId, SHARED_DEPLOY_WORKSPACE_ID } from './request-context.mjs';
 
 let dbInstance = null;
 
@@ -23,6 +23,20 @@ const CENTRAL_DEPLOY_INTERRUPTED_ERROR = JSON.stringify({
   message: '雨燕服务重启，中央部署任务已中断，请重新发布',
   retryable: true,
 });
+
+/** 需要并入共享中央部署工作区的业务表，不包含设备 JDK 和 OpenAPI 缓存。 */
+const SHARED_DEPLOY_WORKSPACE_TABLES = [
+  'deploy_servers',
+  'nginx_runtimes',
+  'nginx_instances',
+  'deploy_targets',
+  'deploy_records',
+  'backend_target_configs',
+  'server_java_runtimes',
+  'deploy_environments',
+  'backend_releases',
+  'deploy_tasks',
+];
 
 /**
  * 生成当前 ISO 时间
@@ -1131,6 +1145,27 @@ async function backupDeployDbBeforeMultiTenantMigration(db) {
 }
 
 /**
+ * 在首次共享中央部署工作区迁移前备份 SQLite，重复启动复用已有备份。
+ * @param {DatabaseSync} db 数据库实例
+ * @returns {Promise<string>} 备份文件路径，无需备份时为空
+ */
+async function backupDeployDbBeforeSharedWorkspaceMigration(db) {
+  const migrated = hasTable(db, 'schema_migrations')
+    ? Boolean(db.prepare('SELECT version FROM schema_migrations WHERE version = 6').get())
+    : false;
+  if (migrated) return '';
+  const stat = await fs.stat(DEPLOY_DB_PATH).catch(() => null);
+  if (!stat?.isFile() || stat.size === 0) return '';
+  const existing = (await fs.readdir(path.dirname(DEPLOY_DB_PATH)).catch(() => []))
+    .find((name) => name.startsWith(`${path.basename(DEPLOY_DB_PATH)}.pre-shared-workspace-v6-`) && name.endsWith('.bak'));
+  if (existing) return path.join(path.dirname(DEPLOY_DB_PATH), existing);
+  const timestamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+  const backupPath = `${DEPLOY_DB_PATH}.pre-shared-workspace-v6-${timestamp}.bak`;
+  await fs.copyFile(DEPLOY_DB_PATH, backupPath);
+  return backupPath;
+}
+
+/**
  * 将已存在的后端部署目标迁入一对一配置表。
  * @param {DatabaseSync} db 数据库实例
  */
@@ -1424,8 +1459,9 @@ function applyMultiTenantSchemaMigration(db) {
 /**
  * 规范化每个团队的服务器排序值，兼容升级前没有排序字段的历史数据。
  * @param {DatabaseSync} db 数据库实例
+ * @param {boolean} manageTransaction 是否由当前方法管理事务
  */
-function normalizeServerSortOrder(db) {
+function normalizeServerSortOrder(db, manageTransaction = true) {
   const rows = db
     .prepare(
       `SELECT id, team_id
@@ -1442,7 +1478,7 @@ function normalizeServerSortOrder(db) {
   const update = db.prepare('UPDATE deploy_servers SET sort_order = ? WHERE id = ? AND team_id = ?');
   let activeTeamId = '';
   let sortOrder = 0;
-  db.exec('BEGIN');
+  if (manageTransaction) db.exec('BEGIN');
   try {
     rows.forEach((row) => {
       if (row.team_id !== activeTeamId) {
@@ -1452,7 +1488,86 @@ function normalizeServerSortOrder(db) {
       sortOrder += 1;
       update.run(sortOrder, Number(row.id), row.team_id);
     });
+    if (manageTransaction) db.exec('COMMIT');
+  } catch (error) {
+    if (manageTransaction) db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+/**
+ * 原子合并历史账号部署空间，并将绑定 teamId 的凭据换绑到共享工作区。
+ * @param {DatabaseSync} db 数据库实例
+ * @returns {{ migratedRows: Record<string, number>; reencryptedCredentials: number }} 迁移统计
+ */
+function applySharedDeployWorkspaceMigration(db) {
+  const migratedRows = {};
+  let reencryptedCredentials = 0;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const serverRows = db
+      .prepare('SELECT id, team_id, encrypted_secret FROM deploy_servers WHERE team_id <> ?')
+      .all(SHARED_DEPLOY_WORKSPACE_ID);
+    const updateServerCredential = db.prepare(
+      'UPDATE deploy_servers SET encrypted_secret = ? WHERE id = ? AND team_id = ?',
+    );
+    for (const row of serverRows) {
+      const credential = decryptCredential(row.encrypted_secret, row.team_id);
+      updateServerCredential.run(
+        encryptCredential(credential, SHARED_DEPLOY_WORKSPACE_ID),
+        Number(row.id),
+        row.team_id,
+      );
+      reencryptedCredentials += 1;
+    }
+
+    const environmentRows = db
+      .prepare('SELECT id, team_id, encrypted_nacos_secret FROM deploy_environments WHERE team_id <> ?')
+      .all(SHARED_DEPLOY_WORKSPACE_ID);
+    const updateEnvironmentCredential = db.prepare(
+      'UPDATE deploy_environments SET encrypted_nacos_secret = ? WHERE id = ? AND team_id = ?',
+    );
+    for (const row of environmentRows) {
+      if (!row.encrypted_nacos_secret) continue;
+      const credential = decryptCredential(row.encrypted_nacos_secret, row.team_id);
+      updateEnvironmentCredential.run(
+        encryptCredential(credential, SHARED_DEPLOY_WORKSPACE_ID),
+        Number(row.id),
+        row.team_id,
+      );
+      reencryptedCredentials += 1;
+    }
+
+    if (hasTable(db, 'backend_target_configs')) {
+      db.exec(`
+        UPDATE backend_target_configs
+        SET required_jdk_alias = COALESCE(
+              NULLIF(required_jdk_alias, ''),
+              (SELECT name FROM build_jdks WHERE build_jdks.id = backend_target_configs.build_jdk_id),
+              ''
+            ),
+            build_jdk_id = NULL
+        WHERE build_jdk_id IS NOT NULL
+      `);
+    }
+    if (hasTable(db, 'deploy_targets') && getTableColumns(db, 'deploy_targets').includes('jdk_id')) {
+      db.prepare('UPDATE deploy_targets SET jdk_id = NULL WHERE jdk_id IS NOT NULL').run();
+    }
+
+    for (const tableName of SHARED_DEPLOY_WORKSPACE_TABLES) {
+      if (!hasTable(db, tableName) || !getTableColumns(db, tableName).includes('team_id')) continue;
+      const result = db.prepare(`UPDATE ${tableName} SET team_id = ? WHERE team_id <> ?`)
+        .run(SHARED_DEPLOY_WORKSPACE_ID, SHARED_DEPLOY_WORKSPACE_ID);
+      migratedRows[tableName] = Number(result.changes || 0);
+    }
+    if (hasTable(db, 'central_target_locks')) {
+      db.prepare('DELETE FROM central_target_locks').run();
+    }
+    normalizeServerSortOrder(db, false);
+    db.prepare('INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (6, ?, ?)')
+      .run('shared-central-deploy-workspace-v6', now());
     db.exec('COMMIT');
+    return { migratedRows, reencryptedCredentials };
   } catch (error) {
     db.exec('ROLLBACK');
     throw error;
@@ -1803,6 +1918,28 @@ export async function getDeployDb() {
   await reconcileInterruptedDeployExecutions(dbInstance);
   initializeDefaultJdks(dbInstance);
   return dbInstance;
+}
+
+/**
+ * 将中央数据库升级为全员共享部署工作区。
+ * @description 该方法必须只由独立中央服务启动流程调用；Tauri 本地辅助数据库不得执行。
+ * @returns {Promise<{ migrated: boolean; backupPath: string; migratedRows: Record<string, number>; reencryptedCredentials: number }>} 迁移结果
+ */
+export async function migrateCentralDeployWorkspace() {
+  const db = await getDeployDb();
+  const migrated = Boolean(db.prepare('SELECT version FROM schema_migrations WHERE version = 6').get());
+  if (migrated) {
+    return { migrated: false, backupPath: '', migratedRows: {}, reencryptedCredentials: 0 };
+  }
+  const backupPath = await backupDeployDbBeforeSharedWorkspaceMigration(db);
+  try {
+    const result = applySharedDeployWorkspaceMigration(db);
+    return { migrated: true, backupPath, ...result };
+  } catch (cause) {
+    const error = new Error(`中央共享部署数据迁移失败，已回滚且禁止启动：${cause instanceof Error ? cause.message : String(cause)}`);
+    error.cause = cause;
+    throw error;
+  }
 }
 
 /**
