@@ -1085,6 +1085,8 @@ pub fn run() {
 
             #[cfg(target_os = "macos")]
             {
+                use cocoa::base::id;
+                use objc::{msg_send, sel, sel_impl};
                 use tauri::menu::{Menu, MenuItemBuilder};
                 let app_handle = app.handle();
                 if let Ok(menu) = Menu::default(app_handle) {
@@ -1111,6 +1113,22 @@ pub fn run() {
                         }
                     }
                     let _ = app.set_menu(menu);
+                }
+            }
+
+            if let Some(main_window) = app.get_webview_window("main") {
+                let _ = main_window.show();
+                let _ = main_window.unminimize();
+                let _ = main_window.set_focus();
+
+                #[cfg(target_os = "macos")]
+                {
+                    use cocoa::base::id;
+                    use objc::{msg_send, sel, sel_impl};
+                    unsafe {
+                        let shared_app: id = msg_send![objc::class!(NSApplication), sharedApplication];
+                        let _: () = msg_send![shared_app, activateIgnoringOtherApps: true];
+                    }
                 }
             }
 
