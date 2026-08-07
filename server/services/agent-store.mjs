@@ -11,6 +11,7 @@ import { AGENT_AUDIT_KEY, AGENT_DB_PATH } from '../config/constants.mjs';
 import { getAgentRuntimeSettings } from './agent-runtime-service.mjs';
 import { redactAgentValue, stableStringify } from './agent-security.mjs';
 import { publishAgentChange } from './agent-event-service.mjs';
+import { normalizeRepositoryUrl } from './agent-workspace-service.mjs';
 
 const AGENT_SCHEMA_VERSION = 2;
 const LEGACY_ACCOUNT_ID = 'legacy-disabled';
@@ -558,9 +559,7 @@ export function upsertProjectGrant({ client, workspacePath, remoteUrl = '', perm
   const db = getAgentDb();
   const context = getAgentStoreContext();
   const timestamp = now();
-  const existing = db.prepare(`
-    SELECT id FROM agent_project_grants WHERE account_id = ? AND device_id = ? AND client = ? AND workspace_path = ? AND remote_url = ?
-  `).get(context.accountId, context.deviceId, client, workspacePath, remoteUrl);
+  const existing = getProjectGrant(client, workspacePath, remoteUrl);
   const id = existing?.id || crypto.randomUUID();
   db.prepare(`
     INSERT INTO agent_project_grants
@@ -573,21 +572,94 @@ export function upsertProjectGrant({ client, workspacePath, remoteUrl = '', perm
   return getProjectGrant(client, workspacePath, remoteUrl);
 }
 
-/** 查询当前账号/设备的精确项目授权。 */
+/** 查询当前账号/设备的精确或智能推算项目授权。 */
 export function getProjectGrant(client, workspacePath, remoteUrl = '') {
+  const db = getAgentDb();
   const context = getAgentStoreContext();
-  const row = getAgentDb().prepare(`
+  const row = db.prepare(`
     SELECT * FROM agent_project_grants
     WHERE account_id = ? AND device_id = ? AND client = ? AND workspace_path = ? AND remote_url = ? AND status = 'active'
   `).get(context.accountId, context.deviceId, client, workspacePath, remoteUrl);
-  return row ? {
-    id: row.id, accountId: row.account_id, deviceId: row.device_id, teamId: row.team_id, client: row.client,
-    workspacePath: row.workspace_path, remoteUrl: row.remote_url, permissions: parseJson(row.permissions_json, []),
-    createdAt: row.created_at, updatedAt: row.updated_at,
-  } : null;
+
+  if (row) {
+    return {
+      id: row.id, accountId: row.account_id, deviceId: row.device_id, teamId: row.team_id, client: row.client,
+      workspacePath: row.workspace_path, remoteUrl: row.remote_url, permissions: parseJson(row.permissions_json, []),
+      createdAt: row.created_at, updatedAt: row.updated_at,
+    };
+  }
+
+  // 降级模糊匹配：同 client 和 workspacePath 下，若有已有授权，智能校验仓库签名兼容性并自动升级
+  const candidates = db.prepare(`
+    SELECT * FROM agent_project_grants
+    WHERE account_id = ? AND device_id = ? AND client = ? AND workspace_path = ? AND status = 'active'
+    ORDER BY updated_at DESC
+  `).all(context.accountId, context.deviceId, client, workspacePath);
+
+  if (candidates.length > 0) {
+    const targetNormalized = normalizeRepositoryUrl(remoteUrl);
+    const match = candidates.find((c) => {
+      if (!c.remote_url || !targetNormalized) return true;
+      return normalizeRepositoryUrl(c.remote_url) === targetNormalized;
+    });
+
+    if (match) {
+      if (remoteUrl && match.remote_url !== remoteUrl) {
+        const timestamp = now();
+        db.prepare(`
+          UPDATE agent_project_grants SET remote_url = ?, updated_at = ? WHERE id = ?
+        `).run(remoteUrl, timestamp, match.id);
+        publishAgentChange('grants');
+        match.remote_url = remoteUrl;
+        match.updated_at = timestamp;
+      }
+      return {
+        id: match.id, accountId: match.account_id, deviceId: match.device_id, teamId: match.team_id, client: match.client,
+        workspacePath: match.workspace_path, remoteUrl: match.remote_url, permissions: parseJson(match.permissions_json, []),
+        createdAt: match.created_at, updatedAt: match.updated_at,
+      };
+    }
+  }
+
+  // 跨 Client 授权共享继承：若当前项目被此设备的任何其他 AI 客户端授权过，自动共享并继承
+  const anyClientCandidates = db.prepare(`
+    SELECT * FROM agent_project_grants
+    WHERE account_id = ? AND device_id = ? AND workspace_path = ? AND status = 'active'
+    ORDER BY updated_at DESC
+  `).all(context.accountId, context.deviceId, workspacePath);
+
+  if (anyClientCandidates.length > 0) {
+    const targetNormalized = normalizeRepositoryUrl(remoteUrl);
+    const match = anyClientCandidates.find((c) => {
+      if (!c.remote_url || !targetNormalized) return true;
+      return normalizeRepositoryUrl(c.remote_url) === targetNormalized;
+    });
+
+    if (match) {
+      const timestamp = now();
+      const newId = crypto.randomUUID();
+      const effectiveRemoteUrl = remoteUrl || match.remote_url;
+      const permissions = parseJson(match.permissions_json, ['read', 'config_write', 'external_effect']);
+      db.prepare(`
+        INSERT INTO agent_project_grants
+        (id, account_id, device_id, team_id, client, workspace_path, remote_url, permissions_json, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+        ON CONFLICT(account_id, device_id, client, workspace_path, remote_url)
+        DO UPDATE SET team_id = excluded.team_id, permissions_json = excluded.permissions_json, status = 'active', updated_at = excluded.updated_at
+      `).run(newId, context.accountId, context.deviceId, context.teamId, client, workspacePath, effectiveRemoteUrl, JSON.stringify(permissions), timestamp, timestamp);
+      publishAgentChange('grants');
+      return {
+        id: newId, accountId: context.accountId, deviceId: context.deviceId, teamId: context.teamId, client,
+        workspacePath, remoteUrl: effectiveRemoteUrl, permissions,
+        createdAt: timestamp, updatedAt: timestamp,
+      };
+    }
+  }
+
+  return null;
 }
 
-/** 列出当前账号/设备项目授权。 */
+/** 列出当前账号/设备项目授权（按 client + workspacePath 去重）。 */
 export function listProjectGrants({ client = '', keyword = '', limit = 50, offset = 0 } = {}) {
   const db = getAgentDb();
   const context = getAgentStoreContext();
@@ -596,15 +668,26 @@ export function listProjectGrants({ client = '', keyword = '', limit = 50, offse
   if (client) { conditions.push('client = ?'); params.push(client); }
   if (keyword) { conditions.push('(workspace_path LIKE ? OR remote_url LIKE ?)'); params.push(`%${keyword}%`, `%${keyword}%`); }
   const where = ` WHERE ${conditions.join(' AND ')}`;
+
+  const allRows = db.prepare(`SELECT * FROM agent_project_grants${where} ORDER BY updated_at DESC`).all(...params);
+  const seenKeys = new Set();
+  const uniqueRows = [];
+  for (const row of allRows) {
+    const key = `${row.client}:${row.workspace_path}`;
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      uniqueRows.push(row);
+    }
+  }
+
+  const total = uniqueRows.length;
   const safeLimit = Math.min(100, Math.max(1, Number(limit)));
   const safeOffset = Math.max(0, Number(offset));
-  const total = Number(db.prepare(`SELECT COUNT(*) AS total FROM agent_project_grants${where}`).get(...params)?.total || 0);
-  const items = db.prepare(`SELECT * FROM agent_project_grants${where} ORDER BY updated_at DESC LIMIT ? OFFSET ?`)
-    .all(...params, safeLimit, safeOffset).map((row) => ({
-      id: row.id, accountId: row.account_id, deviceId: row.device_id, teamId: row.team_id, client: row.client,
-      workspacePath: row.workspace_path, remoteUrl: row.remote_url, permissions: parseJson(row.permissions_json, []),
-      createdAt: row.created_at, updatedAt: row.updated_at,
-    }));
+  const items = uniqueRows.slice(safeOffset, safeOffset + safeLimit).map((row) => ({
+    id: row.id, accountId: row.account_id, deviceId: row.device_id, teamId: row.team_id, client: row.client,
+    workspacePath: row.workspace_path, remoteUrl: row.remote_url, permissions: parseJson(row.permissions_json, []),
+    createdAt: row.created_at, updatedAt: row.updated_at,
+  }));
   return { items, total };
 }
 

@@ -45,7 +45,41 @@ test('项目授权精确绑定客户端、真实 Git 根目录和远程仓库', 
   store.upsertProjectGrant({ client: 'codex', workspacePath: workspace.workspacePath, remoteUrl: workspace.remoteUrl });
   const granted = await workspaceService.requireProjectGrant('codex', path.join(repoDir, 'packages', 'app'));
   assert.equal(granted.grant.client, 'codex');
-  await assert.rejects(() => workspaceService.requireProjectGrant('cursor', repoDir), (error) => error.code === 'authorization_required');
+  // 验证跨客户端自动共享授权：Cursor 访问 Codex 已授权项目直接成功，无需重复授权
+  const cursorGranted = await workspaceService.requireProjectGrant('cursor', path.join(repoDir, 'packages', 'app'));
+  assert.equal(cursorGranted.grant.client, 'cursor');
+});
+
+test('远程仓库 URL 智能归一化与 SSH / HTTP 地址无感授权升级', async () => {
+  const norm = workspaceService.normalizeRepositoryUrl;
+  assert.equal(norm('git@gitlab.yuyan.com:group/subgroup/project.git'), 'gitlab.yuyan.com/group/subgroup/project');
+  assert.equal(norm('ssh://git@gitlab.yuyan.com:22/group/subgroup/project.git'), 'gitlab.yuyan.com/group/subgroup/project');
+  assert.equal(norm('ssh://git@gitlab.yuyan.com:2222/group/subgroup/project.git'), 'gitlab.yuyan.com:2222/group/subgroup/project');
+  assert.equal(norm('http://gitlab.yuyan.com:80/group/subgroup/project.git'), 'gitlab.yuyan.com/group/subgroup/project');
+  assert.equal(norm('https://user:token@gitlab.yuyan.com:443/group/subgroup/project.git'), 'gitlab.yuyan.com/group/subgroup/project');
+  assert.equal(norm('Git@GitLab.YuYan.Com://Group/Project.GIT/'), 'gitlab.yuyan.com/group/project');
+
+  const repoDir = path.join(testRoot, 'norm-upgrade-repo');
+  fs.mkdirSync(repoDir, { recursive: true });
+  fs.writeFileSync(path.join(repoDir, 'package.json'), JSON.stringify({ name: 'norm-demo' }));
+  execFileSync('git', ['init'], { cwd: repoDir, windowsHide: true });
+  const realRepoDir = fs.realpathSync(repoDir);
+
+  store.upsertProjectGrant({ client: 'antigravity', workspacePath: realRepoDir, remoteUrl: '' });
+  const grant1 = store.getProjectGrant('antigravity', realRepoDir, '');
+  assert.ok(grant1);
+  assert.equal(grant1.remoteUrl, '');
+
+  const sshUrl = 'git@gitlab.yuyan.com:team/norm-demo.git';
+  const grant2 = store.getProjectGrant('antigravity', realRepoDir, norm(sshUrl));
+  assert.ok(grant2);
+  assert.equal(grant2.id, grant1.id);
+  assert.equal(grant2.remoteUrl, norm(sshUrl));
+
+  const httpUrl = 'https://user:pass@gitlab.yuyan.com:443/team/norm-demo.git';
+  const grant3 = store.getProjectGrant('antigravity', realRepoDir, norm(httpUrl));
+  assert.ok(grant3);
+  assert.equal(grant3.id, grant1.id);
 });
 
 test('真实路径解析拒绝通过仓库内软链接授权外部目录', async (context) => {

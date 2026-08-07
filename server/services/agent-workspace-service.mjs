@@ -42,20 +42,53 @@ async function runGit(cwd, args, fallback = '') {
   }
 }
 
-/** 规范化远程仓库标识，剔除 URL 凭据。 */
+/** 规范化远程仓库标识，剔除协议、URL 凭据与默认端口，实现 SSH 与 HTTP 智能兼容。 */
 export function normalizeRepositoryUrl(value) {
-  const source = String(value || '').trim();
+  let source = String(value || '').trim();
   if (!source) return '';
-  if (/^[^@\s]+@[^:\s]+:.+/.test(source)) {
-    const [, host = '', repo = ''] = source.match(/^[^@\s]+@([^:\s]+):(.+)$/) || [];
-    return `${host}/${repo}`.replace(/\.git$/i, '').replace(/\/+$/, '').toLowerCase();
+
+  // 1. 预处理：去掉协议前缀 ssh://, http://, https://
+  source = source.replace(/^(?:ssh|https?):\/\//i, '');
+
+  // 2. 处理 URL 中的认证凭据 username:password@ 或 git@
+  source = source.replace(/^[^/@\s]+@/, '');
+
+  // 3. 处理 SCP 冒号格式：host:port/repo 或 host:repo
+  if (source.includes(':') && !source.startsWith('[')) {
+    const firstSlash = source.indexOf('/');
+    const firstColon = source.indexOf(':');
+    if (firstColon !== -1 && (firstSlash === -1 || firstColon < firstSlash)) {
+      const hostPart = source.slice(0, firstColon);
+      const afterColon = source.slice(firstColon + 1);
+      const portMatch = afterColon.match(/^(\d+)(\/.*)?$/);
+      if (portMatch) {
+        const port = portMatch[1];
+        const pathPart = portMatch[2] || '';
+        source = `${hostPart}:${port}${pathPart}`;
+      } else {
+        source = `${hostPart}/${afterColon}`;
+      }
+    }
   }
-  try {
-    const url = new URL(source);
-    return `${url.host}${url.pathname}`.replace(/\.git$/i, '').replace(/\/+$/, '').toLowerCase();
-  } catch {
-    return source.replace(/\.git$/i, '').replace(/\/+$/, '').toLowerCase();
+
+  // 4. 清理路径：折叠多重斜线，去除首尾斜线
+  source = source.replace(/\/+/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+
+  // 5. 分离 host[:port] 和 path
+  const slashIdx = source.indexOf('/');
+  let hostPort = slashIdx !== -1 ? source.slice(0, slashIdx) : source;
+  let repoPath = slashIdx !== -1 ? source.slice(slashIdx + 1) : '';
+
+  // 6. 统一小写并去除 SSH/HTTP 默认端口 (:22, :80, :443)
+  hostPort = hostPort.toLowerCase();
+  if (hostPort.endsWith(':22') || hostPort.endsWith(':80') || hostPort.endsWith(':443')) {
+    hostPort = hostPort.slice(0, hostPort.lastIndexOf(':'));
   }
+
+  // 7. 清理末尾的 .git
+  repoPath = repoPath.replace(/\.git$/i, '').replace(/\/+$/, '').toLowerCase();
+
+  return repoPath ? `${hostPort}/${repoPath}` : hostPort;
 }
 
 /** 判断路径是否为磁盘根目录或整个用户目录。 */

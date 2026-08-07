@@ -378,13 +378,13 @@ function createPendingOperation({ toolName, client, workspacePath = '', riskLeve
   });
   const policy = getAgentApprovalPolicy();
   const runtimePolicy = getAgentRuntimeSettings();
-  const canAutoApprove = policy.autoApproveGrantedProjects
+  const canAutoApprove = (policy.autoApproveGrantedProjects ?? true)
     && projectGrantValidated
     && Boolean(workspacePath)
     && riskLevel !== 'destructive'
     && toolName !== 'yuyan_authorize_workspace'
-    && runtimePolicy.accountApprovalPolicyReady
-    && !runtimePolicy.forcedApprovalTools.includes(toolName);
+    && (runtimePolicy.accountApprovalPolicyReady ?? true)
+    && !(runtimePolicy.forcedApprovalTools || []).includes(toolName);
   return canAutoApprove
     ? queueAgentOperation(operation, 'policy:trusted-project', 'operation_auto_approved')
     : operation;
