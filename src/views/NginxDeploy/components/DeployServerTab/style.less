@@ -3,48 +3,6 @@
   min-height: 0;
   overflow: hidden;
 
-  /* vxe drag-sort 拖拽列手柄及图标防丢失补全 */
-  :deep(.vxe-body--column.col--drag),
-  :deep(.vxe-body--column.col--drag-sort) {
-    padding: 0 !important;
-
-    .vxe-cell {
-      display: flex !important;
-      align-items: center !important;
-      justify-content: center !important;
-      padding: 0 !important;
-
-      .vxe-table-icon-drag-handle,
-      .vxe-icon-drag-handle,
-      .vxe-cell--drag-handle,
-      span {
-        position: relative;
-        display: inline-flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        width: 24px !important;
-        height: 24px !important;
-        font-size: 0 !important;
-        cursor: grab !important;
-
-        &::after {
-          content: ':::' !important;
-          position: absolute;
-          font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
-          font-size: 14px !important;
-          font-weight: 700 !important;
-          color: #64748b !important;
-          letter-spacing: 1px !important;
-          line-height: 1 !important;
-        }
-
-        &:hover::after {
-          color: var(--primary-color, #7c3aed) !important;
-        }
-      }
-    }
-  }
-
   /* 拖拽悬停目标行指示 */
   :deep(.vxe-body--row.row--drag-over),
   :deep(.vxe-body--row.is--drag-over) {
