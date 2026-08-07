@@ -3,11 +3,153 @@
   min-height: 0;
   overflow: hidden;
 
-  /* 拖拽悬停目标行指示 */
+  /* 1. 拖拽手柄专用容器：满宽度 + flex 居中 */
+  :deep(.vxe-cell--wrapper:has(> .vxe-cell--drag-handle)),
+  :deep(.vxe-cell--wrapper:has(> .y-table-drag-handle)) {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 100% !important;
+  }
+
+  /* 2. 隐藏 vxe-table 为拖拽手柄生成的相邻 .vxe-cell--label / .vxe-cell--title 节点 */
+  :deep(.vxe-cell--drag-handle + .vxe-cell--label),
+  :deep(.vxe-cell--drag-handle + .vxe-cell--title),
+  :deep(.vxe-cell--drag-handle + span),
+  :deep(.y-table-drag-handle + .vxe-cell--label),
+  :deep(.y-table-drag-handle + .vxe-cell--title),
+  :deep(.y-table-drag-handle + span) {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  /* 3. 拖拽手柄实体样式 (C4D 玻璃拟态 3D 胶囊按钮，精准对齐组件库 Demo) */
+  :deep(.vxe-cell--drag-handle),
+  :deep(.y-table-drag-handle) {
+    position: relative;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    vertical-align: middle !important;
+    box-sizing: border-box !important;
+
+    width: 24px !important;
+    height: 24px !important;
+    max-width: calc(100% - 4px) !important;
+    max-height: calc(100% - 4px) !important;
+    min-width: 18px !important;
+    min-height: 18px !important;
+    margin: 0 auto !important;
+    border-radius: 7px !important;
+    color: var(--text-color-secondary, #64748b) !important;
+    background: linear-gradient(
+      145deg,
+      rgb(255 255 255 / 98%) 0%,
+      rgb(244 245 248 / 85%) 50%,
+      rgb(235 238 245 / 75%) 100%
+    ) !important;
+    border: 1px solid rgb(255 255 255 / 90%) !important;
+    box-shadow:
+      inset 0 1px 1.5px rgb(255 255 255 / 100%),
+      inset 0 -1px 2px rgb(51 113 255 / 8%),
+      0 2px 6px rgb(15 23 42 / 8%),
+      0 1px 2px rgb(51 113 255 / 6%) !important;
+    cursor: grab !important;
+    user-select: none !important;
+    font-size: 0 !important;
+    line-height: 0 !important;
+    transition:
+      transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1),
+      box-shadow 0.2s ease,
+      background 0.2s ease,
+      border-color 0.2s ease,
+      color 0.2s ease !important;
+
+    /* 隐藏 vxe 默认 iconfont 和 raw 文本 */
+    > i,
+    .vxe-table-icon-drag-handle,
+    .vxe-icon-drag-handle {
+      display: none !important;
+      font-size: 0 !important;
+      width: 0 !important;
+      height: 0 !important;
+      overflow: hidden !important;
+    }
+
+    &::before {
+      content: none !important;
+    }
+
+    /* 3x2 C4D 玻璃横向颗粒 (3列 x 2行点阵) */
+    &::after {
+      content: "" !important;
+      position: absolute !important;
+      top: 50% !important;
+      left: 50% !important;
+      display: block !important;
+      width: 2.5px !important;
+      height: 2.5px !important;
+      border-radius: 50% !important;
+      background: currentcolor !important;
+      box-shadow:
+        5px 0 0 currentcolor,
+        10px 0 0 currentcolor,
+        0 5px 0 currentcolor,
+        5px 5px 0 currentcolor,
+        10px 5px 0 currentcolor !important;
+      transform: translate(-6.25px, -3.75px) !important;
+      opacity: 0.72 !important;
+      filter: drop-shadow(0 0.5px 0.5px rgb(255 255 255 / 85%)) !important;
+      transition:
+        opacity 0.2s ease,
+        color 0.2s ease !important;
+      pointer-events: none !important;
+    }
+
+    &:hover {
+      color: var(--primary-color, #7c3aed) !important;
+      transform: translateY(-1px) scale(1.08) !important;
+      background: linear-gradient(145deg, rgb(235 240 255 / 98%) 0%, rgb(218 230 255 / 90%) 100%) !important;
+      border-color: rgb(124 58 237 / 40%) !important;
+      box-shadow:
+        inset 0 1px 1px rgb(255 255 255 / 95%),
+        0 4px 12px rgb(124 58 237 / 22%),
+        0 2px 4px rgb(124 58 237 / 12%) !important;
+
+      &::after {
+        opacity: 1 !important;
+      }
+    }
+
+    &:active {
+      cursor: grabbing !important;
+      transform: scale(0.94) !important;
+      background: linear-gradient(145deg, rgb(220 230 255 / 98%) 0%, rgb(195 215 255 / 90%) 100%) !important;
+      box-shadow:
+        inset 0 1px 2px rgb(0 0 0 / 12%),
+        0 2px 8px rgb(124 58 237 / 28%) !important;
+    }
+  }
+
+  /* 4. 拖拽悬停目标行指示 (对齐 vxe 原生高亮) */
   :deep(.vxe-body--row.row--drag-over),
   :deep(.vxe-body--row.is--drag-over) {
     background: linear-gradient(90deg, rgba(124, 58, 237, 0.08) 0%, transparent 100%) !important;
-    box-shadow: inset 0 2px 0 0 var(--primary-color, #7c3aed) !important;
+  }
+
+  /* 5. 拖拽结束防死锁/防残留：强制非拖拽源行样式复原 */
+  :deep(.vxe-body--row:not(.is--drag-source):not(.vxe-drag--source):not(.row--drag-source)) {
+    opacity: 1 !important;
+    filter: none !important;
+
+    td,
+    .vxe-cell {
+      opacity: 1 !important;
+      filter: none !important;
+    }
   }
 }
 
