@@ -71,6 +71,8 @@ export const YUYAN_TOOL_DEFINITIONS = [
         nginxSiteManaged: z.boolean().optional(),
         listenPort: z.number().int().min(1).max(65535).optional(),
         serverName: z.string().max(300).optional(),
+        enableNginxTest: z.boolean().optional(),
+        enableNginxReload: z.boolean().optional(),
         installCommand: z.string().max(2000).optional(),
         buildCommand: z.string().max(2000).optional(),
         artifactDir: z.string().max(500).optional(),

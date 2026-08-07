@@ -151,6 +151,19 @@ test('模拟领域接口跑通配置、发布、回滚、服务控制、OpenAPI�
     });
     assert.equal(plan.readyToApply, true);
     assert.equal(plan.action, 'create');
+    assert.equal(plan.proposed.enableNginxTest, false);
+    assert.equal(plan.proposed.enableNginxReload, false);
+
+    const overridePlan = await commands.executeAgentTool('yuyan_plan_project_config', 'codex', {
+      workspacePath: repoDir,
+      projectId: 101,
+      serverId: 1,
+      nginxInstanceId: 9,
+      target: { enableNginxTest: true, enableNginxReload: true },
+    });
+    assert.equal(overridePlan.proposed.enableNginxTest, true);
+    assert.equal(overridePlan.proposed.enableNginxReload, true);
+
     const applyOperation = await commands.executeAgentTool('yuyan_apply_project_config', 'codex', {
       workspacePath: repoDir,
       planId: plan.planId,
