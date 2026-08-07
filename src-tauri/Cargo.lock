@@ -5813,7 +5813,7 @@ dependencies = [
 
 [[package]]
 name = "yuyan-app"
-version = "1.2.35"
+version = "1.2.36"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
