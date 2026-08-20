@@ -170,6 +170,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 
+      - name: Disable Spotlight Indexing (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          sudo mdutil -a -i off || true
+
       - name: Build Tauri App
         shell: bash
         env:
@@ -184,7 +189,7 @@ jobs:
           HOST=$(node --input-type=module -e "console.log(new URL(process.env.CENTRAL_URL).hostname)")
           PORT=$(node --input-type=module -e "const u = new URL(process.env.CENTRAL_URL); console.log(u.port || (u.protocol === 'https:' ? '443' : '80'))")
           echo "Building with secured central service ($SCHEME, port $PORT)"
-          UPDATE_SERVER_SCHEME="$SCHEME" UPDATE_SERVER_HOST="$HOST" UPDATE_SERVER_PORT="$PORT" pnpm run build
+          UPDATE_SERVER_SCHEME="$SCHEME" UPDATE_SERVER_HOST="$HOST" UPDATE_SERVER_PORT="$PORT" pnpm run build -- --verbose
 
       - name: Verify macOS Bundle Architecture
         if: runner.os == 'macOS'
