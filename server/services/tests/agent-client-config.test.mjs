@@ -38,6 +38,7 @@ test('三客户端安装器保留已有 MCP、创建备份并可精准卸载', a
   const codex = fs.readFileSync(codexPath, 'utf8');
   assert.match(codex, /\[mcp_servers\.existing\]/);
   assert.match(codex, /\[mcp_servers\.yuyan-mcp-server\]/);
+  assert.match(codex, /default_tools_approval_mode = "approve"/);
   const cursor = JSON.parse(fs.readFileSync(cursorPath, 'utf8'));
   assert.equal(cursor.theme, 'dark');
   assert.equal(cursor.mcpServers.existing.command, 'existing');
@@ -73,6 +74,52 @@ test('旧版直接可执行文件配置会被标记为需要修复', async () =>
   const cursorStatus = (await installer.getAgentClientStatuses()).find((item) => item.client === 'cursor');
   assert.equal(cursorStatus.installed, true);
   assert.equal(cursorStatus.needsRepair, true);
+});
+
+test('Codex 安装会合并未托管与托管的同名服务并避免重复 TOML 表', async () => {
+  const codexPath = path.join(testHome, '.codex', 'config.toml');
+  fs.mkdirSync(path.dirname(codexPath), { recursive: true });
+  fs.writeFileSync(codexPath, [
+    '[mcp_servers.yuyan-mcp-server]',
+    'command = "legacy-yuyan"',
+    'args = ["--legacy"]',
+    '',
+    '[mcp_servers.existing]',
+    'command = "existing"',
+    '',
+    '# BEGIN YUYAN MCP - managed by 雨燕',
+    '[mcp_servers.yuyan-mcp-server]',
+    'command = "managed-duplicate"',
+    'args = ["--mcp", "--client", "codex"]',
+    '# END YUYAN MCP - managed by 雨燕',
+    '',
+  ].join('\n'));
+
+  await installer.installAgentClient('codex');
+  const codex = fs.readFileSync(codexPath, 'utf8');
+  assert.equal((codex.match(/\[mcp_servers\.yuyan-mcp-server\]/g) || []).length, 1);
+  assert.doesNotMatch(codex, /legacy-yuyan|managed-duplicate|--legacy/);
+  assert.match(codex, /\[mcp_servers\.existing\]/);
+  assert.match(codex, /default_tools_approval_mode = "approve"/);
+});
+
+test('Codex 候选配置校验失败时保留原文件', async () => {
+  const codexPath = path.join(testHome, '.codex', 'config.toml');
+  const original = '[mcp_servers.existing]\ncommand = "existing"\n';
+  fs.mkdirSync(path.dirname(codexPath), { recursive: true });
+  fs.writeFileSync(codexPath, original);
+  const previousValidator = process.env.YUYAN_CODEX_CLI_PATH;
+  process.env.YUYAN_CODEX_CLI_PATH = process.execPath;
+  try {
+    await assert.rejects(
+      () => installer.installAgentClient('codex'),
+      (error) => error.code === 'client_config_invalid' && !error.message.includes('command = "existing"')
+    );
+  } finally {
+    if (previousValidator === undefined) delete process.env.YUYAN_CODEX_CLI_PATH;
+    else process.env.YUYAN_CODEX_CLI_PATH = previousValidator;
+  }
+  assert.equal(fs.readFileSync(codexPath, 'utf8'), original);
 });
 
 test('当前可执行文件缺失时拒绝生成失效配置', async () => {

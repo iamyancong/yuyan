@@ -1,5 +1,68 @@
 # 发现与决策
 
+## 2026-08-20：Codex 安装故障与 MCP 默认执行体验
+
+### 用户目标与截图信息
+- 用户认为当前“AI 调 MCP 后还要回到雨燕 App 授权”的双层交互不便，希望安装 MCP 后普通操作默认直接执行，仅由开关配置明确指定需要审批的能力。
+- 截图显示当前设备的“当前设备自动执行”已经开启，但右侧“账号跨设备审批”仍列出应用项目配置、启停/重启服务、创建微应用、发布项目、生成 OpenAPI、回滚发布；说明 UI 策略与用户期望存在概念重叠。
+- 点击 Codex MCP 客户端安装后 Codex 无法使用，需要优先检查安装器对 `~/.codex/config.toml` 的托管块合并、TOML 合法性、路径转义和 Codex 当前配置格式兼容性。
+
+### 官方能力依据
+- OpenAI 官方 MCP 文档说明 Codex 客户端共享 `~/.codex/config.toml`，MCP 服务支持 `default_tools_approval_mode = "auto|prompt|writes|approve"`，且可使用 `tools.<tool>.approval_mode` 做逐工具覆盖。
+- 因此客户端侧可表达“服务默认自动、特定工具始终审批”；雨燕仍需负责领域授权、破坏性边界、幂等、任务锁和审计，不应让普通操作再进入一轮必须打开 App 的审批。
+
+### 当前工作区保护
+- 当前分支为 `feat/github-actions-build`；需要在修改前继续核对完整 Git 状态，保护用户已有改动。
+- 仓库存在 `.codegraph/`，后续定位代码必须优先使用 CodeGraph。
+
+### CodeGraph 初步定位
+- Codex 安装实现集中在 `server/services/agent-client-config-service.mjs`：`mergeCodexConfig` 直接删除旧托管块后追加新块，随后 `atomicWrite` 备份并覆盖配置。
+- 当前 Codex 托管块只写入 command、args、启动超时和工具超时，没有写入 `default_tools_approval_mode`，也没有在覆盖前后使用 TOML 解析器或 `codex mcp list` 验证配置。
+- 安装状态只根据托管标记和预期字符串判断，不能识别“块存在但整个 config.toml 已无法被 Codex 解析”的情况；这是安装后 Codex 整体不可用的重要故障面。
+- 稳定启动器路径与 `--mcp --client codex` 参数由 `ensureStableLauncher` / `createLaunchSpec` 生成，配置路径含空格由 TOML 双引号转义处理；仍需用实际配置和 CLI 错误确认本次根因。
+
+### 本机 Codex 故障证据
+- 当前 Codex CLI 为 `0.148.0-alpha.15`，当前 `~/.codex/config.toml` 可解析，`codex mcp list` 已能列出启用的 `yuyan-mcp-server`；说明客户端当前没有继续处于“完全不可用”状态。
+- 最新安装前备份 `config.toml.yuyan-backup-2026-08-20T03-15-24-069Z` 无法解析，精确错误为同一个 `mcp_servers.yuyan-mcp-server` 表在第 261 行重复声明；这足以导致 Codex 启动/读取配置失败，与用户描述吻合。
+- 更早备份和当前配置均可解析，说明故障由重复配置条目触发，后续一次安装恰好又清除了冲突；当前实现仍无重复表检测、写后验证和失败自动恢复，问题可以复发。
+- 当前稳定启动器文件本身存在且可执行，内容只查找正式安装目录中的雨燕 App；仍需协议握手确认目标可执行文件存在且 `--mcp` 能启动。
+
+### 重复配置的直接成因
+- 无效备份中第 63 行已经存在一段未带雨燕托管标记的 `[mcp_servers.yuyan-mcp-server]`，安装器又在第 260 行追加了带托管标记的同名表。
+- 当前 `mergeCodexConfig` 只删除 `# BEGIN/END YUYAN MCP` 之间的旧块，不会识别或合并用户通过 Codex UI/CLI、旧版雨燕或手工创建的同名 MCP 表，因此会制造 TOML 重复表。
+- 修复需要按语义处理同名服务，不能只匹配注释块；同时必须在写入前检测源配置是否存在与雨燕无关的其他语法错误，在写入后验证并失败回滚。
+
+### 当前审批模型
+- 本机策略只有 `autoApproveGrantedProjects` 一个布尔值，默认开启；账号策略另有 `forcedTools` 跨设备强制审批列表。
+- UI 同时展示“当前设备自动执行”和“账号跨设备审批”，前者允许普通操作自动，后者又可把发布、服务控制等工具强制拉回人工确认；需要在任务创建逻辑中明确优先级并把产品文案改成“默认直接执行 / 仅所选操作审批”。
+
+### Codex 客户端审批配置决策
+- 官方配置参考确认 `mcp_servers.<id>.default_tools_approval_mode` 支持 `auto | prompt | writes | approve`，并允许逐工具覆盖。
+- 官方示例以服务默认 `prompt`、单个工具 `approve` 表达该工具无需再提示；据此，雨燕托管块应使用 `default_tools_approval_mode = "approve"`，让 Codex 客户端不再增加一层审批，最终是否等待人工由雨燕领域策略统一裁决。
+- 本机 Codex CLI 已用命令行覆盖验证 `approve` 值可被当前版本解析。
+- `CODEX_HOME` 指向临时目录时，`codex mcp list` 能验证候选 `config.toml`；安装器可在覆盖真实文件之前利用这一机制做完整解析验证，验证失败则不写入。
+
+### 审批区交互验收清单
+- 保留一个“已授权项目普通操作默认直接执行”的总开关，默认开启；关闭时才把普通写操作改为逐次审批。
+- 账号跨设备策略不再使用堆叠标签的多选框，改为六个清晰的逐项开关；关闭表示直接执行，开启表示该操作在所有设备人工确认。
+- 高危删除继续始终人工确认，并在策略卡中明确说明其不受普通操作开关影响。
+- 策略保存期间禁用逐项开关，避免并发请求产生旧结果覆盖新状态；服务端默认 `forcedTools=[]` 保持不变。
+- 复用当前 AI 控制中心卡片和主题变量，保持两列宽屏、单列窄屏布局，不引入新的视觉体系。
+
+### 首轮实现验证
+- Codex 安装器已改为按 `yuyan-mcp-server` 表名清理旧配置再生成托管块，并在候选配置中写入 `default_tools_approval_mode = "approve"`。
+- 新增配置并发修改保护：从读取到原子写入之间若文件被其他程序修改，则拒绝覆盖并提示刷新重试。
+- 针对性 Node 测试 5/5 通过，覆盖三客户端保留既有配置、旧路径修复、未托管同名 Codex 服务去重、可执行文件缺失和损坏 JSON 拒绝覆盖。
+- 全量 `vue-tsc --noEmit` 当前因工作区既有 `@ycwang-dev/*` 私有包与 Node 测试类型无法解析而失败，错误覆盖大量未修改文件；需要改用项目现有 CI 构建入口或恢复依赖后复验。
+
+### 实机与全量验证结论
+- 正式安装的 `/Applications/雨燕.app` 可执行文件存在，稳定启动器通过真实 MCP stdio 握手并返回 20 个工具。
+- 当前 `~/.codex/config.toml` 已修成单一受管表，`codex mcp get yuyan-mcp-server` 明确显示 enabled、正确启动器参数和 `default_tools_approval_mode: approve`。
+- 首次给当前配置追加 approval mode 的补丁因实际配置没有托管标记而未命中，未产生部分写入；随后按真实未托管表精确转换为托管块并验证成功。
+- 全量服务端测试 89/89、MCP 测试 5/5、审批组件 SFC 编译和 AI 控制中心 Less 编译通过。
+- `frontend:build:ci` 仍因本机缺少 `@ycwang-dev/components` 停在入口解析；本机没有 GitHub Packages Token/gh CLI，离线缓存也没有该私有包。仓库还存在既有 manifest/lock 版本差异，本轮没有改依赖或锁文件。
+- UI 无法在本机重新构建运行，因此逐项开关只完成 SFC/Less 静态编译；宽屏三列、900px 两列、640px 单列的视觉验收需由 GitHub 客户端 CI 产物复验。
+
 ## 2026-07-22：免费 macOS 本地保险库替代钥匙串
 
 ### 已确认边界
