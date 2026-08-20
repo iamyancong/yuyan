@@ -4,16 +4,21 @@
  */
 
 import fs from 'node:fs/promises';
+import { execFile as execFileCallback } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { AGENT_DB_PATH, YUYAN_APP_EXECUTABLE } from '../config/constants.mjs';
 import { AgentError } from './agent-workspace-service.mjs';
 
 const SERVER_NAME = 'yuyan-mcp-server';
 const CODEX_BEGIN = '# BEGIN YUYAN MCP - managed by 雨燕';
 const CODEX_END = '# END YUYAN MCP - managed by 雨燕';
+/** Codex CLI 解析候选配置的最长等待时间。 */
+const CODEX_VALIDATION_TIMEOUT_MS = 15_000;
 const CONFIG_HOME = String(process.env.YUYAN_AGENT_CONFIG_HOME || os.homedir());
 const LAUNCHER_DIR = String(process.env.YUYAN_AGENT_LAUNCHER_DIR || path.join(path.dirname(AGENT_DB_PATH), 'mcp-launcher'));
+const execFile = promisify(execFileCallback);
 
 /** 客户端配置元数据。 */
 const CLIENTS = {
@@ -45,6 +50,10 @@ const readText = async (filePath) => fs.readFile(filePath, 'utf8').catch((error)
 /** 原子写入配置并保留备份。 */
 async function atomicWrite(filePath, content, previousContent) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const currentContent = await readText(filePath);
+  if (currentContent !== previousContent) {
+    throw new AgentError('client_config_changed', `${filePath} 已被其他程序修改，请刷新状态后重试`);
+  }
   let backupPath = '';
   if (previousContent) {
     backupPath = `${filePath}.yuyan-backup-${new Date().toISOString().replace(/[:.]/g, '-')}`;
@@ -144,15 +153,109 @@ function createLaunchSpec(launcher, client) {
 
 /** 创建 Codex 托管配置块。 */
 function createCodexBlock(launchSpec) {
-  return `${CODEX_BEGIN}\n[mcp_servers.${SERVER_NAME}]\ncommand = ${quoteToml(launchSpec.command)}\nargs = [${launchSpec.args.map(quoteToml).join(', ')}]\nstartup_timeout_sec = 20\ntool_timeout_sec = 1800\n${CODEX_END}`;
+  return `${CODEX_BEGIN}\n[mcp_servers.${SERVER_NAME}]\ncommand = ${quoteToml(launchSpec.command)}\nargs = [${launchSpec.args.map(quoteToml).join(', ')}]\nstartup_timeout_sec = 20\ntool_timeout_sec = 1800\ndefault_tools_approval_mode = "approve"\n${CODEX_END}`;
 }
 
-/** 替换或追加 Codex 托管配置块。 */
+/** 转义正则表达式字面量。 */
+const escapeRegExp = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** 匹配任意 TOML 表头。 */
+const isTomlTableHeader = (line) => /^\s*\[\[?.+\]\]?\s*(?:#.*)?$/.test(line) && !line.includes('=');
+
+/** 判断 TOML 表头是否属于雨燕 MCP，包括其 env/tools 子表。 */
+const isCodexServerTableHeader = (line) => new RegExp(
+  `^\\s*\\[\\[?\\s*mcp_servers\\s*\\.\\s*(?:${escapeRegExp(SERVER_NAME)}|"${escapeRegExp(SERVER_NAME)}"|'${escapeRegExp(SERVER_NAME)}')(?:\\s*\\..+)?\\s*\\]\\]?\\s*(?:#.*)?$`
+).test(line);
+
+/** 判断 TOML 表头是否为雨燕 MCP 根表。 */
+const isCodexServerRootTableHeader = (line) => new RegExp(
+  `^\\s*\\[\\s*mcp_servers\\s*\\.\\s*(?:${escapeRegExp(SERVER_NAME)}|"${escapeRegExp(SERVER_NAME)}"|'${escapeRegExp(SERVER_NAME)}')\\s*\\]\\s*(?:#.*)?$`
+).test(line);
+
+/** 删除雨燕托管块以及所有同名旧版 Codex MCP 表。 */
+function removeCodexServerConfig(source) {
+  const managedPattern = new RegExp(`${escapeRegExp(CODEX_BEGIN)}[\\s\\S]*?${escapeRegExp(CODEX_END)}\\n?`, 'g');
+  const lines = source.replace(managedPattern, '').split(/\r?\n/);
+  const result = [];
+  let skippingServerTable = false;
+  for (const line of lines) {
+    if (isCodexServerTableHeader(line)) {
+      skippingServerTable = true;
+      continue;
+    }
+    if (skippingServerTable && isTomlTableHeader(line)) skippingServerTable = false;
+    if (!skippingServerTable) result.push(line);
+  }
+  return result.join('\n').trimEnd();
+}
+
+/** 统计 Codex 配置中的雨燕 MCP 根表数量。 */
+function countCodexServerTables(source) {
+  return source.split(/\r?\n/).filter(isCodexServerRootTableHeader).length;
+}
+
+/** 返回本机可能存在的 Codex CLI 路径。 */
+function getCodexCliCandidates() {
+  const candidates = [process.env.YUYAN_CODEX_CLI_PATH, process.env.CODEX_CLI_PATH];
+  if (process.platform === 'darwin') {
+    candidates.push(
+      '/Applications/ChatGPT.app/Contents/Resources/codex',
+      '/Applications/Codex.app/Contents/Resources/codex',
+      path.join(CONFIG_HOME, 'Applications', 'ChatGPT.app', 'Contents', 'Resources', 'codex'),
+      path.join(CONFIG_HOME, 'Applications', 'Codex.app', 'Contents', 'Resources', 'codex')
+    );
+  } else if (process.platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA || path.join(CONFIG_HOME, 'AppData', 'Local');
+    candidates.push(
+      path.join(localAppData, 'Programs', 'ChatGPT', 'resources', 'codex.exe'),
+      path.join(localAppData, 'Programs', 'Codex', 'resources', 'codex.exe')
+    );
+  }
+  candidates.push('codex');
+  return [...new Set(candidates.map((item) => String(item || '').trim()).filter(Boolean))];
+}
+
+/** 返回不包含配置原文的 Codex 校验错误摘要。 */
+function summarizeCodexValidationError(error) {
+  const message = String(error?.stderr || error?.message || '');
+  const location = message.match(/(?:at\s+line|line)\s+\d+(?:\s*,?\s*column\s+\d+)?/i)?.[0];
+  if (location) return `配置语法错误（${location}）`;
+  const exitCode = typeof error?.code === 'number' ? `，退出码 ${error.code}` : '';
+  return `Codex CLI 拒绝了候选配置${exitCode}`;
+}
+
+/** 使用 Codex 自身解析候选配置，CLI 不可用时保留结构校验兜底。 */
+async function validateCodexConfig(content, filePath, expectedServerTableCount) {
+  if (countCodexServerTables(content) !== expectedServerTableCount) {
+    throw new AgentError('client_config_invalid', `${filePath} 中雨燕 MCP 配置数量异常，雨燕未修改该文件`);
+  }
+  const validationHome = await fs.mkdtemp(path.join(os.tmpdir(), 'yuyan-codex-validate-'));
+  try {
+    await fs.writeFile(path.join(validationHome, 'config.toml'), content, { mode: 0o600 });
+    for (const command of getCodexCliCandidates()) {
+      try {
+        await execFile(command, ['mcp', 'list'], {
+          env: { ...process.env, CODEX_HOME: validationHome },
+          timeout: CODEX_VALIDATION_TIMEOUT_MS,
+          maxBuffer: 1024 * 1024,
+          windowsHide: true,
+        });
+        return;
+      } catch (error) {
+        if (error?.code === 'ENOENT') continue;
+        throw new AgentError('client_config_invalid', `生成的 Codex 配置无法解析，雨燕未修改原文件：${summarizeCodexValidationError(error)}`);
+      }
+    }
+  } finally {
+    await fs.rm(validationHome, { recursive: true, force: true });
+  }
+}
+
+/** 按服务名替换 Codex MCP 配置，兼容旧版未托管条目。 */
 function mergeCodexConfig(source, launchSpec) {
   const block = createCodexBlock(launchSpec);
-  const pattern = new RegExp(`${CODEX_BEGIN.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${CODEX_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n?`, 'g');
-  const withoutManagedBlock = source.replace(pattern, '').trimEnd();
-  return `${withoutManagedBlock}${withoutManagedBlock ? '\n\n' : ''}${block}\n`;
+  const withoutServerConfig = removeCodexServerConfig(source);
+  return `${withoutServerConfig}${withoutServerConfig ? '\n\n' : ''}${block}\n`;
 }
 
 /** 解析 JSON 配置。 */
@@ -176,8 +279,9 @@ export async function getAgentClientStatuses() {
     let needsRepair = false;
     const launchSpec = createLaunchSpec(launcher, client);
     if (config.format === 'toml') {
-      installed = source.includes(CODEX_BEGIN) && source.includes(CODEX_END);
-      needsRepair = installed && !source.includes(createCodexBlock(launchSpec));
+      const serverTableCount = countCodexServerTables(source);
+      installed = serverTableCount > 0 || source.includes(CODEX_BEGIN) || source.includes(CODEX_END);
+      needsRepair = installed && (serverTableCount !== 1 || !source.includes(createCodexBlock(launchSpec)));
     } else {
       try {
         const parsed = parseJsonConfig(source, config.filePath);
@@ -205,6 +309,7 @@ export async function installAgentClient(client) {
   let content;
   if (config.format === 'toml') {
     content = mergeCodexConfig(source, launchSpec);
+    await validateCodexConfig(content, config.filePath, 1);
   } else {
     const parsed = parseJsonConfig(source, config.filePath);
     parsed.mcpServers = parsed.mcpServers && typeof parsed.mcpServers === 'object' && !Array.isArray(parsed.mcpServers)
@@ -225,9 +330,9 @@ export async function uninstallAgentClient(client) {
   if (!source) return { client, configPath: config.filePath, removed: false, backupPath: '' };
   let content;
   if (config.format === 'toml') {
-    const pattern = new RegExp(`${CODEX_BEGIN.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${CODEX_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n?`, 'g');
-    content = source.replace(pattern, '').trimEnd();
+    content = removeCodexServerConfig(source);
     content = content ? `${content}\n` : '';
+    await validateCodexConfig(content, config.filePath, 0);
   } else {
     const parsed = parseJsonConfig(source, config.filePath);
     if (parsed.mcpServers && typeof parsed.mcpServers === 'object') delete parsed.mcpServers[SERVER_NAME];
