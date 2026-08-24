@@ -22,7 +22,6 @@ interface SelectOption {
 /** 部署目标 Tab 属性 */
 interface DeployTargetTabProps {
   loading: boolean;
-  repairLoading: boolean;
   targets: RuntimeAwareDeployTarget[];
   filterForm: TargetFilterForm;
   branchOptions: SelectOption[];
@@ -35,7 +34,6 @@ const emit = defineEmits<{
   (e: 'update:filterForm', value: TargetFilterForm): void;
   (e: 'search'): void;
   (e: 'reset'): void;
-  (e: 'repairNginxBindings'): void;
   (e: 'openProgress', target: RuntimeAwareDeployTarget): void;
 }>();
 
@@ -84,14 +82,12 @@ const activeColumns = computed(() => {
   <div class="nginx-deploy-tab-pane">
     <DeployTargetFilterBar
       :loading="loading"
-      :repair-loading="repairLoading"
       :filter-form="filterForm"
       :branch-options="branchOptions"
       :server-options="serverOptions"
       @update:filter-form="handleFilterFormUpdate"
       @search="emit('search')"
       @reset="emit('reset')"
-      @repair-nginx-bindings="emit('repairNginxBindings')"
     />
     <div ref="tableAreaRef" class="nginx-deploy-table-area">
       <YTable
