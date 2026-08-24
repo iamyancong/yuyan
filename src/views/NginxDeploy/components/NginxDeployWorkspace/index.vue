@@ -86,7 +86,6 @@ const handleOpenNginxRuntime = async () => {
         <a-tab-pane key="targets" tab="部署目标">
           <DeployTargetTab
             :loading="lifecycleState.loading.value"
-            :repair-loading="targetState.targetBindingRepairing.value"
             :targets="targetState.runtimeTargets.value"
             :filter-form="targetState.targetFilterForm"
             :branch-options="targetState.targetBranchFilterOptions.value"
@@ -95,7 +94,6 @@ const handleOpenNginxRuntime = async () => {
             @update:filter-form="updateTargetFilterForm"
             @search="targetState.handleTargetFilterSearch"
             @reset="targetState.handleTargetFilterReset"
-            @repair-nginx-bindings="targetState.repairManagedNginxBindings"
             @open-progress="progressState.openTargetProgress"
           />
         </a-tab-pane>

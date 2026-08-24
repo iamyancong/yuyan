@@ -20,8 +20,6 @@ interface SelectOption {
 interface DeployTargetFilterBarProps {
   /** 查询加载状态 */
   loading: boolean;
-  /** 修复 Nginx 绑定加载状态 */
-  repairLoading: boolean;
   /** 筛选表单数据 */
   filterForm: TargetFilterForm;
   /** 分支下拉选项 */
@@ -39,8 +37,6 @@ const emit = defineEmits<{
   (e: 'search'): void;
   /** 触发重置筛选 */
   (e: 'reset'): void;
-  /** 触发修复 Nginx 关联 */
-  (e: 'repairNginxBindings'): void;
 }>();
 
 /** 项目关键字计算属性 */
@@ -121,7 +117,6 @@ const serverId = computed({
               查询
             </YButton>
             <YButton @click="emit('reset')">重置</YButton>
-            <YButton :loading="repairLoading" @click="emit('repairNginxBindings')">修复 Nginx 关联</YButton>
           </a-space>
         </a-col>
       </a-row>

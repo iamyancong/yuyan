@@ -52,7 +52,6 @@ import {
   createProjectDraftFromGitLab,
   createServerOptionsFromTargets,
   createTargetServerDefaults,
-  findMainManagedSiteTarget,
   formatServerLabel,
   getErrorMessage,
   getPreferredNginxInstance,
@@ -175,7 +174,6 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
   } = useDeployProjectOptions();
 
   const targetSaving = ref(false);
-  const targetBindingRepairing = ref(false);
   const targetFormLoading = ref(false);
   const targets = ref<DeployTarget[]>([]);
   const allTargets = ref<DeployTarget[]>([]);
@@ -1222,80 +1220,6 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     await refreshTargetServiceLogs();
   };
 
-  /**
-   * 修复历史部署目标与托管 Nginx 实例的绑定关系。
-   */
-  const repairManagedNginxBindings = async () => {
-    if (!ensureLoggedIn()) return;
-    targetBindingRepairing.value = true;
-    try {
-      await refreshServerList();
-      const sourceTargets = await listDeployTargets({});
-      let updatedCount = 0;
-
-      for (const server of servers.value) {
-        const managedInstance = server.nginxInstances?.find((instance) => instance.instanceType === 'managed' && instance.initializedAt) ||
-          server.nginxInstances?.find((instance) => instance.instanceType === 'managed');
-        if (!managedInstance) continue;
-
-        const serverTargets = sourceTargets.filter((target) => Number(target.serverId) === Number(server.id));
-        const mainTargets = serverTargets.filter((target) => isMainDeployProject(target));
-        const mainTarget = mainTargets.find((target) => Number(target.nginxInstanceId) === Number(managedInstance.id)) || mainTargets[0];
-        if (!mainTarget) continue;
-
-        const mainConfPath = managedInstance.defaultNginxConfPath || `${managedInstance.nginxRoot || '/opt/yuyan/nginx'}/conf/nginx.conf`;
-        const mainListenPort = Number(mainTarget.listenPort || managedInstance.portStart || 0);
-        const mainVisitUrl = mainTarget.visitUrl || (mainListenPort ? `http://${server.host}:${mainListenPort}` : '');
-        const mainPayload: DeployTargetPayload = {
-          ...mainTarget,
-          nginxInstanceId: managedInstance.id,
-          nginxConfPath: mainConfPath,
-          nginxSiteManaged: true,
-          listenPort: mainListenPort,
-          serverName: mainTarget.nginxServerName || '_',
-          visitUrl: mainVisitUrl,
-          enableNginxTest: true,
-          enableNginxReload: true,
-          uploadStrategy: mainTarget.uploadStrategy || DEFAULT_UPLOAD_STRATEGY,
-        };
-        await updateDeployTarget(mainTarget.id, mainPayload);
-        await syncNginxSite(mainTarget.id);
-        updatedCount += 1;
-
-        for (const target of serverTargets) {
-          if (target.id === mainTarget.id) continue;
-          if (isMainDeployProject(target)) continue;
-          const fallbackMainTarget = findMainManagedSiteTarget([{ ...mainTarget, nginxInstanceId: managedInstance.id, nginxConfPath: mainConfPath, nginxSiteManaged: true }], server.id, managedInstance.id);
-          const microPayload: DeployTargetPayload = {
-            ...target,
-            nginxInstanceId: managedInstance.id,
-            nginxConfPath: fallbackMainTarget?.nginxConfPath || mainConfPath,
-            nginxSiteManaged: false,
-            listenPort: 0,
-            serverName: target.nginxServerName || '_',
-            enableNginxTest: true,
-            enableNginxReload: true,
-            uploadStrategy: target.uploadStrategy || DEFAULT_UPLOAD_STRATEGY,
-          };
-          await updateDeployTarget(target.id, microPayload);
-          updatedCount += 1;
-        }
-      }
-
-      if (!updatedCount) {
-        message.warning('未找到可修复的主应用和托管 Nginx 实例');
-        return;
-      }
-      message.success(`已修复 ${updatedCount} 个部署目标的 Nginx 关联`);
-      await refreshServerList();
-      await refreshActiveTab({ force: true });
-    } catch (error: any) {
-      message.error(getErrorMessage(error));
-    } finally {
-      targetBindingRepairing.value = false;
-    }
-  };
-
   /** 按当前筛选条件查询部署目标 */
   const handleTargetFilterSearch = async () => {
     await refreshActiveTab({ force: true });
@@ -1480,7 +1404,6 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
 
   return {
     targetSaving,
-    targetBindingRepairing,
     targetFormLoading,
     targets,
     runtimeTargets,
@@ -1527,7 +1450,6 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     runTargetServiceAction,
     openTargetServiceLogs,
     refreshTargetServiceLogs,
-    repairManagedNginxBindings,
     openNginxConfig,
     handleTargetFilterSearch,
     handleTargetFilterReset,
