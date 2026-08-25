@@ -670,3 +670,43 @@
 - 视觉验收使用同一组中央模拟数据验证：App 可显示“华贵委外”服务器筛选项及 4 条参考部署目标；中央空库和 503 不可用状态分别显示准确空态与真实错误。
 - 静态审计确认前端不再引用 `/db/backup`、`/db/restore`、本地目标同步或旧“刷新当前账号配置”文案；服务端只保留两个 410 兼容响应。
 - 本轮未提交、未推送；正式生效需先部署中央服务，再发布包含新刷新交互和数据源收口的 App。
+
+## 会话：2026-08-24（部署根目录智能识别与目录下拉）
+
+### 阶段 84：部署根目录智能识别基线与契约
+- **状态：** complete
+- 已读取 YSS 业务页面、YFormily/Slot/联动、API、Vue3、模块拆分、主题与原型验收 Skills，并核对最新 YFormily Slot 文档。
+- 工作区基线干净，当前分支为 `feat/github-actions-build`；本轮不提交、不推送，也不依赖待授权的 yuyan MCP。
+- 已确认 Vue2/Vue3 样本规律、服务器静态资源过滤规则和现有 GitLab 仓库文件 API 可复用边界。
+- 已通过 CodeGraph 和源码确认项目/分支/服务器/Nginx watcher、默认值覆盖点、YFormily 插槽边界以及 `createTargetServerDefaults` 的现有职责。
+- 已新增仓库构建脚本、Vite mode/dotenv 与 Vue2 HTML 标识解析器；修复带引号 dotenv 行尾注释、显式空值覆盖、HTML 注释节点、Lerna view 工作区和不安全 Shell 语法边界。
+- 真实 Vue2/Vue3 仓库只读验证通过：`outsourced`、standalone 主应用、`dmJurisdictionBuilder` 均按约定识别。
+
+### 阶段 85：目录识别与服务器扫描实现
+- **状态：** complete
+- 新增 `GET /servers/:id/deploy-root-options`、前端 API 类型和服务器目录服务；扫描根目录只取服务器/Nginx 配置，不接受客户端路径，拒绝相对路径、根路径和过宽单级路径。
+- SFTP 仅扫描直属子目录，过滤隐藏/备份及 `css/js/img/fonts/assets/static/theme`，只保留包含 `index.html` 的应用目录；连接/读取均有超时，接口总候选最多 200 项。
+- 根目录、真实应用目录和目标占用信息已合并；服务器已删除但目标仍占用的路径继续展示并禁用，编辑当前目标时该路径保持可用。
+- 服务层和 SFTP 定向测试覆盖非法根目录、实例归属、静态资源、普通文件、隐藏目录、上限、SSH 失败、占用禁用和编辑放行。
+
+### 阶段 86：Formily 可输入下拉与联动实现
+- **状态：** complete
+- `deployRoot` 已改为具名 Formily Slot，私有 `DeployRootField` 使用 Ant Design Vue AutoComplete；后端项目仍使用普通可编辑 Input。
+- 独立 composable 按项目、分支、服务器、Nginx、构建命令和产物目录签名缓存；依赖变化立即废弃在途响应，250ms 防抖重算，手输后不覆盖，并可用“使用推荐值”恢复自动管理。
+- 下拉区分智能推荐、服务器应用和已占用路径；不存在的合法推荐标记“发布时创建”，占用推荐不自动写入，手输占用路径在保存时也会被前端列表校验拦截。
+- 弹窗主组件缩减到 134 行，表单、根目录字段、逻辑和样式已按职责拆分；原部署目标 DTO 与数据库结构未变化。
+
+### 阶段 87：自动化与视觉验收
+- **状态：** complete（本地可验证范围）
+- 服务端全量测试 97/97、前端工具测试 33/33 通过；其中新增仓库/推荐策略 13 项、目录服务/SFTP 9 项均通过，Node 语法、Vue SFC 编译和 `git diff --check` 通过。
+- 常规 `pnpm typecheck` 被缺失的 `@ycwang-dev/components/hooks/utils` 与 Node 测试类型阻断；临时链接相邻 `yss-ui` 工作区包后，类型检查只剩 7 处既有列表页与旧本地 hooks 类型之间的 `Ref` 兼容错误，本次新增文件没有类型错误。
+- 同一临时依赖环境下 `pnpm frontend:build:ci` 已成功完成 12,801 个模块的生产构建，仅保留既有大 chunk 警告；命令结束后已清理所有临时软链接。
+- 使用 webapp-testing Skill 和 Playwright 完成亮色、暗色与 760px 窄屏截图验收；修复已有完整路径导致下拉只显示推荐项的问题后，智能推荐、服务器应用、已占用禁用项可同时显示，弹窗无横向溢出且无页面错误。
+- 本轮未连接真实 SSH 测试服务器，没有执行部署或服务器写操作，也未提交、未推送。
+
+### 阶段 88：部署根目录下拉滚动跟随修复
+- **状态：** complete
+- 根据用户截图确认根因是 AutoComplete 下拉默认挂载到弹窗滚动区域之外；滚动表单时触发字段移动，但面板没有共享同一滚动坐标系。
+- `DeployRootField` 已通过 `getPopupContainer` 把面板挂载到最近的 `.deploy-root-field`，字段容器增加 `position: relative`，未改变候选、搜索和占用禁用逻辑。
+- 首次自动化视口没有产生实际滚动（位移为 0），已改用 650px 高视口并强制断言 `scrollTop` 变化；第二次“位移必须相同”的断言识别出 Ant Design 正常上下翻转，最终改用面板边界贴合判据。
+- 最终 Playwright 验收中弹窗滚动 80px、字段上移 80px；面板从上方翻转到下方后与字段仅相隔 5px，仍位于字段容器内且页面无运行时错误。前端工具测试 33/33、Vue SFC 编译和 `git diff --check` 通过。

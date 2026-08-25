@@ -59,6 +59,33 @@ export interface DeployServer {
   nginxRuntime: NginxRuntime | null;
 }
 
+/** 部署根目录占用目标摘要 */
+export interface DeployRootOccupancy {
+  targetId: number;
+  projectName: string;
+  branch: string;
+  envName: string;
+}
+
+/** 服务器部署根目录候选 */
+export interface DeployRootOption {
+  kind: 'root' | 'application';
+  name: string;
+  path: string;
+  exists: boolean;
+  hasIndexHtml: boolean;
+  occupied: boolean;
+  occupiedBy: DeployRootOccupancy[];
+}
+
+/** 服务器部署根目录候选响应 */
+export interface DeployRootOptionsResult {
+  configuredRoot: string;
+  nginxInstanceId: number;
+  truncated: boolean;
+  items: DeployRootOption[];
+}
+
 /** 独立服务器保存参数 */
 export interface DeployServerPayload {
   name: string;
@@ -733,6 +760,17 @@ export const deleteDeployServer = (id: number, expectedName: string) => client.d
 
 /** 测试服务器连接 */
 export const testDeployServer = (id: number) => client.post(`/servers/${id}/test`).then(unwrap<{ success: boolean; output: string }>);
+
+/**
+ * 获取服务器前端部署根目录候选。
+ * @param serverId 服务器 ID
+ * @param params Nginx 实例与编辑目标参数
+ * @returns 服务器应用目录候选
+ */
+export const getDeployRootOptions = (
+  serverId: number,
+  params: { nginxInstanceId?: number; excludeTargetId?: number } = {}
+) => client.get(`/servers/${serverId}/deploy-root-options`, { params }).then(unwrap<DeployRootOptionsResult>);
 
 /** 获取服务器 Nginx 实例列表 */
 export const listNginxInstances = (serverId: number) => client.get(`/servers/${serverId}/nginx-instances`).then(unwrap<NginxInstance[]>);

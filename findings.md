@@ -429,3 +429,25 @@
 - 设备 JDK 的数据库 ID 属于单机资源，不能随目标行并入共享空间；v6 会解除目标与后端配置中的设备 JDK 外键，仅保留 `required_jdk_alias` 作为目标构建要求，避免中央数据引用另一台设备的本地行。
 - 真实刷新必须由当前页面返回 Promise；全局协调器对同一轮并发点击复用单个 Promise，失败原样抛出，下一轮仍可恢复，不需要依赖全局 DOM 事件。
 - 最终门禁结果为服务端 86/86、前端工具 20/20、迁移专项 2/2、类型检查与生产构建通过；视觉模拟分别覆盖中央有数据、真实空库和 503 三种状态。
+
+# 2026-08-24 部署根目录智能识别与目录下拉
+
+- 当前部署目标表单已经能根据服务器/Nginx 实例给出静态根目录，但 `deployRoot` 仍是普通 Input，分支变化不会读取仓库配置。
+- 现有 GitLab API 已提供 `getFileContent`、`getRepoTree` 和分支读取，可直接按项目 ID 与 ref 读取配置，不需要把 yuyan MCP 引入产品运行时。
+- Vue2 样本的 `public/index.html` 中，`yss-main-app` 节点 ID 可作为微应用目录；`yssMainApp` 是门户主应用哨兵，应落到配置根目录。
+- Vue3 样本在普通 production mode 使用 `VITE_SUB_APP_NAME`，standalone mode 可能给出不同名称但仍应作为主应用落根目录；构建脚本需要安全解析 package scripts 与 `cd`，不能执行仓库命令。
+- 服务器根目录中的 `css/js/img/fonts/assets` 是主应用静态资源，目录候选应以“直属子目录内存在 index.html”为应用判据，而不是返回所有目录。
+- YFormily 最新文档确认 Schema `Slot` 默认提供 `value/onChange`；组件库没有 AutoComplete 封装，当前历史页面应继续使用兼容 `YssFormily`，插槽内采用 Ant Design Vue AutoComplete。
+- 原型验收项：保持现有两列弹窗与 140px label；部署根目录可键入、可搜索、可选；推荐/现有/占用状态清晰；窄屏不溢出；读取失败仍可手输。
+- “平台应用”和“GitLab 仓库”两种项目来源都保存真实 GitLab projectId；目录识别可以统一调用现有 `getFileContent/getRepoTree`，无需新增凭据链路。
+- 当前 `createTargetServerDefaults` 会把项目名直接套入部署模板；新实现应让它继续负责 Nginx 配置、开关和后端路径，前端 deployRoot 则由仓库标识推荐器在受控条件下覆盖。
+- `useNginxDeployTargets.ts` 已超过 1400 行；仓库识别、服务器候选、手输保护和请求代次必须拆成独立 composable 与纯函数模块。
+- 在途请求必须在依赖变化的当下失效，不能等 250ms 防抖结束后才递增代次；仓库读取闭包也必须捕获项目/分支快照，避免旧请求混读新分支并污染缓存。
+- 已占用目标路径可能因人工清理而不再存在于服务器；目录接口仍需从部署目标补回该选项并禁用，编辑时排除当前目标后保持可用。
+- 200 项上限应作用于接口总候选数而非仅 SFTP 子目录；根目录和已配置目标路径优先保留，其余真实应用目录再按扫描顺序补齐。
+- 真实样本只读验证结果：`yss-valuation-outsourced` 普通构建识别 `outsourced`、standalone 识别主应用，`data-middle-jurisdiction-builder` 根 Lerna 构建识别 `dmJurisdictionBuilder`。
+- 当前工作区缺少 `node_modules/@ycwang-dev/*`，且 `.npmrc` 需要未提供的 `GITHUB_TOKEN`；常规 `vue-tsc`/Vite 因此无法直接运行。通过仅在命令生命周期内临时链接相邻 `yss-ui` 工作区包，生产构建已通过；类型检查只剩 7 处既有列表页与旧本地 hooks 类型之间的 `Ref` 兼容错误，本次新增文件没有类型报错。
+- AutoComplete 在已有完整路径时会用当前值过滤候选，首次点击只能看到推荐项；交互层现以聚焦时的字段值作为搜索基线，首次展开显示全部分组，只有用户继续键入时才过滤。
+- Playwright 拦截 GitLab/部署只读接口后完成亮色、暗色和 760px 窄屏验收；智能推荐、服务器应用、已占用禁用项同时可见，弹窗无横向溢出，页面无新增运行时错误。
+- AutoComplete 默认把下拉面板传送到页面级容器，滚动 `.ant-modal-body` 时字段进入新的滚动坐标而面板仍停留在原位置；为字段设置 `getPopupContainer` 并让 `.deploy-root-field` 成为定位容器后，面板会随字段滚动并受弹窗可视区约束。
+- 滚动验收不能简单要求字段与面板位移恒等：Ant Design 会根据可用空间把面板从字段上方自动翻转到下方。可靠判据是弹窗 `scrollTop` 确实变化、字段位移与滚动量相反、面板仍位于字段容器内，且上下边界间距保持在合理范围。

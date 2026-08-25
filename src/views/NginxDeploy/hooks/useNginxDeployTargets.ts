@@ -60,6 +60,7 @@ import {
   syncSelectFieldState,
 } from '../utils';
 import { useNginxDeployContext } from './useNginxDeployContext';
+import { normalizeDeployRoot } from './deployRootRecommendationPolicy';
 import { useTargetRuntime } from './useTargetRuntime';
 import { useTargetNginxConf } from './useTargetNginxConf';
 
@@ -577,6 +578,9 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       targetForm.deployRoot = previousDeployRoot && backendRoot && (previousDeployRoot === backendRoot || previousDeployRoot.startsWith(`${backendRoot}/`))
         ? previousDeployRoot
         : backendRoot && serviceDir ? `${backendRoot}/${serviceDir}` : '';
+    } else {
+      /** 前端部署目录由代码标识与服务器目录共同推荐，服务端默认值只负责其余字段。 */
+      targetForm.deployRoot = previousDeployRoot;
     }
     if (nginxInstance?.instanceType !== 'managed') {
       targetForm.listenPort = 0;
@@ -1059,6 +1063,20 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
         message.warning('部署根目录必须使用服务器绝对路径');
         return;
       }
+      if (!isBackend) {
+        const normalizedDeployRoot = normalizeDeployRoot(payload.deployRoot);
+        const occupiedTarget = (allTargets.value.length ? allTargets.value : targets.value).find((target) => (
+          Number(target.id) !== Number(activeTargetId.value || 0)
+          && Number(target.serverId) === Number(payload.serverId)
+          && target.projectType !== 'backend'
+          && normalizeDeployRoot(target.deployRoot) === normalizedDeployRoot
+        ));
+        if (occupiedTarget) {
+          message.warning(`部署根目录已被 ${occupiedTarget.projectName}（${occupiedTarget.defaultBranch}）使用，请选择其他目录`);
+          return;
+        }
+        payload.deployRoot = normalizedDeployRoot;
+      }
       if (!isBackend &&
         !String(payload.nginxConfPath || '')
           .trim()
@@ -1380,21 +1398,10 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
           targetForm.buildCommand = DEFAULT_BUILD_COMMAND;
         }
 
-        if (!targetForm.deployRoot) {
-          if (server) {
-            const defaults = createTargetServerDefaults(
-              server,
-              targetForm.projectName,
-              applyProjectTemplate,
-              getSelectedNginxInstance(server),
-              {
-                projectName: targetForm.projectName,
-                projectDescription: targetForm.projectDescription || '',
-              },
-              allTargets.value.length ? allTargets.value : targets.value
-            );
-            targetForm.deployRoot = defaults.deployRoot;
-          }
+        /** 从后端切回前端时清空后端默认目录，由前端智能推荐重新接管。 */
+        const backendRoot = String(server?.defaultBackendRoot || '').replace(/\/+$/, '');
+        if (backendRoot && (targetForm.deployRoot === backendRoot || targetForm.deployRoot.startsWith(`${backendRoot}/`))) {
+          targetForm.deployRoot = '';
         }
       }
       syncTargetProjectSourceFieldState();

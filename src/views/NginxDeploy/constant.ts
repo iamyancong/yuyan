@@ -819,7 +819,12 @@ export const targetFormSchema = {
               title: '部署根目录',
               required: true,
               'x-decorator': 'FormItem',
-              'x-component': 'Input',
+              'x-component': 'Slot',
+              'x-component-props': { name: 'deployRoot' },
+              'x-validator': [
+                { required: true, whitespace: true, message: '请输入部署根目录' },
+                { pattern: /^\//, message: '部署根目录必须是绝对路径' },
+              ],
             },
             nginxConfPath: {
               type: 'string',

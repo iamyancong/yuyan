@@ -57,6 +57,7 @@ const updateTargetForm = (values: Partial<DeployTargetPayload>) => {
     :loading="targetState.targetFormLoading.value"
     :form="targetState.targetFormModel.value"
     :schema="targetState.targetSchema"
+    :target-id="targetState.activeTargetId.value"
     @update:form="updateTargetForm"
     @form-ref-change="setTargetFormRef"
     @inspect="targetState.inspectActiveBackendTarget"
