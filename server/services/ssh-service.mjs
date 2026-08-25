@@ -300,6 +300,120 @@ function getSftp(conn) {
   });
 }
 
+/** 服务器根目录中不应作为独立应用候选的静态资源目录。 */
+const REMOTE_STATIC_ASSET_DIRS = new Set(['assets', 'css', 'fonts', 'img', 'images', 'js', 'static', 'theme']);
+
+/**
+ * 为单次 SFTP 操作添加超时。
+ * @param {Promise<*>} promise - 原始异步操作
+ * @param {number} timeoutMs - 超时时间
+ * @param {string} label - 操作描述
+ * @returns {Promise<*>} 带超时的异步结果
+ */
+function withSftpTimeout(promise, timeoutMs, label) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label}超时`)), timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * 读取远程目录条目。
+ * @param {Object} sftp - SFTP 实例
+ * @param {string} dirPath - 目录路径
+ * @param {number} timeoutMs - 超时时间
+ * @returns {Promise<Object[]>} 目录条目
+ */
+function readRemoteDirectory(sftp, dirPath, timeoutMs) {
+  return withSftpTimeout(
+    new Promise((resolve, reject) => {
+      sftp.readdir(dirPath, (error, entries) => {
+        if (error) reject(error);
+        else resolve(Array.isArray(entries) ? entries : []);
+      });
+    }),
+    timeoutMs,
+    `读取远程目录 ${dirPath}`
+  );
+}
+
+/**
+ * 判断远程文件是否存在且为普通文件。
+ * @param {Object} sftp - SFTP 实例
+ * @param {string} filePath - 文件路径
+ * @param {number} timeoutMs - 超时时间
+ * @returns {Promise<boolean>} 是否为普通文件
+ */
+async function isRemoteFile(sftp, filePath, timeoutMs) {
+  try {
+    const attrs = await withSftpTimeout(
+      new Promise((resolve, reject) => {
+        sftp.stat(filePath, (error, result) => {
+          if (error) reject(error);
+          else resolve(result);
+        });
+      }),
+      timeoutMs,
+      `检查远程文件 ${filePath}`
+    );
+    return Boolean(attrs?.isFile?.());
+  } catch (error) {
+    if ([2, 'ENOENT'].includes(error?.code)) return false;
+    throw error;
+  }
+}
+
+/**
+ * 扫描部署根目录中的直属前端应用目录。
+ * @param {Client} conn - SSH 客户端
+ * @param {string} rootPath - 服务器部署根目录
+ * @param {{limit?: number, timeoutMs?: number, concurrency?: number}} options - 扫描选项
+ * @returns {Promise<{rootHasIndex: boolean, directories: Array<{name: string, path: string}>, truncated: boolean}>} 应用目录
+ */
+export async function listRemoteApplicationDirectories(conn, rootPath, options = {}) {
+  const limit = Math.min(Math.max(Number(options.limit || 200), 1), 200);
+  const timeoutMs = Math.min(Math.max(Number(options.timeoutMs || 8_000), 1_000), 30_000);
+  const concurrency = Math.min(Math.max(Number(options.concurrency || 8), 1), 16);
+  const sftp = await withSftpTimeout(getSftp(conn), timeoutMs, '创建 SFTP 会话');
+  const [rootHasIndex, entries] = await Promise.all([
+    isRemoteFile(sftp, remoteJoin(rootPath, 'index.html'), timeoutMs),
+    readRemoteDirectory(sftp, rootPath, timeoutMs),
+  ]);
+  const candidates = entries
+    .filter((entry) => {
+      const name = String(entry?.filename || '').trim();
+      if (!name || name.startsWith('.') || name === '.yuyan-backups') return false;
+      if (REMOTE_STATIC_ASSET_DIRS.has(name.toLowerCase())) return false;
+      return Boolean(entry?.attrs?.isDirectory?.());
+    })
+    .sort((left, right) => String(left.filename).localeCompare(String(right.filename), 'zh-CN'));
+  const directories = [];
+  let truncated = false;
+
+  for (let index = 0; index < candidates.length && !truncated; index += concurrency) {
+    const chunk = candidates.slice(index, index + concurrency);
+    const matches = await Promise.all(
+      chunk.map(async (entry) => {
+        const name = String(entry.filename);
+        const appPath = remoteJoin(rootPath, name);
+        return (await isRemoteFile(sftp, remoteJoin(appPath, 'index.html'), timeoutMs)) ? { name, path: appPath } : null;
+      })
+    );
+    for (const match of matches.filter(Boolean)) {
+      if (directories.length >= limit) {
+        truncated = true;
+        break;
+      }
+      directories.push(match);
+    }
+  }
+
+  return { rootHasIndex, directories, truncated };
+}
+
 /**
  * 读取远程文本文件
  * @param {Client} conn - SSH 客户端

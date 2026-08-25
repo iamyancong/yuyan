@@ -100,6 +100,7 @@ import {
 } from '../services/backend-toolchain-service.mjs';
 import { listActiveCentralDeployOperations } from '../services/artifact-job-service.mjs';
 import { mergeDeployRuntimeSnapshots } from '../services/deploy-runtime-snapshot-service.mjs';
+import { listDeployRootOptions } from '../services/deploy-root-options-service.mjs';
 
 /** GitHub 托管仓库名（主库或 Fork 库） */
 const GITHUB_REPO = process.env.GITHUB_REPOSITORY || 'ycwang-dev/yuyan';
@@ -639,6 +640,23 @@ export async function handleTestServer(req, res) {
 export async function handleListNginxInstances(req, res) {
   try {
     res.json({ success: true, data: await listNginxInstances(Number(req.params.id)) });
+  } catch (error) {
+    sendError(res, error, 400);
+  }
+}
+
+/**
+ * 获取服务器前端部署根目录候选。
+ */
+export async function handleListDeployRootOptions(req, res) {
+  try {
+    res.json({
+      success: true,
+      data: await listDeployRootOptions(Number(req.params.id), {
+        nginxInstanceId: Number(req.query?.nginxInstanceId || 0),
+        excludeTargetId: Number(req.query?.excludeTargetId || 0),
+      }),
+    });
   } catch (error) {
     sendError(res, error, 400);
   }

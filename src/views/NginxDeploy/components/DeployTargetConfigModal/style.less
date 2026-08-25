@@ -197,65 +197,7 @@
   }
 }
 
-.target-config-form {
-  min-width: 0;
-  border-radius: 8px;
-  background: var(--bg-color-container);
-
-  :deep(.ant-formily-item-label),
-  :deep(.ant-input),
-  :deep(.ant-select) {
-    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Helvetica Neue', Arial, sans-serif !important;
-  }
-
-  :deep(.ant-formily-item) {
-    margin-bottom: 14px;
-  }
-
-  :deep([class*='formily-form-grid']) {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-    column-gap: 18px !important;
-  }
-
-  :deep([class*='formily-form-grid'] > [data-grid-span='2']) {
-    grid-column: span 2 / auto !important;
-  }
-}
-
-.target-form-section {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 4px 0 16px;
-  padding: 10px 12px;
-  border-left: 4px solid var(--primary-color);
-  border-radius: 6px;
-  background: linear-gradient(90deg, var(--primary-color-lighter) 0%, var(--bg-color-container) 78%);
-
-  strong {
-    color: var(--text-color);
-    font-size: 16px;
-    font-weight: 800;
-    line-height: 24px;
-  }
-
-  span {
-    color: var(--text-color-secondary);
-    font-size: 13px;
-  }
-}
-
 @media (max-width: 900px) {
-  .target-config-form {
-    :deep([class*='formily-form-grid']) {
-      grid-template-columns: minmax(0, 1fr) !important;
-    }
-
-    :deep([class*='formily-form-grid'] > [data-grid-span='2']) {
-      grid-column: span 1 / auto !important;
-    }
-  }
-
   .target-config-guide__tools {
     grid-template-columns: minmax(0, 1fr);
     gap: 8px;

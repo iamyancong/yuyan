@@ -893,6 +893,27 @@ export const getFileContent = async (projectId: number, filePath: string, ref: s
   }
 };
 
+/**
+ * 尝试读取仓库文件；文件不存在时安静返回 null。
+ * @param projectId GitLab 项目 ID
+ * @param filePath 仓库文件路径
+ * @param ref 分支或 Commit
+ * @returns 文件内容，不存在时返回 null
+ */
+export const getFileContentIfExists = async (projectId: number, filePath: string, ref: string): Promise<{ file_path: string; content: string } | null> => {
+  try {
+    const encoded = encodeURIComponent(filePath);
+    const { data } = await gitlabClient.get(`/projects/${projectId}/repository/files/${encoded}`, { params: { ref } });
+    const raw = (data as any).content;
+    const encoding = (data as any).encoding;
+    const decoded = encoding === 'base64' ? decodeBase64Utf8(raw) : raw;
+    return { file_path: (data as any).file_path as string, content: decoded as string };
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.status === 404) return null;
+    throw error;
+  }
+};
+
 export type CommitAction = {
   action: 'create' | 'update' | 'delete' | 'move' | 'chmod';
   file_path: string;

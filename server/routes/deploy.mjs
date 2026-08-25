@@ -32,6 +32,7 @@ import {
   handleInitNginxRuntime,
   handleInitNginxInstance,
   handleListNginxInstances,
+  handleListDeployRootOptions,
   handleListRecords,
   handleListServers,
   handleReorderServers,
@@ -136,6 +137,7 @@ router.get('/environments', handleListDeployEnvironments);
 router.post('/environments', handleCreateDeployEnvironment);
 router.put('/environments/:id', handleUpdateDeployEnvironment);
 router.delete('/environments/:id', handleDeleteDeployEnvironment);
+router.get('/servers/:id/deploy-root-options', handleListDeployRootOptions);
 router.get('/servers/:id/nginx-instances', handleListNginxInstances);
 router.post('/servers/:id/nginx-instances', handleCreateNginxInstance);
 router.get('/servers/:id/nginx-runtime', handleGetNginxRuntime);
