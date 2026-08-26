@@ -87,6 +87,8 @@ const serverId = computed({
               allow-clear
               show-search
               :dropdown-match-select-width="300"
+              :list-height="280"
+              :list-item-height="56"
               option-filter-prop="searchKey"
               option-label-prop="title"
               popup-class-name="project-select-dropdown"
@@ -105,6 +107,8 @@ const serverId = computed({
               option-filter-prop="searchKey"
               option-label-prop="title"
               :dropdown-match-select-width="300"
+              :list-height="280"
+              :list-item-height="56"
               popup-class-name="project-select-dropdown"
               @change="emit('search')"
             />
