@@ -36,6 +36,8 @@ const emit = defineEmits<{
         placeholder="请选择服务器"
         class="project-select"
         show-search
+        :list-height="280"
+        :list-item-height="56"
         option-filter-prop="searchKey"
         option-label-prop="title"
         popup-class-name="project-select-dropdown"
@@ -52,6 +54,8 @@ const emit = defineEmits<{
           placeholder="请选择 Nginx 实例"
           class="project-select"
           show-search
+          :list-height="280"
+          :list-item-height="56"
           option-filter-prop="searchKey"
           option-label-prop="title"
           popup-class-name="project-select-dropdown"

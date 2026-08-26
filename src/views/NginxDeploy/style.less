@@ -263,11 +263,15 @@
 }
 
 :global(.project-select-dropdown) {
-  padding: 8px;
+  padding: 6px 0;
   border: 1px solid rgba(210, 210, 215, 0.72);
   border-radius: 14px;
   box-shadow: 0 18px 44px rgba(0, 0, 0, 0.12);
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Helvetica Neue', Arial, sans-serif;
+}
+
+:global(.project-select-dropdown .rc-virtual-list-holder) {
+  padding: 0 6px;
 }
 
 :global(.project-select-dropdown .ant-select-item) {
@@ -275,10 +279,6 @@
   padding: 8px 12px;
   border-radius: 10px;
   color: var(--text-color);
-  margin-bottom: 4px;
-}
-
-:global(.project-select-dropdown .ant-select-item:last-child) {
   margin-bottom: 0;
 }
 

@@ -65,6 +65,8 @@ const emit = defineEmits<{
               option-label-prop="title"
               placeholder="全部服务器"
               :dropdown-match-select-width="300"
+              :list-height="280"
+              :list-item-height="56"
               popup-class-name="project-select-dropdown"
               @change="(value?: number) => emit('serverChange', value)"
             />
@@ -82,6 +84,8 @@ const emit = defineEmits<{
               option-filter-prop="searchKey"
               option-label-prop="title"
               :dropdown-match-select-width="500"
+              :list-height="280"
+              :list-item-height="56"
               popup-class-name="project-select-dropdown"
               placeholder="全部项目"
               @change="(value?: string) => emit('projectChange', value)"
@@ -100,6 +104,8 @@ const emit = defineEmits<{
               option-filter-prop="searchKey"
               option-label-prop="title"
               placeholder="全部分支"
+              :list-height="280"
+              :list-item-height="56"
               popup-class-name="project-select-dropdown"
               @change="(value?: string) => emit('branchChange', value)"
             />
