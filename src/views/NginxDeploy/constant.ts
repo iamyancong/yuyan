@@ -624,11 +624,13 @@ export const targetFormSchema = {
               'x-component': 'Select',
               'x-component-props': {
                 showSearch: true,
-                optionFilterProp: 'searchKey',
+                filterOption: false,
                 optionLabelProp: 'title',
                 class: 'project-select',
                 popupClassName: 'project-select-dropdown',
-                placeholder: '请选择平台应用',
+                placeholder: '请输入项目名称搜索或选择',
+                listItemHeight: 56,
+                listHeight: 280,
               },
             },
             remark: {
@@ -650,7 +652,12 @@ export const targetFormSchema = {
               'x-component-props': {
                 showSearch: true,
                 optionFilterProp: 'searchKey',
+                optionLabelProp: 'title',
+                class: 'project-select',
+                popupClassName: 'project-select-dropdown',
                 placeholder: '请选择分支',
+                listItemHeight: 56,
+                listHeight: 280,
               },
             },
             envName: {
@@ -839,10 +846,10 @@ export const targetFormSchema = {
             },
             nginxSiteManaged: {
               type: 'boolean',
-              title: '托管站点',
+              title: '平台管理站点',
               'x-decorator': 'FormItem',
               'x-decorator-props': {
-                tooltip: '打开表示此为主应用，系统会自动为其分配监听端口并生成独立的 Nginx 站点配置；关闭表示此为子应用/微应用，不占用新端口，且复用主应用的端口与域名配置。',
+                tooltip: '开启后，保存目标会同步 Nginx 站点配置并执行校验、重载。服务器已手工配置好 Nginx 时请关闭，平台仍会正常发布前端产物。',
               },
               'x-component': 'Switch',
               'x-component-props': { checkedChildren: '开', unCheckedChildren: '关' },
