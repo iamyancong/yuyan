@@ -43,14 +43,24 @@ export function useNginxRuntimeDrawerView(props: Readonly<NginxRuntimeDrawerProp
   const title = computed(() => {
     if (props.initializing) return 'Nginx 初始化中';
     if (!props.server) return 'Nginx 管理';
+    const instance = props.instances.find((item) => item.id === props.activeInstanceId);
+    if (instance?.instanceType === 'external') return '接入已有 Nginx';
     return getRuntimeDrawerTitle(props.status, props.initializing);
   });
   const activeInstance = computed(() => props.instances.find((item) => item.id === props.activeInstanceId) || null);
   const isManagedInstance = computed(() => activeInstance.value?.instanceType === 'managed');
   const activeInstanceTypeLabel = computed(() => (activeInstance.value?.instanceType === 'managed' ? '托管' : '已有'));
   const statusKey = computed(() => props.status?.status || 'uninitialized');
-  const statusLabel = computed(() => NGINX_RUNTIME_STATUS_LABEL[statusKey.value] || '未知');
-  const statusColor = computed(() => NGINX_RUNTIME_STATUS_COLOR[statusKey.value] || 'default');
+  const statusLabel = computed(() => {
+    if (isManagedInstance.value) return NGINX_RUNTIME_STATUS_LABEL[statusKey.value] || '未知';
+    if (statusKey.value === 'error') return '校验失败';
+    if (statusKey.value === 'running') return '校验通过';
+    return activeInstance.value ? '已接入' : '未知';
+  });
+  const statusColor = computed(() => {
+    if (isManagedInstance.value) return NGINX_RUNTIME_STATUS_COLOR[statusKey.value] || 'default';
+    return statusKey.value === 'error' ? 'error' : activeInstance.value ? 'success' : 'default';
+  });
   const versionLabel = computed(() => props.status?.version || props.status?.runtime?.runtimeVersion || '-');
   const pathRows = computed<RuntimePathRow[]>(() => {
     if (!activeInstance.value || activeInstance.value.instanceType === 'managed') {
@@ -69,7 +79,7 @@ export function useNginxRuntimeDrawerView(props: Readonly<NginxRuntimeDrawerProp
   const canManagedOperate = computed(() => canOperate.value && isManagedInstance.value);
   const canDownloadArchive = computed(() => isManagedInstance.value && initialized.value && !props.initializing && !props.loading && !props.archiveDownloading);
   const pathPreviewTip = computed(() => {
-    if (!isManagedInstance.value) return '保存部署目标和重载时使用当前实例的路径模板与命令';
+    if (!isManagedInstance.value) return '平台不会安装或覆盖已有 Nginx；部署只使用这里登记的目录、配置文件和操作命令';
     if (!initialized.value) return '请先完成初始化，再下载可迁移运行包';
     return '下载包用于迁移当前托管实例，目标机需解压到原路径';
   });
@@ -98,9 +108,11 @@ export function useNginxRuntimeDrawerView(props: Readonly<NginxRuntimeDrawerProp
   );
   const progressLogContent = computed(() => formatProgressLogContent(props.progress.logs));
   const monacoReadonlyOptions = { minimap: { enabled: false }, fontSize: 13, wordWrap: 'on' as const, readOnly: true };
+  const instanceFormTitle = computed(() => (props.instanceForm.instanceType === 'external' ? '接入已有 Nginx' : '配置平台托管 Nginx'));
   const computedInstanceFormSchema = computed(() => {
     const schema = JSON.parse(JSON.stringify(nginxInstanceFormSchema));
     const properties = schema.properties?.layout?.properties?.basicGrid?.properties;
+    const typeLocked = props.instanceForm.name === '系统 Nginx' || Boolean(activeInstance.value?.targetCount);
     if (properties && props.instanceForm.name === '系统 Nginx') {
       if (properties.name) {
         properties.name['x-disabled'] = true;
@@ -109,13 +121,13 @@ export function useNginxRuntimeDrawerView(props: Readonly<NginxRuntimeDrawerProp
           disabled: true,
         };
       }
-      if (properties.instanceType) {
-        properties.instanceType['x-disabled'] = true;
-        properties.instanceType['x-component-props'] = {
-          ...properties.instanceType['x-component-props'],
-          disabled: true,
-        };
-      }
+    }
+    if (properties?.instanceType && typeLocked) {
+      properties.instanceType['x-disabled'] = true;
+      properties.instanceType['x-component-props'] = {
+        ...properties.instanceType['x-component-props'],
+        disabled: true,
+      };
     }
     return schema;
   });
@@ -132,6 +144,7 @@ export function useNginxRuntimeDrawerView(props: Readonly<NginxRuntimeDrawerProp
     hasProgress,
     hasServer,
     initialized,
+    instanceFormTitle,
     instanceFormModel,
     instanceFormVisible,
     instanceOptions,

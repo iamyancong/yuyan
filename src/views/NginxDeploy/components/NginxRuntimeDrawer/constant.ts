@@ -39,7 +39,6 @@ export interface NginxRuntimeDrawerProps {
   archiveConfigPath: string;
   archiveSites: NginxArchiveSiteOption[];
   instanceFormOpen: boolean;
-  instanceFormKey: number;
   instanceSaving: boolean;
   instanceForm: NginxInstancePayload;
   progress: RuntimeProgressState;
@@ -55,7 +54,7 @@ export type NginxRuntimeDrawerEmits = {
   (e: 'selectInstance', value: number): void;
   (e: 'createInstance', value: NginxInstance['instanceType']): void;
   (e: 'editInstance'): void;
-  (e: 'saveInstance'): void;
+  (e: 'saveInstance', value: NginxInstancePayload): void;
   (e: 'deleteInstance'): void;
   (e: 'init'): void;
   (e: 'action', value: NginxRuntimeAction): void;
@@ -173,17 +172,18 @@ export const nginxInstanceFormSchema = {
               type: 'string',
               title: '实例名称',
               required: true,
+              'x-validator': [{ required: true, whitespace: true, message: '请输入实例名称' }],
               'x-decorator': 'FormItem',
               'x-component': 'Input',
-              'x-component-props': { placeholder: '例如：项目 A Nginx' },
+              'x-component-props': { placeholder: '例如：生产环境 Nginx' },
             },
             instanceType: {
               type: 'string',
               title: '实例类型',
               required: true,
               enum: [
-                { label: '已有 Nginx', value: 'external' },
-                { label: '托管 Nginx', value: 'managed' },
+                { label: '接入已有 Nginx（不安装）', value: 'external' },
+                { label: '平台托管 Nginx（需初始化）', value: 'managed' },
               ],
               'x-decorator': 'FormItem',
               'x-component': 'Select',
@@ -191,18 +191,28 @@ export const nginxInstanceFormSchema = {
             defaultDeployRoot: {
               type: 'string',
               title: '默认部署根目录',
+              required: true,
+              'x-validator': [
+                { required: true, whitespace: true, message: '请输入默认部署根目录' },
+                { pattern: /^\//, message: '默认部署根目录必须是绝对路径' },
+              ],
               'x-decorator': 'FormItem',
               'x-decorator-props': { gridSpan: 2 },
               'x-component': 'Input',
-              'x-component-props': { placeholder: '/opt/yuyan/html' },
+              'x-component-props': { placeholder: '例如：/home/app/frontend/html' },
             },
             defaultNginxConfPath: {
               type: 'string',
               title: '默认配置文件',
+              required: true,
+              'x-validator': [
+                { required: true, whitespace: true, message: '请输入 Nginx 配置文件路径' },
+                { pattern: /^\//, message: 'Nginx 配置文件必须是绝对路径' },
+              ],
               'x-decorator': 'FormItem',
               'x-decorator-props': { gridSpan: 2 },
               'x-component': 'Input',
-              'x-component-props': { placeholder: '/opt/yuyan/nginx/conf/nginx.conf' },
+              'x-component-props': { placeholder: '例如：/home/nginx/conf/nginx.conf' },
             },
             nginxWorkDir: {
               type: 'string',
@@ -240,6 +250,10 @@ export const nginxInstanceFormSchema = {
               'x-decorator': 'FormItem',
               'x-component': 'Input',
               'x-component-props': { placeholder: '/opt/yuyan，仅托管实例使用' },
+              'x-reactions': {
+                dependencies: ['instanceType'],
+                fulfill: { state: { visible: '{{$deps[0] === "managed"}}' } },
+              },
             },
             portStart: {
               type: 'number',
@@ -247,6 +261,10 @@ export const nginxInstanceFormSchema = {
               'x-decorator': 'FormItem',
               'x-component': 'InputNumber',
               'x-component-props': { min: 1, max: 65535 },
+              'x-reactions': {
+                dependencies: ['instanceType'],
+                fulfill: { state: { visible: '{{$deps[0] === "managed"}}' } },
+              },
             },
           },
         },

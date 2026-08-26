@@ -2441,20 +2441,47 @@ export async function createNginxInstance(serverId, payload = {}) {
  */
 export async function updateNginxInstance(id, payload = {}) {
   const db = await getDeployDb();
-  const current = db.prepare('SELECT * FROM nginx_instances WHERE id = ?').get(Number(id));
+  const current = db
+    .prepare(
+      `SELECT i.*, COUNT(t.id) AS target_count
+       FROM nginx_instances i
+       LEFT JOIN deploy_targets t ON t.nginx_instance_id = i.id
+       WHERE i.id = ?
+       GROUP BY i.id`
+    )
+    .get(Number(id));
   if (!current) return null;
-  const instanceType = payload.instanceType === 'managed' || current.instance_type === 'managed' ? 'managed' : 'external';
+  const instanceType = NGINX_INSTANCE_TYPES.has(payload.instanceType) ? payload.instanceType : current.instance_type;
+  const typeChanged = instanceType !== current.instance_type;
+  if (typeChanged && Number(current.target_count || 0) > 0) {
+    throw new Error('当前 Nginx 实例已绑定部署目标，请先迁移或删除绑定目标后再切换实例类型');
+  }
+  if (typeChanged && instanceType === 'managed') {
+    const existingManaged = db
+      .prepare("SELECT id FROM nginx_instances WHERE server_id = ? AND instance_type = 'managed' AND id <> ? LIMIT 1")
+      .get(Number(current.server_id), Number(id));
+    if (existingManaged) {
+      throw new Error('同一服务器只能配置一个平台托管 Nginx，请继续使用已有托管实例或选择接入已有 Nginx');
+    }
+  }
   const paths = instanceType === 'managed' ? deriveNginxRuntimePaths(payload.baseRoot || current.base_root || DEFAULT_NGINX_RUNTIME_BASE_ROOT) : {};
   const managedTestCommand = paths.scriptPath ? `${paths.scriptPath} test` : 'nginx -t';
   const managedReloadCommand = paths.scriptPath ? `${paths.scriptPath} reload` : 'nginx -s reload';
   const useManagedCommandDefaults = instanceType === 'managed' && Boolean(payload.baseRoot);
   const nextTestCommand = instanceType === 'managed' && isGenericNginxCommand(payload.nginxTestCommand, 'test') ? managedTestCommand : payload.nginxTestCommand;
   const nextReloadCommand = instanceType === 'managed' && isGenericNginxCommand(payload.nginxReloadCommand, 'reload') ? managedReloadCommand : payload.nginxReloadCommand;
+  const externalTestCommand = typeChanged && instanceType === 'external' && payload.nginxTestCommand === current.nginx_test_command
+    ? 'nginx -t'
+    : payload.nginxTestCommand;
+  const externalReloadCommand = typeChanged && instanceType === 'external' && payload.nginxReloadCommand === current.nginx_reload_command
+    ? 'nginx -s reload'
+    : payload.nginxReloadCommand;
   db.prepare(
     `UPDATE nginx_instances
      SET name = ?, instance_type = ?, default_deploy_root = ?, default_nginx_conf_path = ?, nginx_work_dir = ?,
          nginx_test_command = ?, nginx_reload_command = ?, base_root = ?, nginx_root = ?, html_root = ?,
-         sites_dir = ?, logs_dir = ?, script_path = ?, port_start = ?, use_sudo = ?, updated_at = ?
+         sites_dir = ?, logs_dir = ?, script_path = ?, port_start = ?, use_sudo = ?, runtime_version = ?,
+         package_sha256 = ?, package_variant = ?, status = ?, status_output = ?, initialized_at = ?, updated_at = ?
      WHERE id = ?`
   ).run(
     payload.name || current.name,
@@ -2462,16 +2489,26 @@ export async function updateNginxInstance(id, payload = {}) {
     payload.defaultDeployRoot ?? current.default_deploy_root ?? '',
     payload.defaultNginxConfPath ?? current.default_nginx_conf_path ?? '',
     payload.nginxWorkDir ?? current.nginx_work_dir ?? '',
-    nextTestCommand ?? (useManagedCommandDefaults ? managedTestCommand : current.nginx_test_command || managedTestCommand),
-    nextReloadCommand ?? (useManagedCommandDefaults ? managedReloadCommand : current.nginx_reload_command || managedReloadCommand),
-    paths.baseRoot || payload.baseRoot || current.base_root || '',
-    paths.nginxRoot || payload.nginxRoot || current.nginx_root || '',
-    paths.htmlRoot || payload.htmlRoot || current.html_root || '',
-    paths.sitesDir || payload.sitesDir || current.sites_dir || '',
-    paths.logsDir || payload.logsDir || current.logs_dir || '',
-    paths.scriptPath || payload.scriptPath || current.script_path || '',
+    instanceType === 'managed'
+      ? nextTestCommand ?? (useManagedCommandDefaults ? managedTestCommand : current.nginx_test_command || managedTestCommand)
+      : (externalTestCommand ?? current.nginx_test_command) || 'nginx -t',
+    instanceType === 'managed'
+      ? nextReloadCommand ?? (useManagedCommandDefaults ? managedReloadCommand : current.nginx_reload_command || managedReloadCommand)
+      : (externalReloadCommand ?? current.nginx_reload_command) || 'nginx -s reload',
+    instanceType === 'managed' ? paths.baseRoot || payload.baseRoot || current.base_root || '' : '',
+    instanceType === 'managed' ? paths.nginxRoot || payload.nginxRoot || current.nginx_root || '' : '',
+    instanceType === 'managed' ? paths.htmlRoot || payload.htmlRoot || current.html_root || '' : '',
+    instanceType === 'managed' ? paths.sitesDir || payload.sitesDir || current.sites_dir || '' : '',
+    instanceType === 'managed' ? paths.logsDir || payload.logsDir || current.logs_dir || '' : '',
+    instanceType === 'managed' ? paths.scriptPath || payload.scriptPath || current.script_path || '' : '',
     Number(payload.portStart || current.port_start || 8080),
     (payload.useSudo ?? Boolean(current.use_sudo)) ? 1 : 0,
+    typeChanged ? '' : current.runtime_version || '',
+    typeChanged ? '' : current.package_sha256 || '',
+    typeChanged ? '' : current.package_variant || '',
+    typeChanged ? (instanceType === 'managed' ? 'uninitialized' : 'unknown') : current.status || 'unknown',
+    typeChanged ? '' : current.status_output || '',
+    typeChanged ? null : current.initialized_at || null,
     now(),
     Number(id)
   );

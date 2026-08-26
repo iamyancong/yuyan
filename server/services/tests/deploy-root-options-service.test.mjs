@@ -42,17 +42,26 @@ test('目录服务只使用服务器配置根目录并透传扫描限制', async
   assert.equal(result.items.find((item) => item.path.endsWith('/current-app')).occupied, false);
 });
 
-test('SSH 扫描失败时服务返回错误，不伪造服务器目录', async () => {
-  await assert.rejects(
-    () => listDeployRootOptions(7, {}, {
-      getServer: async () => ({ id: 7, defaultDeployRoot: '/opt/yuyan/html', nginxInstances: [] }),
-      getTargets: async () => [],
-      withConnection: async () => {
-        throw new Error('SSH 凭据无效');
-      },
-    }),
-    /SSH 凭据无效/
-  );
+test('SSH 扫描失败时保留配置根目录并返回非阻断警告', async () => {
+  const result = await listDeployRootOptions(7, {}, {
+    getServer: async () => ({ id: 7, defaultDeployRoot: '/home/app/frontend/html', nginxInstances: [] }),
+    getTargets: async () => [],
+    withConnection: async () => {
+      throw new Error('SSH 凭据无效');
+    },
+  });
+
+  assert.equal(result.configuredRoot, '/home/app/frontend/html');
+  assert.equal(result.scanWarning, 'SSH 凭据无效');
+  assert.deepEqual(result.items[0], {
+    kind: 'root',
+    name: 'html',
+    path: '/home/app/frontend/html',
+    exists: false,
+    hasIndexHtml: false,
+    occupied: false,
+    occupiedBy: [],
+  });
 });
 
 test('托管实例优先使用 htmlRoot，外部实例使用默认模板', () => {

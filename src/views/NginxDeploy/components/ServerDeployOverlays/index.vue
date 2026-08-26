@@ -57,7 +57,6 @@ const updateRuntimeInstanceForm = (values: Partial<NginxInstancePayload>) => {
     :archive-config-path="serverState.archiveConfigPath.value"
     :archive-sites="serverState.archiveSites.value"
     :instance-form-open="serverState.runtimeInstanceFormOpen.value"
-    :instance-form-key="serverState.runtimeInstanceFormKey.value"
     :instance-saving="serverState.runtimeInstanceSaving.value"
     :instance-form="serverState.runtimeInstanceForm"
     :progress="serverState.runtimeProgressState"

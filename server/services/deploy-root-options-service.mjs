@@ -65,7 +65,7 @@ export function resolveServerDeployRoot(server, nginxInstanceId = 0) {
 /**
  * 将服务器应用目录与部署目标占用信息合并。
  * @param {string} configuredRoot - 服务器应用根目录
- * @param {{rootHasIndex: boolean, directories: Array<{name: string, path: string}>, truncated: boolean}} scanResult - SFTP 扫描结果
+ * @param {{rootExists?: boolean, rootHasIndex: boolean, directories: Array<{name: string, path: string}>, truncated: boolean}} scanResult - SFTP 扫描结果
  * @param {Object[]} targets - 当前服务器已有部署目标
  * @param {number} excludeTargetId - 编辑时排除的目标 ID
  * @returns {{configuredRoot: string, truncated: boolean, items: Object[]}} 下拉候选
@@ -95,7 +95,7 @@ export function decorateDeployRootOptions(configuredRoot, scanResult, targets = 
       kind: 'root',
       name: path.posix.basename(configuredRoot) || configuredRoot,
       path: configuredRoot,
-      exists: true,
+      exists: scanResult.rootExists !== false,
       hasIndexHtml: Boolean(scanResult.rootHasIndex),
     },
     ...scanResult.directories.map((item) => ({
@@ -139,7 +139,7 @@ export function decorateDeployRootOptions(configuredRoot, scanResult, targets = 
  * @param {number} serverId - 服务器 ID
  * @param {{nginxInstanceId?: number, excludeTargetId?: number}} options - 查询参数
  * @param {{getServer?: Function, getTargets?: Function, withConnection?: Function, scanDirectories?: Function}} dependencies - 可替换测试依赖
- * @returns {Promise<{configuredRoot: string, nginxInstanceId: number, truncated: boolean, items: Object[]}>} 候选结果
+ * @returns {Promise<{configuredRoot: string, nginxInstanceId: number, truncated: boolean, scanWarning: string, items: Object[]}>} 候选结果
  */
 export async function listDeployRootOptions(serverId, options = {}, dependencies = {}) {
   const getServer = dependencies.getServer || getServerWithCredential;
@@ -149,16 +149,22 @@ export async function listDeployRootOptions(serverId, options = {}, dependencies
   const server = await getServer(serverId);
   if (!server) throw new Error('部署服务器不存在');
   const context = resolveServerDeployRoot(server, options.nginxInstanceId);
-  const [scanResult, targets] = await Promise.all([
+  const [scanOutcome, targets] = await Promise.all([
     withConnection(server, (conn) => scanDirectories(conn, context.configuredRoot, {
       limit: 200,
       timeoutMs: 8_000,
       concurrency: 8,
-    })),
+    }))
+      .then((scanResult) => ({ scanResult, scanWarning: '' }))
+      .catch((error) => ({
+        scanResult: { rootExists: false, rootHasIndex: false, truncated: false, directories: [] },
+        scanWarning: error instanceof Error && error.message ? error.message : '服务器目录暂时无法读取',
+      })),
     getTargets({ serverId, projectType: 'frontend' }),
   ]);
   return {
-    ...decorateDeployRootOptions(context.configuredRoot, scanResult, targets, options.excludeTargetId),
+    ...decorateDeployRootOptions(context.configuredRoot, scanOutcome.scanResult, targets, options.excludeTargetId),
     nginxInstanceId: context.nginxInstanceId,
+    scanWarning: scanOutcome.scanWarning,
   };
 }

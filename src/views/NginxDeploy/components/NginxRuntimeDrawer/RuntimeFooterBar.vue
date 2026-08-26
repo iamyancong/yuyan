@@ -39,11 +39,16 @@ const emit = defineEmits<{
         <template #icon><SyncOutlined /></template>
         刷新状态
       </YButton>
-      <YButton :disabled="!canOperate" :loading="actionLoading === 'test'" @click="emit('action', 'test')">
+      <YButton
+        v-if="activeInstance?.instanceType === 'managed'"
+        :disabled="!canOperate"
+        :loading="actionLoading === 'test'"
+        @click="emit('action', 'test')"
+      >
         <template #icon><CheckCircleOutlined /></template>
         校验
       </YButton>
-      <YButton :disabled="!canManagedOperate" :loading="actionLoading === 'start'" @click="emit('action', 'start')">
+      <YButton v-if="activeInstance?.instanceType === 'managed'" :disabled="!canManagedOperate" :loading="actionLoading === 'start'" @click="emit('action', 'start')">
         <template #icon><PoweroffOutlined /></template>
         启动
       </YButton>
@@ -51,7 +56,7 @@ const emit = defineEmits<{
         <template #icon><ReloadOutlined /></template>
         重载
       </YButton>
-      <YButton :disabled="!canManagedOperate" :loading="actionLoading === 'stop'" danger @click="emit('action', 'stop')">
+      <YButton v-if="activeInstance?.instanceType === 'managed'" :disabled="!canManagedOperate" :loading="actionLoading === 'stop'" danger @click="emit('action', 'stop')">
         <template #icon><CloseOutlined /></template>
         停止
       </YButton>
@@ -59,7 +64,17 @@ const emit = defineEmits<{
 
     <a-space class="nginx-runtime-footer__group nginx-runtime-footer__group--end">
       <YButton :disabled="initializing" @click="emit('close')">关闭</YButton>
-      <YButton type="primary" :disabled="activeInstance?.instanceType !== 'managed'" :loading="initializing" @click="emit('init')">
+      <YButton
+        v-if="activeInstance?.instanceType === 'external'"
+        type="primary"
+        :disabled="!canOperate"
+        :loading="actionLoading === 'test'"
+        @click="emit('action', 'test')"
+      >
+        <template #icon><CheckCircleOutlined /></template>
+        校验接入
+      </YButton>
+      <YButton v-else-if="activeInstance" type="primary" :loading="initializing" @click="emit('init')">
         <template #icon><ThunderboltOutlined /></template>
         {{ initialized ? '重新初始化' : '开始初始化' }}
       </YButton>

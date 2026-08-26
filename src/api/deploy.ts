@@ -83,6 +83,8 @@ export interface DeployRootOptionsResult {
   configuredRoot: string;
   nginxInstanceId: number;
   truncated: boolean;
+  /** 服务器目录扫描失败时的非阻断提示。 */
+  scanWarning?: string;
   items: DeployRootOption[];
 }
 

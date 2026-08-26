@@ -35,14 +35,24 @@ const emit = defineEmits<{
  * @param instance Nginx 实例
  * @returns 状态文案
  */
-const getInstanceStatusLabel = (instance: NginxInstance) => NGINX_RUNTIME_STATUS_LABEL[instance.status || 'unknown'] || '未知';
+const getInstanceStatusLabel = (instance: NginxInstance) => {
+  if (instance.instanceType === 'external') {
+    if (instance.status === 'error') return '校验失败';
+    if (instance.status === 'running') return '校验通过';
+    return '已接入';
+  }
+  return NGINX_RUNTIME_STATUS_LABEL[instance.status || 'unknown'] || '未知';
+};
 
 /**
  * 获取实例状态颜色。
  * @param instance Nginx 实例
  * @returns 标签颜色
  */
-const getInstanceStatusColor = (instance: NginxInstance) => NGINX_RUNTIME_STATUS_COLOR[instance.status || 'unknown'] || 'default';
+const getInstanceStatusColor = (instance: NginxInstance) => {
+  if (instance.instanceType === 'external') return instance.status === 'error' ? 'error' : 'success';
+  return NGINX_RUNTIME_STATUS_COLOR[instance.status || 'unknown'] || 'default';
+};
 
 /**
  * 获取实例主路径。
@@ -57,14 +67,20 @@ const getInstancePath = (instance: NginxInstance) => instance.defaultNginxConfPa
     <div class="nginx-runtime-section-title">
       <div class="nginx-runtime-section-title__left">
         <strong>实例管理</strong>
-        <span>部署目标会绑定到这里选中的具体 Nginx 实例</span>
+        <span>接入已有服务不会安装或覆盖 Nginx；平台托管实例才需要初始化</span>
       </div>
-      <a-tooltip :title="hasManagedInstance ? '同一服务器只能新增一个托管 Nginx；多个 yuyan 主应用请在 nginx.conf 中新增 server' : ''">
-        <YButton size="small" :disabled="hasManagedInstance" @click="emit('createInstance', 'managed')">
+      <a-space :size="8">
+        <YButton type="primary" size="small" @click="emit('createInstance', 'external')">
           <template #icon><PlusOutlined /></template>
-          新增托管
+          接入已有
         </YButton>
-      </a-tooltip>
+        <a-tooltip :title="hasManagedInstance ? '同一服务器只能新增一个托管 Nginx；多个 yuyan 主应用请在 nginx.conf 中新增 server' : ''">
+          <YButton size="small" :disabled="hasManagedInstance" @click="emit('createInstance', 'managed')">
+            <template #icon><PlusOutlined /></template>
+            新增托管
+          </YButton>
+        </a-tooltip>
+      </a-space>
     </div>
 
     <div class="nginx-instance-list">
@@ -84,14 +100,14 @@ const getInstancePath = (instance: NginxInstance) => instance.defaultNginxConfPa
           </span>
           <span class="nginx-instance-card__identity">
             <strong>{{ instance.name }}</strong>
-            <small>{{ instance.instanceType === 'managed' ? '系统托管实例' : '外部已有实例' }}</small>
+            <small>{{ instance.instanceType === 'managed' ? '平台托管实例' : '接入已有 Nginx' }}</small>
           </span>
           <a-tag :color="getInstanceStatusColor(instance)">{{ getInstanceStatusLabel(instance) }}</a-tag>
         </span>
 
         <span class="nginx-instance-card__meta">
           <span><CheckCircleOutlined />绑定 {{ instance.targetCount || 0 }} 个目标</span>
-          <span><CodeOutlined />{{ instance.instanceType === 'managed' ? '托管' : '已有' }}</span>
+          <span><CodeOutlined />{{ instance.instanceType === 'managed' ? '平台托管' : '安全接入' }}</span>
         </span>
 
         <span class="nginx-instance-card__bottom">

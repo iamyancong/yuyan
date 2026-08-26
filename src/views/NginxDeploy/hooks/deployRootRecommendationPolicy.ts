@@ -79,7 +79,7 @@ export function createDeployRootSelectOptions(
       section: occupied ? '已占用' : '智能推荐',
       description: occupied
         ? `已由 ${formatOccupancy(recommendedItem as DeployRootOption)} 使用`
-        : `${detection?.kind === 'main' ? '主应用根目录' : `微应用 ${detection?.appName || ''}`} · ${recommendedItem ? '服务器已存在' : '发布时创建'}`,
+        : `${detection?.kind === 'main' ? '主应用根目录' : `微应用 ${detection?.appName || ''}`} · ${recommendedItem?.exists ? '服务器已存在' : recommendedItem ? '按已配置路径使用' : '发布时创建'}`,
       disabled: occupied,
       recommended: true,
     });
@@ -93,7 +93,9 @@ export function createDeployRootSelectOptions(
       description: item.occupied
         ? `已由 ${formatOccupancy(item)} 使用`
         : item.kind === 'root'
-          ? `${item.hasIndexHtml ? '检测到主应用 index.html' : '服务器配置根目录'}`
+          ? item.exists
+            ? `${item.hasIndexHtml ? '检测到主应用 index.html' : '服务器配置根目录'}`
+            : '配置根目录暂不可读取，可继续手动使用'
           : item.exists
             ? `${item.name} · 已检测到 index.html`
             : `${item.name} · 当前目标已配置，服务器目录不存在`,
