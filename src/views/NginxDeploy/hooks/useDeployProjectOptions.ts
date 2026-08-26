@@ -1,6 +1,6 @@
 import { computed, h, reactive, ref, type VNodeChild } from 'vue';
 import type { DeployProjectSource } from '@/api/deploy';
-import { getBranches, getProjects, type GitLabBranch, type GitLabProject } from '@/api/gitlab';
+import { getBranches, getProject, getProjects, type GitLabBranch, type GitLabProject } from '@/api/gitlab';
 
 /** 平台创建项目标签 */
 const OPS_PROJECT_TOPIC = 'yuyan-ops';
@@ -101,19 +101,46 @@ const getBranchOptionLabel = (branch: GitLabBranch): string => {
  * @returns 项目与分支选项状态
  */
 export function useDeployProjectOptions() {
-  const projectLoading = ref(false);
+  const initialLoading = ref(false);
+  const searchLoading = ref(false);
   const branchLoading = ref(false);
   const branchProjectId = ref<number | null>(null);
   const projectSource = ref<DeployProjectSource>('ops');
-  const projectsBySource = reactive<Record<DeployProjectSource, GitLabProject[]>>({
+  const searchKeyword = ref('');
+
+  /** 各项目来源默认最近活跃项目 */
+  const defaultProjectsBySource = reactive<Record<DeployProjectSource, GitLabProject[]>>({
     ops: [],
     gitlab: [],
   });
+
+  /** 各项目来源当前搜索结果 */
+  const searchProjectsBySource = reactive<Record<DeployProjectSource, GitLabProject[]>>({
+    ops: [],
+    gitlab: [],
+  });
+
+  /** 精准拉取或已选择的项目对象池，用于回显保护 */
+  const pinnedProjectsMap = reactive<Map<number, GitLabProject>>(new Map());
+
   const branches = ref<GitLabBranch[]>([]);
   let branchRequestSeq = 0;
+  let searchRequestSeq = 0;
+  let searchTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const projects = computed(() => projectsBySource[projectSource.value]);
+  /** 项目加载状态（初始加载或搜索中） */
+  const projectLoading = computed(() => initialLoading.value || searchLoading.value);
 
+  /** 当前激活的项目列表 */
+  const projects = computed<GitLabProject[]>(() => {
+    const source = normalizeProjectSource(projectSource.value);
+    const rawList = searchKeyword.value.trim()
+      ? searchProjectsBySource[source]
+      : defaultProjectsBySource[source];
+    return rawList || [];
+  });
+
+  /** 项目下拉选项 */
   const projectOptions = computed<SelectOption[]>(() =>
     projects.value.map((project) => {
       const description = String(project.description || '').trim();
@@ -133,6 +160,7 @@ export function useDeployProjectOptions() {
     })
   );
 
+  /** 分支下拉选项 */
   const branchOptions = computed<SelectOption[]>(() =>
     branches.value.map((branch) => {
       const name = branch.name;
@@ -147,15 +175,15 @@ export function useDeployProjectOptions() {
   );
 
   /**
-   * 加载部署项目列表。
+   * 加载部署项目默认列表（最近活跃）。
    * @param source 项目来源
    * @returns 部署项目列表
    */
   const loadProjects = async (source: DeployProjectSource = projectSource.value): Promise<GitLabProject[]> => {
     const normalizedSource = normalizeProjectSource(source);
     projectSource.value = normalizedSource;
-    if (projectsBySource[normalizedSource].length) return projectsBySource[normalizedSource];
-    projectLoading.value = true;
+    if (defaultProjectsBySource[normalizedSource].length) return defaultProjectsBySource[normalizedSource];
+    initialLoading.value = true;
     try {
       const result = await getProjects({
         page: 1,
@@ -165,22 +193,107 @@ export function useDeployProjectOptions() {
         membership: true,
         ...(normalizedSource === 'ops' ? { topic: OPS_PROJECT_TOPIC } : {}),
       });
-      projectsBySource[normalizedSource] = normalizedSource === 'ops' ? result.filter(isOpsProject) : result;
-      return projectsBySource[normalizedSource];
+      const filtered = normalizedSource === 'ops' ? result.filter(isOpsProject) : result;
+      defaultProjectsBySource[normalizedSource] = filtered;
+      filtered.forEach((p) => pinnedProjectsMap.set(p.id, p));
+      return filtered;
     } finally {
-      projectLoading.value = false;
+      initialLoading.value = false;
     }
   };
 
   /**
-   * 根据项目 ID 查找已加载项目。
+   * 根据项目 ID 查找已缓存或已加载的项目对象。
    * @param source 项目来源
    * @param projectId 项目 ID
    * @returns GitLab 项目
    */
   const findProject = (source: DeployProjectSource, projectId: number): GitLabProject | undefined => {
     const normalizedSource = normalizeProjectSource(source);
-    return projectsBySource[normalizedSource].find((project) => project.id === Number(projectId));
+    const normalizedId = Number(projectId || 0);
+    if (!normalizedId) return undefined;
+    return (
+      searchProjectsBySource[normalizedSource]?.find((project) => project.id === normalizedId) ||
+      defaultProjectsBySource[normalizedSource]?.find((project) => project.id === normalizedId) ||
+      pinnedProjectsMap.get(normalizedId)
+    );
+  };
+
+  /**
+   * 精准确保指定项目已加载到缓存池中（用于非前100条历史目标编辑时的回显）。
+   * @param projectId 项目 ID
+   * @param source 项目来源
+   * @returns GitLab 项目详情
+   */
+  const ensureProjectLoaded = async (projectId: number, source: DeployProjectSource = projectSource.value): Promise<GitLabProject | undefined> => {
+    const normalizedId = Number(projectId || 0);
+    if (!normalizedId) return undefined;
+    const existing = findProject(source, normalizedId);
+    if (existing) return existing;
+    try {
+      const project = await getProject(normalizedId);
+      if (project) {
+        pinnedProjectsMap.set(project.id, project);
+        return project;
+      }
+    } catch (error) {
+      console.warn(`[useDeployProjectOptions] 获取项目详情失败 ID: ${normalizedId}`, error);
+    }
+    return undefined;
+  };
+
+  /**
+   * 防抖远程搜索 GitLab 项目。
+   * @param keyword 搜索关键字
+   * @param source 项目来源
+   */
+  const searchProjects = (keyword: string, source: DeployProjectSource = projectSource.value) => {
+    const trimmed = String(keyword || '').trim();
+    searchKeyword.value = trimmed;
+    if (searchTimer) {
+      clearTimeout(searchTimer);
+      searchTimer = null;
+    }
+    if (!trimmed) {
+      searchLoading.value = false;
+      return;
+    }
+    searchLoading.value = true;
+    searchTimer = setTimeout(async () => {
+      const currentSeq = ++searchRequestSeq;
+      const normalizedSource = normalizeProjectSource(source);
+      try {
+        const result = await getProjects({
+          search: trimmed,
+          per_page: 50,
+          order_by: 'last_activity_at',
+          sort: 'desc',
+          membership: true,
+          ...(normalizedSource === 'ops' ? { topic: OPS_PROJECT_TOPIC } : {}),
+        });
+        if (currentSeq === searchRequestSeq && searchKeyword.value === trimmed) {
+          const filtered = normalizedSource === 'ops' ? result.filter(isOpsProject) : result;
+          searchProjectsBySource[normalizedSource] = filtered;
+          filtered.forEach((p) => pinnedProjectsMap.set(p.id, p));
+        }
+      } catch (error) {
+        console.error('[useDeployProjectOptions] 搜索 GitLab 项目失败:', error);
+      } finally {
+        if (currentSeq === searchRequestSeq) {
+          searchLoading.value = false;
+        }
+      }
+    }, 300);
+  };
+
+  /** 重置搜索关键字与搜索结果 */
+  const resetSearch = () => {
+    if (searchTimer) {
+      clearTimeout(searchTimer);
+      searchTimer = null;
+    }
+    searchKeyword.value = '';
+    searchLoading.value = false;
   };
 
   /**
@@ -230,15 +343,20 @@ export function useDeployProjectOptions() {
 
   return {
     projectLoading,
+    searchLoading,
     branchLoading,
     branchProjectId,
     projectSource,
+    searchKeyword,
     projects,
     branches,
     projectOptions,
     branchOptions,
     loadProjects,
+    searchProjects,
+    resetSearch,
     findProject,
+    ensureProjectLoaded,
     loadBranches,
     resolveDefaultBranch,
     normalizeProjectSource,

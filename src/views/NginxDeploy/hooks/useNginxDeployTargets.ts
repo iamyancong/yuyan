@@ -161,6 +161,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
 
   const {
     projectLoading,
+    searchLoading,
     branchLoading,
     branchProjectId,
     projectSource: activeProjectSource,
@@ -169,7 +170,10 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     projectOptions,
     branchOptions,
     loadProjects,
+    searchProjects,
+    resetSearch,
     findProject,
+    ensureProjectLoaded,
     loadBranches,
     resolveDefaultBranch,
   } = useDeployProjectOptions();
@@ -313,17 +317,25 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     });
   };
 
+  /** 处理部署目标项目搜索输入 */
+  const handleTargetProjectSearch = (keyword: string) => {
+    searchProjects(keyword, getCurrentProjectSource());
+  };
+
   /** 同步部署目标弹窗项目下拉状态 */
   const syncTargetProjectFieldState = () => {
     const source = getCurrentProjectSource();
     syncSelectFieldState(targetFormRef.value, 'projectId', projectOptions.value, {
       loading: projectLoading.value,
       showSearch: true,
-      optionFilterProp: 'searchKey',
+      filterOption: false,
       optionLabelProp: 'title',
-      placeholder: source === 'gitlab' ? '请选择 GitLab 仓库' : '请选择平台应用',
+      placeholder: source === 'gitlab' ? '请输入 GitLab 仓库名称搜索或选择' : '请输入平台应用名称搜索或选择',
       class: 'project-select',
       popupClassName: PROJECT_SELECT_DROPDOWN_CLASS,
+      listItemHeight: 56,
+      listHeight: 280,
+      onSearch: handleTargetProjectSearch,
       onChange: handleTargetProjectChange,
     });
   };
@@ -338,6 +350,8 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       optionLabelProp: 'title',
       class: 'project-select',
       popupClassName: PROJECT_SELECT_DROPDOWN_CLASS,
+      listItemHeight: 56,
+      listHeight: 280,
       placeholder: targetForm.projectId ? '请选择分支' : '请先选择项目',
     });
   };
@@ -350,6 +364,8 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       optionLabelProp: 'title',
       class: 'project-select',
       popupClassName: PROJECT_SELECT_DROPDOWN_CLASS,
+      listItemHeight: 56,
+      listHeight: 280,
       placeholder: '请选择部署服务器',
     });
   };
@@ -768,6 +784,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     // 防重入：避免 onChange 回调和 watch(projectSource) 同时触发
     if (changingProjectSource) return;
     changingProjectSource = true;
+    resetSearch();
     activeProjectSource.value = nextSource;
     targetForm.projectSource = nextSource;
     syncingProjectId.value = null;
@@ -876,6 +893,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
   /** 打开新增部署目标弹窗 */
   const openCreateTarget = async () => {
     if (!ensureLoggedIn()) return;
+    resetSearch();
     // 立即打开弹窗，展现 Loading 状态以提高响应体验
     targetModalOpen.value = true;
     targetFormLoading.value = true;
@@ -930,11 +948,13 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     if (!ensureLoggedIn()) return;
     if (targetFormLoading.value) return;
     if (!(await ensureTargetIdle(target, '编辑'))) return;
+    resetSearch();
     targetFormLoading.value = true;
     activeTargetId.value = target.id;
     initializingTargetForm.value = true;
-    Object.assign(targetForm, { ...target, projectSource: normalizeProjectSource(target.projectSource), serverName: target.nginxServerName || '_' });
-    activeProjectSource.value = normalizeProjectSource(target.projectSource);
+    const targetSource = normalizeProjectSource(target.projectSource);
+    Object.assign(targetForm, { ...target, projectSource: targetSource, serverName: target.nginxServerName || '_' });
+    activeProjectSource.value = targetSource;
     initializingTargetForm.value = false;
     targetModalOpen.value = true;
     try {
@@ -944,9 +964,12 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
         targetForm.requiredJdkAlias = parseMajorVersionFromAlias(targetForm.requiredJdkAlias);
       }
       await refreshDeployEnvironments();
-      await loadProjects(normalizeProjectSource(target.projectSource));
+      await loadProjects(targetSource);
+      if (target.projectId) {
+        await ensureProjectLoaded(Number(target.projectId), targetSource);
+      }
       initializingTargetForm.value = true;
-      Object.assign(targetForm, { ...target, projectSource: normalizeProjectSource(target.projectSource), serverName: target.nginxServerName || '_' });
+      Object.assign(targetForm, { ...target, projectSource: targetSource, serverName: target.nginxServerName || '_' });
       if (targetForm.projectType === 'backend') {
         targetForm.requiredJdkAlias = parseMajorVersionFromAlias(targetForm.requiredJdkAlias);
       }
