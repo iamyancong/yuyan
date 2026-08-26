@@ -43,7 +43,7 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
   const runtimeActionLoading = ref<NginxRuntimeAction | ''>('');
   const runtimeStatusRequestSeq = ref(0);
   const runtimeInstanceFormOpen = ref(false);
-  const runtimeInstanceFormKey = ref(0);
+  const runtimeInstanceEditingId = ref<number | null>(null);
   const runtimeInstanceSaving = ref(false);
   const runtimeForm = reactive<NginxRuntimePayload>({
     baseRoot: '/opt/yuyan',
@@ -398,6 +398,10 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
     if (!params.ensureLoggedIn()) return;
     const instance = getActiveInstance();
     if (!instance) return;
+    if (instance.instanceType !== 'managed') {
+      message.info('已有 Nginx 无需初始化，请使用“校验接入”检查现有配置');
+      return;
+    }
     const baseRoot = String(runtimeForm.baseRoot || '').trim();
     const portStart = Number(runtimeForm.portStart || 0);
     if (!baseRoot.startsWith('/')) {
@@ -453,7 +457,7 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
    * 创建 Nginx 实例。
    * @param instanceType 实例类型
    */
-  const createServerNginxInstance = async (instanceType: NginxInstance['instanceType']) => {
+  const createServerNginxInstance = (instanceType: NginxInstance['instanceType']) => {
     if (!params.ensureLoggedIn()) return;
     const server = runtimeServer.value;
     if (!server) return;
@@ -461,29 +465,22 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
       message.warning('同一服务器只能新增一个托管 Nginx；多个 yuyan 主应用请在当前 nginx.conf 中新增 server 配置');
       return;
     }
-    try {
-      const suffix = runtimeInstances.value.length + 1;
-      const instance = await createNginxInstance(server.id, {
-        name: instanceType === 'managed' ? 'yuyan托管' : `已有 Nginx ${suffix}`,
-        instanceType,
-        baseRoot: instanceType === 'managed' ? '/opt/yuyan' : `/opt/yuyan-${suffix}`,
-        portStart: instanceType === 'managed' ? 8082 : 8080 + suffix,
-        useSudo: Boolean(server.useSudo),
-        defaultDeployRoot: instanceType === 'managed' ? '/opt/yuyan/html' : server.defaultDeployRoot,
-        defaultNginxConfPath: instanceType === 'managed' ? '/opt/yuyan/nginx/conf/nginx.conf' : server.defaultNginxConfPath,
-        nginxWorkDir: server.nginxWorkDir,
-        nginxTestCommand: instanceType === 'managed' ? '/opt/yuyan/nginx/yuyan-nginx.sh test' : server.nginxTestCommand,
-        nginxReloadCommand: instanceType === 'managed' ? '/opt/yuyan/nginx/yuyan-nginx.sh reload' : server.nginxReloadCommand,
-      });
-      patchRuntimeInstance(instance);
-      activeNginxInstanceId.value = instance.id;
-      message.success('Nginx 实例已新增');
-      await refreshRuntimeStatus(instance.id);
-      await params.refreshServerList();
-      await params.refreshActiveTab({ force: true });
-    } catch (error: any) {
-      message.error(getErrorMessage(error));
-    }
+    const suffix = runtimeInstances.value.filter((item) => item.instanceType === instanceType).length + 1;
+    const managed = instanceType === 'managed';
+    Object.assign(runtimeInstanceForm, createDefaultNginxInstanceForm(), {
+      name: managed ? 'yuyan托管' : `已有 Nginx ${suffix}`,
+      instanceType,
+      baseRoot: managed ? '/opt/yuyan' : '',
+      portStart: managed ? 8082 : 8080,
+      useSudo: Boolean(server.useSudo),
+      defaultDeployRoot: managed ? '/opt/yuyan/html' : server.defaultDeployRoot || '/data/webapps/{appName}',
+      defaultNginxConfPath: managed ? '/opt/yuyan/nginx/conf/nginx.conf' : server.defaultNginxConfPath || '/etc/nginx/conf.d/{appName}.conf',
+      nginxWorkDir: managed ? '' : server.nginxWorkDir,
+      nginxTestCommand: managed ? '/opt/yuyan/nginx/yuyan-nginx.sh test' : server.nginxTestCommand || 'nginx -t',
+      nginxReloadCommand: managed ? '/opt/yuyan/nginx/yuyan-nginx.sh reload' : server.nginxReloadCommand || 'nginx -s reload',
+    });
+    runtimeInstanceEditingId.value = null;
+    runtimeInstanceFormOpen.value = true;
   };
 
   /** 打开当前实例编辑表单 */
@@ -491,26 +488,31 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
     const instance = getActiveInstance();
     if (!instance) return;
     Object.assign(runtimeInstanceForm, createNginxInstanceFormFromInstance(instance));
-    runtimeInstanceFormKey.value += 1;
+    runtimeInstanceEditingId.value = instance.id;
     runtimeInstanceFormOpen.value = true;
   };
 
-  /** 保存当前 Nginx 实例配置 */
-  const saveActiveNginxInstance = async () => {
+  /**
+   * 保存新增或编辑的 Nginx 实例配置。
+   * @param values Formily 校验通过后的字段值
+   */
+  const saveActiveNginxInstance = async (values: NginxInstancePayload = runtimeInstanceForm) => {
     if (!params.ensureLoggedIn()) return;
-    const instance = getActiveInstance();
-    if (!instance) return;
+    const server = runtimeServer.value;
+    if (!server) return;
+    const editingId = runtimeInstanceEditingId.value;
     const payload = {
       ...runtimeInstanceForm,
-      name: String(runtimeInstanceForm.name || '').trim(),
-      defaultDeployRoot: String(runtimeInstanceForm.defaultDeployRoot || '').trim(),
-      defaultNginxConfPath: String(runtimeInstanceForm.defaultNginxConfPath || '').trim(),
-      nginxWorkDir: String(runtimeInstanceForm.nginxWorkDir || '').trim(),
-      nginxTestCommand: String(runtimeInstanceForm.nginxTestCommand || '').trim(),
-      nginxReloadCommand: String(runtimeInstanceForm.nginxReloadCommand || '').trim(),
-      baseRoot: String(runtimeInstanceForm.baseRoot || '').trim(),
-      portStart: Number(runtimeInstanceForm.portStart || 0),
-      useSudo: Boolean(runtimeInstanceForm.useSudo),
+      ...values,
+      name: String(values.name || '').trim(),
+      defaultDeployRoot: String(values.defaultDeployRoot || '').trim(),
+      defaultNginxConfPath: String(values.defaultNginxConfPath || '').trim(),
+      nginxWorkDir: String(values.nginxWorkDir || '').trim(),
+      nginxTestCommand: String(values.nginxTestCommand || '').trim(),
+      nginxReloadCommand: String(values.nginxReloadCommand || '').trim(),
+      baseRoot: String(values.baseRoot || '').trim(),
+      portStart: Number(values.portStart || 0),
+      useSudo: Boolean(values.useSudo),
     };
     if (payload.instanceType === 'managed') {
       payload.nginxTestCommand = resolveManagedCommand(payload, 'test');
@@ -519,11 +521,15 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
     if (!validateNginxInstanceForm(payload)) return;
     runtimeInstanceSaving.value = true;
     try {
-      const updated = await updateNginxInstance(instance.id, payload);
-      patchRuntimeInstance(updated);
+      const saved = editingId
+        ? await updateNginxInstance(editingId, payload)
+        : await createNginxInstance(server.id, payload);
+      patchRuntimeInstance(saved);
+      activeNginxInstanceId.value = saved.id;
       runtimeInstanceFormOpen.value = false;
-      message.success('Nginx 实例已更新');
-      await refreshRuntimeStatus(updated.id);
+      runtimeInstanceEditingId.value = null;
+      message.success(editingId ? 'Nginx 实例已更新' : payload.instanceType === 'external' ? '已有 Nginx 已接入' : '托管 Nginx 实例已新增');
+      await refreshRuntimeStatus(saved.id);
       await params.refreshServerList();
       await params.refreshActiveTab({ force: true });
     } catch (error: any) {
@@ -561,6 +567,7 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
     activeNginxInstanceId.value = null;
     runtimeStatus.value = null;
     runtimeInstanceFormOpen.value = false;
+    runtimeInstanceEditingId.value = null;
     Object.assign(runtimeInstanceForm, createDefaultNginxInstanceForm());
     clearArchiveDownloadState();
     resetRuntimeProgress();
@@ -582,7 +589,6 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
     archiveConfigPath,
     archiveSites,
     runtimeInstanceFormOpen,
-    runtimeInstanceFormKey,
     runtimeInstanceSaving,
     runtimeForm,
     runtimeInstanceForm,

@@ -1,5 +1,7 @@
 <script setup lang="ts">
+import { ref } from 'vue';
 import { YssFormily } from '@ycwang-dev/components/lite';
+import type { NginxInstancePayload } from '@/api/deploy';
 import type { NginxRuntimeDrawerEmits, NginxRuntimeDrawerProps } from './constant';
 import RuntimeConfigPanel from './RuntimeConfigPanel.vue';
 import RuntimeContextBar from './RuntimeContextBar.vue';
@@ -27,6 +29,7 @@ const {
   hasProgress,
   hasServer,
   initialized,
+  instanceFormTitle,
   instanceFormModel,
   instanceFormVisible,
   instanceOptions,
@@ -42,6 +45,27 @@ const {
   versionLabel,
   visible,
 } = useNginxRuntimeDrawerView(props, emit);
+
+/** Nginx 实例 Formily 提交能力。 */
+interface NginxInstanceFormRef {
+  submit: () => Promise<Partial<NginxInstancePayload>>;
+}
+
+/** Nginx 实例编辑表单引用。 */
+const instanceFormRef = ref<NginxInstanceFormRef | null>(null);
+
+/** 校验实例表单并提交给业务 Hook。 */
+const submitInstanceForm = async () => {
+  if (!instanceFormRef.value) return;
+  try {
+    const values = await instanceFormRef.value.submit();
+    const payload = { ...props.instanceForm, ...values } as NginxInstancePayload;
+    emit('update:instanceForm', payload);
+    emit('saveInstance', payload);
+  } catch {
+    /** Formily 会在字段旁展示校验反馈。 */
+  }
+};
 </script>
 
 <template>
@@ -132,15 +156,21 @@ const {
 
   <a-modal
     v-model:open="instanceFormVisible"
-    title="编辑 Nginx 实例"
+    :title="instanceFormTitle"
     width="min(900px, 94vw)"
     :confirmLoading="instanceSaving"
     :maskClosable="!instanceSaving"
     :closable="!instanceSaving"
+    :destroy-on-close="true"
     :bodyStyle="{ maxHeight: 'calc(100vh - 220px)', overflowY: 'auto', padding: '18px 18px 2px 0' }"
-    @ok="emit('saveInstance')"
+    @ok="submitInstanceForm"
   >
-    <YssFormily :key="instanceFormKey" v-model:modelValue="instanceFormModel" :schema="computedInstanceFormSchema" />
+    <YssFormily
+      v-if="instanceFormVisible"
+      ref="instanceFormRef"
+      v-model:modelValue="instanceFormModel"
+      :schema="computedInstanceFormSchema"
+    />
   </a-modal>
 
   <ArchiveSiteSelectionModal

@@ -170,6 +170,8 @@ export function useDeployRootRecommendation(
       hint.value = `项目分支配置读取失败：${getErrorMessage(detectionResult.reason)}，可从服务器应用中选择或直接输入`;
     } else if (serverResult.status === 'rejected') {
       hint.value = `服务器目录读取失败：${getErrorMessage(serverResult.reason)}，可直接输入绝对路径`;
+    } else if (server?.scanWarning) {
+      hint.value = `服务器目录暂不可读取：${server.scanWarning}；已保留配置根目录，可继续手动输入和保存`;
     } else if (detection?.status === 'unresolved') {
       hint.value = `${detection.reason}，请从服务器应用中选择或直接输入`;
     } else if (recommendedOption?.disabled) {

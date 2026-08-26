@@ -451,3 +451,28 @@
 - Playwright 拦截 GitLab/部署只读接口后完成亮色、暗色和 760px 窄屏验收；智能推荐、服务器应用、已占用禁用项同时可见，弹窗无横向溢出，页面无新增运行时错误。
 - AutoComplete 默认把下拉面板传送到页面级容器，滚动 `.ant-modal-body` 时字段进入新的滚动坐标而面板仍停留在原位置；为字段设置 `getPopupContainer` 并让 `.deploy-root-field` 成为定位容器后，面板会随字段滚动并受弹窗可视区约束。
 - 滚动验收不能简单要求字段与面板位移恒等：Ant Design 会根据可用空间把面板从字段上方自动翻转到下方。可靠判据是弹窗 `scrollTop` 确实变化、字段位移与滚动量相反、面板仍位于字段容器内，且上下边界间距保持在合理范围。
+
+# 2026-08-26 已有 Nginx 安全接管与部署根目录 400
+
+- 用户服务器已经存在 `/home/nginx` 下的 Nginx，以及 `/home/app/frontend/html` 下的前端产物；目标是把这个现状登记到 Yuyan，后续让项目走平台部署，而不是重新安装或初始化 Nginx。
+- 截图中实例编辑表单选择的是“已有 Nginx”，默认部署根目录为 `/home/app/frontend/html`，配置文件为 `/home/nginx/conf/nginx.conf`；保存后卡片和顶部状态却显示“托管”，再次编辑也回到托管类型，表明实例类型的保存、读取映射或前端回填至少有一处丢失。
+- 截图中已有实例仍显示“未初始化”，右侧路径预览强制使用 `/opt/yuyan/nginx`、`/opt/yuyan/html`、`/opt/yuyan/nginx/conf/conf.d`，底部主动作仍是“开始初始化”；这把“接入已有服务”和“平台创建托管运行时”错误地共用了同一状态机。
+- 用户不敢点击初始化是合理的：在未确认服务端脚本是否只探测前，不应让已有实例进入可能创建目录、写配置、替换 include 或操作服务进程的初始化流程。
+- 交互修复目标：已有 Nginx 应采用“接入/校验”语义，只做只读连接、路径、配置语法和 reload 能力检查；托管 Nginx 才展示根目录、运行包和“开始初始化”。已有前端目录应可直接作为项目部署根目录，不因未执行托管初始化而返回 400。
+- 实例类型无法改回“已有 Nginx”的直接根因已定位：`updateNginxInstance` 使用 `payload.instanceType === 'managed' || current.instance_type === 'managed'` 计算类型，只要历史行曾是 `managed`，任何后续 `external` 更新都会再次被强制保存为 `managed`；前端编辑回填本身正确读取 `instance.instanceType`。
+- `createNginxInstance` 能正确把非 `managed` 保存为 `external`，问题集中在更新逻辑；修复时还要处理托管专属路径/状态字段，避免类型切换后遗留 `/opt/yuyan` 运行时数据继续污染 UI。
+- `createTargetServerDefaults` 对真正的外部实例会采用 `defaultDeployRoot`，所以 `/home/app/frontend/html` 在表单默认值层面是受支持的；400 更可能来自目标保存接口、目录候选扫描或“实例必须初始化”的服务端校验，需要继续定位精确响应来源。
+- 运行时抽屉没有按实例类型隔离状态：`openNginxRuntime`、服务器切换和状态同步都对外部实例填充 `/opt/yuyan` 托管路径兜底，`initServerNginxRuntime` 也没有拒绝 `external`，因此 UI 才会对已有 Nginx 显示托管路径预览和“开始初始化”。
+- 外部实例当前创建时还会写入无意义的 `baseRoot=/opt/yuyan-N` 与端口；编辑表单也始终携带托管字段。重新设计应在类型层和服务端动作层同时设门禁，不能只隐藏按钮。
+- 类型切换允许性需要显式处理：`managed → external` 必须可用于纠正误建记录，并清空托管派生字段/状态；`external → managed` 则要继续遵守同服务器只能有一个托管实例的约束，避免仅修正当前单向锁定后引入重复托管实例。
+- 控制器 `validateTargetPayload` 明确接受任意以 `/` 开头的 `deployRoot` 和 `nginxConfPath`，`/home/app/frontend/html` 与 `/home/nginx/conf/nginx.conf` 都能通过这层校验；400 并不是绝对路径格式造成的。
+- 外部实例状态服务已有专门分支，理论上会返回 `initialized: true`；前端也能把路径预览切成外部实例字段，并允许“校验/重载”、禁止“启动/停止”。当前截图全部表现为托管态，进一步证明类型未成功落库是主因。
+- 底部“开始初始化”虽然对外部实例会禁用，但仍常驻并把抽屉整体命名为“初始化 Nginx”，会让用户误以为不初始化就不能部署；应在外部模式完全替换成“校验接入”/“保存后可直接绑定项目”的信息架构。
+- 目标写库本身不要求 Nginx 已初始化，只校验服务器、实例归属、重复目录和托管端口；因此“接入已有 Nginx 后可直接创建部署目标”不需要新增初始化绕过逻辑。
+- 部署根目录候选接口会根据实例类型选扫描根：标为 `managed` 时优先取历史 `htmlRoot`，完全忽略用户刚保存的外部 `defaultDeployRoot`。该记录因类型锁定仍是托管，所以接口继续扫描 `/opt/yuyan/html`，远端目录不存在时 SSH/SFTP 异常直接冒泡为 HTTP 400；这是用户 `/home/app/frontend/html` 配置没有生效并看到 400 的直接链路。
+- 候选接口当前把只读目录扫描失败视为整个表单失败。即使修好类型，已有目录临时无权限/不存在也不应阻止用户手输和保存合法路径；应返回配置根目录及扫描警告，把 400 仅留给服务器/实例不存在、非法根目录等配置错误。
+- `getNginxInstanceStatus` 对外部实例不连接服务器，只把数据库行包装成 `initialized: true`；真正的只读接入验证可复用现有外部实例 `test` 动作执行用户配置的 `nginx -t` 命令，不需要初始化。
+- 浏览器视觉验收可使用 `sessionStorage['yuyan:web-account-session']` 注入当前标签页账号，并拦截 GitLab 用户与部署只读接口；这样能验证真实 Vue/Formily 交互，又不会连接用户服务器或执行任何 Nginx 命令。
+- 最终视觉验收确认外部实例抽屉不再出现初始化、启动、停止和托管路径预览；主动作是只读“校验接入”，另保留显式“重载”，新增入口直接打开未落库的接入表单，取消时不会产生脏实例。
+- 用户截图把“校验命令”和“重载命令”都填写成了 `/home/nginx/sbin/nginx -s reload`；安全接入时校验命令应为 `/home/nginx/sbin/nginx -t`，只有重载命令使用 `-s reload`。
+- 真实服务器仍需用户显式点击“校验接入”后才能验证 SSH 权限、Nginx 二进制和配置语法；本轮自动化只证明平台不会因接入或新建部署目标而调用初始化或覆盖现有目录。

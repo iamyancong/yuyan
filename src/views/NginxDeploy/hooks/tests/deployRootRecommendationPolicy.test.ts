@@ -68,6 +68,31 @@ test('推荐目录不存在时标记发布时创建，被占用时禁用', () =>
   assert.equal(occupied.disabled, true);
 });
 
+test('配置根目录暂不可读取时仍保留为可选路径且不伪报已存在', () => {
+  const options = createDeployRootSelectOptions(
+    {
+      configuredRoot: '/home/app/frontend/html',
+      nginxInstanceId: 3,
+      truncated: false,
+      scanWarning: '目录不存在或无权限',
+      items: [{
+        kind: 'root',
+        name: 'html',
+        path: '/home/app/frontend/html',
+        exists: false,
+        hasIndexHtml: false,
+        occupied: false,
+        occupiedBy: [],
+      }],
+    },
+    '/home/app/frontend/html',
+    { status: 'resolved', kind: 'main', mode: 'production', reason: '主应用' }
+  );
+
+  assert.equal(options[0].disabled, false);
+  assert.match(options[0].description, /按已配置路径使用/);
+});
+
 test('旧响应、手动输入、首次编辑和占用路径都禁止自动覆盖', () => {
   const baseContext = {
     responseSequence: 2,
