@@ -40,6 +40,7 @@ export interface NginxRuntimeDrawerProps {
   archiveSites: NginxArchiveSiteOption[];
   instanceFormOpen: boolean;
   instanceSaving: boolean;
+  instanceFormEditingId: number | null;
   instanceForm: NginxInstancePayload;
   progress: RuntimeProgressState;
 }
@@ -157,6 +158,11 @@ export const nginxInstanceFormSchema = {
         labelWidth: 132,
       },
       properties: {
+        discoverySection: {
+          type: 'void',
+          'x-component': 'Slot',
+          'x-component-props': { name: 'nginxDiscovery' },
+        },
         basicGrid: {
           type: 'void',
           'x-component': 'FormGrid',

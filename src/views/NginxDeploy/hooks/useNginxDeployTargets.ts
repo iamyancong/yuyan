@@ -63,6 +63,11 @@ import { useNginxDeployContext } from './useNginxDeployContext';
 import { normalizeDeployRoot } from './deployRootRecommendationPolicy';
 import { useTargetRuntime } from './useTargetRuntime';
 import { useTargetNginxConf } from './useTargetNginxConf';
+import {
+  findDuplicateDeployTarget,
+  getDuplicateDeployTargetId,
+  isDuplicateDeployTargetError,
+} from './deployTargetSavePolicy';
 
 /** 部署目标 Hook 参数 */
 interface UseNginxDeployTargetsParams {
@@ -1035,9 +1040,17 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
   const saveTarget = async () => {
     if (!ensureLoggedIn()) return;
     if (targetFormLoading.value) return;
+    if (!targetFormRef.value?.submit) return;
+    let submittedValues: DeployTargetPayload;
+    try {
+      submittedValues = await targetFormRef.value.submit() as DeployTargetPayload;
+    } catch {
+      /** Formily 会在字段旁展示客户端校验反馈。 */
+      return;
+    }
     targetSaving.value = true;
     try {
-      const values = (targetFormRef.value?.getValues?.() || targetForm) as DeployTargetPayload;
+      const values = submittedValues;
       const installCommand = normalizeCommandText(values.installCommand ?? targetForm.installCommand);
       const buildCommand = normalizeCommandText(values.buildCommand ?? targetForm.buildCommand);
       const payload = {
@@ -1164,22 +1177,57 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
           '保存配置'
         ))) return;
       }
-      if (activeTargetId.value) {
-        const savedTarget = await updateDeployTarget(activeTargetId.value, payload);
-        if (savedTarget.nginxSiteManaged) {
-          await syncNginxSite(savedTarget.id);
-        }
-        message.success('部署目标已更新');
-      } else {
-        const savedTarget = await createDeployTarget(payload);
-        if (savedTarget.nginxSiteManaged) {
-          await syncNginxSite(savedTarget.id);
-        }
-        message.success('部署目标已新增');
-      }
+      const editing = Boolean(activeTargetId.value);
+      const savedTarget = activeTargetId.value
+        ? await updateDeployTarget(activeTargetId.value, payload)
+        : await createDeployTarget(payload);
+      activeTargetId.value = savedTarget.id;
       targetModalOpen.value = false;
-      await refreshActiveTab({ force: true });
+      let nginxSyncError: unknown;
+      if (savedTarget.nginxSiteManaged) {
+        try {
+          await syncNginxSite(savedTarget.id);
+        } catch (error) {
+          nginxSyncError = error;
+        }
+      }
+      let refreshError: unknown;
+      try {
+        await refreshActiveTab({ force: true });
+      } catch (error) {
+        refreshError = error;
+      }
+      const persistedLabel = editing ? '部署目标已更新' : '部署目标已新增';
+      if (nginxSyncError) {
+        message.warning(`${persistedLabel}，但 Nginx 站点同步失败：${getErrorMessage(nginxSyncError)}。目标已保留，可在列表中点击“同步站点”重试`);
+      } else if (refreshError) {
+        message.warning(`${persistedLabel}，但列表刷新失败：${getErrorMessage(refreshError)}。请手动刷新查看最新配置`);
+      } else {
+        message.success(savedTarget.nginxSiteManaged ? `${persistedLabel}，Nginx 站点已同步` : persistedLabel);
+      }
     } catch (error: any) {
+      if (!activeTargetId.value && isDuplicateDeployTargetError(error)) {
+        const conflictTargetId = getDuplicateDeployTargetId(error);
+        const latestTargets = await listDeployTargets().catch(() => []);
+        if (latestTargets.length) allTargets.value = latestTargets;
+        const existingTarget = findDuplicateDeployTarget(
+          latestTargets,
+          { ...targetForm, ...submittedValues },
+          conflictTargetId
+        );
+        if (existingTarget) {
+          targetModalOpen.value = false;
+          targetSaving.value = false;
+          await nextTick();
+          message.info('检测到该部署目标已经保存，已切换到现有目标编辑，不会重复创建');
+          await openEditTarget(existingTarget);
+          return;
+        }
+        message.warning(conflictTargetId
+          ? `部署目标 #${conflictTargetId} 已存在，请刷新列表后编辑该目标`
+          : '部署目标已经存在，请刷新列表并编辑已有目标');
+        return;
+      }
       message.error(getErrorMessage(error));
     } finally {
       targetSaving.value = false;

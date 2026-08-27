@@ -82,7 +82,9 @@ const updateFormRef = (value: FormilyRef | null) => emit('formRefChange', value)
             <p v-if="formModel.projectType === 'backend'">
               使用 releases/current/shared 版本化目录，兼容 conf、logs、nas、target 入口；健康检查失败时自动恢复上一版本。
             </p>
-            <p v-else>测试环境发布会上传构建产物，并将原目录备份到 .yuyan-backups。</p>
+            <p v-else>
+              发布会先备份原目录再上传构建产物；已有 Nginx 已手工配置时，请关闭“平台管理站点”，避免保存时自动同步和重载。
+            </p>
           </div>
         </div>
 

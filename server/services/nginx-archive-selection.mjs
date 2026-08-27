@@ -53,7 +53,7 @@ function readQuotedToken(content, start) {
  * @param {string} content - 配置文本
  * @returns {Array<{type: 'word'|'brace-open'|'brace-close'|'semicolon', value: string, start: number, end: number}>} token 列表
  */
-function tokenizeNginxConfig(content) {
+export function tokenizeNginxConfig(content) {
   const tokens = [];
   let index = 0;
   while (index < content.length) {
@@ -101,7 +101,7 @@ function tokenizeNginxConfig(content) {
  * @param {string[]} args - listen 参数
  * @returns {number|null} 端口
  */
-function parseListenPort(args) {
+export function parseNginxListenPort(args) {
   const endpoint = String(args[0] || '').trim();
   if (/^\d{1,5}$/.test(endpoint)) return Number(endpoint);
   const colonPort = endpoint.match(/:(\d{1,5})$/);
@@ -149,7 +149,7 @@ function parseServerDirectives(tokens, openIndex, closeIndex) {
     } else if (depth === 1 && directive === 'listen') {
       const rawValue = args.join(' ').trim();
       if (rawValue) listenValues.add(rawValue);
-      const port = parseListenPort(args);
+      const port = parseNginxListenPort(args);
       if (port && port <= 65535) listenPorts.add(port);
     } else if (depth === 1 && directive === 'server_name') {
       args.filter(Boolean).forEach((value) => serverNames.add(value));
