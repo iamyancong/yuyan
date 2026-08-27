@@ -589,6 +589,7 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
     archiveConfigPath,
     archiveSites,
     runtimeInstanceFormOpen,
+    runtimeInstanceEditingId,
     runtimeInstanceSaving,
     runtimeForm,
     runtimeInstanceForm,

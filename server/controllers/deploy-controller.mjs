@@ -101,6 +101,7 @@ import {
 import { listActiveCentralDeployOperations } from '../services/artifact-job-service.mjs';
 import { mergeDeployRuntimeSnapshots } from '../services/deploy-runtime-snapshot-service.mjs';
 import { listDeployRootOptions } from '../services/deploy-root-options-service.mjs';
+import { discoverServerNginx } from '../services/nginx-discovery-service.mjs';
 
 const GITHUB_REPO = process.env.GITHUB_REPOSITORY || 'ycwang-dev/yuyan';
 
@@ -441,7 +442,11 @@ function isStreamRequest(req) {
 function sendError(res, error, status = 500) {
   const message = error instanceof Error ? error.message : String(error);
   if (!res.headersSent) {
-    res.status(status).json({ success: false, error: message });
+    const responseStatus = Number.isInteger(error?.status) ? error.status : status;
+    const payload = { success: false, error: message };
+    if (typeof error?.code === 'string' && error.code) payload.code = error.code;
+    if (error?.details && typeof error.details === 'object') payload.details = error.details;
+    res.status(responseStatus).json(payload);
   }
 }
 
@@ -654,6 +659,22 @@ export async function handleListDeployRootOptions(req, res) {
       data: await listDeployRootOptions(Number(req.params.id), {
         nginxInstanceId: Number(req.query?.nginxInstanceId || 0),
         excludeTargetId: Number(req.query?.excludeTargetId || 0),
+      }),
+    });
+  } catch (error) {
+    sendError(res, error, 400);
+  }
+}
+
+/**
+ * 只读发现服务器宿主机 Nginx 与前端站点。
+ */
+export async function handleDiscoverServerNginx(req, res) {
+  try {
+    res.json({
+      success: true,
+      data: await discoverServerNginx(Number(req.params.id), {
+        useSudo: req.query?.useSudo === undefined ? undefined : String(req.query.useSudo) === '1',
       }),
     });
   } catch (error) {

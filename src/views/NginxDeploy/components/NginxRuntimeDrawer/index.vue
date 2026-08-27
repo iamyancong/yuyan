@@ -10,6 +10,7 @@ import RuntimeInstanceNavigator from './RuntimeInstanceNavigator.vue';
 import RuntimePathPreview from './RuntimePathPreview.vue';
 import RuntimeProgressPanel from './RuntimeProgressPanel.vue';
 import ArchiveSiteSelectionModal from './components/ArchiveSiteSelectionModal/index.vue';
+import ExistingNginxDiscovery from './components/ExistingNginxDiscovery/index.vue';
 import { useNginxRuntimeDrawerView } from './hooks/useNginxRuntimeDrawerView';
 
 defineOptions({ name: 'NginxRuntimeDrawer' });
@@ -65,6 +66,11 @@ const submitInstanceForm = async () => {
   } catch {
     /** Formily 会在字段旁展示校验反馈。 */
   }
+};
+
+/** 将智能发现结果回填到当前实例表单，用户仍可继续手动修改。 */
+const applyDiscoveredNginx = (values: Partial<NginxInstancePayload>) => {
+  instanceFormModel.value = { ...props.instanceForm, ...values };
 };
 </script>
 
@@ -170,7 +176,17 @@ const submitInstanceForm = async () => {
       ref="instanceFormRef"
       v-model:modelValue="instanceFormModel"
       :schema="computedInstanceFormSchema"
-    />
+    >
+      <template #nginxDiscovery>
+        <ExistingNginxDiscovery
+          v-if="instanceFormModel.instanceType === 'external' && instanceFormEditingId === null"
+          :server-id="server?.id || 0"
+          :open="instanceFormVisible"
+          :use-sudo="Boolean(instanceFormModel.useSudo)"
+          @select="applyDiscoveredNginx"
+        />
+      </template>
+    </YssFormily>
   </a-modal>
 
   <ArchiveSiteSelectionModal

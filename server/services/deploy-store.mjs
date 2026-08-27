@@ -2065,9 +2065,10 @@ function getDuplicateTarget(db, payload, excludeId = 0) {
   const { conditions, params } = createProjectFilters(payload, 't');
   if (!conditions.length) return null;
   const sql = `
-    SELECT t.id
+    SELECT t.id, t.project_name
     FROM deploy_targets t
-    WHERE (${conditions.join(' OR ')})
+    WHERE t.team_id = ?
+      AND (${conditions.join(' OR ')})
       AND t.env_name = ?
       AND t.server_id = ?
       AND t.deploy_root = ?
@@ -2075,6 +2076,7 @@ function getDuplicateTarget(db, payload, excludeId = 0) {
     LIMIT 1
   `;
   const queryParams = [
+    getRequestTeamId(),
     ...params,
     payload.envName || '测试',
     Number(payload.serverId),
@@ -2094,13 +2096,14 @@ function getDuplicateTarget(db, payload, excludeId = 0) {
 function getDuplicateListenPortTarget(db, payload, excludeId = 0) {
   const listenPort = Number(payload.listenPort || 0);
   if (!payload.nginxSiteManaged || !listenPort) return null;
-  const params = [Number(payload.serverId), listenPort];
+  const params = [getRequestTeamId(), Number(payload.serverId), listenPort];
   if (excludeId) params.push(Number(excludeId));
   return db
     .prepare(
       `SELECT id
        FROM deploy_targets
-       WHERE server_id = ?
+       WHERE team_id = ?
+         AND server_id = ?
          AND nginx_site_managed = 1
          AND listen_port = ?
          ${excludeId ? 'AND id != ?' : ''}
@@ -2902,14 +2905,14 @@ function getDuplicateBackendPort(db, payload, excludeTargetId = 0) {
   if (payload.projectType !== 'backend') return null;
   const serverPort = Number(payload.serverPort || 0);
   if (!serverPort) return null;
-  const params = [Number(payload.serverId), serverPort];
+  const params = [getRequestTeamId(), Number(payload.serverId), serverPort];
   if (excludeTargetId) params.push(Number(excludeTargetId));
   return db
     .prepare(
       `SELECT t.id, t.project_name
        FROM deploy_targets t
        INNER JOIN backend_target_configs b ON b.target_id = t.id
-       WHERE t.server_id = ? AND b.server_port = ? ${excludeTargetId ? 'AND t.id != ?' : ''}
+       WHERE t.team_id = ? AND t.server_id = ? AND b.server_port = ? ${excludeTargetId ? 'AND t.id != ?' : ''}
        LIMIT 1`
     )
     .get(...params);
@@ -3059,8 +3062,16 @@ export async function createTarget(payload) {
   if (!isBackend && !hasNginxInstanceForServer(db, payload.serverId, payload.nginxInstanceId)) {
     throw new Error('Nginx 实例不存在，请重新选择部署服务器和 Nginx 实例');
   }
-  if (getDuplicateTarget(db, payload)) {
-    throw new Error('该项目在当前服务器和部署根目录下已存在部署目标，请编辑已有目标或更换部署根目录');
+  const duplicateTarget = getDuplicateTarget(db, payload);
+  if (duplicateTarget) {
+    const error = new Error('该项目在当前服务器和部署根目录下已存在部署目标，请编辑已有目标或更换部署根目录');
+    error.code = 'deploy_target_exists';
+    error.status = 409;
+    error.details = {
+      targetId: Number(duplicateTarget.id),
+      projectName: duplicateTarget.project_name || payload.projectName || '',
+    };
+    throw error;
   }
   if (!isBackend && getDuplicateListenPortTarget(db, payload)) {
     throw new Error(`当前服务器已存在监听端口 ${payload.listenPort} 的托管站点，请更换端口`);

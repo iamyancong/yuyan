@@ -34,6 +34,7 @@ export type NginxDeployTabKey = 'targets' | 'servers' | 'records';
 /** Formily 实例最小接口 */
 export interface FormilyRef {
   getValues: () => Record<string, any>;
+  submit?: () => Promise<Record<string, any>>;
   setValues?: (values: Record<string, any>) => void;
   setFieldState?: (path: string, callback: (state: any) => void) => void;
 }

@@ -96,6 +96,26 @@ export function execSsh(conn, command, options = {}) {
       let stdout = '';
       let stderr = '';
       let settled = false;
+      const timeoutMs = Math.max(0, Number(options.timeoutMs || 0));
+      const maxOutputBytes = Math.max(0, Number(options.maxOutputBytes || 0));
+      let outputBytes = 0;
+      let timeout = null;
+
+      /** 清理远程命令定时器。 */
+      const clearCommandTimeout = () => {
+        if (timeout) clearTimeout(timeout);
+        timeout = null;
+      };
+
+      /** 主动关闭已超时或输出过大的 SSH channel。 */
+      const closeStream = () => {
+        try {
+          if (typeof stream.close === 'function') stream.close();
+          else stream.destroy?.();
+        } catch {
+          stream.destroy?.();
+        }
+      };
 
       /**
        * 按远程命令退出码结束 Promise。
@@ -104,6 +124,7 @@ export function execSsh(conn, command, options = {}) {
       const finishWithCode = (code) => {
         if (settled) return;
         settled = true;
+        clearCommandTimeout();
         const result = { stdout, stderr, code: Number(code || 0) };
         if (result.code === 0 || options.allowFailure) {
           resolve(result);
@@ -119,8 +140,29 @@ export function execSsh(conn, command, options = {}) {
       const finishWithError = (streamError) => {
         if (settled) return;
         settled = true;
+        clearCommandTimeout();
         reject(streamError);
       };
+
+      /** 收集远程输出并执行大小门禁。 */
+      const appendOutput = (target, chunk) => {
+        if (settled) return target;
+        const text = chunk.toString();
+        outputBytes += Buffer.byteLength(text);
+        if (maxOutputBytes && outputBytes > maxOutputBytes) {
+          finishWithError(new Error(`${options.label || '远程命令'}输出超过 ${maxOutputBytes} 字节限制`));
+          closeStream();
+          return target;
+        }
+        return target + text;
+      };
+
+      if (timeoutMs) {
+        timeout = setTimeout(() => {
+          finishWithError(new Error(`${options.label || '远程命令'}执行超时（${timeoutMs}ms）`));
+          closeStream();
+        }, timeoutMs);
+      }
 
       stream
         .on('error', (error) => {
@@ -133,15 +175,15 @@ export function execSsh(conn, command, options = {}) {
           finishWithCode(code);
         })
         .on('data', (chunk) => {
-          const text = chunk.toString();
-          stdout += text;
-          options.onStdout?.(text);
+          const previousLength = stdout.length;
+          stdout = appendOutput(stdout, chunk);
+          if (stdout.length > previousLength) options.onStdout?.(stdout.slice(previousLength));
         });
 
       stream.stderr.on('data', (chunk) => {
-        const text = chunk.toString();
-        stderr += text;
-        options.onStderr?.(text);
+        const previousLength = stderr.length;
+        stderr = appendOutput(stderr, chunk);
+        if (stderr.length > previousLength) options.onStderr?.(stderr.slice(previousLength));
       });
     });
   });

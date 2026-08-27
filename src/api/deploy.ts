@@ -88,6 +88,55 @@ export interface DeployRootOptionsResult {
   items: DeployRootOption[];
 }
 
+/** Nginx 发现到的静态根目录状态。 */
+export interface NginxDiscoveryRoot {
+  path: string;
+  exists: boolean;
+  hasIndexHtml: boolean;
+}
+
+/** Nginx 发现到的 server 站点。 */
+export interface NginxDiscoverySite {
+  id: string;
+  order: number;
+  configPath: string;
+  listenPorts: number[];
+  listenValues: string[];
+  serverNames: string[];
+  roots: NginxDiscoveryRoot[];
+  dynamicRoots: string[];
+  aliases: string[];
+  dynamicAliases: string[];
+  type: 'static' | 'mixed' | 'proxy' | 'unknown';
+  hasProxyPass: boolean;
+}
+
+/** 宿主机 Nginx 运行实例发现结果。 */
+export interface NginxDiscoveryRuntime {
+  id: string;
+  binaryPath: string;
+  version: string;
+  masterPids: number[];
+  running: boolean;
+  prefix: string;
+  mainConfigPath: string;
+  nginxWorkDir: string;
+  nginxTestCommand: string;
+  nginxReloadCommand: string;
+  useSudo: boolean;
+  connectedInstanceId: number | null;
+  warnings: string[];
+  sites: NginxDiscoverySite[];
+}
+
+/** 宿主机 Nginx 智能发现响应。 */
+export interface NginxDiscoveryResult {
+  useSudo: boolean;
+  runtimes: NginxDiscoveryRuntime[];
+  warnings: string[];
+  truncated: boolean;
+}
+
 /** 独立服务器保存参数 */
 export interface DeployServerPayload {
   name: string;
@@ -773,6 +822,16 @@ export const getDeployRootOptions = (
   serverId: number,
   params: { nginxInstanceId?: number; excludeTargetId?: number } = {}
 ) => client.get(`/servers/${serverId}/deploy-root-options`, { params }).then(unwrap<DeployRootOptionsResult>);
+
+/**
+ * 只读发现服务器宿主机 Nginx 与前端站点。
+ * @param serverId 服务器 ID
+ * @param useSudo 是否使用非交互 sudo
+ * @param signal 取消信号
+ * @returns Nginx 运行实例与站点候选
+ */
+export const discoverServerNginx = (serverId: number, useSudo: boolean, signal?: AbortSignal) =>
+  client.get(`/servers/${serverId}/nginx-discovery`, { params: { useSudo: useSudo ? 1 : 0 }, signal }).then(unwrap<NginxDiscoveryResult>);
 
 /** 获取服务器 Nginx 实例列表 */
 export const listNginxInstances = (serverId: number) => client.get(`/servers/${serverId}/nginx-instances`).then(unwrap<NginxInstance[]>);
