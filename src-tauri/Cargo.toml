@@ -1,6 +1,6 @@
 [package]
 name = "yuyan-app"
-version = "1.2.43"
+version = "1.2.44"
 edition = "2021"
 
 [lib]
