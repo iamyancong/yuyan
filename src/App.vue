@@ -51,6 +51,67 @@ body,
   background-color: var(--bg-color, var(--boot-background-color, #f0f2f5));
 }
 
+/* =====================================================
+ * 🎨 全局精致现代滚动条规范
+ * 特性：6px/7px 胶囊滑块、半透明、自适应亮/暗主题、悬浮过渡
+ * ===================================================== */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 999px;
+  transition: background-color 0.2s ease;
+
+  &:hover {
+    background: rgba(0, 0, 0, 0.38);
+  }
+
+  &:active {
+    background: rgba(0, 0, 0, 0.5);
+  }
+}
+
+/* 暗黑主题下滚动条自适应 */
+html[data-theme='dark'] {
+  * {
+    scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.2);
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.36);
+    }
+
+    &:active {
+      background: rgba(255, 255, 255, 0.48);
+    }
+  }
+}
+
+/* 兼容 vxe-table / 局部容器内部滚动条 */
+.vxe-table--body-wrapper,
+.vxe-table--scroll-y-wrapper,
+.vxe-table--scroll-x-wrapper {
+  &::-webkit-scrollbar {
+    width: 7px;
+    height: 7px;
+  }
+}
+
 /* 全局覆盖：dropdown / YTable 操作列「更多」Popover 内的链接按钮走主题色（弹出层 teleport 到 body） */
 .ant-dropdown {
   .ant-dropdown-menu {

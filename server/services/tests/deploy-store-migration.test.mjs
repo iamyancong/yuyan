@@ -91,6 +91,7 @@ test('v1/v2/v3 迁移保留前端目标，将历史后端命令标记为 legacy 
         missingServer: missingServerRecords.total,
       },
       recordTypes: allRecords.items.map(x => x.projectType).sort(),
+      recordDescriptions: allRecords.items.map(x => ({ name: x.projectName, description: x.projectDescription })).sort((a, b) => a.name.localeCompare(b.name)),
       taskLogLinked: Boolean(updatedTask.logPath && updatedTask.resultRef),
     }));
   `);
@@ -104,6 +105,10 @@ test('v1/v2/v3 迁移保留前端目标，将历史后端命令标记为 legacy 
   assert.equal(migrated.config.legacy_start_command, 'nohup java');
   assert.deepEqual(migrated.recordCounts, { all: 2, frontend: 1, backend: 1, missingServer: 0 });
   assert.deepEqual(migrated.recordTypes, ['backend', 'frontend']);
+  assert.deepEqual(migrated.recordDescriptions, [
+    { name: 'backend-app', description: 'back' },
+    { name: 'frontend-app', description: 'front' },
+  ]);
   assert.equal(migrated.taskLogLinked, true);
 
   const repeated = runStoreScript(root, `

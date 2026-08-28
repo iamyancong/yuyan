@@ -1,29 +1,19 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue';
+import { toRef } from 'vue';
 import { YTable } from '@ycwang-dev/components/lite';
-import { openExternal } from '@/utils/open';
-import { useTableHeight } from '@ycwang-dev/hooks';
 import type { YTableActionConfig } from '@ycwang-dev/components/lite';
 import type { DeployRecord } from '@/api/deploy';
-import {
-  getDeployRecordCommitMessage,
-  getDeployRecordShortCommit,
-  getDeployRecordStatusColor,
-  getDeployRecordStatusLabel,
-  recordColumns,
-} from '../../constant';
+import { getDeployRecordStatusColor, getDeployRecordStatusLabel, recordColumns } from '../../constant';
 import type { RecordProjectOption, RecordServerOption } from '../../types';
+import { TABLE_CELL_CONFIG, TABLE_HEADER_HEIGHT } from './constant';
+import { useDeployRecordTab } from './hooks/useDeployRecordTab';
 import DeployRecordFilterBar from './components/DeployRecordFilterBar.vue';
-import ProjectTypeIcon from '../ProjectTypeIcon/index.vue';
-import { getGitLabHost } from '@/api/gitlab';
+import NginxProjectNameCell from '../NginxProjectNameCell/index.vue';
+import DeployServerCell from '../DeployServerCell/index.vue';
+import DeployCommitMessageCell from '../DeployCommitMessageCell/index.vue';
+import MiddleEllipsisText from '@/components/MiddleEllipsisText.vue';
 
 defineOptions({ name: 'DeployRecordTab' });
-
-/** 表格默认高度 */
-const TABLE_DEFAULT_HEIGHT = 420;
-
-/** 表格最小高度 */
-const TABLE_MIN_HEIGHT = 240;
 
 /** 下拉选项 */
 interface SelectOption {
@@ -69,92 +59,12 @@ const emit = defineEmits<{
   (e: 'refresh'): void;
 }>();
 
-const tableAreaRef = ref<HTMLElement>();
-const { tableHeight: rawTableHeight, recalculateHeight } = useTableHeight(tableAreaRef, {
-  minHeight: TABLE_MIN_HEIGHT,
-  defaultHeight: TABLE_DEFAULT_HEIGHT,
-  withPagination: true,
+const { tableAreaRef, tableHeight, getCommitUrl } = useDeployRecordTab({
+  active: toRef(props, 'active'),
+  loading: toRef(props, 'loading'),
+  records: toRef(props, 'records'),
+  pageSize: toRef(props.pagination, 'pageSize'),
 });
-
-/** 限制表格最小高度，避免 hook 内部 availableHeight <= minHeight 时 fallback 到 0 的 Bug */
-const tableHeight = computed(() => {
-  return rawTableHeight.value > TABLE_MIN_HEIGHT ? rawTableHeight.value : TABLE_MIN_HEIGHT;
-});
-
-/** 等待视图更新后重新计算表格高度 */
-const recalculateAfterRender = async () => {
-  await nextTick();
-  recalculateHeight();
-};
-
-watch([() => props.loading, () => props.records.length, () => props.pagination.pageSize], recalculateAfterRender, {
-  flush: 'post',
-});
-
-watch(
-  () => props.active,
-  (isActive) => {
-    if (isActive) {
-      void recalculateAfterRender();
-    }
-  },
-  { flush: 'post' }
-);
-
-/**
- * 构建 GitLab 提交记录页面链接。
- * @param record 发布记录
- * @returns 提交记录页面链接，无法获取时返回空字符串
- */
-const buildCommitUrl = (record: DeployRecord): string => {
-  const commitSha = record.commitSha;
-  if (!commitSha) return '';
-
-  const gitlabHost = getGitLabHost();
-  const host = gitlabHost.replace(/\/+$/, '').replace(/\/api\/v4$/, '');
-  const projectPath = record.projectPath || '';
-
-  if (projectPath) {
-    return `${host}/${projectPath}/-/commit/${commitSha}`;
-  }
-
-  const repoUrl = record.repositoryUrl || '';
-  if (repoUrl) {
-    if (repoUrl.startsWith('http://') || repoUrl.startsWith('https://')) {
-      const baseUrl = repoUrl.replace(/\.git$/i, '');
-      return `${baseUrl}/-/commit/${commitSha}`;
-    }
-    if (repoUrl.includes('@')) {
-      const match = repoUrl.match(/@([^:/]+)(?::\d+)?[:/](.+)$/i);
-      if (match) {
-        const hostName = match[1];
-        const repoPath = match[2].replace(/\.git$/i, '');
-        let portPart = '';
-        try {
-          const urlObj = new URL(host);
-          if (urlObj.port) portPart = `:${urlObj.port}`;
-        } catch (e) {}
-        return `${host.startsWith('https') ? 'https' : 'http'}://${hostName}${portPart}/${repoPath}/-/commit/${commitSha}`;
-      }
-    }
-  }
-
-  return '';
-};
-
-const commitUrlMap = computed(() => {
-  const map = new Map<number, string>();
-  props.records.forEach((record) => {
-    map.set(record.id, buildCommitUrl(record));
-  });
-  return map;
-});
-
-/**
- * 获取当前行的 GitLab 提交链接。
- * @param record 发布记录
- */
-const getCommitUrl = (record: DeployRecord) => commitUrlMap.value.get(record.id) || '';
 </script>
 
 <template>
@@ -179,37 +89,31 @@ const getCommitUrl = (record: DeployRecord) => commitUrlMap.value.get(record.id)
         :loading="loading"
         :action-config="actionConfig"
         :max-height="tableHeight"
+        :cell-config="TABLE_CELL_CONFIG"
+        :header-height="TABLE_HEADER_HEIGHT"
         :pageable="true"
+        :auto-flex-column="false"
         :pagination="pagination"
         size="small"
-        id="nginx-deploy-records"
+        id="nginx-deploy-records-v2"
         @page-change="(pageInfo: { current: number; pageSize: number }) => emit('pageChange', pageInfo)"
       >
         <template #projectName="{ row }">
-          <div class="record-project-cell">
-            <ProjectTypeIcon :type="row.projectType" compact />
-            <span class="record-project-cell__name">{{ row.projectName }}</span>
-          </div>
+          <NginxProjectNameCell :record="row" />
+        </template>
+        <template #serverName="{ row }">
+          <DeployServerCell :server-name="row.serverName" :server-host="row.serverHost" />
+        </template>
+        <template #commitMessage="{ row }">
+          <DeployCommitMessageCell :record="row" :commit-url="getCommitUrl(row)" />
         </template>
         <template #status="{ row }">
           <a-tag :color="getDeployRecordStatusColor(row.status)">
             {{ getDeployRecordStatusLabel(row.status) }}
           </a-tag>
         </template>
-        <template #effectiveCommit="{ row }">
-          <a-space :size="6">
-            <a v-if="getCommitUrl(row)" :href="getCommitUrl(row)" class="commit-link" @click.prevent.stop="openExternal(getCommitUrl(row))">
-              {{ getDeployRecordShortCommit(row) }}
-            </a>
-            <span v-else>{{ getDeployRecordShortCommit(row) }}</span>
-            <a-tag v-if="row.isCurrentVersion" color="processing">当前</a-tag>
-          </a-space>
-        </template>
-        <template #commitMessage="{ row }">
-          <a v-if="getCommitUrl(row)" :href="getCommitUrl(row)" class="commit-link" @click.prevent.stop="openExternal(getCommitUrl(row))">
-            {{ getDeployRecordCommitMessage(row) }}
-          </a>
-          <span v-else>{{ getDeployRecordCommitMessage(row) || '-' }}</span>
+        <template #releasePath="{ row }">
+          <MiddleEllipsisText :text="row.releasePath" />
         </template>
       </YTable>
     </div>

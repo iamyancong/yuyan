@@ -8,6 +8,7 @@ import type { RuntimeAwareDeployTarget, TargetFilterForm } from '../../types';
 import { targetColumns } from '../../constant';
 import NginxProjectNameCell from '../NginxProjectNameCell/index.vue';
 import DeployTargetRuntimeCell from '../DeployTargetRuntimeCell/index.vue';
+import DeployServerCell from '../DeployServerCell/index.vue';
 import DeployTargetFilterBar from './components/DeployTargetFilterBar.vue';
 import { useNginxDeployContext } from '../../hooks/useNginxDeployContext';
 
@@ -104,6 +105,9 @@ const activeColumns = computed(() => {
       >
         <template #projectName="{ row }">
           <NginxProjectNameCell :record="row" />
+        </template>
+        <template #serverName="{ row }">
+          <DeployServerCell :server-name="row.serverName" :server-host="row.serverHost" />
         </template>
         <template #defaultBranch="{ row }">
           <a-tooltip :title="row.defaultBranch || '-'">

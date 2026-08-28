@@ -992,9 +992,13 @@ function mapRecord(row, options = {}) {
     targetId: row.target_id,
     projectId: row.project_id,
     projectName: row.project_name,
+    projectDescription: row.project_description || '',
     projectType: row.project_type || 'frontend',
     projectPath: row.project_path || '',
     repositoryUrl: row.repository_url || '',
+    serverId: Number(row.server_id || 0),
+    serverName: row.server_name || '',
+    serverHost: row.server_host || '',
     envName: row.env_name,
     branch: row.branch,
     commitSha: row.commit_sha || '',
@@ -3474,9 +3478,10 @@ export async function getRecord(id, options = {}) {
   const db = await getDeployDb();
   const row = db
     .prepare(
-      `SELECT r.*, t.project_path, t.repository_url
+      `SELECT r.*, t.project_description, t.project_path, t.repository_url, t.project_type, t.server_id, s.name AS server_name, s.host AS server_host
        FROM deploy_records r
        LEFT JOIN deploy_targets t ON t.id = r.target_id
+       LEFT JOIN deploy_servers s ON s.id = t.server_id
        WHERE r.id = ? AND r.team_id = ?`
     )
     .get(Number(id), getRequestTeamId());
@@ -3497,9 +3502,10 @@ export async function getLatestSuccessfulRecord(targetId, options = {}) {
   const db = await getDeployDb();
   const row = db
     .prepare(
-      `SELECT r.*, t.project_path, t.repository_url
+      `SELECT r.*, t.project_description, t.project_path, t.repository_url, t.project_type, t.server_id, s.name AS server_name, s.host AS server_host
        FROM deploy_records r
        LEFT JOIN deploy_targets t ON t.id = r.target_id
+       LEFT JOIN deploy_servers s ON s.id = t.server_id
        WHERE r.target_id = ? AND r.status = 'success'
        ORDER BY r.started_at DESC, r.id DESC
        LIMIT 1`
@@ -3583,14 +3589,16 @@ export async function listRecords(query = {}) {
   const offset = (page - 1) * pageSize;
   const whereParts = ['r.team_id = ?'];
   let fromSql = `
-    SELECT r.*, t.project_path, t.repository_url, t.project_type
+    SELECT r.*, t.project_description, t.project_path, t.repository_url, t.project_type, t.server_id, s.name AS server_name, s.host AS server_host
     FROM deploy_records r
     LEFT JOIN deploy_targets t ON t.id = r.target_id
+    LEFT JOIN deploy_servers s ON s.id = t.server_id
   `;
   let countSql = `
     SELECT COUNT(*) AS total
     FROM deploy_records r
     LEFT JOIN deploy_targets t ON t.id = r.target_id
+    LEFT JOIN deploy_servers s ON s.id = t.server_id
   `;
   if (query.targetId) {
     whereParts.push('r.target_id = ?');

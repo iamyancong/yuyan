@@ -10,13 +10,13 @@ export const useProjectList = () => {
 
   // 表格列
   const columns: YTableColumn[] = [
-    { title: '项目名称', field: 'name', minWidth: 430, fixed: 'left' },
-    { title: '项目ID', field: 'id', width: 110, sortable: true, align: 'center' },
-    { title: '仓库路径', field: 'path_with_namespace', minWidth: 360 },
-    { title: '默认分支', field: 'default_branch', width: 130, align: 'center' },
-    { title: '可见性', field: 'visibility', width: 110, align: 'center' },
-    { title: '最后活动', field: 'last_activity_at', width: 150, sortable: true },
-    { title: '创建时间', field: 'created_at', width: 150, sortable: true },
+    { title: '项目名称', field: 'name', minWidth: 260, fixed: 'left', showOverflow: false },
+    { title: '项目ID', field: 'id', width: 95, sortable: true, align: 'center' },
+    { title: '仓库路径', field: 'path_with_namespace', minWidth: 240, showOverflow: false },
+    { title: '默认分支', field: 'default_branch', width: 120, align: 'center', showOverflow: false },
+    { title: '可见性', field: 'visibility', width: 90, align: 'center', showOverflow: false },
+    { title: '最后活动', field: 'last_activity_at', width: 135, sortable: true },
+    { title: '创建时间', field: 'created_at', width: 135, sortable: true },
   ];
 
   // 状态

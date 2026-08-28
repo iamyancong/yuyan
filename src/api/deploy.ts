@@ -447,6 +447,9 @@ export interface DeployRecord {
   projectId: number;
   projectName: string;
   projectType: 'frontend' | 'backend';
+  serverId?: number;
+  serverName?: string;
+  serverHost?: string;
   envName: string;
   branch: string;
   commitSha: string;
@@ -466,6 +469,7 @@ export interface DeployRecord {
   operator: string;
   startedAt: string;
   finishedAt: string;
+  projectDescription?: string;
   projectPath?: string;
   repositoryUrl?: string;
 }

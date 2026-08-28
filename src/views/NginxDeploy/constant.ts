@@ -318,23 +318,24 @@ export const serverColumns: YTableColumn[] = [
 
 /** 部署目标表格列 */
 export const targetColumns: YTableColumn[] = [
-  { field: 'projectName', title: '项目名称', minWidth: 280, fixed: 'left', slots: { default: 'projectName' } },
+  { field: 'projectName', title: '项目名称', minWidth: 280, fixed: 'left', showOverflow: false, slots: { default: 'projectName' } },
   { field: 'projectType', title: '类型', width: 80, align: 'center', formatter: ({ cellValue }) => cellValue === 'backend' ? '后端' : '前端' },
-  { field: 'defaultBranch', title: '分支', minWidth: 200, align: 'center', slots: { default: 'defaultBranch' } },
+  { field: 'defaultBranch', title: '分支', minWidth: 200, align: 'center', showOverflow: false, slots: { default: 'defaultBranch' } },
   { field: 'remark', title: '备注', minWidth: 140 },
   {
     field: 'runtimeStatus',
     title: '运行态',
     width: 120,
     align: 'center',
+    showOverflow: false,
     slots: { default: 'runtimeStatus' },
   },
-  { field: 'serverName', title: '服务器', minWidth: 140, formatter: ({ row }) => formatServerLabel(row.serverName, row.serverHost) },
+  { field: 'serverName', title: '服务器', minWidth: 160, showOverflow: false, slots: { default: 'serverName' } },
   { field: 'deployRoot', title: '部署根目录', minWidth: 240 },
   { field: 'serviceRole', title: '服务角色', width: 90, align: 'center', formatter: ({ row }) => row.projectType === 'backend' ? (row.serviceRole === 'gateway' ? 'Gateway' : '业务服务') : '-' },
   { field: 'serverPort', title: '服务端口', width: 90, align: 'center', formatter: ({ row }) => row.projectType === 'backend' ? row.serverPort || '-' : '-' },
-  { field: 'serviceLinks', title: '服务地址', minWidth: 230, slots: { default: 'serviceLinks' } },
-  { field: 'visitUrl', title: '页面访问地址', minWidth: 220, slots: { default: 'visitUrl' } },
+  { field: 'serviceLinks', title: '服务地址', minWidth: 230, showOverflow: false, slots: { default: 'serviceLinks' } },
+  { field: 'visitUrl', title: '页面访问地址', minWidth: 220, showOverflow: false, slots: { default: 'visitUrl' } },
   { field: 'nginxInstanceName', title: 'Nginx 实例', minWidth: 90, formatter: ({ row }) => row.nginxInstanceName || '-' },
   { field: 'listenPort', title: '监听端口', width: 90, align: 'center', formatter: ({ row }) => (row.nginxSiteManaged ? row.listenPort || '-' : '-') },
   { field: 'nginxServerName', title: 'server_name', minWidth: 120, formatter: ({ row }) => (row.nginxSiteManaged ? row.nginxServerName || '_' : '-') },
@@ -346,17 +347,17 @@ export const targetColumns: YTableColumn[] = [
 
 /** 发布记录表格列 */
 export const recordColumns: YTableColumn[] = [
-  { field: 'projectName', title: '项目名称', minWidth: 240, fixed: 'left', slots: { default: 'projectName' } },
-  { field: 'operator', title: '发布人', minWidth: 100, formatter: ({ row }) => getDeployRecordOperator(row) },
-  { field: 'branch', title: '分支', width: 140 },
-  { field: 'commitMessage', title: '当前生效提交信息', minWidth: 260, slots: { default: 'commitMessage' } },
-  { field: 'commitSha', title: '当前生效Commit', minWidth: 160, slots: { default: 'effectiveCommit' } },
+  { field: 'projectName', title: '项目名称', minWidth: 240, fixed: 'left', showOverflow: false, slots: { default: 'projectName' } },
+  { field: 'serverName', title: '服务器', minWidth: 160, showOverflow: false, slots: { default: 'serverName' } },
+  { field: 'operator', title: '发布人', width: 90, formatter: ({ row }) => getDeployRecordOperator(row) },
+  { field: 'branch', title: '分支', width: 120 },
+  { field: 'commitMessage', title: '当前生效提交信息', minWidth: 280, showOverflow: false, slots: { default: 'commitMessage' } },
   { field: 'commitAuthor', title: '提交人', width: 80, formatter: ({ row }) => getDeployRecordCommitAuthor(row) },
-  { field: 'releasePath', title: '发布目录', minWidth: 200 },
+  { field: 'releasePath', title: '发布目录', minWidth: 240, showOverflow: false, slots: { default: 'releasePath' } },
   { field: 'startedAt', minWidth: 160, title: '开始时间', formatter: ({ cellValue }) => formatDeployDateTime(cellValue) },
   { field: 'action', title: '操作类型', width: 100, align: 'center', formatter: ({ row }) => getDeployRecordActionLabel(row) },
   { field: 'sourceRecordId', title: '回滚来源', width: 80, align: 'center', formatter: ({ row }) => getDeployRecordSourceText(row) },
-  { field: 'status', title: '状态', minWidth: 80, align: 'center', fixed: 'right' },
+  { field: 'status', title: '状态', minWidth: 80, align: 'center', showOverflow: false, fixed: 'right' },
   // { field: 'envName', title: '环境', width: 90, align: 'center' },
 ];
 
