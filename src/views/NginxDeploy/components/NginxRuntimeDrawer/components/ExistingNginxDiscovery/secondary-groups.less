@@ -1,0 +1,59 @@
+.nginx-discovery-secondary {
+  border-top: 1px solid var(--border-color-split, var(--primary-color-light));
+}
+
+.nginx-discovery-secondary__rows {
+  display: grid;
+  gap: 6px;
+}
+
+.nginx-discovery-secondary__row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: var(--bg-color-secondary, var(--primary-color-lighter));
+  color: var(--text-color-secondary);
+
+  > div {
+    display: grid;
+    flex: 1;
+    min-width: 0;
+  }
+
+  strong,
+  span,
+  code {
+    overflow-wrap: anywhere;
+  }
+
+  strong {
+    color: var(--text-color);
+    font-size: 12px;
+  }
+
+  span,
+  summary,
+  code {
+    font-size: 11px;
+    line-height: 17px;
+  }
+
+  details {
+    margin-top: 3px;
+  }
+}
+
+:deep(.ant-collapse-header) {
+  min-height: 34px;
+  padding: 7px 0 !important;
+  color: var(--text-color-secondary) !important;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+:deep(.ant-collapse-content-box) {
+  padding: 0 0 8px !important;
+}

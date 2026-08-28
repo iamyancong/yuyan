@@ -1,5 +1,6 @@
 import { onScopeDispose, ref, watch } from 'vue';
 import { discoverServerNginx, type NginxDiscoveryResult } from '@/api/deploy';
+import { hasDiscoveryCandidateKey } from '../presentationPolicy';
 
 /** 智能发现 Hook 参数。 */
 interface UseExistingNginxDiscoveryParams {
@@ -27,6 +28,7 @@ export function useExistingNginxDiscovery(params: UseExistingNginxDiscoveryParam
   const result = ref<NginxDiscoveryResult | null>(null);
   const errorMessage = ref('');
   const selectedKey = ref('');
+  const staleResult = ref(false);
   let requestSequence = 0;
   let abortController: AbortController | null = null;
 
@@ -39,10 +41,16 @@ export function useExistingNginxDiscovery(params: UseExistingNginxDiscoveryParam
   };
 
   /** 使用当前 sudo 选项扫描宿主机 Nginx。 */
-  const scan = async () => {
+  const scan = async (options: { clearResult?: boolean } = {}) => {
     const serverId = params.serverId();
     if (!params.open() || !serverId) return;
     cancelScan();
+    if (options.clearResult) {
+      result.value = null;
+      selectedKey.value = '';
+    } else if (result.value) {
+      staleResult.value = true;
+    }
     const sequence = requestSequence;
     abortController = new AbortController();
     loading.value = true;
@@ -50,11 +58,14 @@ export function useExistingNginxDiscovery(params: UseExistingNginxDiscoveryParam
     try {
       const response = await discoverServerNginx(serverId, params.useSudo(), abortController.signal);
       if (sequence !== requestSequence || !params.open()) return;
+      const selectedStillExists = hasDiscoveryCandidateKey(response.runtimes, selectedKey.value);
       result.value = response;
-      selectedKey.value = '';
+      if (!selectedStillExists) selectedKey.value = '';
+      staleResult.value = false;
     } catch (error: any) {
       if (sequence !== requestSequence || error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
       errorMessage.value = getDiscoveryErrorMessage(error);
+      staleResult.value = Boolean(result.value);
     } finally {
       if (sequence === requestSequence) loading.value = false;
     }
@@ -68,11 +79,15 @@ export function useExistingNginxDiscovery(params: UseExistingNginxDiscoveryParam
         result.value = null;
         errorMessage.value = '';
         selectedKey.value = '';
+        staleResult.value = false;
         return;
       }
-      if (!previousOpen || previousServerId !== serverId || previousUseSudo !== useSudo) void scan();
+      if (!previousOpen || previousServerId !== serverId || previousUseSudo !== useSudo) {
+        staleResult.value = false;
+        void scan({ clearResult: true });
+      }
     },
-    { immediate: true },
+    { immediate: true, flush: 'sync' },
   );
 
   onScopeDispose(cancelScan);
@@ -83,5 +98,6 @@ export function useExistingNginxDiscovery(params: UseExistingNginxDiscoveryParam
     result,
     scan,
     selectedKey,
+    staleResult,
   };
 }

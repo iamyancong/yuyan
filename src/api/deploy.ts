@@ -92,7 +92,40 @@ export interface DeployRootOptionsResult {
 export interface NginxDiscoveryRoot {
   path: string;
   exists: boolean;
+  readable: boolean;
   hasIndexHtml: boolean;
+}
+
+/** Nginx listen 结构化摘要。 */
+export interface NginxDiscoveryListen {
+  raw: string;
+  address: string;
+  port: number | null;
+  transport: 'tcp' | 'unix';
+  ssl: boolean;
+  defaultServer: boolean;
+  wildcard: boolean;
+  loopback: boolean;
+}
+
+/** Nginx 站点建议访问地址。 */
+export interface NginxDiscoveryAccessEndpoint {
+  url: string;
+  host: string;
+  port: number;
+  protocol: 'http' | 'https';
+  source: 'serverName' | 'serverHost' | 'listen';
+  scope: 'remote' | 'local';
+}
+
+/** Nginx 扫描结构化诊断。 */
+export interface NginxDiscoveryDiagnostic {
+  code: 'binary_unresolved' | 'command_not_found' | 'permission_denied' | 'sudo_password_required' | 'config_invalid' | 'timeout' | 'no_sites' | 'truncated';
+  severity: 'info' | 'warning' | 'error';
+  scope: 'scan' | 'runtime';
+  summary: string;
+  detail?: string;
+  action?: string;
 }
 
 /** Nginx 发现到的 server 站点。 */
@@ -100,6 +133,8 @@ export interface NginxDiscoverySite {
   id: string;
   order: number;
   configPath: string;
+  listens: NginxDiscoveryListen[];
+  accessEndpoints: NginxDiscoveryAccessEndpoint[];
   listenPorts: number[];
   listenValues: string[];
   serverNames: string[];
@@ -109,12 +144,16 @@ export interface NginxDiscoverySite {
   dynamicAliases: string[];
   type: 'static' | 'mixed' | 'proxy' | 'unknown';
   hasProxyPass: boolean;
+  warnings: string[];
 }
 
 /** 宿主机 Nginx 运行实例发现结果。 */
 export interface NginxDiscoveryRuntime {
   id: string;
   binaryPath: string;
+  binaryResolution: 'resolved' | 'unresolved';
+  inspectionState: 'ready' | 'partial' | 'unavailable';
+  runtimeFingerprint: string;
   version: string;
   masterPids: number[];
   running: boolean;
@@ -125,14 +164,20 @@ export interface NginxDiscoveryRuntime {
   nginxReloadCommand: string;
   useSudo: boolean;
   connectedInstanceId: number | null;
+  connectedInstance: Pick<NginxInstance, 'id' | 'name'> | null;
+  diagnostics: NginxDiscoveryDiagnostic[];
   warnings: string[];
   sites: NginxDiscoverySite[];
 }
 
 /** 宿主机 Nginx 智能发现响应。 */
 export interface NginxDiscoveryResult {
+  server: { id: number; name: string; host: string; sshPort: number };
+  scannedAt: string;
+  durationMs: number;
   useSudo: boolean;
   runtimes: NginxDiscoveryRuntime[];
+  diagnostics: NginxDiscoveryDiagnostic[];
   warnings: string[];
   truncated: boolean;
 }
@@ -557,6 +602,7 @@ export interface NginxInstance {
   serverId: number;
   name: string;
   instanceType: NginxInstanceType;
+  runtimeFingerprint?: string;
   defaultDeployRoot: string;
   defaultNginxConfPath: string;
   nginxWorkDir: string;
@@ -585,6 +631,7 @@ export interface NginxInstance {
 export interface NginxInstancePayload {
   name: string;
   instanceType: NginxInstanceType;
+  runtimeFingerprint?: string;
   defaultDeployRoot?: string;
   defaultNginxConfPath?: string;
   nginxWorkDir?: string;

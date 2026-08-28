@@ -90,6 +90,15 @@ test('普通 SSH 命令输出超过上限后拒绝并关闭远程 channel', asyn
   assert.equal(fixture.isClosed(), true);
 });
 
+test('AbortSignal 取消后拒绝并关闭远程 channel', async () => {
+  const fixture = createExecSshConn();
+  const controller = new AbortController();
+  const commandPromise = execSsh(fixture.conn, 'nginx -T', { signal: controller.signal, label: '扫描配置' });
+  controller.abort();
+  await assert.rejects(commandPromise, (error) => error?.name === 'AbortError' && error?.code === 'ERR_CANCELED');
+  assert.equal(fixture.isClosed(), true);
+});
+
 /**
  * 创建 SFTP 目录扫描连接桩。
  * @returns {Object} SSH 连接桩

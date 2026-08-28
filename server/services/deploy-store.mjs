@@ -134,6 +134,66 @@ function normalizeRemoteRoot(value, fallback) {
 }
 
 /**
+ * 标准化 Nginx 配置来源路径，用于手动接入兜底查重。
+ * @param {string} value - 原始配置路径
+ * @returns {string} 可比较路径
+ */
+function normalizeNginxConfigIdentity(value) {
+  const source = String(value || '').trim().replace(/\\/g, '/');
+  if (!source) return '';
+  return source.startsWith('/') ? path.posix.normalize(source) : source;
+}
+
+/**
+ * 标准化扫描返回的运行时指纹。
+ * @param {string} value - 原始指纹
+ * @returns {string} 合法 SHA-256 指纹或空字符串
+ */
+function normalizeNginxRuntimeFingerprint(value) {
+  const fingerprint = String(value || '').trim().toLowerCase();
+  return /^[a-f\d]{64}$/.test(fingerprint) ? fingerprint : '';
+}
+
+/**
+ * 创建已接入运行时冲突错误。
+ * @param {Object} row - 已存在实例行
+ * @returns {Error} HTTP 409 业务错误
+ */
+function createNginxRuntimeConflictError(row) {
+  const error = new Error(`该 Nginx 运行实例已由“${row.name}”接入`);
+  error.status = 409;
+  error.code = 'nginx_runtime_already_connected';
+  error.details = { existingInstance: { id: Number(row.id), name: row.name } };
+  return error;
+}
+
+/**
+ * 查询服务器内重复的外部 Nginx 运行实例。
+ * @param {DatabaseSync} db - 数据库实例
+ * @param {number} serverId - 服务器 ID
+ * @param {Object} payload - 待保存参数
+ * @param {number} excludeId - 排除的实例 ID
+ * @returns {Object|null} 冲突实例
+ */
+function findDuplicateExternalNginxInstance(db, serverId, payload, excludeId = 0) {
+  const fingerprint = normalizeNginxRuntimeFingerprint(payload.runtimeFingerprint);
+  if (fingerprint) {
+    return db.prepare(
+      `SELECT id, name FROM nginx_instances
+       WHERE server_id = ? AND runtime_fingerprint = ? AND id <> ?
+       LIMIT 1`
+    ).get(Number(serverId), fingerprint, Number(excludeId)) || null;
+  }
+  const configIdentity = normalizeNginxConfigIdentity(payload.defaultNginxConfPath);
+  if (!configIdentity) return null;
+  return db.prepare(
+    `SELECT id, name, default_nginx_conf_path FROM nginx_instances
+     WHERE server_id = ? AND instance_type = 'external' AND id <> ?`
+  ).all(Number(serverId), Number(excludeId))
+    .find((row) => normalizeNginxConfigIdentity(row.default_nginx_conf_path) === configIdentity) || null;
+}
+
+/**
  * 按根目录派生托管 Nginx 运行时路径。
  * @param {string} baseRoot - 运行时根目录
  * @returns {Object} 派生路径
@@ -707,6 +767,7 @@ function mapNginxInstance(row) {
     serverId: row.server_id,
     name: row.name,
     instanceType,
+    runtimeFingerprint: row.runtime_fingerprint || '',
     defaultDeployRoot: row.default_deploy_root || '',
     defaultNginxConfPath: row.default_nginx_conf_path || '',
     nginxWorkDir: row.nginx_work_dir || '',
@@ -1030,16 +1091,17 @@ function insertNginxInstance(db, serverId, payload) {
   const result = db
     .prepare(
       `INSERT INTO nginx_instances
-       (server_id, name, instance_type, default_deploy_root, default_nginx_conf_path, nginx_work_dir,
+       (server_id, name, instance_type, runtime_fingerprint, default_deploy_root, default_nginx_conf_path, nginx_work_dir,
         nginx_test_command, nginx_reload_command, base_root, nginx_root, html_root, sites_dir, logs_dir,
         script_path, port_start, use_sudo, runtime_version, package_sha256, package_variant, status,
         status_output, initialized_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       Number(serverId),
       payload.name || DEFAULT_EXTERNAL_NGINX_INSTANCE_NAME,
       NGINX_INSTANCE_TYPES.has(payload.instanceType) ? payload.instanceType : 'external',
+      payload.instanceType === 'managed' ? null : normalizeNginxRuntimeFingerprint(payload.runtimeFingerprint) || null,
       payload.defaultDeployRoot || '',
       payload.defaultNginxConfPath || '',
       payload.nginxWorkDir || '',
@@ -1403,6 +1465,37 @@ function applyBackendSchemaMigration(db) {
 }
 
 /**
+ * 应用 Nginx 外部运行时指纹迁移。
+ * @description 保留旧实例为空指纹；若存在半完成迁移产生的重复值，仅保留最早记录的指纹。
+ * @param {DatabaseSync} db - 数据库实例
+ */
+function applyNginxRuntimeFingerprintMigration(db) {
+  const columns = getTableColumns(db, 'nginx_instances');
+  if (!columns.includes('runtime_fingerprint')) {
+    db.exec('ALTER TABLE nginx_instances ADD COLUMN runtime_fingerprint TEXT');
+  }
+  const duplicates = db.prepare(
+    `SELECT server_id, runtime_fingerprint, MIN(id) AS keep_id
+     FROM nginx_instances
+     WHERE runtime_fingerprint IS NOT NULL AND runtime_fingerprint <> ''
+     GROUP BY server_id, runtime_fingerprint
+     HAVING COUNT(*) > 1`
+  ).all();
+  const clearDuplicate = db.prepare(
+    `UPDATE nginx_instances SET runtime_fingerprint = NULL
+     WHERE server_id = ? AND runtime_fingerprint = ? AND id <> ?`
+  );
+  duplicates.forEach((item) => clearDuplicate.run(item.server_id, item.runtime_fingerprint, item.keep_id));
+  db.exec(
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_nginx_instances_server_runtime_fingerprint
+     ON nginx_instances(server_id, runtime_fingerprint)
+     WHERE runtime_fingerprint IS NOT NULL AND runtime_fingerprint <> ''`
+  );
+  db.prepare('INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (7, ?, ?)')
+    .run('nginx-runtime-fingerprint-v7', now());
+}
+
+/**
  * 为全部部署领域表增加账号隔离边界，并使用当前请求上下文填充新记录。
  * @param {DatabaseSync} db 数据库实例
  */
@@ -1702,6 +1795,7 @@ export async function getDeployDb() {
       server_id INTEGER NOT NULL,
       name TEXT NOT NULL,
       instance_type TEXT NOT NULL DEFAULT 'external',
+      runtime_fingerprint TEXT,
       default_deploy_root TEXT,
       default_nginx_conf_path TEXT,
       nginx_work_dir TEXT,
@@ -1886,6 +1980,10 @@ export async function getDeployDb() {
   if (!runtimeColumns.includes('package_variant')) {
     dbInstance.exec('ALTER TABLE nginx_runtimes ADD COLUMN package_variant TEXT');
   }
+  const nginxInstanceColumns = getTableColumns(dbInstance, 'nginx_instances');
+  if (!nginxInstanceColumns.includes('runtime_fingerprint')) {
+    dbInstance.exec('ALTER TABLE nginx_instances ADD COLUMN runtime_fingerprint TEXT');
+  }
   migrateLegacyNginxInstances(dbInstance);
   const recordColumns = getTableColumns(dbInstance, 'deploy_records');
   if (!recordColumns.includes('log_path')) {
@@ -1912,6 +2010,7 @@ export async function getDeployDb() {
   }
   normalizeDeployRecordVersionFields(dbInstance, { inferLegacyAction: !hadRecordActionColumn });
   applyBackendSchemaMigration(dbInstance);
+  applyNginxRuntimeFingerprintMigration(dbInstance);
   await backupDeployDbBeforeMultiTenantMigration(dbInstance);
   applyMultiTenantSchemaMigration(dbInstance);
   normalizeServerSortOrder(dbInstance);
@@ -2413,8 +2512,12 @@ export async function createNginxInstance(serverId, payload = {}) {
     const existingManaged = db.prepare("SELECT id FROM nginx_instances WHERE server_id = ? AND instance_type = 'managed' LIMIT 1").get(Number(serverId));
     if (existingManaged) throw new Error('同一服务器只能新增一个托管 Nginx；多个 yuyan 主应用请在当前 nginx.conf 中新增 server 配置');
   }
+  if (instanceType === 'external') {
+    const duplicate = findDuplicateExternalNginxInstance(db, serverId, payload);
+    if (duplicate) throw createNginxRuntimeConflictError(duplicate);
+  }
   const paths = instanceType === 'managed' ? deriveNginxRuntimePaths(payload.baseRoot || DEFAULT_NGINX_RUNTIME_BASE_ROOT) : {};
-  const instanceId = insertNginxInstance(db, serverId, {
+  const insertPayload = {
     ...payload,
     name: payload.name || (instanceType === 'managed' ? DEFAULT_MANAGED_NGINX_INSTANCE_NAME : DEFAULT_EXTERNAL_NGINX_INSTANCE_NAME),
     instanceType,
@@ -2428,7 +2531,18 @@ export async function createNginxInstance(serverId, payload = {}) {
     scriptPath: paths.scriptPath || payload.scriptPath || '',
     nginxTestCommand: payload.nginxTestCommand || (paths.scriptPath ? `${paths.scriptPath} test` : 'nginx -t'),
     nginxReloadCommand: payload.nginxReloadCommand || (paths.scriptPath ? `${paths.scriptPath} reload` : 'nginx -s reload'),
-  });
+    runtimeFingerprint: instanceType === 'external' ? normalizeNginxRuntimeFingerprint(payload.runtimeFingerprint) : '',
+  };
+  let instanceId = 0;
+  try {
+    instanceId = insertNginxInstance(db, serverId, insertPayload);
+  } catch (error) {
+    if (instanceType === 'external' && /unique|constraint/i.test(String(error?.message || ''))) {
+      const duplicate = findDuplicateExternalNginxInstance(db, serverId, insertPayload);
+      if (duplicate) throw createNginxRuntimeConflictError(duplicate);
+    }
+    throw error;
+  }
   const server = db.prepare('SELECT default_nginx_instance_id FROM deploy_servers WHERE id = ?').get(Number(serverId));
   if (instanceType === 'managed' || !Number(server?.default_nginx_instance_id || 0)) {
     db.prepare('UPDATE deploy_servers SET default_nginx_instance_id = ? WHERE id = ?').run(instanceId, Number(serverId));
@@ -2479,42 +2593,67 @@ export async function updateNginxInstance(id, payload = {}) {
   const externalReloadCommand = typeChanged && instanceType === 'external' && payload.nginxReloadCommand === current.nginx_reload_command
     ? 'nginx -s reload'
     : payload.nginxReloadCommand;
-  db.prepare(
-    `UPDATE nginx_instances
-     SET name = ?, instance_type = ?, default_deploy_root = ?, default_nginx_conf_path = ?, nginx_work_dir = ?,
+  const nextRuntimeFingerprint = instanceType === 'managed'
+    ? ''
+    : payload.runtimeFingerprint === undefined
+      ? normalizeNginxRuntimeFingerprint(current.runtime_fingerprint)
+      : normalizeNginxRuntimeFingerprint(payload.runtimeFingerprint);
+  const nextConfigPath = payload.defaultNginxConfPath ?? current.default_nginx_conf_path ?? '';
+  if (instanceType === 'external') {
+    const duplicate = findDuplicateExternalNginxInstance(db, current.server_id, {
+      runtimeFingerprint: nextRuntimeFingerprint,
+      defaultNginxConfPath: nextConfigPath,
+    }, Number(id));
+    if (duplicate) throw createNginxRuntimeConflictError(duplicate);
+  }
+  try {
+    db.prepare(
+      `UPDATE nginx_instances
+     SET name = ?, instance_type = ?, runtime_fingerprint = ?, default_deploy_root = ?, default_nginx_conf_path = ?, nginx_work_dir = ?,
          nginx_test_command = ?, nginx_reload_command = ?, base_root = ?, nginx_root = ?, html_root = ?,
          sites_dir = ?, logs_dir = ?, script_path = ?, port_start = ?, use_sudo = ?, runtime_version = ?,
          package_sha256 = ?, package_variant = ?, status = ?, status_output = ?, initialized_at = ?, updated_at = ?
      WHERE id = ?`
-  ).run(
-    payload.name || current.name,
-    instanceType,
-    payload.defaultDeployRoot ?? current.default_deploy_root ?? '',
-    payload.defaultNginxConfPath ?? current.default_nginx_conf_path ?? '',
-    payload.nginxWorkDir ?? current.nginx_work_dir ?? '',
-    instanceType === 'managed'
-      ? nextTestCommand ?? (useManagedCommandDefaults ? managedTestCommand : current.nginx_test_command || managedTestCommand)
-      : (externalTestCommand ?? current.nginx_test_command) || 'nginx -t',
-    instanceType === 'managed'
-      ? nextReloadCommand ?? (useManagedCommandDefaults ? managedReloadCommand : current.nginx_reload_command || managedReloadCommand)
-      : (externalReloadCommand ?? current.nginx_reload_command) || 'nginx -s reload',
-    instanceType === 'managed' ? paths.baseRoot || payload.baseRoot || current.base_root || '' : '',
-    instanceType === 'managed' ? paths.nginxRoot || payload.nginxRoot || current.nginx_root || '' : '',
-    instanceType === 'managed' ? paths.htmlRoot || payload.htmlRoot || current.html_root || '' : '',
-    instanceType === 'managed' ? paths.sitesDir || payload.sitesDir || current.sites_dir || '' : '',
-    instanceType === 'managed' ? paths.logsDir || payload.logsDir || current.logs_dir || '' : '',
-    instanceType === 'managed' ? paths.scriptPath || payload.scriptPath || current.script_path || '' : '',
-    Number(payload.portStart || current.port_start || 8080),
-    (payload.useSudo ?? Boolean(current.use_sudo)) ? 1 : 0,
-    typeChanged ? '' : current.runtime_version || '',
-    typeChanged ? '' : current.package_sha256 || '',
-    typeChanged ? '' : current.package_variant || '',
-    typeChanged ? (instanceType === 'managed' ? 'uninitialized' : 'unknown') : current.status || 'unknown',
-    typeChanged ? '' : current.status_output || '',
-    typeChanged ? null : current.initialized_at || null,
-    now(),
-    Number(id)
-  );
+    ).run(
+      payload.name || current.name,
+      instanceType,
+      nextRuntimeFingerprint || null,
+      payload.defaultDeployRoot ?? current.default_deploy_root ?? '',
+      nextConfigPath,
+      payload.nginxWorkDir ?? current.nginx_work_dir ?? '',
+      instanceType === 'managed'
+        ? nextTestCommand ?? (useManagedCommandDefaults ? managedTestCommand : current.nginx_test_command || managedTestCommand)
+        : (externalTestCommand ?? current.nginx_test_command) || 'nginx -t',
+      instanceType === 'managed'
+        ? nextReloadCommand ?? (useManagedCommandDefaults ? managedReloadCommand : current.nginx_reload_command || managedReloadCommand)
+        : (externalReloadCommand ?? current.nginx_reload_command) || 'nginx -s reload',
+      instanceType === 'managed' ? paths.baseRoot || payload.baseRoot || current.base_root || '' : '',
+      instanceType === 'managed' ? paths.nginxRoot || payload.nginxRoot || current.nginx_root || '' : '',
+      instanceType === 'managed' ? paths.htmlRoot || payload.htmlRoot || current.html_root || '' : '',
+      instanceType === 'managed' ? paths.sitesDir || payload.sitesDir || current.sites_dir || '' : '',
+      instanceType === 'managed' ? paths.logsDir || payload.logsDir || current.logs_dir || '' : '',
+      instanceType === 'managed' ? paths.scriptPath || payload.scriptPath || current.script_path || '' : '',
+      Number(payload.portStart || current.port_start || 8080),
+      (payload.useSudo ?? Boolean(current.use_sudo)) ? 1 : 0,
+      typeChanged ? '' : current.runtime_version || '',
+      typeChanged ? '' : current.package_sha256 || '',
+      typeChanged ? '' : current.package_variant || '',
+      typeChanged ? (instanceType === 'managed' ? 'uninitialized' : 'unknown') : current.status || 'unknown',
+      typeChanged ? '' : current.status_output || '',
+      typeChanged ? null : current.initialized_at || null,
+      now(),
+      Number(id)
+    );
+  } catch (error) {
+    if (instanceType === 'external' && /unique|constraint/i.test(String(error?.message || ''))) {
+      const duplicate = findDuplicateExternalNginxInstance(db, current.server_id, {
+        runtimeFingerprint: nextRuntimeFingerprint,
+        defaultNginxConfPath: nextConfigPath,
+      }, Number(id));
+      if (duplicate) throw createNginxRuntimeConflictError(duplicate);
+    }
+    throw error;
+  }
   return mapNginxInstance(db.prepare('SELECT *, (SELECT COUNT(*) FROM deploy_targets WHERE nginx_instance_id = nginx_instances.id) AS target_count FROM nginx_instances WHERE id = ?').get(Number(id)));
 }
 
