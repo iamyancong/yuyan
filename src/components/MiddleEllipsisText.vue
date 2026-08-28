@@ -95,6 +95,12 @@ const buildMiddleText = (value: string, visibleCount: number) => {
 const displayText = computed(() => buildMiddleText(rawText.value, visibleCharCount.value));
 
 /**
+ * 判断当前文本是否已被截断省略。
+ * @returns 是否处于省略状态
+ */
+const isEllipsized = computed(() => displayText.value !== rawText.value);
+
+/**
  * 测量当前字体的平均字符宽度。
  * @param element - 文本容器
  * @returns 平均字符宽度
@@ -143,7 +149,7 @@ watch(rawText, async () => {
 </script>
 
 <template>
-  <a-tooltip :title="rawText">
+  <a-tooltip :title="isEllipsized ? rawText : undefined">
     <span ref="textRef" class="middle-ellipsis-text">{{ displayText }}</span>
   </a-tooltip>
 </template>
@@ -154,7 +160,7 @@ watch(rawText, async () => {
   width: 100%;
   max-width: 100%;
   overflow: hidden;
-  color: var(--text-color-secondary);
+  color: var(--text-color);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
   font-size: 12px;
   white-space: nowrap;

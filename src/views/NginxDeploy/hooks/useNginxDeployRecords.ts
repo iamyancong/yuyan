@@ -207,7 +207,18 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
       authState.value.host || ''
     );
     if (refreshSequence !== recordRefreshSequence) return;
-    records.value = recordList.items;
+    const targetMap = new Map<number, DeployTarget>();
+    recordTargets.value.forEach((target) => targetMap.set(target.id, target));
+    records.value = recordList.items.map((item) => {
+      const target = targetMap.get(item.targetId);
+      return {
+        ...item,
+        projectDescription: item.projectDescription || target?.projectDescription || '',
+        serverId: item.serverId || target?.serverId || 0,
+        serverName: item.serverName || target?.serverName || '',
+        serverHost: item.serverHost || target?.serverHost || '',
+      };
+    });
     recordPagination.current = recordList.page;
     recordPagination.pageSize = recordList.pageSize;
     recordPagination.total = recordList.total;

@@ -44,14 +44,48 @@
   details {
     margin-top: 3px;
   }
+  > .anticon {
+    margin-top: 2px;
+    font-size: 13px;
+    flex-shrink: 0;
+  }
 }
 
 :deep(.ant-collapse-header) {
-  min-height: 34px;
-  padding: 7px 0 !important;
+  display: flex;
+  align-items: center !important;
+  min-height: 32px;
+  padding: 6px 0 !important;
   color: var(--text-color-secondary) !important;
   font-size: 12px;
   font-weight: 700;
+  line-height: 20px;
+
+  .ant-collapse-expand-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding-inline-end: 6px;
+    margin-top: -2px;
+
+    .ant-collapse-arrow {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      vertical-align: middle;
+
+      svg {
+        display: block;
+      }
+    }
+  }
+
+  .ant-collapse-header-text {
+    display: inline-flex;
+    align-items: center;
+    line-height: 20px;
+  }
 }
 
 :deep(.ant-collapse-content-box) {

@@ -53,7 +53,7 @@ const handleToggle = () => {
           <span class="logo-glass" aria-hidden="true" />
           <LogoSwift :size="30" />
         </div>
-        <span v-if="!collapsed" class="brand-copy">
+        <span class="brand-copy" :aria-hidden="collapsed">
           <strong class="brand-name">雨燕平台</strong>
           <span class="brand-signature"><i aria-hidden="true" /> YUYAN · OPS</span>
         </span>
@@ -61,7 +61,7 @@ const handleToggle = () => {
     </div>
 
     <div class="nav-caption" :aria-hidden="collapsed">
-      <span v-if="!collapsed">工作空间</span>
+      <span class="nav-caption-text">工作空间</span>
     </div>
 
     <a-menu
@@ -96,8 +96,8 @@ const handleToggle = () => {
           <MenuUnfoldOutlined v-if="collapsed" />
           <MenuFoldOutlined v-else />
         </span>
-        <span v-if="!collapsed" class="collapse-label">收起侧栏</span>
-        <span v-if="!collapsed" class="collapse-signal" aria-hidden="true"><i /><i /></span>
+        <span class="collapse-label" :aria-hidden="collapsed">收起侧栏</span>
+        <span class="collapse-signal" aria-hidden="true"><i /><i /></span>
       </button>
     </div>
   </a-layout-sider>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { DeployTarget } from '@/api/deploy';
+import type { DeployRecord, DeployTarget } from '@/api/deploy';
 import { openExternal } from '@/utils/open';
 import { getProjectDescription } from './constant';
 import ProjectTypeIcon from '../ProjectTypeIcon/index.vue';
@@ -7,7 +7,7 @@ import ProjectTypeIcon from '../ProjectTypeIcon/index.vue';
 defineOptions({ name: 'NginxProjectNameCell' });
 
 const props = defineProps<{
-  record: DeployTarget;
+  record: DeployTarget | DeployRecord;
 }>();
 </script>
 
