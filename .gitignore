@@ -37,3 +37,10 @@ src-tauri/resources/bin/
 server/package.json
 server/package-lock.json
 server/node_modules/
+
+# AI Agent / Scratchpad files
+findings.md
+progress.md
+task_plan.md
+task_log.md
+*.plan.md
