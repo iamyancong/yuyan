@@ -32,7 +32,11 @@ export function getPreferredDiscoveryRoot(site: NginxDiscoverySite): NginxDiscov
  * @returns 实例名称建议
  */
 export function createDiscoveredInstanceName(site: NginxDiscoverySite): string {
-  const serverName = site.serverNames.find((name) => name && name !== '_' && !name.includes('$'));
+  const serverName = site.serverNames.find((name) => name
+    && name !== '_'
+    && !name.includes('$')
+    && !name.includes('_')
+    && !/[~*]/.test(name));
   if (serverName) return `${serverName} Nginx`;
   const port = site.listenPorts[0];
   return port ? `Nginx ${port}` : '已有 Nginx';
@@ -59,6 +63,7 @@ export function createExistingNginxSelection(
     formPatch: {
       name: createDiscoveredInstanceName(site),
       instanceType: 'external',
+      runtimeFingerprint: runtime.runtimeFingerprint,
       defaultDeployRoot: root.path,
       defaultNginxConfPath: site.configPath || runtime.mainConfigPath,
       nginxWorkDir: runtime.nginxWorkDir,

@@ -94,7 +94,7 @@ test('v1/v2/v3 迁移保留前端目标，将历史后端命令标记为 legacy 
       taskLogLinked: Boolean(updatedTask.logPath && updatedTask.resultRef),
     }));
   `);
-  assert.deepEqual(migrated.versions, [1, 2, 3, 4, 5]);
+  assert.deepEqual(migrated.versions, [1, 2, 3, 4, 5, 7]);
   assert.deepEqual(migrated.targets, [
     { name: 'backend-app', type: 'backend' },
     { name: 'frontend-app', type: 'frontend' },
@@ -123,7 +123,7 @@ test('v1/v2/v3 迁移保留前端目标，将历史后端命令标记为 legacy 
     console.log(JSON.stringify(result));
   `);
   assert.deepEqual(repeated, {
-    versions: 5,
+    versions: 6,
     configs: 1,
     taskStatus: 'interrupted',
     recordStatus: 'stopped',

@@ -87,6 +87,19 @@ export async function withSsh(server, task) {
  */
 export function execSsh(conn, command, options = {}) {
   return new Promise((resolve, reject) => {
+    /** 创建与 Web AbortSignal 语义一致的取消错误。 */
+    const createAbortError = () => {
+      const error = new Error(`${options.label || '远程命令'}已取消`);
+      error.name = 'AbortError';
+      error.code = 'ERR_CANCELED';
+      return error;
+    };
+
+    if (options.signal?.aborted) {
+      reject(createAbortError());
+      return;
+    }
+
     conn.exec(command, (error, stream) => {
       if (error) {
         reject(error);
@@ -100,6 +113,11 @@ export function execSsh(conn, command, options = {}) {
       const maxOutputBytes = Math.max(0, Number(options.maxOutputBytes || 0));
       let outputBytes = 0;
       let timeout = null;
+
+      /** 清理外部取消监听。 */
+      const clearAbortListener = () => {
+        options.signal?.removeEventListener('abort', handleAbort);
+      };
 
       /** 清理远程命令定时器。 */
       const clearCommandTimeout = () => {
@@ -125,6 +143,7 @@ export function execSsh(conn, command, options = {}) {
         if (settled) return;
         settled = true;
         clearCommandTimeout();
+        clearAbortListener();
         const result = { stdout, stderr, code: Number(code || 0) };
         if (result.code === 0 || options.allowFailure) {
           resolve(result);
@@ -141,8 +160,15 @@ export function execSsh(conn, command, options = {}) {
         if (settled) return;
         settled = true;
         clearCommandTimeout();
+        clearAbortListener();
         reject(streamError);
       };
+
+      /** 收到外部取消信号后关闭 SSH channel。 */
+      function handleAbort() {
+        finishWithError(createAbortError());
+        closeStream();
+      }
 
       /** 收集远程输出并执行大小门禁。 */
       const appendOutput = (target, chunk) => {
@@ -162,6 +188,12 @@ export function execSsh(conn, command, options = {}) {
           finishWithError(new Error(`${options.label || '远程命令'}执行超时（${timeoutMs}ms）`));
           closeStream();
         }, timeoutMs);
+      }
+
+      options.signal?.addEventListener('abort', handleAbort, { once: true });
+      if (options.signal?.aborted) {
+        handleAbort();
+        return;
       }
 
       stream

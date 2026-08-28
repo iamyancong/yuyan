@@ -286,6 +286,7 @@ export const nginxInstanceFormSchema = {
 export const createDefaultNginxInstanceForm = (): NginxInstancePayload => ({
   name: '',
   instanceType: 'managed',
+  runtimeFingerprint: '',
   defaultDeployRoot: '/opt/yuyan/html',
   defaultNginxConfPath: '/opt/yuyan/nginx/conf/nginx.conf',
   nginxWorkDir: '',

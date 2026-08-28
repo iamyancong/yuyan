@@ -1,11 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildNginxAccessEndpoints,
+  dedupeNginxDiagnostics,
   discoverServerNginx,
   parseNginxDiscoverySites,
+  parseNginxDiscoveryListen,
   parseNginxDumpSections,
   parseNginxMasterProcesses,
+  parseNginxProcPaths,
   parseNginxVersionOutput,
+  resolveNginxProcessBinary,
   splitShellWords,
 } from '../nginx-discovery-service.mjs';
 
@@ -82,6 +87,51 @@ test('解析 Nginx 版本、prefix 和默认配置路径', () => {
   );
 });
 
+test('结构化解析 IPv4、IPv6、SSL、通配与 Unix Socket listen', () => {
+  assert.deepEqual(parseNginxDiscoveryListen(['127.0.0.1:8080']), {
+    raw: '127.0.0.1:8080', address: '127.0.0.1', port: 8080, transport: 'tcp', ssl: false, defaultServer: false, wildcard: false, loopback: true,
+  });
+  assert.deepEqual(parseNginxDiscoveryListen(['[::]:443', 'ssl', 'default_server']), {
+    raw: '[::]:443 ssl default_server', address: '::', port: 443, transport: 'tcp', ssl: true, defaultServer: true, wildcard: true, loopback: false,
+  });
+  assert.deepEqual(parseNginxDiscoveryListen(['unix:/run/nginx.sock']), {
+    raw: 'unix:/run/nginx.sock', address: '/run/nginx.sock', port: null, transport: 'unix', ssl: false, defaultServer: false, wildcard: false, loopback: true,
+  });
+});
+
+test('访问地址忽略占位 server_name，并回退到服务器配置 IP', () => {
+  const listens = [parseNginxDiscoveryListen(['*:9999'])];
+  assert.deepEqual(buildNginxAccessEndpoints(listens, ['_', 'SERVER_URL'], '192.168.165.13'), [{
+    url: 'http://192.168.165.13:9999',
+    host: '192.168.165.13',
+    port: 9999,
+    protocol: 'http',
+    source: 'serverHost',
+    scope: 'remote',
+  }]);
+});
+
+test('通过 proc exe/cwd 解析相对二进制，缺少依据时禁止执行', () => {
+  const procPaths = parseNginxProcPaths('101\t/opt/yuyan/nginx/sbin/nginx\t/opt/yuyan/nginx\n202\t\t/home/nginx\n');
+  assert.deepEqual(resolveNginxProcessBinary({ binary: './nginx' }, procPaths.get(101), []), {
+    binary: '/opt/yuyan/nginx/sbin/nginx', status: 'resolved',
+  });
+  assert.deepEqual(resolveNginxProcessBinary({ binary: './sbin/nginx' }, procPaths.get(202), []), {
+    binary: '/home/nginx/sbin/nginx', status: 'resolved',
+  });
+  assert.deepEqual(resolveNginxProcessBinary({ binary: './nginx' }, {}, []), {
+    binary: './nginx', status: 'unresolved',
+  });
+});
+
+test('结构化诊断按稳定键去重', () => {
+  const diagnostic = { code: 'permission_denied', severity: 'warning', scope: 'runtime', summary: '权限不足' };
+  assert.deepEqual(dedupeNginxDiagnostics([diagnostic, { ...diagnostic }, { ...diagnostic, scope: 'scan' }]), [
+    diagnostic,
+    { ...diagnostic, scope: 'scan' },
+  ]);
+});
+
 test('展开配置按来源文件提取静态、混合、alias 和动态 root 站点', () => {
   const sections = parseNginxDumpSections(NGINX_DUMP, '/fallback/nginx.conf');
   const sites = parseNginxDiscoverySites(sections, 'runtime-1');
@@ -126,7 +176,7 @@ test('服务器发现使用 sudo -n 展开配置并标记已接入实例', async
       }
       if (String(options.label || '').startsWith('扫描 ')) return { code: 0, stdout: NGINX_DUMP, stderr: '' };
       if (options.label === '检查 Nginx 前端目录') {
-        return { code: 0, stdout: `${Buffer.from(root).toString('base64')}\t1\t1\n`, stderr: '' };
+        return { code: 0, stdout: `${Buffer.from(root).toString('base64')}\t1\t1\t1\n`, stderr: '' };
       }
       throw new Error(`未处理命令：${command}`);
     },
@@ -137,6 +187,7 @@ test('服务器发现使用 sudo -n 展开配置并标记已接入实例', async
   assert.equal(result.runtimes[0].mainConfigPath, '/home/nginx/conf/nginx.conf');
   assert.equal(result.runtimes[0].connectedInstanceId, 8);
   assert.equal(result.runtimes[0].sites[0].roots[0].hasIndexHtml, true);
+  assert.equal(result.runtimes[0].sites[0].roots[0].readable, true);
   assert.match(result.runtimes[0].nginxTestCommand, /^'\/home\/nginx\/sbin\/nginx' -t/);
   assert.equal(result.runtimes[0].nginxTestCommand.includes('sudo'), false);
   assert.equal(commands.some((command) => command.includes('sudo -n find /home /opt')), true);
@@ -159,7 +210,7 @@ test('sudo 需要交互密码时保留运行实例并给出手工接入提示', 
 
   assert.equal(result.runtimes.length, 1);
   assert.equal(result.runtimes[0].sites.length, 0);
-  assert.equal(result.runtimes[0].warnings.some((item) => item.includes('sudo -n')), true);
+  assert.equal(result.runtimes[0].diagnostics.some((item) => item.code === 'sudo_password_required'), true);
 });
 
 test('普通账号读取权限不足时提示开启 sudo', async () => {
@@ -177,5 +228,5 @@ test('普通账号读取权限不足时提示开启 sudo', async () => {
   });
 
   assert.equal(result.runtimes[0].sites.length, 0);
-  assert.equal(result.runtimes[0].warnings.some((item) => item.includes('开启“使用 sudo”')), true);
+  assert.equal(result.runtimes[0].diagnostics.some((item) => item.code === 'permission_denied' && item.action.includes('使用 sudo')), true);
 });

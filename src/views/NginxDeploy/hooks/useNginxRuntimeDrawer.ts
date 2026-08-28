@@ -1,5 +1,6 @@
 import { reactive, ref } from 'vue';
 import message from 'ant-design-vue/es/message';
+import Modal from 'ant-design-vue/es/modal';
 import {
   createNginxInstance,
   deleteNginxInstance,
@@ -203,6 +204,7 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
     ...createDefaultNginxInstanceForm(),
     name: instance.name,
     instanceType: instance.instanceType,
+    runtimeFingerprint: instance.runtimeFingerprint,
     defaultDeployRoot: instance.defaultDeployRoot,
     defaultNginxConfPath: instance.defaultNginxConfPath,
     nginxWorkDir: instance.nginxWorkDir,
@@ -505,6 +507,7 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
       ...runtimeInstanceForm,
       ...values,
       name: String(values.name || '').trim(),
+      runtimeFingerprint: String(values.runtimeFingerprint || '').trim(),
       defaultDeployRoot: String(values.defaultDeployRoot || '').trim(),
       defaultNginxConfPath: String(values.defaultNginxConfPath || '').trim(),
       nginxWorkDir: String(values.nginxWorkDir || '').trim(),
@@ -533,6 +536,25 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
       await params.refreshServerList();
       await params.refreshActiveTab({ force: true });
     } catch (error: any) {
+      const conflict = error?.response?.data;
+      const existingInstance = conflict?.code === 'nginx_runtime_already_connected'
+        ? conflict?.details?.existingInstance
+        : null;
+      if (existingInstance?.id) {
+        Modal.confirm({
+          title: '该 Nginx 已被接入',
+          content: `现有实例：${existingInstance.name || `#${existingInstance.id}`}。可直接打开，避免重复登记。`,
+          okText: '打开已有实例',
+          cancelText: '留在表单',
+          async onOk() {
+            runtimeInstanceFormOpen.value = false;
+            runtimeInstanceEditingId.value = null;
+            activeNginxInstanceId.value = Number(existingInstance.id);
+            await refreshRuntimeStatus(Number(existingInstance.id));
+          },
+        });
+        return;
+      }
       message.error(getErrorMessage(error));
     } finally {
       runtimeInstanceSaving.value = false;

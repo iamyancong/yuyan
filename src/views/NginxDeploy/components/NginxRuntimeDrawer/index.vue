@@ -72,6 +72,17 @@ const submitInstanceForm = async () => {
 const applyDiscoveredNginx = (values: Partial<NginxInstancePayload>) => {
   instanceFormModel.value = { ...props.instanceForm, ...values };
 };
+
+/** 同步扫描 sudo 选择到实例表单，触发按新条件重新扫描。 */
+const updateDiscoverySudo = (value: boolean) => {
+  instanceFormModel.value = { ...props.instanceForm, useSudo: value };
+};
+
+/** 关闭新增表单并打开扫描识别出的已有实例。 */
+const openConnectedNginx = (instanceId: number) => {
+  instanceFormVisible.value = false;
+  emit('selectInstance', instanceId);
+};
 </script>
 
 <template>
@@ -163,12 +174,12 @@ const applyDiscoveredNginx = (values: Partial<NginxInstancePayload>) => {
   <a-modal
     v-model:open="instanceFormVisible"
     :title="instanceFormTitle"
-    width="min(900px, 94vw)"
+    width="min(980px, 96vw)"
     :confirmLoading="instanceSaving"
     :maskClosable="!instanceSaving"
     :closable="!instanceSaving"
     :destroy-on-close="true"
-    :bodyStyle="{ maxHeight: 'calc(100vh - 220px)', overflowY: 'auto', padding: '18px 18px 2px 0' }"
+    :bodyStyle="{ maxHeight: 'calc(100vh - 220px)', overflowY: 'auto', padding: '14px 18px 2px' }"
     @ok="submitInstanceForm"
   >
     <YssFormily
@@ -181,9 +192,12 @@ const applyDiscoveredNginx = (values: Partial<NginxInstancePayload>) => {
         <ExistingNginxDiscovery
           v-if="instanceFormModel.instanceType === 'external' && instanceFormEditingId === null"
           :server-id="server?.id || 0"
+          :server="server"
           :open="instanceFormVisible"
           :use-sudo="Boolean(instanceFormModel.useSudo)"
           @select="applyDiscoveredNginx"
+          @update-use-sudo="updateDiscoverySudo"
+          @open-connected="openConnectedNginx"
         />
       </template>
     </YssFormily>

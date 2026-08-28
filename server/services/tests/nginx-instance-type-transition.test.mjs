@@ -96,4 +96,53 @@ test('托管实例可安全纠正为已有 Nginx，并允许直接绑定现有�
     /只能配置一个平台托管 Nginx/
   );
   assert.equal(managedAgain.instanceType, 'managed');
+
+  const fingerprint = 'a'.repeat(64);
+  const fingerprintInstance = await store.createNginxInstance(server.id, {
+    name: '指纹实例',
+    instanceType: 'external',
+    runtimeFingerprint: fingerprint,
+    defaultNginxConfPath: '/srv/nginx/conf/nginx.conf',
+  });
+  assert.equal(fingerprintInstance.runtimeFingerprint, fingerprint);
+  await assert.rejects(
+    () => store.createNginxInstance(server.id, {
+      name: '并发重复实例',
+      instanceType: 'external',
+      runtimeFingerprint: fingerprint,
+      defaultNginxConfPath: '/srv/nginx/conf/other.conf',
+    }),
+    (error) => error?.status === 409
+      && error?.code === 'nginx_runtime_already_connected'
+      && error?.details?.existingInstance?.id === fingerprintInstance.id,
+  );
+  await assert.rejects(
+    () => store.createNginxInstance(server.id, {
+      name: '手动路径重复实例',
+      instanceType: 'external',
+      defaultNginxConfPath: '/etc/nginx/./nginx.conf',
+    }),
+    (error) => error?.status === 409 && error?.code === 'nginx_runtime_already_connected',
+  );
+
+  const secondServer = await store.createServer({
+    name: '指纹清理测试机',
+    host: '127.0.0.2',
+    port: 22,
+    username: 'ops',
+    authType: 'password',
+    password: 'secret',
+  });
+  const externalWithFingerprint = await store.createNginxInstance(secondServer.id, {
+    name: '待切换实例',
+    instanceType: 'external',
+    runtimeFingerprint: 'b'.repeat(64),
+    defaultNginxConfPath: '/opt/nginx/conf/nginx.conf',
+  });
+  const convertedManaged = await store.updateNginxInstance(externalWithFingerprint.id, {
+    ...externalWithFingerprint,
+    instanceType: 'managed',
+    baseRoot: '/opt/yuyan-managed',
+  });
+  assert.equal(convertedManaged.runtimeFingerprint, '');
 });

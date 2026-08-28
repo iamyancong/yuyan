@@ -487,6 +487,9 @@ function validateNginxRuntimePayload(body = {}) {
 function validateNginxInstancePayload(body = {}) {
   if (!String(body.name || '').trim()) throw new Error('Nginx 实例名称必填');
   if (body.instanceType && !['external', 'managed'].includes(String(body.instanceType))) throw new Error('Nginx 实例类型不合法');
+  if (body.runtimeFingerprint && !/^[a-f\d]{64}$/i.test(String(body.runtimeFingerprint).trim())) {
+    throw new Error('Nginx 运行时指纹格式不合法');
+  }
   const instanceType = body.instanceType === 'managed' ? 'managed' : 'external';
   if (instanceType === 'managed') {
     validateNginxRuntimePayload(body);
@@ -671,15 +674,29 @@ export async function handleListDeployRootOptions(req, res) {
  * 只读发现服务器宿主机 Nginx 与前端站点。
  */
 export async function handleDiscoverServerNginx(req, res) {
+  const abortController = new AbortController();
+  /** 客户端断开后终止仍在运行的只读 SSH 扫描。 */
+  const abortScan = () => abortController.abort(new Error('客户端已取消 Nginx 扫描'));
+  /** 仅在响应未正常完成时处理中断。 */
+  const handleResponseClose = () => {
+    if (!res.writableEnded) abortScan();
+  };
+  req.on('aborted', abortScan);
+  res.on('close', handleResponseClose);
   try {
     res.json({
       success: true,
       data: await discoverServerNginx(Number(req.params.id), {
         useSudo: req.query?.useSudo === undefined ? undefined : String(req.query.useSudo) === '1',
+        signal: abortController.signal,
       }),
     });
   } catch (error) {
+    if (abortController.signal.aborted && !res.headersSent) return;
     sendError(res, error, 400);
+  } finally {
+    req.off('aborted', abortScan);
+    res.off('close', handleResponseClose);
   }
 }
 
