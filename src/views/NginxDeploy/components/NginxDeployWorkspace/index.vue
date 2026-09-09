@@ -1,12 +1,14 @@
 <script setup lang="ts">
+import { defineAsyncComponent } from 'vue';
 import message from 'ant-design-vue/es/message';
 import { YCard } from '@yss-ui/components/lite';
 import type { YTableActionConfig } from '@yss-ui/components/lite';
 import type { DeployProjectContext, TargetFilterForm } from '../../types';
 import DeployHero from '../DeployHero/index.vue';
 import DeployTargetTab from '../DeployTargetTab/index.vue';
-import DeployServerTab from '../DeployServerTab/index.vue';
-import DeployRecordTab from '../DeployRecordTab/index.vue';
+
+const DeployServerTab = defineAsyncComponent(() => import('../DeployServerTab/index.vue'));
+const DeployRecordTab = defineAsyncComponent(() => import('../DeployRecordTab/index.vue'));
 
 defineOptions({ name: 'NginxDeployWorkspace' });
 
@@ -85,6 +87,7 @@ const handleOpenNginxRuntime = async () => {
         >
         <a-tab-pane key="targets" tab="部署目标">
           <DeployTargetTab
+            :active="lifecycleState.activeTabKey.value === 'targets'"
             :loading="lifecycleState.loading.value"
             :targets="targetState.runtimeTargets.value"
             :filter-form="targetState.targetFilterForm"
@@ -99,6 +102,7 @@ const handleOpenNginxRuntime = async () => {
         </a-tab-pane>
         <a-tab-pane key="servers" tab="服务器管理">
           <DeployServerTab
+            :active="lifecycleState.activeTabKey.value === 'servers'"
             :loading="lifecycleState.loading.value"
             :order-saving="serverState.serverOrderSaving.value"
             :servers="serverState.servers.value"

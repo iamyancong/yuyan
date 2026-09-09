@@ -1540,5 +1540,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     handleSaveNginxConf,
     handleTestNginxConf,
     clearTargetData,
+    startTargetRuntimePolling,
+    stopTargetRuntimePolling,
   };
 }

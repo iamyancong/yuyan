@@ -16,6 +16,7 @@ const TABLE_MIN_HEIGHT = 240;
 
 /** 服务器管理 Tab 属性 */
 interface DeployServerTabProps {
+  active?: boolean;
   loading: boolean;
   orderSaving: boolean;
   servers: DeployServer[];
@@ -45,8 +46,9 @@ const isDragable = computed(() => {
   return tableData.value.length > 0 && !props.orderSaving;
 });
 
-/** 等待视图更新后重新计算表格高度 */
+/** 等待视图更新后重新计算表格高度（仅在当前 Tab 激活时执行，避免后台强制回流） */
 const recalculateAfterRender = async () => {
+  if (props.active === false) return;
   await nextTick();
   recalculateHeight();
 };
@@ -59,10 +61,10 @@ let dragTargetServer: DeployServer | null = null;
 let dragInsertPos: 'top' | 'bottom' = 'top';
 
 /**
- * 隐藏拖拽浮盒/指示线并强制还原所有节点（tr, td, cell 等）的样式与透明度（彻底避免拖拽后样式残留）
+ * 隐藏拖拽浮盒/指示线并还原所有节点的样式与透明度
  */
 const clearVxeDragStatus = () => {
-  if (!tableAreaRef.value) return;
+  if (!tableAreaRef.value || props.active === false) return;
 
   // 1. 隐藏残留的拖拽 Tip 浮盒与指示线
   const tipEl = tableAreaRef.value.querySelector('.vxe-table--drag-sort-tip') as HTMLElement | null;
@@ -74,7 +76,7 @@ const clearVxeDragStatus = () => {
     lineEl.style.display = 'none';
   }
 
-  // 2. 深度清除所有节点（tr, td, cell等）的半透明 (opacity) 与拖拽相关 Class
+  // 2. 清除节点的拖拽残留类与透明度
   const targetEls = tableAreaRef.value.querySelectorAll(
     'tr, td, th, .vxe-body--row, .vxe-body--column, .vxe-cell, .vxe-table--body-wrapper'
   );
@@ -99,31 +101,30 @@ const clearVxeDragStatus = () => {
   });
 };
 
-const triggerFullCleanup = () => {
+/** 拖拽结束后清理视觉残影（仅在实际拖拽操作完成时触发） */
+const cleanupDragArtifacts = () => {
   clearVxeDragStatus();
-  nextTick(() => clearVxeDragStatus());
-  setTimeout(() => clearVxeDragStatus(), 60);
-  setTimeout(() => clearVxeDragStatus(), 180);
-  setTimeout(() => clearVxeDragStatus(), 350);
+  requestAnimationFrame(() => clearVxeDragStatus());
 };
 
 watch([() => props.loading, () => props.servers.length], recalculateAfterRender, { flush: 'post' });
+
+watch(
+  () => props.active,
+  (isActive) => {
+    if (isActive) {
+      void recalculateAfterRender();
+    }
+  },
+  { flush: 'post' }
+);
+
 watch(
   () => props.servers,
   (servers) => {
     tableData.value = [...servers];
-    triggerFullCleanup();
   },
   { immediate: true }
-);
-
-watch(
-  () => props.orderSaving,
-  (saving) => {
-    if (!saving) {
-      triggerFullCleanup();
-    }
-  }
 );
 
 const handleAreaDragStart = (e: DragEvent) => {
@@ -191,13 +192,13 @@ const handleAreaDrop = (e: DragEvent) => {
   }
   dragSourceServer = null;
   dragTargetServer = null;
-  triggerFullCleanup();
+  cleanupDragArtifacts();
 };
 
 const handleAreaDragEnd = () => {
   dragSourceServer = null;
   dragTargetServer = null;
-  triggerFullCleanup();
+  cleanupDragArtifacts();
 };
 
 /**
@@ -214,7 +215,7 @@ const handleRowDragEnd = (params: any) => {
     if (isChanged) {
       tableData.value = [...data];
       emit('reorder', [...data]);
-      triggerFullCleanup();
+      cleanupDragArtifacts();
       return;
     }
   }
@@ -222,7 +223,7 @@ const handleRowDragEnd = (params: any) => {
   if (oldRow && newRow) {
     executeReorder(oldRow, newRow, dragPos);
   }
-  triggerFullCleanup();
+  cleanupDragArtifacts();
 };
 </script>
 
