@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { CheckCircleOutlined, ClockCircleOutlined, CloseCircleOutlined, RocketOutlined, StopOutlined, SyncOutlined } from '@ant-design/icons-vue';
-import { YButton, YMonaco } from '@ycwang-dev/components/lite';
+import { YButton, YMonaco } from '@yss-ui/components/lite';
 import { computed, ref, watch } from 'vue';
 import type { PublishConfirmModalProps, PublishStartOptions } from './constant';
 import { usePublishConfirm } from './hooks/usePublishConfirm';

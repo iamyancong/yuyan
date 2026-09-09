@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { DeleteOutlined } from '@ant-design/icons-vue';
-import { YButton } from '@ycwang-dev/components/lite';
+import { YButton } from '@yss-ui/components/lite';
 import type { AgentOperation } from '@/api/agent';
 import {
   AGENT_RISK_LABELS,

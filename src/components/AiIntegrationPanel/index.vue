@@ -6,7 +6,7 @@ import {
   SafetyCertificateOutlined,
   UserOutlined,
 } from '@ant-design/icons-vue';
-import { YButton } from '@ycwang-dev/components/lite';
+import { YButton } from '@yss-ui/components/lite';
 import AiSectionShell from './components/AiSectionShell.vue';
 import ClientInstallList from './components/ClientInstallList.vue';
 import ApprovalPolicyCard from './components/ApprovalPolicyCard.vue';

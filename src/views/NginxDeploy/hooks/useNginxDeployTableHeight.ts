@@ -1,5 +1,5 @@
 import { computed, nextTick, ref, watch, type Ref } from 'vue';
-import { useTableHeight } from '@ycwang-dev/hooks';
+import { useTableHeight } from '@yss-ui/hooks';
 import type { NginxDeployTabKey } from '../types';
 
 /** 表格初始高度，避免首次计算前页面抖动 */

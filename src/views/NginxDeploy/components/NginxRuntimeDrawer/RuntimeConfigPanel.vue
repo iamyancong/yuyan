@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { YssFormily } from '@ycwang-dev/components/lite';
+import { YssFormily } from '@yss-ui/components/lite';
 import type { NginxRuntimePayload } from '@/api/deploy';
 import { nginxRuntimeFormSchema } from './constant';
 

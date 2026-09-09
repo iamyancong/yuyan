@@ -1,5 +1,5 @@
 import { computed, nextTick, ref, watch, type Ref } from 'vue';
-import { useTableHeight } from '@ycwang-dev/hooks';
+import { useTableHeight } from '@yss-ui/hooks';
 
 /** 项目列表表格外固定区域偏移：卡片头部、筛选区、卡片内边距与间距 */
 const PROJECT_LIST_TABLE_OFFSET = 188;

@@ -45,7 +45,7 @@
 │  前端 SPA (Vue 3, src/)    │   │  Node 服务 (Express, server/) │
 │  · Vue Router / 组件        │──▶│  · /scaffold-api  脚手架      │
 │  · Ant Design Vue / vxe-ui │HTTP│  · /deploy-api    部署        │
-│  · @ycwang-dev/*  业务组件  │   │  · /health        健康检查    │
+│  · @yss-ui/*      业务组件  │   │  · /health        健康检查    │
 └───────────────────────────┘   │  · SQLite 持久化 / SSH 操作   │
                                  └───────────────────────────┘
 ```
@@ -62,7 +62,7 @@
 - Vite 7 + vue-tsc
 - Vue Router 4（Hash 模式）
 - Ant Design Vue 4 / vxe-pc-ui 4
-- `@ycwang-dev/components`、`@ycwang-dev/hooks`、`@ycwang-dev/utils`（私有业务组件库）
+- `@yss-ui/components`、`@yss-ui/hooks`、`@yss-ui/utils`、`@yss-ui/theme`（企业级通用组件库）
 - Less
 
 **桌面端**
@@ -121,16 +121,9 @@ yuyan-app/
 
 ### 安装依赖
 
-项目使用了私有 npm 包 `@ycwang-dev/*`（托管在 GitHub Packages），安装前需配置可访问的 Token：
-
 ```bash
-# 设置 GitHub Packages 访问 Token（用于 @ycwang-dev 私有包）
-export GITHUB_TOKEN=<your_github_token>
-
 pnpm install
 ```
-
-> `.npmrc` 已将默认源指向 npmmirror 镜像，并把 `@ycwang-dev` 作用域指向 `npm.pkg.github.com`，因此必须提供 `GITHUB_TOKEN`。
 
 ### 开发调试
 
@@ -228,7 +221,6 @@ pnpm build
 - **macOS 每次启动都要求授权钥匙串**：新版本不再访问 macOS 钥匙串，账号、设备私钥和本机数据库密钥改存应用数据目录中的 AES-256-GCM 加密保险库，因此不会再出现该授权弹窗。首次从旧版升级需要重新登录一次；已保存的 SSH、Nacos 等本机敏感配置因旧主密钥无法在不触发钥匙串的前提下恢复，需要重新录入。旧钥匙串项目不会被自动读取或删除，便于必要时回退旧版本。
 - **免费 macOS 包首次无法直接打开**：由于采用 ad-hoc 签名且不做 Apple 公证，首次安装可能被 Gatekeeper 拦截。请在 Finder 中右键应用选择“打开”并确认；之后普通启动即可。Windows 用户仍直接安装 EXE，无需配置任何 GitHub Secret。
 - **本地保险库的安全边界**：保险库密文、随机密钥和目录分别限制为当前系统用户可访问；它能避免明文落盘和普通误读，但不能抵御已经取得同一系统用户权限的恶意程序。高安全环境仍建议使用付费系统代码签名与企业设备管理。
-- **`pnpm install` 报 401 / 找不到 `@ycwang-dev/*`**：未配置 `GITHUB_TOKEN`，或 Token 无 `read:packages` 权限。
 - **创建微应用失败**：检查 `GITLAB_TOKEN`、模板仓库地址与网络连通性（启动日志会给出对应提示）。
 
 ---

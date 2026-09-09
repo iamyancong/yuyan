@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { YMonaco } from '@ycwang-dev/components/lite';
+import { YMonaco } from '@yss-ui/components/lite';
 import type { DeployTarget } from '@/api/deploy';
 import { useNginxConfig } from './hooks/useNginxConfig';
 

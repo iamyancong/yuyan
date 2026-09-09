@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { toRef } from 'vue';
-import { YTable } from '@ycwang-dev/components/lite';
-import type { YTableActionConfig } from '@ycwang-dev/components/lite';
+import { YTable } from '@yss-ui/components/lite';
+import type { YTableActionConfig } from '@yss-ui/components/lite';
 import type { DeployRecord } from '@/api/deploy';
 import { getDeployRecordStatusColor, getDeployRecordStatusLabel, recordColumns } from '../../constant';
 import type { RecordProjectOption, RecordServerOption } from '../../types';

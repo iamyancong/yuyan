@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue';
-import { YssFormily } from '@ycwang-dev/components/lite';
+import { YssFormily } from '@yss-ui/components/lite';
 import type { DeployTargetPayload } from '@/api/deploy';
 import type { FormilyRef } from '../../../../types';
 import DeployRootField from '../DeployRootField/index.vue';

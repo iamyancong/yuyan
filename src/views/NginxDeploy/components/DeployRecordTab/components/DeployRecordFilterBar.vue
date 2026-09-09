@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { SyncOutlined } from '@ant-design/icons-vue';
-import { YButton } from '@ycwang-dev/components/lite';
+import { YButton } from '@yss-ui/components/lite';
 import type { RecordProjectOption, RecordServerOption } from '../../../types';
 
 defineOptions({ name: 'DeployRecordFilterBar' });

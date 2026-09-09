@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { ApiOutlined, CheckOutlined, DeleteOutlined, EditOutlined, SafetyCertificateOutlined } from '@ant-design/icons-vue';
-import { YButton } from '@ycwang-dev/components/lite';
+import { YButton } from '@yss-ui/components/lite';
 import type { DeployEnvironment } from '@/api/deploy';
 import { formatEnvironmentCheckedAt, getEnvironmentStatusMeta } from '../../constant';
 

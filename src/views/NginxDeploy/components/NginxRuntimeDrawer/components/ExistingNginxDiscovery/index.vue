@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { ReloadOutlined, SafetyCertificateOutlined } from '@ant-design/icons-vue';
-import { YButton } from '@ycwang-dev/components/lite';
+import { YButton } from '@yss-ui/components/lite';
 import type { DeployServer, NginxInstancePayload } from '@/api/deploy';
 import DiscoverySecondaryGroups from './DiscoverySecondaryGroups.vue';
 import RuntimeDiscoveryGroup from './RuntimeDiscoveryGroup.vue';

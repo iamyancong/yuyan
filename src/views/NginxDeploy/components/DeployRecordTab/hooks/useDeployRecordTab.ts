@@ -1,5 +1,5 @@
 import { computed, nextTick, ref, watch, type Ref } from 'vue';
-import { useTableHeight } from '@ycwang-dev/hooks';
+import { useTableHeight } from '@yss-ui/hooks';
 import type { DeployRecord } from '@/api/deploy';
 import { buildCommitUrl, TABLE_DEFAULT_HEIGHT, TABLE_MIN_HEIGHT } from '../constant';
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, toRef } from 'vue';
-import { YButton } from '@ycwang-dev/components/lite';
+import { YButton } from '@yss-ui/components/lite';
 import type { BuildJdk, DeployServer, ServerJavaRuntime } from '@/api/deploy';
 import { useBackendJavaManager } from './hooks/useBackendJavaManager';
 

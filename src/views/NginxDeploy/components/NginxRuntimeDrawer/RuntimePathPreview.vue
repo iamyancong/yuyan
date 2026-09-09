@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import message from 'ant-design-vue/es/message';
-import { YButton } from '@ycwang-dev/components/lite';
-import { copyToClipboard } from '@ycwang-dev/utils';
+import { YButton } from '@yss-ui/components/lite';
+import { copyToClipboard } from '@yss-ui/utils';
 import { CloudDownloadOutlined, CopyOutlined, DownOutlined } from '@ant-design/icons-vue';
 import type { RuntimePathRow } from './constant';
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { YMonaco } from '@ycwang-dev/components/lite';
+import { YMonaco } from '@yss-ui/components/lite';
 import type { DeployProgressEvent } from '@/api/deploy';
 
 defineOptions({ name: 'NginxRuntimeProgressPanel' });

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ExportOutlined, WarningOutlined } from '@ant-design/icons-vue';
-import { YButton } from '@ycwang-dev/components/lite';
+import { YButton } from '@yss-ui/components/lite';
 import type { NginxDiscoveryDiagnostic, NginxDiscoveryRuntime } from '@/api/deploy';
 
 defineOptions({ name: 'NginxDiscoverySecondaryGroups' });

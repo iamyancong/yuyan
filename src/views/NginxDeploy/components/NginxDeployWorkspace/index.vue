@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import message from 'ant-design-vue/es/message';
-import { YCard } from '@ycwang-dev/components/lite';
-import type { YTableActionConfig } from '@ycwang-dev/components/lite';
+import { YCard } from '@yss-ui/components/lite';
+import type { YTableActionConfig } from '@yss-ui/components/lite';
 import type { DeployProjectContext, TargetFilterForm } from '../../types';
 import DeployHero from '../DeployHero/index.vue';
 import DeployTargetTab from '../DeployTargetTab/index.vue';

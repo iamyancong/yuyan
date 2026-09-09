@@ -5,7 +5,7 @@ import {
   DownloadOutlined,
   ReloadOutlined,
 } from '@ant-design/icons-vue';
-import { YButton } from '@ycwang-dev/components/lite';
+import { YButton } from '@yss-ui/components/lite';
 import ArchiveSiteList from './components/ArchiveSiteList/index.vue';
 import ArchiveTypeSelector from './components/ArchiveTypeSelector/index.vue';
 import type { ArchiveSiteSelectionModalProps } from './constant';

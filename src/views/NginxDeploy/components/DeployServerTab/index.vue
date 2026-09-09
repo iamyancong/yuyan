@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
-import { YTable } from '@ycwang-dev/components/lite';
-import { useTableHeight } from '@ycwang-dev/hooks';
-import type { YTableActionConfig } from '@ycwang-dev/components/lite';
+import { YTable } from '@yss-ui/components/lite';
+import { useTableHeight } from '@yss-ui/hooks';
+import type { YTableActionConfig } from '@yss-ui/components/lite';
 import type { DeployServer } from '@/api/deploy';
 import { serverColumns } from '../../constant';
 

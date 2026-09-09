@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { BulbOutlined, CheckOutlined, CloseOutlined, EyeInvisibleOutlined } from '@ant-design/icons-vue';
-import { YButton } from '@ycwang-dev/components/lite';
+import { YButton } from '@yss-ui/components/lite';
 import { useTheme } from '@/hooks/useTheme';
 import {
   BORDER_RADIUS_RANGE,

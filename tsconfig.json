@@ -3,10 +3,7 @@
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"],
-      "@yss-ui/components": ["node_modules/@ycwang-dev/components"],
-      "@yss-ui/hooks": ["node_modules/@ycwang-dev/hooks"],
-      "@yss-ui/utils": ["node_modules/@ycwang-dev/utils"]
+      "@/*": ["src/*"]
     }
   },
   "include": ["src/**/*", "src/**/*.vue"],

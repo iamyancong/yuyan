@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { CheckOutlined, CloseOutlined, CopyOutlined, DownOutlined, LoadingOutlined, UpOutlined } from '@ant-design/icons-vue';
-import { YButton } from '@ycwang-dev/components/lite';
+import { YButton } from '@yss-ui/components/lite';
 import message from 'ant-design-vue/es/message';
 import { computed, nextTick, ref, watch } from 'vue';
 import {

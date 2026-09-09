@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { YButton, YMonaco } from '@ycwang-dev/components/lite';
+import { YButton, YMonaco } from '@yss-ui/components/lite';
 import { LinkOutlined } from '@ant-design/icons-vue';
 import type { DeployTarget, OpenApiArtifact } from '@/api/deploy';
 import { OPENAPI_JSON_LANGUAGE } from '@/utils/monacoJsonHighlight';

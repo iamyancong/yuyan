@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue';
-import { YssFormily } from '@ycwang-dev/components/lite';
+import { YssFormily } from '@yss-ui/components/lite';
 import type { NginxInstancePayload } from '@/api/deploy';
 import type { NginxRuntimeDrawerEmits, NginxRuntimeDrawerProps } from './constant';
 import RuntimeConfigPanel from './RuntimeConfigPanel.vue';

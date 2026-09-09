@@ -1,4 +1,4 @@
-import type { YTableColumn } from '@ycwang-dev/components/lite';
+import type { YTableColumn } from '@yss-ui/components/lite';
 import type { DeployProgressEvent, DeployProgressSnapshot, DeployProjectSource, DeployRecord, DeployRecordAction, DeployUploadStrategy } from '@/api/deploy';
 import { formatServerLabel } from './utils';
 

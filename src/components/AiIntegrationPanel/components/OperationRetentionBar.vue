@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { YButton } from '@ycwang-dev/components/lite';
+import { YButton } from '@yss-ui/components/lite';
 import type { AgentOperationRetentionPolicy } from '@/api/agent';
 import { AGENT_OPERATION_RETENTION_OPTIONS } from '../constant';
 

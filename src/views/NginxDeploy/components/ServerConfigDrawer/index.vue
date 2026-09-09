@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue';
-import { YButton, YssFormily } from '@ycwang-dev/components/lite';
+import { YButton, YssFormily } from '@yss-ui/components/lite';
 import type { DeployServerPayload } from '@/api/deploy';
 import type { FormilyRef } from '../../types';
 import { serverFormSchema } from '../../constant';

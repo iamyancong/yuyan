@@ -1,6 +1,6 @@
 import { ref, reactive, watch } from 'vue';
 import message from 'ant-design-vue/es/message';
-import type { YTableColumn } from '@ycwang-dev/components/lite';
+import type { YTableColumn } from '@yss-ui/components/lite';
 import { useAuth } from '@/composables/useAuth';
 import { getProjects, type GitLabProject, type GroupTreeNode, type ProjectSearchParams } from '@/api/gitlab';
 

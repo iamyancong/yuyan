@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, toRef } from 'vue';
 import { PlusOutlined } from '@ant-design/icons-vue';
-import { YButton } from '@ycwang-dev/components/lite';
+import { YButton } from '@yss-ui/components/lite';
 import type { DeployEnvironment } from '@/api/deploy';
 import EnvironmentCard from './components/EnvironmentCard/index.vue';
 import { useBackendEnvironments } from './hooks/useBackendEnvironments';

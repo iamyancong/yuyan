@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { FolderOutlined, FileTextOutlined, PlusOutlined, MinusOutlined, CopyOutlined } from '@ant-design/icons-vue';
-import { copyToClipboard } from '@ycwang-dev/utils';
+import { copyToClipboard } from '@yss-ui/utils';
 import { openExternal } from '@/utils/open';
 import message from 'ant-design-vue/es/message';
 import type { GitLabProject, GroupTreeNode } from '@/api/gitlab';

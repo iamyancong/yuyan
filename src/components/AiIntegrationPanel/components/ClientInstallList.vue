@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { YButton } from '@ycwang-dev/components/lite';
+import { YButton } from '@yss-ui/components/lite';
 import type { AgentClientStatus } from '@/api/agent';
 
 /** 客户端安装列表属性。 */

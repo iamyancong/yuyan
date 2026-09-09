@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { CloudServerOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/icons-vue';
-import { YButton } from '@ycwang-dev/components/lite';
+import { YButton } from '@yss-ui/components/lite';
 import { useNginxDeployContext } from '../../hooks/useNginxDeployContext';
 
 defineOptions({ name: 'DeployHero' });

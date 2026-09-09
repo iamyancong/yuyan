@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { FolderOutlined, GlobalOutlined } from '@ant-design/icons-vue';
-import { YButton } from '@ycwang-dev/components/lite';
+import { YButton } from '@yss-ui/components/lite';
 import type { NginxDiscoveryRuntime } from '@/api/deploy';
 import { createExistingNginxSelection, type ExistingNginxSelection } from './selectionPolicy';
 import {

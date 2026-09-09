@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onMounted, ref } from 'vue';
-import '@ycwang-dev/components/dist/style.css';
+import '@yss-ui/components/dist/style.css';
 import { useYssVxeUI } from '@/composables/useYssVxeUI';
 import NginxDeployWorkspace from './components/NginxDeployWorkspace/index.vue';
 import NginxDeployOverlayHost from './components/NginxDeployOverlayHost/index.vue';

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { DeleteOutlined, LaptopOutlined, LinkOutlined } from '@ant-design/icons-vue';
-import { YButton } from '@ycwang-dev/components/lite';
+import { YButton } from '@yss-ui/components/lite';
 import type { CentralDevice, CentralMe } from '@/api/centralIdentity';
 import type { SecureAccountState } from '@/services/secureAuth';
 

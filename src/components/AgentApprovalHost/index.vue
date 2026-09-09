@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ExclamationCircleOutlined, SafetyCertificateOutlined } from '@ant-design/icons-vue';
-import { YButton } from '@ycwang-dev/components/lite';
+import { YButton } from '@yss-ui/components/lite';
 import { useAgentApproval } from './hooks/useAgentApproval';
 
 defineOptions({ name: 'AgentApprovalHost' });

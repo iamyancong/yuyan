@@ -1,5 +1,5 @@
 import { computed, type Ref, ref, onActivated, onDeactivated, onMounted, onUnmounted } from 'vue';
-import type { YTableActionConfig } from '@ycwang-dev/components/lite';
+import type { YTableActionConfig } from '@yss-ui/components/lite';
 import type { DeployProgressSnapshot, DeployRecord, DeployServer, DeployTarget } from '@/api/deploy';
 import { useNginxDeployContext } from './useNginxDeployContext';
 import { isTauri } from '@/utils/env';
