@@ -51,7 +51,7 @@ const resolveManualChunk = (id: string) => {
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   const appServerUrl = env.VITE_APP_SERVER_URL || 'http://127.0.0.1:3100';
-  const gitlabHostDefault = env.VITE_GITLAB_HOST || 'http://192.168.167.142:8081';
+  const gitlabHostDefault = env.VITE_GITLAB_HOST || 'http://127.0.0.1:8081';
 
   return {
     plugins: [

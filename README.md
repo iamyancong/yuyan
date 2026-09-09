@@ -1,5 +1,13 @@
 # 雨燕（Yuyan）桌面端
 
+<p align="center">
+  <a href="https://github.com/ycwang-dev/yuyan/releases"><img src="https://img.shields.io/github/v/release/ycwang-dev/yuyan?style=flat-square&color=41B883" alt="Release"></a>
+  <a href="https://vuejs.org/"><img src="https://img.shields.io/badge/Vue-3.5-41B883?style=flat-square&logo=vue.js" alt="Vue 3"></a>
+  <a href="https://tauri.app/"><img src="https://img.shields.io/badge/Tauri-2.x-24C8D8?style=flat-square&logo=tauri" alt="Tauri 2"></a>
+  <a href="https://www.npmjs.com/package/@yss-ui/components"><img src="https://img.shields.io/npm/v/@yss-ui/components?label=@yss-ui/components&style=flat-square&color=1890ff" alt="yss-ui"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="License"></a>
+</p>
+
 > 雨燕平台桌面端 —— 面向前端团队的一站式「微应用脚手架 + 运维部署」工具。
 
 雨燕是一款基于 **Tauri 2 + Vue 3 + 内嵌 Node.js（Express）服务** 构建的跨平台桌面应用。它把「创建微应用」「管理 GitLab 仓库」「向独立服务器发布静态站点 / 管理 Nginx」这些日常前端工程化与运维动作整合到一个本地客户端中，无需在浏览器、终端、SSH 工具之间来回切换。
@@ -227,4 +235,4 @@ pnpm build
 
 ## 📄 许可
 
-私有项目，仅供内部使用。
+本项目基于 [MIT 协议](LICENSE) 开源。欢迎社区开发者提出建议、提交 Issue 或发起 Pull Request。
