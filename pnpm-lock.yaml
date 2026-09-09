@@ -1721,20 +1721,20 @@ packages:
         optional: true
 
   '@ycwang-dev/components@1.5.14':
-    resolution: {integrity: sha512-npUkWyb8eWi1+xNZLxE731hZ2qR0cfIFj6akOXlod+FFmX6H+LUPUSzFG5b95EjsadUljriiAVQSva6zqQgHHA==, tarball: https://npm.pkg.github.com/download/@ycwang-dev/components/1.5.14/4a5bb792737884f88716b3bcb6ef65ddebd0ee54}
+    resolution: {integrity: sha512-npUkWyb8eWi1+xNZLxE731hZ2qR0cfIFj6akOXlod+FFmX6H+LUPUSzFG5b95EjsadUljriiAVQSva6zqQgHHA==, tarball: https://npm.pkg.github.com/download/@iamyancong/components/1.5.14/4a5bb792737884f88716b3bcb6ef65ddebd0ee54}
     peerDependencies:
       ant-design-vue: ^4.0.7
       dayjs: '>=1.11.0'
       vue: '>=3.3.0'
 
   '@ycwang-dev/hooks@1.1.2':
-    resolution: {integrity: sha512-LFEY8C20Ws5ckdByMlq/oBDyGmQZOoTCOsgRq1/HFZXxHvWY8XqbCxLXPSRbDVAsPE1cO4GWvswM+DRCSSLN9Q==, tarball: https://npm.pkg.github.com/download/@ycwang-dev/hooks/1.1.2/7f969ede17e832b5705e255c804efa555eb78ecd}
+    resolution: {integrity: sha512-LFEY8C20Ws5ckdByMlq/oBDyGmQZOoTCOsgRq1/HFZXxHvWY8XqbCxLXPSRbDVAsPE1cO4GWvswM+DRCSSLN9Q==, tarball: https://npm.pkg.github.com/download/@iamyancong/hooks/1.1.2/7f969ede17e832b5705e255c804efa555eb78ecd}
 
   '@ycwang-dev/theme@1.0.3':
-    resolution: {integrity: sha512-di48KNUKv+aag+Vew38c83ERRwg4qxw1QqnPz3hcR1f80f2dVh+FzEVNOqwFLM1y63L//b1jvx3TCFaj/vb5lQ==, tarball: https://npm.pkg.github.com/download/@ycwang-dev/theme/1.0.3/85162134e7c140fbea30aa04cfaa94905f28adae}
+    resolution: {integrity: sha512-di48KNUKv+aag+Vew38c83ERRwg4qxw1QqnPz3hcR1f80f2dVh+FzEVNOqwFLM1y63L//b1jvx3TCFaj/vb5lQ==, tarball: https://npm.pkg.github.com/download/@iamyancong/theme/1.0.3/85162134e7c140fbea30aa04cfaa94905f28adae}
 
   '@ycwang-dev/utils@1.0.6':
-    resolution: {integrity: sha512-bZZgiIRhu9gRBYQv/a3fviM5S3rz3uNJkjlwqe4aw6BnIDJ3B+ktPgNBIJ2v/AS18FHW4AS05WKvgXVMJ6ih0w==, tarball: https://npm.pkg.github.com/download/@ycwang-dev/utils/1.0.6/fd122e9247c513bf9a2d109bb9779ba7676fdd72}
+    resolution: {integrity: sha512-bZZgiIRhu9gRBYQv/a3fviM5S3rz3uNJkjlwqe4aw6BnIDJ3B+ktPgNBIJ2v/AS18FHW4AS05WKvgXVMJ6ih0w==, tarball: https://npm.pkg.github.com/download/@iamyancong/utils/1.0.6/fd122e9247c513bf9a2d109bb9779ba7676fdd72}
 
   accepts@2.0.0:
     resolution: {integrity: sha512-5cvg6CtKwfgdmVqY1WIiXKc3Q1bkRqGLi+2W/6ao+6Y7gu/RCwRuAhGEzh5B4KlszSuTLgZYuqFqo5bImjNKng==, tarball: https://registry.npmmirror.com/accepts/-/accepts-2.0.0.tgz}
