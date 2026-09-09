@@ -22,6 +22,7 @@ interface SelectOption {
 
 /** 部署目标 Tab 属性 */
 interface DeployTargetTabProps {
+  active?: boolean;
   loading: boolean;
   targets: RuntimeAwareDeployTarget[];
   filterForm: TargetFilterForm;
@@ -49,13 +50,24 @@ const tableHeight = computed(() => {
   return rawTableHeight.value > 240 ? rawTableHeight.value : 240;
 });
 
-/** 等待视图更新后重新计算表格高度 */
+/** 等待视图更新后重新计算表格高度（仅在当前 Tab 激活时执行，避免后台强制回流） */
 const recalculateAfterRender = async () => {
+  if (props.active === false) return;
   await nextTick();
   recalculateHeight();
 };
 
 watch([() => props.loading, () => props.targets.length], recalculateAfterRender, { flush: 'post' });
+
+watch(
+  () => props.active,
+  (isActive) => {
+    if (isActive) {
+      void recalculateAfterRender();
+    }
+  },
+  { flush: 'post' }
+);
 
 /**
  * 传递最新的筛选表单数据。

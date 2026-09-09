@@ -34,8 +34,9 @@ export function useDeployRecordTab(options: UseDeployRecordTabOptions) {
     return rawTableHeight.value > TABLE_MIN_HEIGHT ? rawTableHeight.value : TABLE_MIN_HEIGHT;
   });
 
-  /** 等待视图更新后重新计算表格高度 */
+  /** 等待视图更新后重新计算表格高度（仅在当前 Tab 激活时执行，避免后台强制回流） */
   const recalculateAfterRender = async () => {
+    if (!options.active.value) return;
     await nextTick();
     recalculateHeight();
   };

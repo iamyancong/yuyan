@@ -19,6 +19,8 @@ interface UseNginxDeployLifecycleParams {
   refreshRecordList?: (options?: RefreshActiveTabOptions) => Promise<void>;
   resetRecordPage?: () => void;
   clearDataHandlers?: Array<() => void>;
+  startTargetRuntimePolling?: () => void;
+  stopTargetRuntimePolling?: () => void;
 }
 
 /**
@@ -119,8 +121,7 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
       } else if (tabKey === 'records') {
         await refreshRecordList(options);
       } else {
-        await refreshServerList();
-        await refreshTargetList();
+        await Promise.all([refreshServerList(), refreshTargetList()]);
       }
       if (refreshSequence === activeRefreshSequence) {
         tabLoadedFlags.value[tabKey] = true;
@@ -138,7 +139,7 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
   };
 
   /**
-   * 切换页面 Tab：已缓存的 Tab 立即展示，首次进入再延迟拉数。
+   * 切换页面 Tab：已缓存的 Tab 立即展示，首次进入在下一动画帧调度拉数，确保点击反馈与动画不掉帧。
    * @param key Tab Key
    */
   const handleTabChange = (key: string | number) => {
@@ -148,9 +149,20 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
       return;
     }
     requestAnimationFrame(() => {
-      void refreshActiveTab().catch(reportRefreshError);
+      requestAnimationFrame(() => {
+        void refreshActiveTab().catch(reportRefreshError);
+      });
     });
   };
+
+  // 监听当前 Tab：非 targets Tab 自动休眠运行态轮询，切回 targets 时自动恢复
+  watch(activeTabKey, (currentTab) => {
+    if (currentTab === 'targets') {
+      params?.startTargetRuntimePolling?.();
+    } else {
+      params?.stopTargetRuntimePolling?.();
+    }
+  });
 
   /**
    * 初始化页面认证并刷新首屏数据。

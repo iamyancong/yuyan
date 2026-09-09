@@ -117,6 +117,8 @@ const lifecycleState = useNginxDeployLifecycle({
   refreshServerList: serverState.refreshServerList,
   refreshRecordList: recordState.refreshRecordList,
   resetRecordPage: recordState.resetRecordPage,
+  startTargetRuntimePolling: targetState.startTargetRuntimePolling,
+  stopTargetRuntimePolling: targetState.stopTargetRuntimePolling,
   clearDataHandlers: [
     serverState.clearServerData,
     targetState.clearTargetData,
