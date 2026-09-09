@@ -340,6 +340,9 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       popupClassName: PROJECT_SELECT_DROPDOWN_CLASS,
       listItemHeight: 56,
       listHeight: 280,
+      autocapitalize: 'none',
+      autocorrect: 'off',
+      spellcheck: false,
       onSearch: handleTargetProjectSearch,
       onChange: handleTargetProjectChange,
     });
@@ -357,6 +360,9 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       popupClassName: PROJECT_SELECT_DROPDOWN_CLASS,
       listItemHeight: 56,
       listHeight: 280,
+      autocapitalize: 'none',
+      autocorrect: 'off',
+      spellcheck: false,
       placeholder: targetForm.projectId ? '请选择分支' : '请先选择项目',
     });
   };
