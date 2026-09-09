@@ -23,25 +23,29 @@ description: 管理雨燕平台桌面端的 GitHub/GitLab 双分支协作。凡�
 
 术语约定：用户说“提交代码”时，默认含义是 `git commit` 后继续 `git push` 到对应远端；不要把本地 commit 当作任务完成。只有用户明确说“只本地提交”“不要推送”时，才允许不 push。
 
-## 执行流程
+## 执行流程（Worktree 物理双目录标准）
 
-1. 确认当前分支、远端和工作区状态，先读现有实现及未提交差异。
-2. 在 `feat/github-actions-build` 完成功能、测试和 Conventional Commit。
-3. 推送 `git push github feat/github-actions-build`，触发客户端构建发布。
-4. 切换 `yuyan-3.0`，执行 `git pull --ff-only origin yuyan-3.0`。
-5. 执行 `git cherry-pick <github-commit>`。
-6. 解决分支职责冲突后推送 `git push origin yuyan-3.0`，触发 API 部署。
-7. 切回 `feat/github-actions-build`，确认工作区干净。
+1. **客户端主线提交**：
+   - 在当前目录 `yuyan-app`（`feat/github-actions-build`）确认差异，完成功能与单测/构建验证。
+   - 生成符合规范的 Conventional Commit。
+   - 推送：`git push github feat/github-actions-build`，触发 GitHub Actions 客户端构建发布。
+2. **内网 API 部署线同步（通过物理 Worktree）**：
+   - 进入同级独立物理目录 `../yuyan-app-internal`（已绑定 `yuyan-3.0` 分支，无需在主目录切分支）。
+   - 拉取最新代码：`git pull --ff-only origin yuyan-3.0`。
+   - 同步提交：`git cherry-pick <github-commit>`。
+   - 解决分支专属职责差异（如保留 `.github/workflows/build-tauri.yml` 删除状态）。
+   - 推送：`git push origin yuyan-3.0`，触发内网 GitLab CI 仅构建 Docker 镜像并部署 API。
+3. **两边状态核验**：
+   - 确认主工作区 `yuyan-app` 与物理工作区 `../yuyan-app-internal` 均处于 clean 状态。
 
-## 冲突规则
+## 冲突与隔离规则
 
-- `yuyan-3.0` 不保留 `.github/workflows/build-tauri.yml`；cherry-pick 出现 modify/delete 冲突时保持该文件删除。
-- 不在 `.gitlab-ci.yml` 恢复客户端 build-client、Tauri 打包或安装包上传阶段。
-- 不用 merge 代替 cherry-pick，不强推，不把两个远端的同名分支混用。
-- 只同步本次业务提交；不要夹带其他用户改动或无关重构。
-- 如果当前存在未提交改动，先区分本次改动与用户既有改动；不得为了 cherry-pick 或切分支回滚用户改动。
-- 推荐使用独立 worktree 处理 `yuyan-3.0`，避免污染 `feat/github-actions-build` 客户端工作区。
-- **注意包名与路径差异 (Critical)**：客户端主线 `feat/github-actions-build` 中使用核心组件库 `@ycwang-dev/components`（以及 `hooks`、`utils` 等）；而内网分支 `yuyan-3.0` 对应使用企业内网组件库 `@yss-ui/components`（及其 hooks、utils）。当从客户端 cherry-pick 代码到内网分支时，若修改涉及到这些包的引入，**必须手动将 `@ycwang-dev/components` 改为 `@yss-ui/components`**（对 hooks 和 utils 亦同），并测试本地构建通过。
+- **包名完全同构 (Zero-Conflict)**：客户端主线与内网分支已全面统一为公网 `@yss-ui/*` 组件库与 Hooks 体系，cherry-pick 业务代码时**无需再手动替换任何包名**，零语法冲突！
+- **物理目录隔离**：通过 `../yuyan-app-internal` 独立工作区执行 cherry-pick 和 push，彻底避免在主开发目录下频繁切换分支导致 node_modules 变动或本地未提交改动被污染。
+- **分支职责专属保留**：
+  - `yuyan-3.0` 不保留 `.github/workflows/build-tauri.yml`；cherry-pick 出现 modify/delete 冲突时直接保留删除。
+  - 不在 `.gitlab-ci.yml` 恢复客户端构建或打包阶段。
+- **原子闭环**：不使用 merge 代替 cherry-pick，只同步本次业务相关 commit，不夹带无关改动。
 
 ## 提交与验证
 
