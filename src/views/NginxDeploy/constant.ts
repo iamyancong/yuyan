@@ -419,7 +419,12 @@ export const serverFormSchema = {
               required: true,
               'x-decorator': 'FormItem',
               'x-component': 'Input',
-              'x-component-props': { placeholder: '例如：测试 Nginx 服务器' },
+              'x-component-props': {
+                placeholder: '例如：测试 Nginx 服务器',
+                autocapitalize: 'none',
+                autocorrect: 'off',
+                spellcheck: false,
+              },
             },
             host: {
               type: 'string',
@@ -427,7 +432,12 @@ export const serverFormSchema = {
               required: true,
               'x-decorator': 'FormItem',
               'x-component': 'Input',
-              'x-component-props': { placeholder: '例如：192.168.1.10' },
+              'x-component-props': {
+                placeholder: '例如：192.168.1.10',
+                autocapitalize: 'none',
+                autocorrect: 'off',
+                spellcheck: false,
+              },
             },
             port: {
               type: 'number',
@@ -442,6 +452,11 @@ export const serverFormSchema = {
               required: true,
               'x-decorator': 'FormItem',
               'x-component': 'Input',
+              'x-component-props': {
+                autocapitalize: 'none',
+                autocorrect: 'off',
+                spellcheck: false,
+              },
             },
           },
         },
@@ -632,6 +647,9 @@ export const targetFormSchema = {
                 placeholder: '请输入项目名称搜索或选择',
                 listItemHeight: 56,
                 listHeight: 280,
+                autocapitalize: 'none',
+                autocorrect: 'off',
+                spellcheck: false,
               },
             },
             remark: {
@@ -641,6 +659,9 @@ export const targetFormSchema = {
               'x-component': 'Input',
               'x-component-props': {
                 placeholder: '请输入备注',
+                autocapitalize: 'none',
+                autocorrect: 'off',
+                spellcheck: false,
               },
             },
             defaultBranch: {
@@ -659,6 +680,9 @@ export const targetFormSchema = {
                 placeholder: '请选择分支',
                 listItemHeight: 56,
                 listHeight: 280,
+                autocapitalize: 'none',
+                autocorrect: 'off',
+                spellcheck: false,
               },
             },
             envName: {

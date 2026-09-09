@@ -3,6 +3,7 @@ import App from './App.vue';
 import router from './router';
 import { configureGlobalMessage } from '@/utils/globalMessage';
 import { configureMonacoJsonHighlight } from '@/utils/monacoJsonHighlight';
+import { configureGlobalInputBehavior } from '@/utils/configureGlobalInputBehavior';
 import 'ant-design-vue/dist/reset.css';
 import '@ycwang-dev/components/dist/style.css';
 
@@ -12,6 +13,7 @@ import 'monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution';
 
 configureGlobalMessage();
 configureMonacoJsonHighlight();
+configureGlobalInputBehavior();
 const app = createApp(App);
 app.use(router);
 app.mount('#app');

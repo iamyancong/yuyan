@@ -1,6 +1,11 @@
 import { computed, h, reactive, ref, type VNodeChild } from 'vue';
 import type { DeployProjectSource } from '@/api/deploy';
 import { getBranches, getProject, getProjects, type GitLabBranch, type GitLabProject } from '@/api/gitlab';
+import {
+  normalizeSearchKeyword,
+  matchProjectCandidate,
+  mergeAndDeduplicateProjects,
+} from './projectSearchPolicy';
 
 /** 平台创建项目标签 */
 const OPS_PROJECT_TOPIC = 'yuyan-ops';
@@ -134,10 +139,25 @@ export function useDeployProjectOptions() {
   /** 当前激活的项目列表 */
   const projects = computed<GitLabProject[]>(() => {
     const source = normalizeProjectSource(projectSource.value);
-    const rawList = searchKeyword.value.trim()
-      ? searchProjectsBySource[source]
-      : defaultProjectsBySource[source];
-    return rawList || [];
+    const searchContext = normalizeSearchKeyword(searchKeyword.value);
+
+    // 未输入关键字时展示默认最近活跃项目
+    if (!searchContext.rawKeyword) {
+      return defaultProjectsBySource[source] || [];
+    }
+
+    // 1. 本地候选池（默认列表 + 精准缓存池）模糊匹配，保证本地已加载项（如短词 py 命中 pyjob）即时可见且不丢失
+    const localPool = [
+      ...(defaultProjectsBySource[source] || []),
+      ...Array.from(pinnedProjectsMap.values()),
+    ];
+    const localMatches = localPool.filter((project) => matchProjectCandidate(project, searchContext));
+
+    // 2. 远程搜索结果
+    const remoteProjects = searchProjectsBySource[source] || [];
+
+    // 3. 融合去重：本地强匹配项优先保底，远程项增量补充
+    return mergeAndDeduplicateProjects(remoteProjects, localMatches);
   });
 
   /** 项目下拉选项 */
@@ -248,30 +268,31 @@ export function useDeployProjectOptions() {
    * @param source 项目来源
    */
   const searchProjects = (keyword: string, source: DeployProjectSource = projectSource.value) => {
-    const trimmed = String(keyword || '').trim();
-    searchKeyword.value = trimmed;
+    const searchContext = normalizeSearchKeyword(keyword);
+    searchKeyword.value = searchContext.rawKeyword;
     if (searchTimer) {
       clearTimeout(searchTimer);
       searchTimer = null;
     }
-    if (!trimmed) {
+    if (!searchContext.rawKeyword) {
       searchLoading.value = false;
       return;
     }
     searchLoading.value = true;
+    const remoteQuery = searchContext.compactKeyword || searchContext.rawKeyword;
     searchTimer = setTimeout(async () => {
       const currentSeq = ++searchRequestSeq;
       const normalizedSource = normalizeProjectSource(source);
       try {
         const result = await getProjects({
-          search: trimmed,
+          search: remoteQuery,
           per_page: 50,
           order_by: 'last_activity_at',
           sort: 'desc',
           membership: true,
           ...(normalizedSource === 'ops' ? { topic: OPS_PROJECT_TOPIC } : {}),
         });
-        if (currentSeq === searchRequestSeq && searchKeyword.value === trimmed) {
+        if (currentSeq === searchRequestSeq && searchKeyword.value === searchContext.rawKeyword) {
           const filtered = normalizedSource === 'ops' ? result.filter(isOpsProject) : result;
           searchProjectsBySource[normalizedSource] = filtered;
           filtered.forEach((p) => pinnedProjectsMap.set(p.id, p));
