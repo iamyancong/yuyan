@@ -1,5 +1,13 @@
 import { computed, nextTick, ref, watch } from 'vue';
-import { DEPLOY_FAILURE_BRIEF, getDeployProgressFailureStageKey, getDeployProgressFailureTitle, publishStages, UPLOAD_STRATEGY_LABEL_MAP } from '../../../constant';
+import {
+  DEPLOY_FAILURE_BRIEF,
+  formatDeployDateTime,
+  getDeployProgressFailureStageKey,
+  getDeployProgressFailureTitle,
+  publishStages,
+  UNKNOWN_OPERATOR_TEXT,
+  UPLOAD_STRATEGY_LABEL_MAP,
+} from '../../../constant';
 import { calcStageStatus, getLogText, type PublishConfirmModalProps } from '../constant';
 
 /** YMonaco 日志模式暴露方法 */
@@ -14,6 +22,39 @@ interface MonacoLogViewerExpose {
 export function usePublishConfirm(props: PublishConfirmModalProps) {
   /** 发布日志 Monaco 实例引用 */
   const logMonacoRef = ref<MonacoLogViewerExpose | null>(null);
+
+  /** 当前展示的操作人/发布人 */
+  const displayOperator = computed(() => {
+    const directOperator = String(props.operator || '').trim();
+    if (directOperator) return directOperator;
+    if (!props.started) {
+      return String(props.currentUserName || '').trim() || UNKNOWN_OPERATOR_TEXT;
+    }
+    return UNKNOWN_OPERATOR_TEXT;
+  });
+
+  /** 是否为当前用户发起 */
+  const isSelfOperator = computed(() => {
+    const current = String(props.currentUserName || '').trim();
+    return Boolean(current && displayOperator.value === current);
+  });
+
+  /** 顶部 Header 发起人文案 */
+  const operatorTagText = computed(() => {
+    if (!props.started) {
+      return `拟发布人：${displayOperator.value}`;
+    }
+    if (isSelfOperator.value) {
+      return `${displayOperator.value} (我) 发起`;
+    }
+    return `${displayOperator.value} 发起`;
+  });
+
+  /** 格式化发起时间 */
+  const displayStartedAt = computed(() => {
+    if (!props.started) return '等待开始';
+    return props.startedAt ? formatDeployDateTime(props.startedAt) : '-';
+  });
 
   /** 当前发布分支 */
   const branchText = computed(() => props.target?.defaultBranch || 'dev');
@@ -80,11 +121,12 @@ export function usePublishConfirm(props: PublishConfirmModalProps) {
   const targetSummaries = computed(() => [
     { label: '项目', value: props.target?.projectName || '-' },
     { label: '分支', value: branchText.value },
+    { label: '发布人', value: isSelfOperator.value ? `${displayOperator.value} (我)` : displayOperator.value },
     { label: '服务器', value: props.target?.serverName || '-' },
     { label: '部署根目录', value: props.target?.deployRoot || '-' },
     { label: '上传策略', value: props.target?.uploadStrategy ? UPLOAD_STRATEGY_LABEL_MAP[props.target.uploadStrategy] : UPLOAD_STRATEGY_LABEL_MAP.overlayKeepAssets },
     { label: '访问地址', value: props.target?.visitUrl || '未配置' },
-    // { label: '环境', value: props.target?.envName || '测试' },
+    { label: '发起时间', value: displayStartedAt.value },
   ]);
 
   /** 发布日志文本 */
@@ -143,6 +185,10 @@ export function usePublishConfirm(props: PublishConfirmModalProps) {
     statusText,
     statusClassName,
     targetSummaries,
+    displayOperator,
+    isSelfOperator,
+    operatorTagText,
+    displayStartedAt,
     publishLogContent,
     getStageStatus,
     getStageLabel,

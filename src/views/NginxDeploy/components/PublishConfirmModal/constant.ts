@@ -25,6 +25,12 @@ export interface PublishConfirmModalProps {
   stoppable: boolean;
   /** 是否正在停止 */
   stopping: boolean;
+  /** 操作人 / 发布人 */
+  operator?: string;
+  /** 发起时间 */
+  startedAt?: string;
+  /** 当前登录用户名 */
+  currentUserName?: string;
 }
 
 /** 发布启动选项 */

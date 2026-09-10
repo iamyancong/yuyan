@@ -39,6 +39,15 @@ const actionLabel = computed(() => getDeployProgressActionLabel(snapshot.value?.
 /** 当前任务阶段 */
 const stageLabel = computed(() => getDeployProgressStageLabel(snapshot.value));
 
+/** 运行中阶段与发起人展示文案 */
+const runningDetailText = computed(() => {
+  const operator = String(snapshot.value?.operator || '').trim();
+  if (operator) {
+    return `${operator} · ${stageLabel.value}`;
+  }
+  return stageLabel.value;
+});
+
 /** 当前任务进度百分比 */
 const progressPercent = computed(() => {
   const stageEvent = [...(snapshot.value?.events || [])].reverse().find((event) => event.type === 'stage');
@@ -81,7 +90,7 @@ const emit = defineEmits<{
       </span>
       <span class="target-runtime-cell__content">
         <strong>{{ running ? `正在${actionLabel}` : serviceState.title }}</strong>
-        <small>{{ running ? stageLabel : serviceState.detail }}</small>
+        <small>{{ running ? runningDetailText : serviceState.detail }}</small>
       </span>
       <span v-if="running" class="target-runtime-cell__progress" />
     </span>
