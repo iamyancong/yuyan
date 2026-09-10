@@ -1,5 +1,13 @@
 <script setup lang="ts">
-import { CheckCircleOutlined, ClockCircleOutlined, CloseCircleOutlined, RocketOutlined, StopOutlined, SyncOutlined } from '@ant-design/icons-vue';
+import {
+  CheckCircleOutlined,
+  ClockCircleOutlined,
+  CloseCircleOutlined,
+  RocketOutlined,
+  StopOutlined,
+  SyncOutlined,
+  UserOutlined,
+} from '@ant-design/icons-vue';
 import { YButton, YMonaco } from '@yss-ui/components/lite';
 import { computed, ref, watch } from 'vue';
 import type { PublishConfirmModalProps, PublishStartOptions } from './constant';
@@ -29,6 +37,8 @@ const {
   statusText,
   statusClassName,
   targetSummaries,
+  isSelfOperator,
+  operatorTagText,
   publishLogContent,
   getStageStatus,
   getStageLabel,
@@ -73,6 +83,14 @@ watch(
           <h3 class="publish-workbench__title">
             <span class="publish-workbench__tag">{{ started ? '实时发布' : '发布前确认' }}</span>
             <span class="publish-workbench__title-text">{{ started ? title || '发布处理中' : `确认发布到${target?.envName || '测试'}环境` }}</span>
+            <a-tag
+              class="publish-operator-tag"
+              :class="{ 'is-self': isSelfOperator, 'is-pending': !started }"
+              :color="!started ? 'default' : isSelfOperator ? 'blue' : 'purple'"
+            >
+              <template #icon><UserOutlined /></template>
+              {{ operatorTagText }}
+            </a-tag>
           </h3>
           <p class="publish-workbench__desc">{{ headerDescription }}</p>
         </div>

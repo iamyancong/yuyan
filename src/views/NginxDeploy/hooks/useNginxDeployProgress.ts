@@ -79,6 +79,8 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     logs: [] as DeployProgressEvent[],
     running: false,
     stopped: false,
+    operator: '',
+    startedAt: '',
   });
 
   /** 当前发布阶段 */
@@ -128,7 +130,16 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
 
   /** 重置发布进度 */
   const resetPublishProgress = () => {
-    Object.assign(progressState, { percent: 0, title: '', detail: '', logs: [], running: false, stopped: false });
+    Object.assign(progressState, {
+      percent: 0,
+      title: '',
+      detail: '',
+      logs: [],
+      running: false,
+      stopped: false,
+      operator: '',
+      startedAt: '',
+    });
   };
 
   /** 重置发布工作台临时态 */
@@ -184,6 +195,8 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       logs: [...snapshot.events],
       running: snapshot.running,
       stopped: snapshot.result?.status === 'stopped',
+      operator: snapshot.operator || '',
+      startedAt: snapshot.startedAt || '',
     });
     if (snapshot.error) {
       progressState.title = getDeployProgressFailureTitle({
@@ -255,7 +268,18 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     const sessionId = ++progressSessionId;
     const abortController = new AbortController();
     deployAbortController = abortController;
-    Object.assign(progressState, { percent: 0, title: '准备发布', detail: '', logs: [], running: true, stopped: false });
+    const currentOperator = userName.value || '';
+    const currentStartedAt = new Date().toISOString();
+    Object.assign(progressState, {
+      percent: 0,
+      title: '准备发布',
+      detail: '',
+      logs: [],
+      running: true,
+      stopped: false,
+      operator: currentOperator,
+      startedAt: currentStartedAt,
+    });
     try {
       const result = await deployTargetWithProgress(
         target.id,
@@ -608,6 +632,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     activePublishTarget.value = target;
     publishStarted.value = false;
     resetPublishProgress();
+    progressState.operator = userName.value || '';
     publishConfirmOpen.value = true;
   };
 
@@ -677,5 +702,6 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     runUndoRollback,
     runTargetServiceAction,
     clearProgressData,
+    userName,
   };
 }
