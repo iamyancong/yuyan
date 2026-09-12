@@ -21,6 +21,8 @@ interface DeployRecordFilterBarProps {
   projectFilter?: string;
   /** 分支筛选条件 */
   branchFilter?: string;
+  /** 发布人筛选条件 */
+  operatorFilter?: string;
   /** 服务器下拉选项 */
   serverOptions: RecordServerOption[];
   /** 项目下拉选项 */
@@ -38,6 +40,8 @@ const emit = defineEmits<{
   (e: 'projectChange', value?: string): void;
   /** 分支更改 */
   (e: 'branchChange', value?: string): void;
+  /** 发布人更改 */
+  (e: 'operatorChange', value?: string): void;
   /** 触发刷新 */
   (e: 'refresh'): void;
 }>();
@@ -52,7 +56,7 @@ const emit = defineEmits<{
       class="record-filter-bar__form"
     >
       <a-row :gutter="[16, 12]" class="filter-row">
-        <a-col :xs="24" :sm="12" :md="12" :xl="6">
+        <a-col :xs="24" :sm="12" :md="12" :xl="5">
           <a-form-item label="服务器" class="record-filter-item">
             <a-select
               :value="serverFilter"
@@ -72,7 +76,7 @@ const emit = defineEmits<{
             />
           </a-form-item>
         </a-col>
-        <a-col :xs="24" :sm="12" :md="12" :xl="9">
+        <a-col :xs="24" :sm="12" :md="12" :xl="7">
           <a-form-item label="项目" class="record-filter-item">
             <a-select
               :value="projectFilter"
@@ -111,7 +115,18 @@ const emit = defineEmits<{
             />
           </a-form-item>
         </a-col>
-        <a-col :xs="24" :sm="12" :md="12" :xl="4" class="record-filter-bar__actions">
+        <a-col :xs="24" :sm="12" :md="12" :xl="4">
+          <a-form-item label="发布人" class="record-filter-item">
+            <a-input
+              :value="operatorFilter"
+              placeholder="按发布人筛选"
+              allow-clear
+              @change="(e: any) => emit('operatorChange', e.target?.value)"
+              @pressEnter="emit('refresh')"
+            />
+          </a-form-item>
+        </a-col>
+        <a-col :xs="24" :sm="12" :md="12" :xl="3" class="record-filter-bar__actions">
           <YButton :loading="loading" @click="emit('refresh')">
             <template #icon>
               <SyncOutlined v-if="!loading" />

@@ -3639,6 +3639,16 @@ export async function listRecords(query = {}) {
     whereParts.push('r.branch = ?');
     params.push(branch);
   }
+  const operator = String(query.operator || '').trim();
+  if (operator) {
+    whereParts.push('r.operator LIKE ?');
+    params.push(`%${operator}%`);
+  }
+  const action = String(query.action || '').trim();
+  if (action) {
+    whereParts.push('r.action = ?');
+    params.push(action);
+  }
   if (whereParts.length) {
     const whereSql = ` WHERE ${whereParts.join(' AND ')}`;
     fromSql += whereSql;

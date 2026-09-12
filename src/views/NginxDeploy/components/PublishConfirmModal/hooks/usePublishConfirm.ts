@@ -9,6 +9,7 @@ import {
   UPLOAD_STRATEGY_LABEL_MAP,
 } from '../../../constant';
 import { calcStageStatus, getLogText, type PublishConfirmModalProps } from '../constant';
+import { resolveRuntimeLockState } from '../../../hooks/runtimeLockPolicy';
 
 /** YMonaco 日志模式暴露方法 */
 interface MonacoLogViewerExpose {
@@ -108,6 +109,28 @@ export function usePublishConfirm(props: PublishConfirmModalProps) {
     return props.detail || '正在等待发布进度回传';
   });
 
+  /** 协同锁与停止权限策略计算 */
+  const runtimeLockState = computed(() =>
+    resolveRuntimeLockState({
+      currentUserName: props.currentUserName,
+      userRole: props.userRole,
+      taskOperator: displayOperator.value,
+      startedAt: props.startedAt,
+      running: props.running,
+      stoppable: props.stoppable,
+      action: 'deploy',
+      currentStage: currentStageKey.value,
+    })
+  );
+
+  const isSubscriberMode = computed(() => runtimeLockState.value.isSubscriberMode);
+  const canStop = computed(() => runtimeLockState.value.canStop);
+  const canPreempt = computed(() => runtimeLockState.value.canPreempt);
+  const isAdmin = computed(() => runtimeLockState.value.isAdmin);
+  const stopButtonText = computed(() => runtimeLockState.value.stopButtonText);
+  const stopButtonTooltip = computed(() => runtimeLockState.value.stopButtonTooltip);
+  const lockDescription = computed(() => runtimeLockState.value.lockDescription);
+
   /** 顶部状态样式 */
   const statusClassName = computed(() => {
     if (props.stopped) return 'is-stopped';
@@ -189,6 +212,13 @@ export function usePublishConfirm(props: PublishConfirmModalProps) {
     isSelfOperator,
     operatorTagText,
     displayStartedAt,
+    isSubscriberMode,
+    canStop,
+    canPreempt,
+    isAdmin,
+    stopButtonText,
+    stopButtonTooltip,
+    lockDescription,
     publishLogContent,
     getStageStatus,
     getStageLabel,

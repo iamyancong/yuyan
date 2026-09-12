@@ -56,6 +56,9 @@ export {
 };
 export type { BackendTemplateKey, BackendProjectTemplate };
 
+import { formatDeployDuration } from './hooks/runtimeLockPolicy';
+export { formatDeployDuration };
+
 /** 默认产物目录，空值表示自动识别 */
 export const DEFAULT_ARTIFACT_DIR = '';
 
@@ -376,6 +379,7 @@ export const recordColumns: YTableColumn[] = [
   { field: 'commitAuthor', title: '提交人', width: 80, formatter: ({ row }) => getDeployRecordCommitAuthor(row) },
   { field: 'releasePath', title: '发布目录', minWidth: 240, showOverflow: false, slots: { default: 'releasePath' } },
   { field: 'startedAt', minWidth: 160, title: '开始时间', formatter: ({ cellValue }) => formatDeployDateTime(cellValue) },
+  { field: 'duration', width: 90, title: '耗时', align: 'center', formatter: ({ row }) => formatDeployDuration(row.startedAt, row.finishedAt) },
   { field: 'action', title: '操作类型', width: 100, align: 'center', formatter: ({ row }) => getDeployRecordActionLabel(row) },
   { field: 'sourceRecordId', title: '回滚来源', width: 80, align: 'center', formatter: ({ row }) => getDeployRecordSourceText(row) },
   { field: 'status', title: '状态', minWidth: 80, align: 'center', showOverflow: false, fixed: 'right' },

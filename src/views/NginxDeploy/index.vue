@@ -55,6 +55,7 @@ const project = useNginxDeployProjectContext();
 const {
   authState,
   userName,
+  userRole,
   isLoggedIn,
   openLoginModal,
   initAuthCheck,
@@ -156,6 +157,7 @@ provideNginxDeployContext({
   project,
   authState,
   userName,
+  userRole,
   isLoggedIn,
   isAuthReady,
   ensureLoggedIn,

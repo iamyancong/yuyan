@@ -119,6 +119,7 @@ const handleOpenNginxRuntime = async () => {
             :server-filter="recordState.recordServerFilter.value"
             :project-filter="recordState.recordProjectFilter.value"
             :branch-filter="recordState.recordBranchFilter.value"
+            :operator-filter="recordState.recordOperatorFilter.value"
             :server-options="recordState.recordServerOptions.value"
             :project-options="recordState.recordProjectOptions.value"
             :branch-options="recordState.recordBranchOptions.value"
@@ -126,6 +127,7 @@ const handleOpenNginxRuntime = async () => {
             @server-change="recordState.handleRecordServerChange"
             @project-change="recordState.handleRecordProjectChange"
             @branch-change="recordState.handleRecordBranchChange"
+            @operator-change="recordState.handleRecordOperatorChange"
             @page-change="recordState.handleRecordPageChange"
             @refresh="() => lifecycleState.refreshActiveTab({ force: true, reloadRecordTargets: true })"
           />

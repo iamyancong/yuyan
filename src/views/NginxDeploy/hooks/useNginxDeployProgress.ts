@@ -1,5 +1,6 @@
 import { computed, reactive, ref, watch, type Ref } from 'vue';
 import message from 'ant-design-vue/es/message';
+import notification from 'ant-design-vue/es/notification';
 import {
   deployTargetWithProgress,
   getTargetDeployProgress,
@@ -26,8 +27,9 @@ import { useNginxDeployContext } from './useNginxDeployContext';
 interface UseNginxDeployProgressParams {
   ensureLoggedIn?: () => boolean;
   refreshActiveTab?: (options?: RefreshActiveTabOptions) => Promise<void>;
-  authState?: Readonly<Ref<{ token?: string | null }>>;
+  authState?: Readonly<Ref<{ token?: string | null; role?: string }>>;
   userName?: Ref<string>;
+  userRole?: Ref<string>;
   activeRecord?: Ref<DeployRecord | null>;
   setTargetRuntimeSnapshot?: (snapshot: DeployProgressSnapshot) => void;
   clearTargetRuntimeSnapshot?: (targetId: number) => void;
@@ -60,6 +62,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
   const refreshActiveTab = params?.refreshActiveTab ?? context?.refreshActiveTab!;
   const authState = params?.authState ?? context?.authState!;
   const userName = params?.userName ?? context?.userName!;
+  const userRole = params?.userRole ?? context?.userRole ?? computed(() => authState?.value?.role || '');
   const activeRecord = params?.activeRecord ?? context?.activeRecord!;
   const setTargetRuntimeSnapshot = params?.setTargetRuntimeSnapshot ?? context?.setTargetRuntimeSnapshot!;
   const clearTargetRuntimeSnapshot = params?.clearTargetRuntimeSnapshot ?? context?.clearTargetRuntimeSnapshot!;
@@ -297,11 +300,21 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
         progressState.stopped = true;
         progressState.title = '已停止';
         progressState.detail = '发布任务已停止，未进入上传产物阶段。';
-        await refreshActiveTab({ resetRecordsPage: true });
+        notification.warning({
+          message: '发布已停止',
+          description: `${target.projectName || '项目'} 发布任务已停止，未进入上传产物阶段。`,
+          duration: 4.5,
+        });
+        await refreshActiveTab({ resetRecordsPage: true, force: true });
         return;
       }
       message.success('发布完成');
-      await refreshActiveTab({ resetRecordsPage: true });
+      notification.success({
+        message: '发布完成',
+        description: `${target.projectName || '项目'} 已成功发布到「${target.serverName || target.envName || '服务器'}」`,
+        duration: 4.5,
+      });
+      await refreshActiveTab({ resetRecordsPage: true, force: true });
     } catch (error: any) {
       if (isAbortError(error) || abortController.signal.aborted) {
         if (sessionId === progressSessionId && publishStopping.value) {
@@ -312,18 +325,28 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
             stopped: true,
           });
           message.warning('发布任务已停止');
+          notification.warning({
+            message: '发布已停止',
+            description: `${target.projectName || '项目'} 发布任务已停止。`,
+            duration: 4.5,
+          });
           await new Promise((resolve) => window.setTimeout(resolve, 500));
-          await refreshActiveTab({ resetRecordsPage: true });
+          await refreshActiveTab({ resetRecordsPage: true, force: true });
         }
         return;
       }
       if (sessionId !== progressSessionId) return;
       const errorMessage = getErrorMessage(error);
       if (isDeployConflictError(error)) {
-        message.warning(errorMessage);
-        publishStarted.value = false;
-        resetPublishProgress();
-        publishConfirmOpen.value = true;
+        const conflictSnapshot = (error?.response?.data?.data as DeployProgressSnapshot) || undefined;
+        const operatorName = conflictSnapshot?.operator ? `「${conflictSnapshot.operator}」` : '其他成员';
+        message.warning(`该目标当前正由 ${operatorName} 执行发布，已为您自动切换至协同观察模式`);
+        if (conflictSnapshot) {
+          setTargetRuntimeSnapshot?.(conflictSnapshot);
+          void subscribeRunningTargetProgress(target, conflictSnapshot);
+        } else {
+          void openTargetProgress(target);
+        }
         return;
       }
       appendProgressErrorLog(errorMessage, currentPublishStageKey.value);
@@ -333,6 +356,11 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
         fallbackStage: currentPublishStageKey.value,
       });
       progressState.detail = DEPLOY_FAILURE_BRIEF;
+      notification.error({
+        message: '发布失败',
+        description: `${target.projectName || '项目'} 发布失败：${errorMessage}`,
+        duration: 6,
+      });
     } finally {
       if (sessionId === progressSessionId) {
         progressState.running = false;
@@ -385,18 +413,29 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
         progressState.stopped = true;
         progressState.title = '已停止';
         progressState.detail = '发布任务已停止，未进入上传产物阶段。';
-        await refreshActiveTab({ resetRecordsPage: true });
+        notification.warning({
+          message: '任务已停止',
+          description: `${target.projectName || '项目'} 任务已停止，未进入上传产物阶段。`,
+          duration: 4.5,
+        });
+        await refreshActiveTab({ resetRecordsPage: true, force: true });
         return;
       }
       shouldClearRuntime = true;
-      message.success(`${getDeployProgressActionLabel(snapshot.action)}完成`);
-      await refreshActiveTab({ resetRecordsPage: true });
+      const actionLabel = getDeployProgressActionLabel(snapshot.action);
+      message.success(`${actionLabel}完成`);
+      notification.success({
+        message: `${actionLabel}完成`,
+        description: `${target.projectName || '项目'} ${actionLabel}成功。`,
+        duration: 4.5,
+      });
+      await refreshActiveTab({ resetRecordsPage: true, force: true });
     } catch (error: any) {
       if (isAbortError(error) || abortController.signal.aborted || sessionId !== progressSessionId) return;
       if (isNotFoundError(error)) {
         clearTargetRuntimeSnapshot?.(target.id);
         message.info('当前任务已结束，请查看发布历史');
-        await refreshActiveTab({ resetRecordsPage: true });
+        await refreshActiveTab({ resetRecordsPage: true, force: true });
         resetPublishWorkbench();
         publishConfirmOpen.value = false;
         rollbackProgressOpen.value = false;
@@ -411,6 +450,11 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
         fallbackStage: currentPublishStageKey.value || snapshot.currentStage,
       });
       progressState.detail = snapshot.action === 'deploy' ? DEPLOY_FAILURE_BRIEF : errorMessage;
+      notification.error({
+        message: `${getDeployProgressActionLabel(snapshot.action)}失败`,
+        description: `${target.projectName || '项目'} ${getDeployProgressActionLabel(snapshot.action)}失败：${errorMessage}`,
+        duration: 6,
+      });
     } finally {
       if (sessionId === progressSessionId) {
         progressState.running = false;
@@ -487,7 +531,10 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     progressState.detail = '正在终止当前发布任务';
     appendProgressStoppedLog();
     try {
-      await stopTargetDeploy(target.id, target.projectType);
+      await stopTargetDeploy(target.id, target.projectType, {
+        operator: userName.value || '',
+        role: userRole.value || '',
+      });
     } catch (error: any) {
       publishStopping.value = false;
       message.error(getErrorMessage(error));
@@ -515,7 +562,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       });
       if (sessionId !== progressSessionId || abortController.signal.aborted) return;
       message.success('回滚完成');
-      await refreshActiveTab({ resetRecordsPage: true });
+      await refreshActiveTab({ resetRecordsPage: true, force: true });
     } catch (error: any) {
       if (isAbortError(error) || abortController.signal.aborted || sessionId !== progressSessionId) return;
       const errorMessage = getErrorMessage(error);
@@ -558,7 +605,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       });
       if (sessionId !== progressSessionId || abortController.signal.aborted) return;
       message.success('撤销回滚完成');
-      await refreshActiveTab({ resetRecordsPage: true });
+      await refreshActiveTab({ resetRecordsPage: true, force: true });
     } catch (error: any) {
       if (isAbortError(error) || abortController.signal.aborted || sessionId !== progressSessionId) return;
       const errorMessage = getErrorMessage(error);
@@ -591,7 +638,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       if (!runningTask.running) {
         clearTargetRuntimeSnapshot?.(target.id);
         message.info('当前任务已结束，请查看发布历史');
-        await refreshActiveTab({ resetRecordsPage: true });
+        await refreshActiveTab({ resetRecordsPage: true, force: true });
         return;
       }
       detachPublishProgressStream();
@@ -600,7 +647,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       clearTargetRuntimeSnapshot?.(target.id);
       if (isNotFoundError(error)) {
         message.info('当前任务已结束，请查看发布历史');
-        await refreshActiveTab({ resetRecordsPage: true });
+        await refreshActiveTab({ resetRecordsPage: true, force: true });
         return;
       }
       message.error(getErrorMessage(error));
@@ -703,5 +750,6 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     runTargetServiceAction,
     clearProgressData,
     userName,
+    userRole,
   };
 }
