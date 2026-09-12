@@ -490,6 +490,8 @@ export interface DeployRecordQuery {
   projectPath?: string;
   projectName?: string;
   branch?: string;
+  operator?: string;
+  action?: string;
   targetId?: number;
   serverId?: number;
   projectType?: 'frontend' | 'backend';
@@ -1180,16 +1182,21 @@ export const listDeployTargetRuntimeSnapshots = (signal?: AbortSignal) =>
  * 停止部署目标运行中的发布任务。
  * @param targetId 部署目标 ID
  * @param projectType 项目类型
+ * @param payload 停止操作附带上下文（操作人与角色）
  * @returns 停止后的发布任务快照
  */
-export async function stopTargetDeploy(targetId: number, projectType: DeployTarget['projectType']) {
+export async function stopTargetDeploy(
+  targetId: number,
+  projectType: DeployTarget['projectType'],
+  payload?: { operator?: string; role?: string }
+) {
   if (projectType === 'backend') {
     const snapshot = await getTargetDeployProgress(targetId, projectType);
-    const operation = await client.post(`/operations/${snapshot.operationId}/cancel`).then(unwrap<CentralDeployOperation>);
+    const operation = await client.post(`/operations/${snapshot.operationId}/cancel`, payload).then(unwrap<CentralDeployOperation>);
     return mapCentralDeployOperation(operation, targetId);
   }
   const url = await getTargetExecutionApiUrl(`/targets/${targetId}/deploy/stop`, projectType);
-  return axios.post(url, undefined, { headers: getDeployApiAuthHeaders() }).then(unwrap<DeployProgressSnapshot>);
+  return axios.post(url, payload, { headers: getDeployApiAuthHeaders() }).then(unwrap<DeployProgressSnapshot>);
 }
 
 /** 检测后端项目配置 */

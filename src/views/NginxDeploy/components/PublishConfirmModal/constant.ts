@@ -31,6 +31,8 @@ export interface PublishConfirmModalProps {
   startedAt?: string;
   /** 当前登录用户名 */
   currentUserName?: string;
+  /** 当前用户权限角色 */
+  userRole?: string;
 }
 
 /** 发布启动选项 */

@@ -255,9 +255,34 @@
   strong {
     color: var(--text-color-secondary);
   }
+}
 
-  span {
-    color: var(--text-color-secondary);
+.publish-subscriber-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  border: 1px solid #91caff;
+  background: #e6f4ff;
+  color: #0958d9;
+  font-size: 13px;
+  line-height: 1.4;
+
+  &__icon {
+    font-size: 16px;
+    color: #1677ff;
+    flex-shrink: 0;
+  }
+
+  &__text {
+    flex: 1;
+
+    strong {
+      color: #003eb3;
+      font-weight: 600;
+    }
   }
 }
 

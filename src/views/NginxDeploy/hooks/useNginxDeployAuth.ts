@@ -1,3 +1,4 @@
+import { computed } from 'vue';
 import { useAuth } from '@/composables/useAuth';
 
 /**
@@ -6,6 +7,7 @@ import { useAuth } from '@/composables/useAuth';
  */
 export function useNginxDeployAuth() {
   const { authState, userName, isLoggedIn, authLoading } = useAuth();
+  const userRole = computed(() => authState.value?.role || '');
   let authReady = false;
 
   /** 打开全局登录弹窗 */
@@ -51,6 +53,7 @@ export function useNginxDeployAuth() {
   return {
     authState,
     userName,
+    userRole,
     isLoggedIn,
     authLoading,
     openLoginModal,

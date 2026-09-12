@@ -3,13 +3,16 @@ import {
   CheckCircleOutlined,
   ClockCircleOutlined,
   CloseCircleOutlined,
+  ExclamationCircleOutlined,
+  InfoCircleOutlined,
   RocketOutlined,
   StopOutlined,
   SyncOutlined,
   UserOutlined,
 } from '@ant-design/icons-vue';
+import { Modal } from 'ant-design-vue';
 import { YButton, YMonaco } from '@yss-ui/components/lite';
-import { computed, ref, watch } from 'vue';
+import { computed, h, ref, watch } from 'vue';
 import type { PublishConfirmModalProps, PublishStartOptions } from './constant';
 import { usePublishConfirm } from './hooks/usePublishConfirm';
 
@@ -37,8 +40,15 @@ const {
   statusText,
   statusClassName,
   targetSummaries,
+  displayOperator,
   isSelfOperator,
   operatorTagText,
+  isSubscriberMode,
+  canStop,
+  canPreempt,
+  stopButtonText,
+  stopButtonTooltip,
+  lockDescription,
   publishLogContent,
   getStageStatus,
   getStageLabel,
@@ -58,6 +68,23 @@ const handleStart = () => {
 /** 重新发布 */
 const handleRepublish = () => {
   emit('republish', { forceInstallDependencies: forceInstallDependencies.value });
+};
+
+/** 处理停止发布或管理员强制停止点击 */
+const handleStopClick = () => {
+  if (canPreempt.value) {
+    Modal.confirm({
+      title: '确认强制停止他人任务？',
+      icon: h(ExclamationCircleOutlined),
+      content: `当前发布任务正由「${displayOperator.value}」执行中，作为管理员强制停止将终止其发布流程。是否确认继续？`,
+      okText: '强制停止',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: () => emit('stop'),
+    });
+    return;
+  }
+  emit('stop');
 };
 
 watch(
@@ -102,6 +129,15 @@ watch(
     </template>
 
     <section class="publish-workbench" :class="{ 'is-started': started }">
+
+      <div v-if="isSubscriberMode" class="publish-subscriber-banner">
+        <span class="publish-subscriber-banner__icon">
+          <InfoCircleOutlined />
+        </span>
+        <span class="publish-subscriber-banner__text">
+          <strong>协同观察模式：</strong>{{ lockDescription }}
+        </span>
+      </div>
 
       <div class="publish-target-mini">
         <div v-for="item in targetSummaries" :key="item.label" class="publish-target-mini__item">
@@ -167,10 +203,18 @@ watch(
         </div>
         <div class="publish-workbench__actions">
           <YButton @click="visible = false">{{ started && running ? '收起' : started ? '关闭' : '取消' }}</YButton>
-          <YButton v-if="started && running" danger :disabled="!stoppable" :loading="stopping" @click="emit('stop')">
-            <template #icon><StopOutlined /></template>
-            {{ stoppable ? '停止' : '上传后不可停止' }}
-          </YButton>
+          <a-tooltip :title="stopButtonTooltip">
+            <YButton
+              v-if="started && running"
+              danger
+              :disabled="!canStop"
+              :loading="stopping"
+              @click="handleStopClick"
+            >
+              <template #icon><StopOutlined /></template>
+              {{ stopButtonText }}
+            </YButton>
+          </a-tooltip>
           <YButton v-if="!started" type="primary" :disabled="!target" @click="handleStart">
             <template #icon><RocketOutlined /></template>
             开始发布

@@ -396,9 +396,11 @@ function sendDeployLimitConflict(res) {
  */
 function sendDeployTargetBusy(res, task) {
   const actionText = task?.action === 'undoRollback' ? '撤销回滚' : task?.action === 'rollback' ? '回滚' : '发布';
+  const operatorText = task?.operator ? `「${task.operator}」` : '其他成员';
+  const startedText = task?.startedAt ? `（开始于 ${task.startedAt}）` : '';
   res.status(409).json({
     success: false,
-    error: `该部署目标正在${actionText}中，请稍后重试`,
+    error: `该部署目标正由 ${operatorText} 执行${actionText}${startedText}，请稍后重试`,
     data: serializeDeployTask(task),
   });
 }
@@ -1235,7 +1237,18 @@ export async function handleStopDeployTarget(req, res) {
     sendError(res, new Error('上传产物后不可停止当前发布任务'), 400);
     return;
   }
-  task.controller.abort(new DeployStoppedError('用户已停止发布任务'));
+  const operator = String(req.body?.operator || '').trim();
+  const role = String(req.body?.role || '').trim();
+  const isOwner = Boolean(operator && task.operator && (operator === task.operator || task.operator === '未知操作人'));
+  const isAdmin = role === 'admin';
+  if (task.operator && task.operator !== '未知操作人' && !isOwner && !isAdmin) {
+    sendError(res, new Error(`无权停止该任务：当前任务由「${task.operator}」发起，仅本人或管理员(admin)可执行强制停止`), 403);
+    return;
+  }
+  const stopReason = !isOwner && isAdmin
+    ? `管理员「${operator || 'admin'}」已强制停止该发布任务`
+    : '用户已停止发布任务';
+  task.controller.abort(new DeployStoppedError(stopReason));
   res.json({ success: true, data: serializeDeployTask(task) });
 }
 

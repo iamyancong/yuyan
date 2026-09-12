@@ -55,6 +55,7 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
   const recordTargetFilter = ref<string | undefined>();
   const recordProjectFilter = recordTargetFilter;
   const recordBranchFilter = ref<string | undefined>();
+  const recordOperatorFilter = ref<string | undefined>();
   const recordLogOpen = ref(false);
   const activeRecord = ref<DeployRecord | null>(null);
   let recordRefreshSequence = 0;
@@ -170,6 +171,7 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
     if (!selected?.targetId && recordServerFilter.value) query.serverId = recordServerFilter.value;
     if (projectType.value === 'frontend' || projectType.value === 'backend') query.projectType = projectType.value;
     if (recordBranchFilter.value) query.branch = recordBranchFilter.value;
+    if (recordOperatorFilter.value?.trim()) query.operator = recordOperatorFilter.value.trim();
     return query;
   };
 
@@ -283,6 +285,15 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
     await refreshActiveTab({ resetRecordsPage: true, force: true });
   };
 
+  /**
+   * 切换发布历史操作人筛选。
+   * @param value 操作人名称
+   */
+  const handleRecordOperatorChange = async (value?: string) => {
+    recordOperatorFilter.value = value;
+    await refreshActiveTab({ resetRecordsPage: true, force: true });
+  };
+
   /** 清空发布历史数据和临时态 */
   const clearRecordData = () => {
     recordRefreshSequence += 1;
@@ -291,6 +302,7 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
     recordServerFilter.value = undefined;
     recordTargetFilter.value = undefined;
     recordBranchFilter.value = undefined;
+    recordOperatorFilter.value = undefined;
     activeRecord.value = null;
     recordLogOpen.value = false;
     recordLogLoading.value = false;
@@ -305,6 +317,7 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
     recordServerFilter.value = undefined;
     recordTargetFilter.value = undefined;
     recordBranchFilter.value = undefined;
+    recordOperatorFilter.value = undefined;
     records.value = [];
     recordPagination.current = 1;
     recordPagination.total = 0;
@@ -317,6 +330,7 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
     recordTargetFilter,
     recordProjectFilter,
     recordBranchFilter,
+    recordOperatorFilter,
     recordServerOptions,
     recordTargetOptions,
     recordProjectOptions,
@@ -331,6 +345,7 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
     handleRecordServerChange,
     handleRecordProjectChange,
     handleRecordBranchChange,
+    handleRecordOperatorChange,
     clearRecordData,
   };
 }

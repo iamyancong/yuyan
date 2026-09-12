@@ -43,6 +43,7 @@ interface DeployRecordTabProps {
   serverFilter?: number;
   projectFilter?: string;
   branchFilter?: string;
+  operatorFilter?: string;
   serverOptions: RecordServerOption[];
   projectOptions: RecordProjectOption[];
   branchOptions: SelectOption[];
@@ -55,6 +56,7 @@ const emit = defineEmits<{
   (e: 'serverChange', value?: number): void;
   (e: 'projectChange', value?: string): void;
   (e: 'branchChange', value?: string): void;
+  (e: 'operatorChange', value?: string): void;
   (e: 'pageChange', value: { current: number; pageSize: number }): void;
   (e: 'refresh'): void;
 }>();
@@ -74,12 +76,14 @@ const { tableAreaRef, tableHeight, getCommitUrl } = useDeployRecordTab({
       :server-filter="serverFilter"
       :project-filter="projectFilter"
       :branch-filter="branchFilter"
+      :operator-filter="operatorFilter"
       :server-options="serverOptions"
       :project-options="projectOptions"
       :branch-options="branchOptions"
       @server-change="(val?: number) => emit('serverChange', val)"
       @project-change="(val?: string) => emit('projectChange', val)"
       @branch-change="(val?: string) => emit('branchChange', val)"
+      @operator-change="(val?: string) => emit('operatorChange', val)"
       @refresh="emit('refresh')"
     />
     <div ref="tableAreaRef" class="nginx-deploy-table-area">

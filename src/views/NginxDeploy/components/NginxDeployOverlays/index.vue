@@ -80,6 +80,7 @@ const updateTargetForm = (values: Partial<DeployTargetPayload>) => {
     :operator="progressState.progressState.operator"
     :started-at="progressState.progressState.startedAt"
     :current-user-name="progressState.userName?.value"
+    :user-role="progressState.userRole?.value"
     @start="progressState.startPublishFromConfirm"
     @republish="progressState.republishFromConfirm"
     @stop="progressState.stopCurrentPublish"

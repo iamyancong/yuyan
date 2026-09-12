@@ -15,6 +15,8 @@ export interface NginxDeployContext {
   authState: any;
   /** 当前登录用户名 */
   userName: Ref<string>;
+  /** 当前用户权限角色: 'viewer' | 'operator' | 'admin' | '' */
+  userRole: Ref<string>;
   /** 是否已成功登录 */
   isLoggedIn: Ref<boolean>;
   /** 鉴权检查是否已就绪 */
