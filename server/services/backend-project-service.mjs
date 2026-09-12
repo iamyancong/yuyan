@@ -380,32 +380,44 @@ export async function inspectBackendRepository(repoDir) {
   const modulePomContent = starterContent.replace(/<parent>[\s\S]*?<\/parent>/, '');
   const artifactId = modulePomContent.match(/<artifactId>\s*([^<]+)\s*<\/artifactId>/)?.[1]?.trim() || path.basename(starterDir);
   const resourceDir = path.join(starterDir, 'src', 'main', 'resources');
-  const bootstrapFiles = (await fs.readdir(resourceDir).catch(() => []))
-    .filter((name) => /^bootstrap.*\.ya?ml$/i.test(name));
-  const bootstrapName = bootstrapFiles.includes('bootstrap.yml') ? 'bootstrap.yml' : bootstrapFiles[0] || '';
-  const bootstrap = bootstrapName ? await fs.readFile(path.join(resourceDir, bootstrapName), 'utf8') : '';
-  const port = Number(bootstrap.match(/(?:^|\n)server:\s*[\s\S]{0,160}?\n\s+port:\s*(\d+)/)?.[1] || 0);
-  const applicationName = bootstrap.match(/(?:^|\n)\s+application:\s*[\s\S]{0,120}?\n\s+name:\s*([^\s#]+)/)?.[1]?.trim() || artifactId;
-  const managementBase = bootstrap.match(/(?:^|\n)\s+base-path:\s*([^\s#]+)/)?.[1]?.trim() || '/actuator';
-  const profiles = bootstrap.match(/(?:^|\n)\s+active:\s*([^\n#]+)/)?.[1]?.trim() || '';
+  const configCandidateFiles = await fs.readdir(resourceDir).catch(() => []);
+  const bootstrapFiles = configCandidateFiles.filter((name) => /^bootstrap.*\.ya?ml$/i.test(name));
+  const applicationFiles = configCandidateFiles.filter((name) => /^application.*\.ya?ml$/i.test(name));
+  const primaryConfigName = bootstrapFiles.includes('bootstrap.yml')
+    ? 'bootstrap.yml'
+    : bootstrapFiles[0] || (applicationFiles.includes('application.yml') ? 'application.yml' : applicationFiles[0] || '');
+  const configContent = primaryConfigName ? await fs.readFile(path.join(resourceDir, primaryConfigName), 'utf8') : '';
+  const port = Number(configContent.match(/(?:^|\n)server:\s*[\s\S]{0,160}?\n\s+port:\s*(\d+)/)?.[1] || 0);
+  const applicationName = configContent.match(/(?:^|\n)\s+application:\s*[\s\S]{0,120}?\n\s+name:\s*([^\s#]+)/)?.[1]?.trim() || artifactId;
+  const managementBase = configContent.match(/(?:^|\n)\s+base-path:\s*([^\s#]+)/)?.[1]?.trim() || '/actuator';
+  const profiles = configContent.match(/(?:^|\n)\s+active:\s*([^\n#]+)/)?.[1]?.trim() || '';
   const smartDocPath = path.join(resourceDir, 'smart-doc.json');
   const smartDocRaw = await fs.readFile(smartDocPath, 'utf8').catch(() => '');
   const outPath = smartDocRaw.match(/"outPath"\s*:\s*"([^"]+)"/)?.[1] || 'target/openapi';
   const starterRelative = path.relative(repoDir, starterDir).replace(/\\/g, '/');
+  const isRootModule = !starterRelative || starterRelative === '.';
   return {
     javaVersion,
     javaMajorVersion: parseJavaMajorVersion(javaVersion),
     starterPom,
-    starterModule: starterRelative,
+    starterModule: isRootModule ? '' : starterRelative,
     applicationName,
     serverPort: port,
     springProfiles: profiles,
     bootstrapFiles,
     healthCheckPath: `${managementBase.replace(/\/$/, '')}/health`,
-    buildCommand: `./mvnw -nsu clean package -pl ${starterRelative} -am -DskipTests`,
-    artifactPattern: `${starterRelative}/target/${artifactId}-*.jar`,
-    openapiCommand: smartDocRaw ? `./mvnw -nsu -f ${starterPom} smart-doc:openapi` : '',
-    openapiOutputPath: smartDocRaw ? `${starterRelative}/${outPath}/openapi.json` : '',
+    buildCommand: isRootModule
+      ? './mvnw -nsu clean package -DskipTests'
+      : `./mvnw -nsu clean package -pl ${starterRelative} -am -DskipTests`,
+    artifactPattern: isRootModule
+      ? `target/${artifactId}-*.jar`
+      : `${starterRelative}/target/${artifactId}-*.jar`,
+    openapiCommand: smartDocRaw
+      ? (isRootModule ? './mvnw -nsu smart-doc:openapi' : `./mvnw -nsu -f ${starterPom} smart-doc:openapi`)
+      : '',
+    openapiOutputPath: smartDocRaw
+      ? (isRootModule ? `${outPath}/openapi.json` : `${starterRelative}/${outPath}/openapi.json`)
+      : '',
   };
 }
 

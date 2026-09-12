@@ -42,6 +42,28 @@ test('检测 Java、启动模块、端口、健康路径、Jar 与 smart-doc', a
   assert.equal(result.openapiOutputPath, 'valuation-outsourced-starter/target/openapi/openapi.json');
 });
 
+test('检测单模块 Spring Boot 项目生成干净的根目录打包命令与产物路径', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'yuyan-single-boot-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const resources = path.join(root, 'src/main/resources');
+  await fs.mkdir(resources, { recursive: true });
+  await fs.writeFile(path.join(root, 'pom.xml'), `
+    <project>
+      <properties><java.version>17</java.version></properties>
+      <artifactId>trade-order-service</artifactId>
+      <build><plugins><plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build>
+    </project>
+  `);
+  await fs.writeFile(path.join(resources, 'application.yml'), `server:\n  port: 8080\nspring:\n  application:\n    name: trade-order-service\n`);
+  const result = await inspectBackendRepository(root);
+  assert.equal(result.javaMajorVersion, 17);
+  assert.equal(result.starterModule, '');
+  assert.equal(result.applicationName, 'trade-order-service');
+  assert.equal(result.serverPort, 8080);
+  assert.equal(result.buildCommand, './mvnw -nsu clean package -DskipTests');
+  assert.equal(result.artifactPattern, 'target/trade-order-service-*.jar');
+});
+
 test('Jar 匹配排除 sources/original 并要求唯一', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'yuyan-jar-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

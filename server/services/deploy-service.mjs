@@ -1814,7 +1814,7 @@ export async function deployTarget(targetId, payload, emit) {
     if (isBackend) {
       const configured = String(target.artifactDir || '').trim();
       if (!configured) {
-        throw new Error('未配置 Jar 产物路径，请检查部署目标的“产物目录”配置项（如： valuation-outsourced-starter/target/valuation-outsourced-starter-3.0.0-SNAPSHOT.jar）');
+        throw new Error('未配置 Jar 产物路径，请检查部署目标的“产物目录”配置项（如：target/app.jar 或 app-starter/target/app-starter-1.0.0.jar）');
       }
       localJarPath = path.resolve(repoDir, configured);
       const fileStat = await fs.stat(localJarPath).catch(() => null);

@@ -269,6 +269,7 @@ export interface DeployTarget {
   artifactPattern: string;
   openapiCommand: string;
   openapiOutputPath: string;
+  backendTemplate?: string;
   needsReview: boolean;
   serviceStatus: BackendServiceStatus;
   serviceStatusOutput: string;
@@ -334,6 +335,7 @@ export interface DeployTargetPayload {
   artifactPattern?: string;
   openapiCommand?: string;
   openapiOutputPath?: string;
+  backendTemplate?: string;
   needsReview?: boolean;
 }
 

@@ -38,6 +38,10 @@ import {
   TEST_ENV_NAME,
   applyProjectTemplate,
   targetFormSchema,
+  resolveBackendTemplateValues,
+  recommendTemplateForProject,
+  detectBackendTemplateKey,
+  type BackendTemplateKey,
 } from '../constant';
 import {
   PROJECT_SELECT_DROPDOWN_CLASS,
@@ -669,8 +673,12 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     initializingTargetForm.value = true;
     activeTargetId.value = null;
     const initialProjectType = projectType.value !== 'all' ? projectType.value : 'frontend';
+    const recommendedTemplate = recommendTemplateForProject(selectedProject?.projectName || '');
+    const templateValues = resolveBackendTemplateValues(recommendedTemplate, selectedProject?.projectName || '');
+
     const initialInstallCmd = initialProjectType === 'backend' ? DEFAULT_BACKEND_INSTALL_COMMAND : DEFAULT_INSTALL_COMMAND;
-    const initialBuildCmd = initialProjectType === 'backend' ? DEFAULT_BACKEND_BUILD_COMMAND : DEFAULT_BUILD_COMMAND;
+    const initialBuildCmd = initialProjectType === 'backend' ? templateValues.buildCommand : DEFAULT_BUILD_COMMAND;
+    const initialArtifact = initialProjectType === 'backend' ? templateValues.artifactPattern : DEFAULT_ARTIFACT_DIR;
 
     Object.assign(targetForm, {
       projectSource: DEFAULT_PROJECT_SOURCE,
@@ -692,11 +700,12 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       enableNginxReload: false,
       installCommand: initialInstallCmd,
       buildCommand: initialBuildCmd,
-      artifactDir: initialProjectType === 'backend' ? DEFAULT_BACKEND_ARTIFACT_PATTERN : DEFAULT_ARTIFACT_DIR,
+      artifactDir: initialArtifact,
       preserveSubDirs: DEFAULT_PRESERVE_SUB_DIRS,
       uploadStrategy: DEFAULT_UPLOAD_STRATEGY,
       visitUrl: '',
       projectType: initialProjectType,
+      backendTemplate: initialProjectType === 'backend' ? recommendedTemplate : undefined,
       jdkId: undefined,
       buildJdkId: undefined,
       serverJavaRuntimeId: undefined,
@@ -705,7 +714,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       serviceName: selectedProject?.projectName || '',
       runtimeJavaHome: '',
       runtimeJavaVersion: '',
-      serverPort: 9999,
+      serverPort: initialProjectType === 'backend' ? templateValues.serverPort : 8080,
       processMode: 'pid',
       springProfiles: '',
       externalConfigPath: '',
@@ -713,7 +722,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       appArgs: '',
       stopTimeoutSeconds: 30,
       startupTimeoutSeconds: 120,
-      healthCheckPath: '/monitor/health',
+      healthCheckPath: initialProjectType === 'backend' ? templateValues.healthCheckPath : '/actuator/health',
       nacosServerAddr: '',
       nacosConsoleUrl: '',
       nacosNamespace: '',
@@ -721,9 +730,9 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       requireNacosRegistration: false,
       gatewayUrl: '',
       gatewayProbePath: '',
-      artifactPattern: initialProjectType === 'backend' ? DEFAULT_BACKEND_ARTIFACT_PATTERN : '',
-      openapiCommand: initialProjectType === 'backend' ? DEFAULT_BACKEND_OPENAPI_COMMAND : '',
-      openapiOutputPath: initialProjectType === 'backend' ? DEFAULT_BACKEND_OPENAPI_OUTPUT_PATH : '',
+      artifactPattern: initialProjectType === 'backend' ? templateValues.artifactPattern : '',
+      openapiCommand: initialProjectType === 'backend' ? templateValues.openapiCommand : '',
+      openapiOutputPath: initialProjectType === 'backend' ? templateValues.openapiOutputPath : '',
     });
     applyTargetServerDefaults(selectedServer, selectedProject?.projectName || '');
     void applyManagedNginxDefaults(selectedServer);
@@ -983,6 +992,11 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       Object.assign(targetForm, { ...target, projectSource: targetSource, serverName: target.nginxServerName || '_' });
       if (targetForm.projectType === 'backend') {
         targetForm.requiredJdkAlias = parseMajorVersionFromAlias(targetForm.requiredJdkAlias);
+        targetForm.backendTemplate = target.backendTemplate || detectBackendTemplateKey({
+          buildCommand: target.buildCommand,
+          artifactDir: target.artifactDir,
+          artifactPattern: target.artifactPattern,
+        });
       }
       if (!targetForm.nginxInstanceId) {
         const selectedServer = servers.value.find((server) => server.id === Number(targetForm.serverId));
@@ -1021,7 +1035,12 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
         String(authState?.value?.token || '')
       );
       const matchedJdk = jdks.value.find((jdk) => jdk.status === 'available' && Number(jdk.majorVersion) === Number(inspection.javaMajorVersion));
+      const detectedTemplate: BackendTemplateKey = inspection.starterModule
+        ? (inspection.starterModule === 'valuation-outsourced-starter' ? 'yss-valuation-outsourced' : 'maven-multi-module-starter')
+        : 'spring-boot-single-jar';
+
       Object.assign(targetForm, {
+        backendTemplate: detectedTemplate,
         serviceName: inspection.applicationName || targetForm.serviceName,
         serverPort: inspection.serverPort || targetForm.serverPort,
         healthCheckPath: inspection.healthCheckPath || targetForm.healthCheckPath,
@@ -1429,23 +1448,27 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
         if (targetForm.projectSource !== 'gitlab') {
           void handleTargetProjectSourceChange('gitlab');
         }
+        const recommendedTemplate = (targetForm.backendTemplate as BackendTemplateKey) || recommendTemplateForProject(targetForm.projectName);
+        targetForm.backendTemplate = recommendedTemplate;
+        const templateValues = resolveBackendTemplateValues(recommendedTemplate, targetForm.projectName);
+
         if (targetForm.installCommand === DEFAULT_INSTALL_COMMAND) {
           targetForm.installCommand = DEFAULT_BACKEND_INSTALL_COMMAND;
         }
         if (targetForm.buildCommand === DEFAULT_BUILD_COMMAND) {
-          targetForm.buildCommand = DEFAULT_BACKEND_BUILD_COMMAND;
+          targetForm.buildCommand = templateValues.buildCommand;
         }
         targetForm.serviceRole ||= 'application';
         targetForm.serviceName ||= targetForm.projectName;
-        targetForm.serverPort ||= 9999;
+        targetForm.serverPort ||= templateValues.serverPort;
         targetForm.processMode = targetForm.processMode === 'systemd' ? 'systemd' : 'pid';
         targetForm.stopTimeoutSeconds ||= 30;
         targetForm.startupTimeoutSeconds ||= 120;
-        targetForm.healthCheckPath ||= '/monitor/health';
-        targetForm.artifactDir ||= DEFAULT_BACKEND_ARTIFACT_PATTERN;
+        targetForm.healthCheckPath ||= templateValues.healthCheckPath;
+        targetForm.artifactDir ||= templateValues.artifactPattern;
         targetForm.artifactPattern ||= targetForm.artifactDir;
-        targetForm.openapiCommand ||= DEFAULT_BACKEND_OPENAPI_COMMAND;
-        targetForm.openapiOutputPath ||= DEFAULT_BACKEND_OPENAPI_OUTPUT_PATH;
+        targetForm.openapiCommand ||= templateValues.openapiCommand;
+        targetForm.openapiOutputPath ||= templateValues.openapiOutputPath;
 
         // 算出当前服务器对应的前端默认部署根目录
         const defaultFrontDeployRoot = server
@@ -1482,6 +1505,24 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
         }
       }
       syncTargetProjectSourceFieldState();
+      syncTargetFormValues();
+    }
+  );
+
+  watch(
+    () => targetForm.backendTemplate,
+    (newTemplate, oldTemplate) => {
+      if (initializingTargetForm.value || !targetModalOpen.value || targetForm.projectType !== 'backend') return;
+      if (!newTemplate || newTemplate === oldTemplate || newTemplate === 'custom') return;
+
+      const templateValues = resolveBackendTemplateValues(newTemplate as BackendTemplateKey, targetForm.projectName);
+      targetForm.buildCommand = templateValues.buildCommand;
+      targetForm.artifactDir = templateValues.artifactPattern;
+      targetForm.artifactPattern = templateValues.artifactPattern;
+      targetForm.openapiCommand = templateValues.openapiCommand;
+      targetForm.openapiOutputPath = templateValues.openapiOutputPath;
+      targetForm.serverPort = templateValues.serverPort;
+      targetForm.healthCheckPath = templateValues.healthCheckPath;
       syncTargetFormValues();
     }
   );

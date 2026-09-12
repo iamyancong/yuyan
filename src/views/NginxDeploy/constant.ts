@@ -23,17 +23,38 @@ export const DEFAULT_BUILD_COMMAND = 'pnpm build';
 /** 默认后端安装命令 */
 export const DEFAULT_BACKEND_INSTALL_COMMAND = '';
 
-/** 默认后端构建命令 */
-export const DEFAULT_BACKEND_BUILD_COMMAND = './mvnw -nsu clean package -pl valuation-outsourced-starter -am -DskipTests';
+/** 默认后端构建命令（通用 Spring Boot 单模块默认值） */
+export const DEFAULT_BACKEND_BUILD_COMMAND = './mvnw -nsu clean package -DskipTests';
 
-/** 默认后端 Jar 匹配规则 */
-export const DEFAULT_BACKEND_ARTIFACT_PATTERN = 'valuation-outsourced-starter/target/valuation-outsourced-starter-*.jar';
+/** 默认后端 Jar 匹配规则（通用 Spring Boot 单模块默认值） */
+export const DEFAULT_BACKEND_ARTIFACT_PATTERN = 'target/*.jar';
 
 /** 默认 OpenAPI 生成命令 */
-export const DEFAULT_BACKEND_OPENAPI_COMMAND = './mvnw -nsu -f valuation-outsourced-starter/pom.xml smart-doc:openapi';
+export const DEFAULT_BACKEND_OPENAPI_COMMAND = '';
 
 /** 默认 OpenAPI 输出路径 */
-export const DEFAULT_BACKEND_OPENAPI_OUTPUT_PATH = 'valuation-outsourced-starter/target/openapi/openapi.json';
+export const DEFAULT_BACKEND_OPENAPI_OUTPUT_PATH = '';
+
+import {
+  BACKEND_TEMPLATES,
+  BACKEND_TEMPLATE_OPTIONS,
+  deriveStarterModuleName,
+  resolveBackendTemplateValues,
+  recommendTemplateForProject,
+  detectBackendTemplateKey,
+  type BackendTemplateKey,
+  type BackendProjectTemplate,
+} from './templates/backendTemplates';
+
+export {
+  BACKEND_TEMPLATES,
+  BACKEND_TEMPLATE_OPTIONS,
+  deriveStarterModuleName,
+  resolveBackendTemplateValues,
+  recommendTemplateForProject,
+  detectBackendTemplateKey,
+};
+export type { BackendTemplateKey, BackendProjectTemplate };
 
 /** 默认产物目录，空值表示自动识别 */
 export const DEFAULT_ARTIFACT_DIR = '';
@@ -729,6 +750,23 @@ export const targetFormSchema = {
               'x-component': 'Select',
               'x-component-props': { placeholder: '请选择项目类型' },
             },
+            backendTemplate: {
+              type: 'string',
+              title: '后端模板画像',
+              required: false,
+              enum: BACKEND_TEMPLATE_OPTIONS,
+              'x-decorator': 'FormItem',
+              'x-component': 'Select',
+              'x-component-props': { placeholder: '选择工程模板自动填充' },
+              'x-reactions': {
+                dependencies: ['.projectType'],
+                fulfill: {
+                  state: {
+                    visible: '{{$deps[0] === "backend"}}',
+                  },
+                },
+              },
+            },
             requiredJdkAlias: {
               type: 'string',
               title: '本机构建 Java 版本',
@@ -783,7 +821,7 @@ export const targetFormSchema = {
               required: true,
               'x-decorator': 'FormItem',
               'x-component': 'Input',
-              'x-component-props': { placeholder: '例如 valuation-outsourced' },
+              'x-component-props': { placeholder: '例如 trade-service 或 valuation-outsourced' },
               'x-reactions': {
                 dependencies: ['.projectType'],
                 fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } },
@@ -990,7 +1028,7 @@ export const targetFormSchema = {
                   state: {
                     title: '{{$deps[0] === "backend" ? "Maven 打包命令" : "构建命令"}}',
                     componentProps: {
-                      placeholder: '{{$deps[0] === "backend" ? "每行一条命令，例如：\\n./mvnw -nsu -pl valuation-outsourced-starter -am -DskipTests package" : "每行一条命令，例如：\\npnpm build\\npnpm --filter app build"}}'
+                      placeholder: '{{$deps[0] === "backend" ? "每行一条命令，例如：\\n./mvnw -nsu clean package -DskipTests\\n多模块微服务：./mvnw -nsu clean package -pl app-starter -am -DskipTests" : "每行一条命令，例如：\\npnpm build\\npnpm --filter app build"}}'
                     }
                   }
                 }
@@ -1014,10 +1052,10 @@ export const targetFormSchema = {
                     title: '{{$deps[0] === "backend" ? "Jar 产物相对路径" : "产物目录"}}',
                     required: '{{$deps[0] === "backend"}}',
                     decoratorProps: {
-                      tooltip: '{{$deps[0] === "backend" ? "请填写打包后生成的 jar 包在仓库内的相对路径，必须直接指向 jar 包文件，例如：valuation-outsourced-starter/target/valuation-outsourced-starter-3.0.0-SNAPSHOT.jar" : "不填时发布系统会在本次构建后的仓库中自动查找静态产物目录；填写时请填构建产物在仓库内的相对路径，例如 packages/dist。" }}'
+                      tooltip: '{{$deps[0] === "backend" ? "请填写打包后生成的 jar 包在仓库内的相对路径，例如：target/*.jar 或 app-starter/target/*.jar" : "不填时发布系统会在本次构建后的仓库中自动查找静态产物目录；填写时请填构建产物在仓库内的相对路径，例如 packages/dist。" }}'
                     },
                     componentProps: {
-                      placeholder: '{{$deps[0] === "backend" ? "必填，示例：valuation-outsourced-starter/target/xxx.jar" : "不填自动识别；示例：packages/dist"}}'
+                      placeholder: '{{$deps[0] === "backend" ? "必填，示例：target/*.jar 或 starter/target/*.jar" : "不填自动识别；示例：packages/dist"}}'
                     }
                   }
                 }
