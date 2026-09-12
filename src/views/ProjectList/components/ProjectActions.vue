@@ -33,7 +33,7 @@ const isGroupRow = () => 'isGroup' in props.record && props.record.isGroup;
         <EyeOutlined />
       </a-button>
     </a-tooltip>
-    <a-tooltip title="独立服务器部署" placement="top">
+    <a-tooltip title="部署中心" placement="top">
       <a-button type="text" class="action-btn action-btn-primary" @click="emit('openNginxDeploy', record as GitLabProject)">
         <CloudUploadOutlined />
       </a-button>

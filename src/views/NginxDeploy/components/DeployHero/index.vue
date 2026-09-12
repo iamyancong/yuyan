@@ -35,9 +35,9 @@ const emit = defineEmits<{
   <div class="deploy-hero">
     <div class="deploy-hero__content">
       <div class="deploy-hero__left">
-        <div class="deploy-hero__kicker">Server Deployment Center</div>
+        <div class="deploy-hero__kicker">Deploy Center</div>
         <h1 class="deploy-hero__title">
-          独立服务器部署中心
+          部署中心
           <span class="title-split">·</span>
           <span class="glass-type-select-wrapper">
             <a-select

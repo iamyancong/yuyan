@@ -25,10 +25,18 @@ export const routes: RouteRecordRaw[] = [
         meta: { title: '平台应用列表' },
       },
       {
-        path: '/nginx-deploy',
-        name: 'NginxDeploy',
+        path: '/deploy',
+        name: 'DeployCenter',
         component: loadNginxDeploy,
-        meta: { title: '独立服务器部署' },
+        meta: { title: '部署中心' },
+      },
+      {
+        path: '/nginx-deploy',
+        redirect: (to) => ({
+          path: '/deploy',
+          query: to.query,
+          hash: to.hash,
+        }),
       },
       {
         path: '/projects',

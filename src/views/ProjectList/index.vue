@@ -50,12 +50,12 @@ const pageSize = computed(() => pagination.pageSize);
 const { tableBoundaryRef, tableAreaRef, tableHeight, recalculateHeight } = useProjectTableHeight(loading, dataLength, pageSize);
 
 /**
- * 跳转到独立服务器部署中心
+ * 跳转到部署中心
  * @param record - GitLab 项目记录
  */
 const handleOpenNginxDeploy = (record: GitLabProject) => {
   router.push({
-    path: '/nginx-deploy',
+    path: '/deploy',
     query: {
       projectId: String(record.id),
       projectName: record.name,
