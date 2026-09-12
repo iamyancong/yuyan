@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | 🚀 创建微应用 | `/scaffold` | 基于远程模板仓库一键生成标准化微应用（Vue3 / React），自动完成变量替换、初始化 Git、推送并在 GitLab 创建仓库，全程流式进度展示。 |
 | 📋 平台应用列表 | `/ops-projects` | 查看由雨燕创建并打了 `yuyan-ops` 标签的平台微应用，支持查看代码、配置等运维信息。 |
-| 🌐 独立服务器部署 | `/nginx-deploy` | 通过 SSH 将前端产物发布到独立服务器，内置构建、上传、Nginx 站点配置管理、版本备份与一键回滚，并支持「托管式 Nginx 运行时」自动下发。 |
+| 🌐 部署中心 | `/deploy` | 统一步署前后端服务与微应用，支持 SSH 构建发布、Nginx 站点管理、Jar 服务生命周期与日志、版本备份与一键回滚，并支持「托管式 Nginx 运行时」自动下发。 |
 | 📦 GitLab 仓库列表 | `/projects` | 浏览、搜索 GitLab 仓库，进行仓库相关的批量运维操作。 |
 | 🤖 AI 控制平面 | 顶部 AI 控制中心 | Codex、Cursor、Antigravity 通过本地 stdio MCP 调用雨燕，支持可信项目自动执行、配置差异、发布、回滚、服务控制、受审批删除、任务进度与审计。 |
 
@@ -93,7 +93,7 @@ yuyan-app/
 │   ├── views/               # 业务页面
 │   │   ├── ProjectList/Scaffold/   # 创建微应用
 │   │   ├── OpsProjects/            # 平台应用列表
-│   │   ├── NginxDeploy/            # 独立服务器部署
+│   │   ├── NginxDeploy/            # 部署中心
 │   │   └── ProjectList/            # GitLab 仓库列表
 │   ├── components/          # 通用组件
 │   ├── composables/ hooks/  # 组合式逻辑、主题、鉴权

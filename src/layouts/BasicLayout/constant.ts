@@ -11,6 +11,7 @@ export const MENU_ICON_MAP: Record<string, any> = {
   Scaffold: AppstoreOutlined,
   ProjectList: ProjectOutlined,
   OpsProjectList: ProjectOutlined,
+  DeployCenter: CloudServerOutlined,
   NginxDeploy: CloudServerOutlined,
 };
 
