@@ -59,9 +59,12 @@ const handleOpenNginxRuntime = async () => {
       :has-project-context="targetState.hasProjectContext.value"
       :project-name="project.projectName"
       :default-branch="project.defaultBranch"
+      :servers="serverState.servers.value"
+      :targets="targetState.runtimeTargets.value"
       @create-server="serverState.openCreateServer"
       @nginx-manage="handleOpenNginxRuntime"
       @create-target="targetState.openCreateTarget"
+      @select-tab="lifecycleState.handleTabChange"
     />
 
     <div class="deploy-tabs-wrapper">
@@ -104,6 +107,7 @@ const handleOpenNginxRuntime = async () => {
             @search="targetState.handleTargetFilterSearch"
             @reset="targetState.handleTargetFilterReset"
             @open-progress="progressState.openTargetProgress"
+            @bind-instance="targetState.openEditTarget"
           />
         </a-tab-pane>
         <a-tab-pane key="servers" tab="服务器管理">
@@ -114,6 +118,7 @@ const handleOpenNginxRuntime = async () => {
             :servers="serverState.servers.value"
             :action-config="serverActionConfig"
             @reorder="serverState.reorderServerList"
+            @manage-nginx="serverState.openNginxRuntime"
           />
         </a-tab-pane>
         <a-tab-pane key="records" tab="发布历史">

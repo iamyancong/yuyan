@@ -1,0 +1,137 @@
+.deploy-server-nginx-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+
+  &:hover {
+    background-color: var(--ant-primary-1, rgba(22, 119, 255, 0.08));
+    .nginx-health-badge {
+      text-decoration: underline;
+    }
+  }
+
+  &__empty {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--ant-color-text-quaternary, #bfbfbf);
+    border: 1px dashed var(--ant-color-border, #d9d9d9);
+    padding: 1px 8px;
+    border-radius: 4px;
+    line-height: 20px;
+    transition: all 0.2s;
+
+    &:hover {
+      color: var(--primary-color, #1890ff);
+      border-color: var(--primary-color, #1890ff);
+      background: var(--ant-primary-1, rgba(22, 119, 255, 0.04));
+    }
+  }
+
+  &__tags {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: nowrap;
+  }
+
+  .instance-tag {
+    margin: 0;
+    font-size: 12px;
+    line-height: 18px;
+    padding: 0 5px;
+    border-radius: 3px;
+
+    &.managed {
+      color: #1677ff;
+      background: #e6f4ff;
+      border-color: #91caff;
+    }
+
+    &.external {
+      color: #722ed1;
+      background: #f9f0ff;
+      border-color: #d3adf7;
+    }
+  }
+
+  .nginx-health-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    white-space: nowrap;
+
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      display: inline-block;
+
+      &.status-running {
+        background-color: #52c41a;
+        box-shadow: 0 0 0 2px rgba(82, 196, 26, 0.2);
+      }
+
+      &.status-stopped {
+        background-color: #faad14;
+      }
+
+      &.status-error {
+        background-color: #ff4d4f;
+      }
+
+      &.status-uninitialized {
+        background-color: #8c8c8c;
+      }
+    }
+
+    .status-text {
+      color: var(--ant-color-text-secondary, #595959);
+    }
+  }
+}
+
+// 暗色模式样式优化
+html[data-theme='dark'] .deploy-server-nginx-cell {
+  &:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+  }
+
+  &__empty {
+    border-color: rgba(255, 255, 255, 0.16);
+    color: rgba(255, 255, 255, 0.45);
+
+    &:hover {
+      border-color: #177ddc;
+      color: #177ddc;
+      background: rgba(23, 125, 220, 0.12);
+    }
+  }
+
+  .instance-tag {
+    &.managed {
+      color: #3c9ae8;
+      background: #111d2c;
+      border-color: #153450;
+    }
+
+    &.external {
+      color: #9254de;
+      background: #1a1325;
+      border-color: #391085;
+    }
+  }
+
+  .nginx-health-badge {
+    .status-text {
+      color: rgba(255, 255, 255, 0.65);
+    }
+  }
+}

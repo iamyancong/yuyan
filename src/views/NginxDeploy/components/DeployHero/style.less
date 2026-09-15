@@ -175,10 +175,53 @@
     color: var(--primary-color);
     box-shadow: 0 4px 10px var(--primary-color-lighter);
     transition: all 0.2s ease;
+    display: inline-flex;
+    align-items: center;
 
-    &:hover {
-      background: var(--glass-bg-heavy);
-      border-color: var(--primary-color-light);
+    &.is-clickable {
+      cursor: pointer;
+      user-select: none;
+
+      &:hover {
+        background: var(--glass-bg-heavy);
+        border-color: var(--primary-color-light);
+        transform: translateY(-1px);
+        box-shadow: 0 6px 14px var(--primary-color-lighter);
+      }
+
+      &:active {
+        transform: translateY(0);
+      }
+    }
+
+    &.is-warning {
+      border-color: rgba(250, 140, 22, 0.35);
+      background: rgba(250, 140, 22, 0.06);
+    }
+
+    &.is-error {
+      border-color: rgba(255, 77, 79, 0.35);
+      background: rgba(255, 77, 79, 0.06);
+    }
+
+    &.is-success {
+      border-color: rgba(82, 196, 26, 0.35);
+      background: rgba(82, 196, 26, 0.06);
+    }
+
+    .flow-step__badge {
+      margin-left: 4px;
+      font-size: 11px;
+      opacity: 0.85;
+    }
+
+    .flow-step__tag {
+      margin-left: 6px;
+      margin-right: 0;
+      padding: 0 6px;
+      font-size: 11px;
+      line-height: 16px;
+      border-radius: 999px;
     }
   }
 

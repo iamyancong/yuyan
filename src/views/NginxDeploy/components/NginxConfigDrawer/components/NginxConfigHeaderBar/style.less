@@ -1,0 +1,93 @@
+.nginx-config-header-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  background: var(--ant-color-fill-quaternary, rgba(0, 0, 0, 0.02));
+  border-bottom: 1px solid var(--ant-color-border-secondary, #e8e8e8);
+  font-size: 12px;
+  line-height: 22px;
+
+  &__left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    overflow: hidden;
+    white-space: nowrap;
+
+    .route-domain {
+      font-weight: 600;
+      color: var(--ant-color-text-heading, #1f1f1f);
+      font-size: 13px;
+    }
+
+    .route-arrow {
+      color: var(--ant-color-text-quaternary, #bfbfbf);
+    }
+
+    .route-dest {
+      color: var(--primary-color, #1890ff);
+      font-family: var(--font-mono, monospace);
+    }
+
+    .config-path-tag {
+      font-family: var(--font-mono, monospace);
+      font-size: 11px;
+      margin: 0;
+      max-width: 280px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+  }
+
+  &__right {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+
+    .instance-pill {
+      color: var(--ant-color-text-secondary, #595959);
+      background: var(--ant-color-fill-secondary, rgba(0, 0, 0, 0.06));
+      border: 1px solid var(--ant-color-border, #d9d9d9);
+      border-radius: 4px;
+      padding: 0 6px;
+      font-size: 11px;
+    }
+
+    .ssl-placeholder {
+      font-size: 11px;
+      color: var(--ant-color-text-quaternary, #8c8c8c);
+      padding: 0 4px;
+    }
+  }
+}
+
+// 暗色模式样式
+html[data-theme='dark'] .nginx-config-header-bar {
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+
+  &__left {
+    .route-domain {
+      color: rgba(255, 255, 255, 0.9);
+    }
+
+    .route-dest {
+      color: #3c9ae8;
+    }
+  }
+
+  &__right {
+    .instance-pill {
+      color: rgba(255, 255, 255, 0.65);
+      background: rgba(255, 255, 255, 0.08);
+      border-color: rgba(255, 255, 255, 0.15);
+    }
+
+    .ssl-placeholder {
+      color: rgba(255, 255, 255, 0.35);
+    }
+  }
+}

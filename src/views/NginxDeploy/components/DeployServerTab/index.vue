@@ -5,6 +5,7 @@ import { useTableHeight } from '@yss-ui/hooks';
 import type { YTableActionConfig } from '@yss-ui/components/lite';
 import type { DeployServer } from '@/api/deploy';
 import { serverColumns } from '../../constant';
+import DeployServerNginxCell from '../DeployServerNginxCell/index.vue';
 
 defineOptions({ name: 'DeployServerTab' });
 
@@ -27,6 +28,8 @@ const props = defineProps<DeployServerTabProps>();
 const emit = defineEmits<{
   /** 保存拖拽后的服务器顺序 */
   (event: 'reorder', servers: DeployServer[]): void;
+  /** 点击 Nginx 实例单元格触发管理 */
+  (event: 'manageNginx', server: DeployServer): void;
 }>();
 
 const tableAreaRef = ref<HTMLElement>();
@@ -266,7 +269,11 @@ const handleRowDragEnd = (params: any) => {
         size="small"
         id="nginx-deploy-servers"
         @row-dragend="handleRowDragEnd"
-      />
+      >
+        <template #nginxRuntime="{ row }">
+          <DeployServerNginxCell :server="row" @click="(server) => emit('manageNginx', server)" />
+        </template>
+      </YTable>
     </div>
   </div>
 </template>

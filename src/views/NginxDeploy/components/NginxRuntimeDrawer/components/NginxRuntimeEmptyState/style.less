@@ -1,0 +1,188 @@
+.nginx-runtime-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  min-height: 360px;
+  text-align: center;
+
+  &__no-server {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+
+    .empty-icon {
+      font-size: 48px;
+      color: var(--ant-color-text-quaternary, #bfbfbf);
+    }
+
+    .empty-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--ant-color-text-heading, #262626);
+    }
+
+    .empty-desc {
+      font-size: 13px;
+      color: var(--ant-color-text-secondary, #595959);
+      max-width: 400px;
+      line-height: 22px;
+    }
+  }
+
+  &__no-instance {
+    width: 100%;
+    max-width: 780px;
+
+    .header-box {
+      margin-bottom: 28px;
+
+      .title {
+        font-size: 18px;
+        font-weight: 600;
+        color: var(--ant-color-text-heading, #262626);
+        margin-bottom: 8px;
+      }
+
+      .desc {
+        font-size: 13px;
+        color: var(--ant-color-text-secondary, #595959);
+      }
+    }
+
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 20px;
+      text-align: left;
+    }
+
+    .choice-card {
+      border: 1px solid var(--ant-color-border, #d9d9d9);
+      border-radius: 12px;
+      padding: 24px;
+      background: var(--ant-color-bg-container, #ffffff);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      transition: all 0.25s ease;
+
+      &:hover {
+        border-color: var(--primary-color, #1890ff);
+        box-shadow: 0 8px 24px rgba(24, 144, 255, 0.12);
+        transform: translateY(-2px);
+      }
+
+      &__header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 12px;
+
+        .card-icon {
+          width: 40px;
+          height: 40px;
+          border-radius: 8px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 20px;
+
+          &.managed {
+            background: #e6f4ff;
+            color: #1677ff;
+          }
+
+          &.external {
+            background: #f9f0ff;
+            color: #722ed1;
+          }
+        }
+
+        .card-titles {
+          .main-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--ant-color-text-heading, #262626);
+          }
+
+          .sub-title {
+            font-size: 12px;
+            color: var(--ant-color-text-quaternary, #8c8c8c);
+          }
+        }
+      }
+
+      &__body {
+        font-size: 13px;
+        line-height: 20px;
+        color: var(--ant-color-text-secondary, #595959);
+        margin-bottom: 20px;
+        flex: 1;
+      }
+
+      &__action {
+        width: 100%;
+
+        .action-btn {
+          width: 100%;
+          border-radius: 6px;
+        }
+      }
+    }
+  }
+}
+
+// 暗色模式样式
+html[data-theme='dark'] .nginx-runtime-empty-state {
+  &__no-instance {
+    .header-box {
+      .title {
+        color: rgba(255, 255, 255, 0.9);
+      }
+      .desc {
+        color: rgba(255, 255, 255, 0.65);
+      }
+    }
+
+    .choice-card {
+      background: rgba(255, 255, 255, 0.04);
+      border-color: rgba(255, 255, 255, 0.12);
+
+      &:hover {
+        border-color: #177ddc;
+        box-shadow: 0 8px 24px rgba(23, 125, 220, 0.2);
+      }
+
+      &__header {
+        .card-icon {
+          &.managed {
+            background: #111d2c;
+            color: #177ddc;
+          }
+
+          &.external {
+            background: #1a1325;
+            color: #9254de;
+          }
+        }
+
+        .card-titles {
+          .main-title {
+            color: rgba(255, 255, 255, 0.9);
+          }
+          .sub-title {
+            color: rgba(255, 255, 255, 0.45);
+          }
+        }
+      }
+
+      &__body {
+        color: rgba(255, 255, 255, 0.65);
+      }
+    }
+  }
+}

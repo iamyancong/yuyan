@@ -49,6 +49,7 @@ import {
   useDeployProjectOptions,
   renderTwoLineSelectOption,
 } from './useDeployProjectOptions';
+import { useSiteConflictCheck } from './useSiteConflictCheck';
 import type { DeployProjectContext, DeployTargetProjectDraft, FormilyRef, RefreshActiveTabOptions, RuntimeAwareDeployTarget, TargetFilterForm } from '../types';
 import {
   createBranchOptions,
@@ -221,6 +222,9 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
   // 核心战役 2.1: 引入裂变出来的子 Hooks
   // ==========================================
   
+  // 站点域名与端口冲突预检 Hook
+  const { confirmIfConflict } = useSiteConflictCheck();
+
   // 运行态长轮询与快照子 Hook
   const {
     targetRuntimeSnapshots,
@@ -1149,6 +1153,23 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       if (!isBackend && payload.nginxSiteManaged && (!Number.isInteger(Number(payload.listenPort)) || Number(payload.listenPort) < 1 || Number(payload.listenPort) > 65535)) {
         message.warning('托管站点监听端口必须在 1-65535 之间');
         return;
+      }
+      if (!isBackend) {
+        const shouldProceed = await confirmIfConflict(
+          {
+            id: activeTargetId.value,
+            serverId: payload.serverId,
+            nginxInstanceId: payload.nginxInstanceId,
+            nginxServerName: payload.serverName,
+            listenPort: payload.listenPort,
+            projectType: payload.projectType,
+          },
+          allTargets.value.length ? allTargets.value : targets.value
+        );
+        if (!shouldProceed) {
+          targetSaving.value = false;
+          return;
+        }
       }
       if (isBackend) {
         if (payload.processMode === 'legacy') {

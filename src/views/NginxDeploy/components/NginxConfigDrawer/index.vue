@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 import { YMonaco } from 'virtual:yss-heavy-components';
 import type { DeployTarget } from '@/api/deploy';
+import NginxConfigHeaderBar from './components/NginxConfigHeaderBar/index.vue';
 import { useNginxConfig } from './hooks/useNginxConfig';
 
 defineOptions({ name: 'NginxConfigDrawer' });
@@ -41,21 +42,12 @@ const open = computed({
 <template>
   <a-drawer v-model:open="open" width="72%" placement="right" title="Nginx 配置文件管理" destroyOnClose>
     <a-spin :spinning="loading">
-      <div class="nginx-config-path-bar">
-        <span class="nginx-config-path-label">当前配置文件</span>
-        <a-tag color="blue" class="nginx-config-path">{{ configPath || '未选择配置文件' }}</a-tag>
-      </div>
-      <div class="nginx-config-path-bar">
-        <span class="nginx-config-path-label">Nginx 实例</span>
-        <a-tag>{{ target?.serverName || '-' }}</a-tag>
-        <a-tag color="purple">{{ target?.nginxInstanceName || '-' }}</a-tag>
-        <a-tag>{{ target?.nginxInstanceType === 'managed' ? '托管' : '已有' }}</a-tag>
-      </div>
+      <NginxConfigHeaderBar :target="target" :config-path="configPath" />
       <YMonaco
         v-model:modelValue="content"
         language="nginx"
         theme="vs-dark"
-        height="calc(100vh - 210px)"
+        height="calc(100vh - 180px)"
         :format-on-mount="false"
         :options="{ minimap: { enabled: false }, fontSize: 13 }"
       />

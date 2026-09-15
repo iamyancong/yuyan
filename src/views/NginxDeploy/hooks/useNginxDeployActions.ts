@@ -136,9 +136,19 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
         },
       },
       {
-        key: 'nginx',
+        key: 'nginxManage',
         text: 'Nginx 管理',
         type: 'link',
+        hideFn: ({ row }) => !Boolean(row.nginxInstances?.length || row.nginxRuntime?.initializedAt),
+        clickFn: ({ row }) => {
+          void openNginxRuntime?.(row);
+        },
+      },
+      {
+        key: 'nginxInit',
+        text: '初始化/发现',
+        type: 'link',
+        hideFn: ({ row }) => Boolean(row.nginxInstances?.length || row.nginxRuntime?.initializedAt),
         clickFn: ({ row }) => {
           void openNginxRuntime?.(row);
         },
