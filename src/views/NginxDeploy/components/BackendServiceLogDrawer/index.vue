@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { YButton, YMonaco } from '@yss-ui/components/lite';
+import { YButton } from '@yss-ui/components/lite';
+import { YMonaco } from 'virtual:yss-heavy-components';
 import type { DeployTarget } from '@/api/deploy';
 
 defineOptions({ name: 'BackendServiceLogDrawer' });

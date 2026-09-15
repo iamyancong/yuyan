@@ -1,4 +1,4 @@
-import { computed, nextTick, ref, watch, type Ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, watch, type Ref } from 'vue';
 import { useTableHeight } from '@yss-ui/hooks';
 import type { DeployRecord } from '@/api/deploy';
 import { buildCommitUrl, TABLE_DEFAULT_HEIGHT, TABLE_MIN_HEIGHT } from '../constant';
@@ -45,15 +45,30 @@ export function useDeployRecordTab(options: UseDeployRecordTabOptions) {
     flush: 'post',
   });
 
+  let activeTimer: ReturnType<typeof setTimeout> | null = null;
   watch(
     options.active,
     (isActive) => {
-      if (isActive) {
-        void recalculateAfterRender();
+      if (activeTimer) {
+        clearTimeout(activeTimer);
+        activeTimer = null;
       }
-    },
-    { flush: 'post' }
+      if (isActive) {
+        // 延迟 220ms 执行重算，彻底避开 Tab 切换 inkBar 动画执行期，防止同步回流卡顿
+        activeTimer = setTimeout(() => {
+          recalculateHeight();
+          activeTimer = null;
+        }, 220);
+      }
+    }
   );
+
+  onBeforeUnmount(() => {
+    if (activeTimer) {
+      clearTimeout(activeTimer);
+      activeTimer = null;
+    }
+  });
 
   /** 提交链接映射 */
   const commitUrlMap = computed(() => {

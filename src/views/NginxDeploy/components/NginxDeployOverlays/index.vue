@@ -1,15 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, defineAsyncComponent, ref, watch } from 'vue';
 import type { DeployTargetPayload } from '@/api/deploy';
 import type { FormilyRef } from '../../types';
-import ProgressPanel from '../ProgressPanel/index.vue';
-import PublishConfirmModal from '../PublishConfirmModal/index.vue';
-import NginxConfigDrawer from '../NginxConfigDrawer/index.vue';
-import RecordLogDrawer from '../RecordLogDrawer/index.vue';
-import DeployTargetConfigModal from '../DeployTargetConfigModal/index.vue';
-import ServerDeployOverlays from '../ServerDeployOverlays/index.vue';
-import BackendDeployOverlays from '../BackendDeployOverlays/index.vue';
-import BackendServiceProgressModal from '../BackendServiceProgressModal/index.vue';
 
 defineOptions({ name: 'NginxDeployOverlays' });
 
@@ -23,6 +15,87 @@ interface NginxDeployOverlaysProps {
 }
 
 const props = defineProps<NginxDeployOverlaysProps>();
+
+/** 各业务弹层完全按需异步加载，阻断首开大包与 Monaco 等重型依赖 */
+const ProgressPanel = defineAsyncComponent(() => import('../ProgressPanel/index.vue'));
+const PublishConfirmModal = defineAsyncComponent(() => import('../PublishConfirmModal/index.vue'));
+const NginxConfigDrawer = defineAsyncComponent(() => import('../NginxConfigDrawer/index.vue'));
+const RecordLogDrawer = defineAsyncComponent(() => import('../RecordLogDrawer/index.vue'));
+const DeployTargetConfigModal = defineAsyncComponent(() => import('../DeployTargetConfigModal/index.vue'));
+const ServerDeployOverlays = defineAsyncComponent(() => import('../ServerDeployOverlays/index.vue'));
+const BackendDeployOverlays = defineAsyncComponent(() => import('../BackendDeployOverlays/index.vue'));
+const BackendServiceProgressModal = defineAsyncComponent(() => import('../BackendServiceProgressModal/index.vue'));
+
+/** 首次激活保活状态，未激活前零下载零挂载，关闭后保持保活避免重新渲染 */
+const serverOverlaysEverOpened = ref(false);
+const targetModalEverOpened = ref(false);
+const publishConfirmEverOpened = ref(false);
+const rollbackProgressEverOpened = ref(false);
+const nginxConfigEverOpened = ref(false);
+const recordLogEverOpened = ref(false);
+const backendOverlaysEverOpened = ref(false);
+
+watch(
+  () => Boolean(props.serverState?.serverModalOpen?.value || props.serverState?.runtimeDrawerOpen?.value),
+  (val) => {
+    if (val && !serverOverlaysEverOpened.value) serverOverlaysEverOpened.value = true;
+  },
+  { immediate: true }
+);
+
+watch(
+  () => Boolean(props.targetState?.targetModalOpen?.value),
+  (val) => {
+    if (val && !targetModalEverOpened.value) targetModalEverOpened.value = true;
+  },
+  { immediate: true }
+);
+
+watch(
+  () => Boolean(props.progressState?.publishConfirmOpen?.value),
+  (val) => {
+    if (val && !publishConfirmEverOpened.value) publishConfirmEverOpened.value = true;
+  },
+  { immediate: true }
+);
+
+watch(
+  () => Boolean(props.progressState?.rollbackProgressOpen?.value),
+  (val) => {
+    if (val && !rollbackProgressEverOpened.value) rollbackProgressEverOpened.value = true;
+  },
+  { immediate: true }
+);
+
+watch(
+  () => Boolean(props.targetState?.nginxTargetId?.value),
+  (val) => {
+    if (val && !nginxConfigEverOpened.value) nginxConfigEverOpened.value = true;
+  },
+  { immediate: true }
+);
+
+watch(
+  () => Boolean(props.recordState?.recordLogOpen?.value),
+  (val) => {
+    if (val && !recordLogEverOpened.value) recordLogEverOpened.value = true;
+  },
+  { immediate: true }
+);
+
+watch(
+  () =>
+    Boolean(
+      props.openApiState?.drawerOpen?.value ||
+        props.targetState?.serviceLogOpen?.value ||
+        props.targetState?.javaManagerOpen?.value ||
+        props.targetState?.environmentManagerOpen?.value
+    ),
+  (val) => {
+    if (val && !backendOverlaysEverOpened.value) backendOverlaysEverOpened.value = true;
+  },
+  { immediate: true }
+);
 
 const activeNginxTarget = computed(() => {
   const targetId = Number(props.targetState.nginxTargetId.value || 0);
@@ -50,8 +123,13 @@ const updateTargetForm = (values: Partial<DeployTargetPayload>) => {
 </script>
 
 <template>
-  <ServerDeployOverlays :server-state="serverState" />
+  <ServerDeployOverlays
+    v-if="serverOverlaysEverOpened"
+    :server-state="serverState"
+  />
+
   <DeployTargetConfigModal
+    v-if="targetModalEverOpened"
     v-model:open="targetState.targetModalOpen.value"
     :saving="targetState.targetSaving.value"
     :loading="targetState.targetFormLoading.value"
@@ -65,7 +143,9 @@ const updateTargetForm = (values: Partial<DeployTargetPayload>) => {
     @manage-environment="targetState.openEnvironmentManager"
     @save="targetState.saveTarget"
   />
+
   <PublishConfirmModal
+    v-if="publishConfirmEverOpened"
     v-model:open="progressState.publishConfirmOpen.value"
     :target="progressState.activePublishTarget.value"
     :percent="progressState.progressState.percent"
@@ -86,47 +166,58 @@ const updateTargetForm = (values: Partial<DeployTargetPayload>) => {
     @stop="progressState.stopCurrentPublish"
   />
 
-  <BackendServiceProgressModal
-    v-if="isBackendServiceProgress"
-    v-model:open="progressState.rollbackProgressOpen.value"
-    :action="progressState.progressMode.value"
-    :target="progressState.activePublishTarget.value"
-    :percent="progressState.progressState.percent"
-    :title="progressState.progressState.title"
-    :detail="progressState.progressState.detail"
-    :logs="progressState.progressState.logs"
-    :running="progressState.progressState.running"
-  />
-
-  <a-modal
-    v-else
-    v-model:open="progressState.rollbackProgressOpen.value"
-    :title="progressState.rollbackProgressTitle.value"
-    width="860px"
-    :bodyStyle="{ maxHeight: 'calc(100vh - 200px)', overflowY: 'auto', padding: '24px' }"
-    style="top: 40px"
-    :footer="null"
-    :closable="!progressState.progressState.running"
-    :maskClosable="!progressState.progressState.running"
-  >
-    <ProgressPanel
+  <template v-if="rollbackProgressEverOpened">
+    <BackendServiceProgressModal
+      v-if="isBackendServiceProgress"
+      v-model:open="progressState.rollbackProgressOpen.value"
+      :action="progressState.progressMode.value"
+      :target="progressState.activePublishTarget.value"
       :percent="progressState.progressState.percent"
       :title="progressState.progressState.title"
       :detail="progressState.progressState.detail"
       :logs="progressState.progressState.logs"
       :running="progressState.progressState.running"
     />
-  </a-modal>
+
+    <a-modal
+      v-else
+      v-model:open="progressState.rollbackProgressOpen.value"
+      :title="progressState.rollbackProgressTitle.value"
+      width="860px"
+      :bodyStyle="{ maxHeight: 'calc(100vh - 200px)', overflowY: 'auto', padding: '24px' }"
+      style="top: 40px"
+      :footer="null"
+      :closable="!progressState.progressState.running"
+      :maskClosable="!progressState.progressState.running"
+    >
+      <ProgressPanel
+        :percent="progressState.progressState.percent"
+        :title="progressState.progressState.title"
+        :detail="progressState.progressState.detail"
+        :logs="progressState.progressState.logs"
+        :running="progressState.progressState.running"
+      />
+    </a-modal>
+  </template>
 
   <NginxConfigDrawer
+    v-if="nginxConfigEverOpened"
     v-model:targetId="targetState.nginxTargetId.value"
     :target="activeNginxTarget"
     @save="targetState.handleSaveNginxConf"
   />
+
   <RecordLogDrawer
+    v-if="recordLogEverOpened"
     v-model:open="recordState.recordLogOpen.value"
     :record="recordState.activeRecord.value"
     :loading="recordState.recordLogLoading.value"
   />
-  <BackendDeployOverlays :server-state="serverState" :target-state="targetState" :open-api-state="openApiState" />
+
+  <BackendDeployOverlays
+    v-if="backendOverlaysEverOpened"
+    :server-state="serverState"
+    :target-state="targetState"
+    :open-api-state="openApiState"
+  />
 </template>

@@ -1,12 +1,35 @@
 <script setup lang="ts">
+import { defineAsyncComponent, ref, watch } from 'vue';
 import type { DeployServerPayload, NginxInstancePayload, NginxRuntimePayload } from '@/api/deploy';
 import type { FormilyRef } from '../../types';
-import ServerConfigDrawer from '../ServerConfigDrawer/index.vue';
-import NginxRuntimeDrawer from '../NginxRuntimeDrawer/index.vue';
 
 defineOptions({ name: 'ServerDeployOverlays' });
 
 const props = defineProps<{ serverState: Record<string, any> }>();
+
+/** 抽屉组件按需异步加载，避免相互污染与整包加载 */
+const ServerConfigDrawer = defineAsyncComponent(() => import('../ServerConfigDrawer/index.vue'));
+const NginxRuntimeDrawer = defineAsyncComponent(() => import('../NginxRuntimeDrawer/index.vue'));
+
+/** 首次激活标记，确保首次打开前零下载，关闭后常驻保活 */
+const serverModalEverOpened = ref(false);
+const runtimeDrawerEverOpened = ref(false);
+
+watch(
+  () => Boolean(props.serverState?.serverModalOpen?.value),
+  (val) => {
+    if (val && !serverModalEverOpened.value) serverModalEverOpened.value = true;
+  },
+  { immediate: true }
+);
+
+watch(
+  () => Boolean(props.serverState?.runtimeDrawerOpen?.value),
+  (val) => {
+    if (val && !runtimeDrawerEverOpened.value) runtimeDrawerEverOpened.value = true;
+  },
+  { immediate: true }
+);
 
 /** 同步服务器 Formily 实例。 */
 const setServerFormRef = (instance: FormilyRef | null) => {
@@ -31,6 +54,7 @@ const updateRuntimeInstanceForm = (values: Partial<NginxInstancePayload>) => {
 
 <template>
   <ServerConfigDrawer
+    v-if="serverModalEverOpened"
     v-model:open="serverState.serverModalOpen.value"
     :saving="serverState.serverSaving.value"
     :form-key="serverState.serverFormKey.value"
@@ -40,6 +64,7 @@ const updateRuntimeInstanceForm = (values: Partial<NginxInstancePayload>) => {
     @save="serverState.saveServer"
   />
   <NginxRuntimeDrawer
+    v-if="runtimeDrawerEverOpened"
     v-model:open="serverState.runtimeDrawerOpen.value"
     :servers="serverState.servers.value"
     :server="serverState.runtimeServer.value"

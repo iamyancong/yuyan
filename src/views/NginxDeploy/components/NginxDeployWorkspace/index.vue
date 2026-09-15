@@ -6,9 +6,8 @@ import type { YTableActionConfig } from '@yss-ui/components/lite';
 import type { DeployProjectContext, TargetFilterForm } from '../../types';
 import DeployHero from '../DeployHero/index.vue';
 import DeployTargetTab from '../DeployTargetTab/index.vue';
-
-const DeployServerTab = defineAsyncComponent(() => import('../DeployServerTab/index.vue'));
-const DeployRecordTab = defineAsyncComponent(() => import('../DeployRecordTab/index.vue'));
+import DeployServerTab from '../DeployServerTab/index.vue';
+import DeployRecordTab from '../DeployRecordTab/index.vue';
 
 defineOptions({ name: 'NginxDeployWorkspace' });
 
@@ -35,13 +34,20 @@ const updateTargetFilterForm = (values: TargetFilterForm) => {
   Object.assign(props.targetState.targetFilterForm, values);
 };
 
-/** 打开 Nginx 管理抽屉，内部可切换服务器 */
+/** 打开 Nginx 管理抽屉，先开抽屉壳后拉取最新状态 */
 const handleOpenNginxRuntime = async () => {
-  await props.serverState.refreshServerList();
-  const servers = props.serverState.servers.value || [];
+  let servers = props.serverState.servers.value || [];
   if (!servers.length) {
-    message.warning('请先新增服务器，再管理 Nginx');
-    return;
+    // 若当前无服务器缓存，拉取一次以确认是否存在服务器
+    await props.serverState.refreshServerList();
+    servers = props.serverState.servers.value || [];
+    if (!servers.length) {
+      message.warning('请先新增服务器，再管理 Nginx');
+      return;
+    }
+  } else {
+    // 已有服务器列表时，后台静默刷新最新服务器，不阻塞抽屉打开
+    void props.serverState.refreshServerList();
   }
   void props.serverState.openNginxRuntimeDrawer(servers);
 };
@@ -88,7 +94,7 @@ const handleOpenNginxRuntime = async () => {
         <a-tab-pane key="targets" tab="部署目标">
           <DeployTargetTab
             :active="lifecycleState.activeTabKey.value === 'targets'"
-            :loading="lifecycleState.loading.value"
+            :loading="Boolean(lifecycleState.loading.value && lifecycleState.activeTabKey.value === 'targets')"
             :targets="targetState.runtimeTargets.value"
             :filter-form="targetState.targetFilterForm"
             :branch-options="targetState.targetBranchFilterOptions.value"
@@ -103,7 +109,7 @@ const handleOpenNginxRuntime = async () => {
         <a-tab-pane key="servers" tab="服务器管理">
           <DeployServerTab
             :active="lifecycleState.activeTabKey.value === 'servers'"
-            :loading="lifecycleState.loading.value"
+            :loading="Boolean(lifecycleState.loading.value && lifecycleState.activeTabKey.value === 'servers')"
             :order-saving="serverState.serverOrderSaving.value"
             :servers="serverState.servers.value"
             :action-config="serverActionConfig"
@@ -113,7 +119,7 @@ const handleOpenNginxRuntime = async () => {
         <a-tab-pane key="records" tab="发布历史">
           <DeployRecordTab
             :active="lifecycleState.activeTabKey.value === 'records'"
-            :loading="lifecycleState.loading.value"
+            :loading="Boolean(lifecycleState.loading.value && lifecycleState.activeTabKey.value === 'records')"
             :records="recordState.records.value"
             :action-config="recordActionConfig"
             :server-filter="recordState.recordServerFilter.value"

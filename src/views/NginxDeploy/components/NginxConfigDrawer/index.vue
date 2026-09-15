@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { YMonaco } from '@yss-ui/components/lite';
+import { YMonaco } from 'virtual:yss-heavy-components';
 import type { DeployTarget } from '@/api/deploy';
 import { useNginxConfig } from './hooks/useNginxConfig';
 

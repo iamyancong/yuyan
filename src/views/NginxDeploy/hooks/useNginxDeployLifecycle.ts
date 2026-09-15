@@ -107,7 +107,7 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
       tabLoadedFlags.value.records = false;
     }
     const hasCachedData = tabLoadedFlags.value[tabKey];
-    const shouldShowLoading = Boolean(options.force || !hasCachedData);
+    const shouldShowLoading = !options.silent && Boolean(options.force || !hasCachedData);
 
     if (shouldShowLoading) {
       loading.value = true;
@@ -138,21 +138,28 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
     }
   };
 
+  let tabRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
   /**
-   * 切换页面 Tab：已缓存的 Tab 立即展示，首次进入在下一动画帧调度拉数，确保点击反馈与动画不掉帧。
+   * 切换页面 Tab。
+   * 1. 立即更新 activeTabKey，驱动 Tab 标签高亮与底部指示线以 60fps 满帧极速滑动；
+   * 2. 延迟 180ms（待 Tab 切换动效完全平稳落定）后再触发表格 loading 与后端数据拉取，
+   *    彻底杜绝数据请求与响应式 patch 争抢动画黄金帧导致的掉帧与顿挫感。
    * @param key Tab Key
    */
   const handleTabChange = (key: string | number) => {
     const nextKey = String(key) as NginxDeployTabKey;
     activeTabKey.value = ['targets', 'servers', 'records'].includes(nextKey) ? nextKey : 'targets';
-    if (tabLoadedFlags.value[nextKey]) {
-      return;
+
+    if (tabRefreshTimer) {
+      clearTimeout(tabRefreshTimer);
+      tabRefreshTimer = null;
     }
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        void refreshActiveTab().catch(reportRefreshError);
-      });
-    });
+
+    tabRefreshTimer = setTimeout(() => {
+      tabRefreshTimer = null;
+      void refreshActiveTab({ force: true }).catch(reportRefreshError);
+    }, 180);
   };
 
   // 监听当前 Tab：非 targets Tab 自动休眠运行态轮询，切回 targets 时自动恢复

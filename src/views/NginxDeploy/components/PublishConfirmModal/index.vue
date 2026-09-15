@@ -11,7 +11,8 @@ import {
   UserOutlined,
 } from '@ant-design/icons-vue';
 import { Modal } from 'ant-design-vue';
-import { YButton, YMonaco } from '@yss-ui/components/lite';
+import { YButton } from '@yss-ui/components/lite';
+import { YMonaco } from 'virtual:yss-heavy-components';
 import { computed, h, ref, watch } from 'vue';
 import type { PublishConfirmModalProps, PublishStartOptions } from './constant';
 import { usePublishConfirm } from './hooks/usePublishConfirm';

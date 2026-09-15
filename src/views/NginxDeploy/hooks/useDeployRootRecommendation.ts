@@ -196,15 +196,32 @@ export function useDeployRootRecommendation(
     }
   };
 
-  /** 延迟刷新，避免编辑构建命令时逐键发起请求。 */
+  /** 延迟刷新，避免编辑构建命令时逐键发起请求，同时避免在弹窗初次挂载时争抢关键渲染帧。 */
   const scheduleRefresh = () => {
     /** 依赖一变化就让在途响应失效，不能等待防抖结束后再递增代次。 */
     refreshSequence += 1;
     if (refreshTimer) clearTimeout(refreshTimer);
+
+    // 若当前环境非前端项目，或者尚未满足项目、分支、服务器基础条件，不启动网络定时器，立即清空状态
+    if (props.projectType !== 'frontend') {
+      loading.value = false;
+      options.value = [];
+      recommendation.value = '';
+      hint.value = '';
+      return;
+    }
+    if (!props.projectId || !props.defaultBranch || !props.serverId) {
+      loading.value = false;
+      options.value = [];
+      recommendation.value = '';
+      hint.value = '请选择项目、分支和服务器以智能识别部署目录';
+      return;
+    }
+
     refreshTimer = setTimeout(() => {
       refreshTimer = null;
       void refresh();
-    }, 250);
+    }, 300);
   };
 
   /** 处理字段输入；只有可用推荐值继续保持自动管理。 */
