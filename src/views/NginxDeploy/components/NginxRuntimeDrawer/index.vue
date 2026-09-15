@@ -9,6 +9,7 @@ import RuntimeFooterBar from './RuntimeFooterBar.vue';
 import RuntimeInstanceNavigator from './RuntimeInstanceNavigator.vue';
 import RuntimePathPreview from './RuntimePathPreview.vue';
 import ExistingNginxDiscovery from './components/ExistingNginxDiscovery/index.vue';
+import NginxRuntimeEmptyState from './components/NginxRuntimeEmptyState/index.vue';
 import { useNginxRuntimeDrawerView } from './hooks/useNginxRuntimeDrawerView';
 
 /** 仅在有初始化/操作进度时才异步拉取包含 Monaco 的进度面板，阻断首开 bundle 污染 */
@@ -115,7 +116,13 @@ const openConnectedNginx = (instanceId: number) => {
           @select-instance="(value) => emit('selectInstance', value)"
         />
 
-        <a-empty v-if="!hasServer" description="请在上方选择一台服务器" class="nginx-runtime-empty" />
+        <NginxRuntimeEmptyState
+          v-if="!hasServer || instances.length === 0"
+          :has-server="hasServer"
+          :server="server"
+          @create-managed="emit('createInstance', 'managed')"
+          @create-external="emit('createInstance', 'external')"
+        />
 
         <div v-else class="nginx-runtime-body">
           <div class="nginx-runtime-body__left">

@@ -1,0 +1,132 @@
+.deploy-target-site-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 100%;
+  line-height: 1.35;
+  text-align: left;
+
+  &__route {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 13px;
+    color: var(--ant-color-text, #262626);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    .route-domain {
+      font-weight: 500;
+      color: var(--ant-color-text-heading, #1f1f1f);
+
+      &.is-fallback {
+        font-weight: normal;
+        color: var(--ant-color-text-quaternary, #8c8c8c);
+        font-style: italic;
+      }
+    }
+
+    .route-arrow {
+      color: var(--ant-color-text-quaternary, #bfbfbf);
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+
+    .route-dest {
+      color: var(--ant-color-text-secondary, #595959);
+      font-family: var(--font-mono, monospace);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  &__meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    flex-wrap: wrap;
+
+    .status-badge {
+      margin: 0;
+      padding: 0 5px;
+      font-size: 11px;
+      line-height: 16px;
+      border-radius: 2px;
+
+      &.status-accessible {
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+
+        &:hover {
+          opacity: 0.85;
+          text-decoration: underline;
+        }
+      }
+    }
+
+    .bind-action-btn {
+      padding: 0;
+      height: auto;
+      font-size: 11px;
+      line-height: 16px;
+      color: var(--primary-color, #1890ff);
+      cursor: pointer;
+      text-decoration: underline;
+
+      &:hover {
+        color: #40a9ff;
+      }
+    }
+
+    .instance-pill {
+      color: var(--ant-color-text-tertiary, #8c8c8c);
+      background: var(--ant-color-fill-quaternary, rgba(0, 0, 0, 0.04));
+      border: 1px solid var(--ant-color-border-secondary, #f0f0f0);
+      border-radius: 2px;
+      padding: 0 4px;
+      line-height: 15px;
+      font-size: 11px;
+      white-space: nowrap;
+      max-width: 140px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+  }
+}
+
+// 暗色模式样式适配
+html[data-theme='dark'] .deploy-target-site-summary {
+  &__route {
+    color: rgba(255, 255, 255, 0.85);
+
+    .route-domain {
+      color: rgba(255, 255, 255, 0.95);
+
+      &.is-fallback {
+        color: rgba(255, 255, 255, 0.45);
+      }
+    }
+
+    .route-arrow {
+      color: rgba(255, 255, 255, 0.35);
+    }
+
+    .route-dest {
+      color: rgba(255, 255, 255, 0.65);
+    }
+  }
+
+  &__meta {
+    .instance-pill {
+      color: rgba(255, 255, 255, 0.55);
+      background: rgba(255, 255, 255, 0.06);
+      border-color: rgba(255, 255, 255, 0.12);
+    }
+  }
+}

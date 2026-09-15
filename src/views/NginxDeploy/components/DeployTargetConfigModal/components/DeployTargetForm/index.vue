@@ -3,7 +3,9 @@ import { computed, onUnmounted, ref, watch } from 'vue';
 import { YssFormily } from '@yss-ui/components/lite';
 import type { DeployTargetPayload } from '@/api/deploy';
 import type { FormilyRef } from '../../../../types';
+import { useNginxDeployContext } from '../../../../hooks/useNginxDeployContext';
 import DeployRootField from '../DeployRootField/index.vue';
+import NginxBindingPreviewCard from '../../../NginxBindingPreviewCard/index.vue';
 
 defineOptions({ name: 'DeployTargetForm' });
 
@@ -22,10 +24,25 @@ const emit = defineEmits<{
 }>();
 const formRef = ref<FormilyRef | null>(null);
 
+/** 全局服务器列表上下文 */
+const { servers } = useNginxDeployContext();
+
 /** 部署目标表单双向绑定模型。 */
 const formModel = computed({
   get: () => props.form,
   set: (value: Partial<DeployTargetPayload>) => emit('update:form', value || {}),
+});
+
+/** 当前选中的部署服务器 */
+const selectedServer = computed(() => {
+  if (!formModel.value.serverId) return null;
+  return servers.value.find((s) => s.id === Number(formModel.value.serverId)) || null;
+});
+
+/** 当前选中的 Nginx 实例 */
+const selectedInstance = computed(() => {
+  if (!selectedServer.value || !formModel.value.nginxInstanceId) return null;
+  return selectedServer.value.nginxInstances?.find((i) => i.id === Number(formModel.value.nginxInstanceId)) || null;
 });
 
 watch(formRef, (instance) => emit('formRefChange', instance), { flush: 'post' });
@@ -41,6 +58,16 @@ onUnmounted(() => emit('formRefChange', null));
             <strong>项目与环境</strong>
             <span>选择发布源代码分支和部署服务器</span>
           </div>
+        </template>
+        <template #targetNginxBindingPreview>
+          <NginxBindingPreviewCard
+            v-if="selectedServer && selectedInstance"
+            :server="selectedServer"
+            :instance="selectedInstance"
+            :domain="formModel.serverName"
+            :port="formModel.listenPort"
+            :deploy-root="formModel.deployRoot"
+          />
         </template>
         <template #targetPathSection>
           <div class="target-form-section">

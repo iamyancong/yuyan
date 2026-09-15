@@ -9,6 +9,7 @@ import { targetColumns } from '../../constant';
 import NginxProjectNameCell from '../NginxProjectNameCell/index.vue';
 import DeployTargetRuntimeCell from '../DeployTargetRuntimeCell/index.vue';
 import DeployServerCell from '../DeployServerCell/index.vue';
+import DeployTargetSiteSummaryCell from '../DeployTargetSiteSummaryCell/index.vue';
 import DeployTargetFilterBar from './components/DeployTargetFilterBar.vue';
 import { useNginxDeployContext } from '../../hooks/useNginxDeployContext';
 
@@ -37,6 +38,7 @@ const emit = defineEmits<{
   (e: 'search'): void;
   (e: 'reset'): void;
   (e: 'openProgress', target: RuntimeAwareDeployTarget): void;
+  (e: 'bindInstance', target: RuntimeAwareDeployTarget): void;
 }>();
 
 const tableAreaRef = ref<HTMLElement>();
@@ -96,10 +98,10 @@ const { projectType } = useNginxDeployContext();
 
 const activeColumns = computed(() => {
   if (projectType.value === 'backend') {
-    const excludedFields = ['visitUrl', 'nginxInstanceName', 'listenPort', 'nginxServerName', 'nginxConfPath', 'uploadStrategy', 'preserveSubDirs', 'projectType'];
+    const excludedFields = ['siteSummary', 'visitUrl', 'nginxInstanceName', 'listenPort', 'nginxServerName', 'nginxConfPath', 'uploadStrategy', 'preserveSubDirs', 'projectType'];
     return targetColumns.filter((col) => !excludedFields.includes(col.field || ''));
   } else if (projectType.value === 'frontend') {
-    const excludedFields = ['projectType', 'serviceRole', 'serverPort', 'serviceLinks'];
+    const excludedFields = ['projectType', 'serviceRole', 'serverPort', 'serviceLinks', 'nginxInstanceName', 'listenPort', 'nginxServerName', 'visitUrl'];
     return targetColumns.filter((col) => !excludedFields.includes(col.field || ''));
   }
   return targetColumns;
@@ -137,6 +139,9 @@ const activeColumns = computed(() => {
         </template>
         <template #serverName="{ row }">
           <DeployServerCell :server-name="row.serverName" :server-host="row.serverHost" />
+        </template>
+        <template #siteSummary="{ row }">
+          <DeployTargetSiteSummaryCell :target="row" @bind-instance="(target) => emit('bindInstance', target as RuntimeAwareDeployTarget)" />
         </template>
         <template #defaultBranch="{ row }">
           <a-tooltip :title="row.defaultBranch || '-'">

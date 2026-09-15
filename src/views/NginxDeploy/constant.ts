@@ -325,17 +325,11 @@ export const serverColumns: YTableColumn[] = [
   },
   {
     field: 'nginxRuntime',
-    title: 'Nginx 状态',
-    width: 120,
+    title: 'Nginx 实例',
+    minWidth: 190,
     align: 'center',
-    formatter: ({ row }) => {
-      const runtime = row.nginxRuntime;
-      if (!runtime) return '未初始化';
-      if (runtime.status === 'running') return '运行中';
-      if (runtime.status === 'stopped') return '已停止';
-      if (runtime.status === 'error') return '异常';
-      return runtime.initializedAt ? '已初始化' : '未初始化';
-    },
+    showOverflow: false,
+    slots: { default: 'nginxRuntime' },
   },
   { field: 'remark', title: '备注', minWidth: 180 },
 ];
@@ -355,6 +349,7 @@ export const targetColumns: YTableColumn[] = [
     slots: { default: 'runtimeStatus' },
   },
   { field: 'serverName', title: '服务器', minWidth: 160, showOverflow: false, slots: { default: 'serverName' } },
+  { field: 'siteSummary', title: '站点摘要 (Nginx)', minWidth: 260, showOverflow: false, slots: { default: 'siteSummary' } },
   { field: 'deployRoot', title: '部署根目录', minWidth: 240 },
   { field: 'serviceRole', title: '服务角色', width: 90, align: 'center', formatter: ({ row }) => row.projectType === 'backend' ? (row.serviceRole === 'gateway' ? 'Gateway' : '业务服务') : '-' },
   { field: 'serverPort', title: '服务端口', width: 90, align: 'center', formatter: ({ row }) => row.projectType === 'backend' ? row.serverPort || '-' : '-' },
@@ -738,6 +733,21 @@ export const targetFormSchema = {
                 fulfill: {
                   state: {
                     visible: '{{$deps[0] !== "backend"}}',
+                  },
+                },
+              },
+            },
+            nginxBindingPreview: {
+              type: 'void',
+              'x-component': 'Slot',
+              'x-component-props': { name: 'targetNginxBindingPreview' },
+              'x-decorator': 'FormItem',
+              'x-decorator-props': { gridSpan: 2 },
+              'x-reactions': {
+                dependencies: ['.projectType', '.serverId', '.nginxInstanceId'],
+                fulfill: {
+                  state: {
+                    visible: '{{$deps[0] !== "backend" && Boolean($deps[1]) && Boolean($deps[2])}}',
                   },
                 },
               },

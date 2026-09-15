@@ -1,7 +1,11 @@
 <script setup lang="ts">
+import { computed } from 'vue';
 import { CloudServerOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/icons-vue';
 import { YButton } from '@yss-ui/components/lite';
+import type { DeployServer } from '@/api/deploy';
+import type { RuntimeAwareDeployTarget } from '../../types';
 import { useNginxDeployContext } from '../../hooks/useNginxDeployContext';
+import { calcStep2Diagnostic } from './constant';
 
 defineOptions({ name: 'DeployHero' });
 
@@ -17,9 +21,16 @@ interface DeployHeroProps {
   projectName?: string;
   /** 项目默认分支 */
   defaultBranch?: string;
+  /** 服务器列表（用于流程诊断） */
+  servers?: DeployServer[];
+  /** 部署目标列表（用于流程诊断） */
+  targets?: RuntimeAwareDeployTarget[];
 }
 
-defineProps<DeployHeroProps>();
+const props = withDefaults(defineProps<DeployHeroProps>(), {
+  servers: () => [],
+  targets: () => [],
+});
 
 const emit = defineEmits<{
   /** 触发新增服务器 */
@@ -28,7 +39,37 @@ const emit = defineEmits<{
   (e: 'nginxManage'): void;
   /** 触发新增部署目标 */
   (e: 'createTarget'): void;
+  /** 切换激活 Tab */
+  (e: 'selectTab', tabKey: 'targets' | 'servers' | 'records'): void;
 }>();
+
+/** 流程第二步诊断结果 */
+const step2Diag = computed(() => calcStep2Diagnostic(props.servers, props.targets));
+
+/** 步骤 1 点击处理 */
+const handleStep1Click = () => {
+  if (props.targets.length === 0) {
+    emit('createTarget');
+  } else {
+    emit('selectTab', 'targets');
+  }
+};
+
+/** 步骤 2 点击处理：按诊断状态智能跳转 */
+const handleStep2Click = () => {
+  if (step2Diag.value.state === 'no_server') {
+    emit('createServer');
+  } else if (step2Diag.value.state === 'unlinked_targets') {
+    emit('selectTab', 'targets');
+  } else {
+    emit('nginxManage');
+  }
+};
+
+/** 步骤 3 点击处理 */
+const handleStep3Click = () => {
+  emit('selectTab', 'records');
+};
 </script>
 
 <template>
@@ -68,11 +109,30 @@ const emit = defineEmits<{
         </div>
 
         <div class="deploy-hero__flow">
-          <span class="flow-step">1. 创建部署目标</span>
+          <a-tooltip title="点击查看部署目标或新建目标">
+            <span class="flow-step is-clickable" @click="handleStep1Click">
+              1. 创建部署目标
+              <span v-if="targets.length > 0" class="flow-step__badge">({{ targets.length }})</span>
+            </span>
+          </a-tooltip>
           <i class="flow-line" />
-          <span class="flow-step">2. Nginx 关联配置</span>
+          <a-tooltip :title="step2Diag.tooltip">
+            <span
+              :class="['flow-step', 'is-clickable', `is-${step2Diag.tagColor}`]"
+              @click="handleStep2Click"
+            >
+              2. Nginx 关联配置
+              <a-tag :color="step2Diag.tagColor" class="flow-step__tag">
+                {{ step2Diag.tagText }}
+              </a-tag>
+            </span>
+          </a-tooltip>
           <i class="flow-line" />
-          <span class="flow-step">3. 发布与版本管理</span>
+          <a-tooltip title="点击查看发布历史与版本管理">
+            <span class="flow-step is-clickable" @click="handleStep3Click">
+              3. 发布与版本管理
+            </span>
+          </a-tooltip>
         </div>
       </div>
 
