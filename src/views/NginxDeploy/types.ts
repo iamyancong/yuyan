@@ -68,6 +68,8 @@ export interface RefreshActiveTabOptions {
   resetRecordsPage?: boolean;
   /** 强制展示 loading 并刷新，忽略 Tab 缓存 */
   force?: boolean;
+  /** 静默刷新：不展示遮罩 loading，仅后台静默拉取最新数据并更新 */
+  silent?: boolean;
   /** 发布历史刷新时是否重新拉取部署目标列表 */
   reloadRecordTargets?: boolean;
 }

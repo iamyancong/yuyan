@@ -3,8 +3,49 @@ import vue from '@vitejs/plugin-vue';
 import Components from 'unplugin-vue-components/vite';
 import { AntDesignVueResolver } from 'unplugin-vue-components/resolvers';
 import path from 'node:path';
+import type { Plugin } from 'vite';
 import pkg from './package.json';
 
+/** 仅供重型 YSS UI 组件使用的虚拟模块标识。 */
+const YSS_HEAVY_COMPONENTS_ID = 'virtual:yss-heavy-components';
+const YSS_HEAVY_COMPONENTS_RESOLVED_ID = `\0${YSS_HEAVY_COMPONENTS_ID}`;
+const YSS_HEAVY_MODULE_QUERY = '?yss-heavy-components';
+
+/**
+ * 隔离组件库 Monaco 全局样式副作用与重型依赖的 Vite 插件。
+ */
+const createYssHeavyComponentsIsolationPlugin = (): Plugin => {
+  const yssComponentsEntry = path.resolve(__dirname, 'node_modules/@yss-ui/components/dist/index.mjs');
+  return {
+    name: 'yss-components-isolation',
+    enforce: 'pre',
+    resolveId(source) {
+      if (source === YSS_HEAVY_COMPONENTS_ID) {
+        return YSS_HEAVY_COMPONENTS_RESOLVED_ID;
+      }
+      return null;
+    },
+    load(id) {
+      if (id === YSS_HEAVY_COMPONENTS_RESOLVED_ID) {
+        const isolatedEntry = `${yssComponentsEntry}${YSS_HEAVY_MODULE_QUERY}`;
+        return `export { YMonaco, YMonacoDiff } from ${JSON.stringify(isolatedEntry)};`;
+      }
+      return null;
+    },
+    transform(code, id) {
+      // 若是组件库产物，且不是显式请求 heavy 隔离入口，剥离其顶层 monaco 全局样式副作用
+      if (id.includes('/@yss-ui/components/') && !id.includes(YSS_HEAVY_MODULE_QUERY)) {
+        if (code.includes('monaco-editor/min/vs/editor/editor.main.css')) {
+          return {
+            code: code.replace(/^import\s+["']monaco-editor\/min\/vs\/editor\/editor\.main\.css["'];?/m, '/* [stripped monaco css] */'),
+            map: null,
+          };
+        }
+      }
+      return null;
+    },
+  };
+};
 
 /**
  * 按依赖来源拆分构建产物，降低首屏入口包体积并提升浏览器缓存命中率。
@@ -55,6 +96,7 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [
+      createYssHeavyComponentsIsolationPlugin(),
       vue(),
       Components({
         dirs: [],

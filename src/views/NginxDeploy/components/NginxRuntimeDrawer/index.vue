@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { defineAsyncComponent, ref } from 'vue';
 import { YssFormily } from '@yss-ui/components/lite';
 import type { NginxInstancePayload } from '@/api/deploy';
 import type { NginxRuntimeDrawerEmits, NginxRuntimeDrawerProps } from './constant';
@@ -8,10 +8,13 @@ import RuntimeContextBar from './RuntimeContextBar.vue';
 import RuntimeFooterBar from './RuntimeFooterBar.vue';
 import RuntimeInstanceNavigator from './RuntimeInstanceNavigator.vue';
 import RuntimePathPreview from './RuntimePathPreview.vue';
-import RuntimeProgressPanel from './RuntimeProgressPanel.vue';
-import ArchiveSiteSelectionModal from './components/ArchiveSiteSelectionModal/index.vue';
 import ExistingNginxDiscovery from './components/ExistingNginxDiscovery/index.vue';
 import { useNginxRuntimeDrawerView } from './hooks/useNginxRuntimeDrawerView';
+
+/** 仅在有初始化/操作进度时才异步拉取包含 Monaco 的进度面板，阻断首开 bundle 污染 */
+const RuntimeProgressPanel = defineAsyncComponent(() => import('./RuntimeProgressPanel.vue'));
+/** 归档站点选择弹窗按需异步加载 */
+const ArchiveSiteSelectionModal = defineAsyncComponent(() => import('./components/ArchiveSiteSelectionModal/index.vue'));
 
 defineOptions({ name: 'NginxRuntimeDrawer' });
 

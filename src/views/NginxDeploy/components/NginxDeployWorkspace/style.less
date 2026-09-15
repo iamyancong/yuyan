@@ -76,9 +76,12 @@
     padding: 8px 14px 10px;
     border-radius: 8px 8px 0 0;
     font-size: 13px;
-    font-weight: 550;
+    font-weight: 600;
     color: var(--text-color-secondary);
-    transition: color 0.18s ease, background-color 0.18s ease;
+    will-change: color, background-color;
+    transition:
+      color 0.16s cubic-bezier(0.4, 0, 0.2, 1),
+      background-color 0.16s cubic-bezier(0.4, 0, 0.2, 1);
 
     &:hover {
       color: var(--primary-color);
@@ -91,7 +94,7 @@
 
     .ant-tabs-tab-btn {
       color: var(--primary-color) !important;
-      font-weight: 700;
+      font-weight: 600;
     }
   }
 
@@ -99,6 +102,14 @@
     background: linear-gradient(90deg, var(--primary-color), var(--primary-color-hover)) !important;
     height: 3px !important;
     border-radius: 99px;
+    will-change: left, width;
+    transform: translateZ(0);
+
+    &.ant-tabs-ink-bar-animated {
+      transition:
+        left 0.18s cubic-bezier(0.25, 1, 0.5, 1),
+        width 0.18s cubic-bezier(0.25, 1, 0.5, 1) !important;
+    }
   }
 }
 
@@ -117,6 +128,7 @@
   height: 100%;
   min-height: 0;
   overflow: hidden;
+  contain: content;
 }
 
 :deep(.nginx-deploy-tab-pane) {

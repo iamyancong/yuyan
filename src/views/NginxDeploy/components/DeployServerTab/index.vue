@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { YTable } from '@yss-ui/components/lite';
 import { useTableHeight } from '@yss-ui/hooks';
 import type { YTableActionConfig } from '@yss-ui/components/lite';
@@ -109,15 +109,30 @@ const cleanupDragArtifacts = () => {
 
 watch([() => props.loading, () => props.servers.length], recalculateAfterRender, { flush: 'post' });
 
+let activeTimer: ReturnType<typeof setTimeout> | null = null;
 watch(
   () => props.active,
   (isActive) => {
-    if (isActive) {
-      void recalculateAfterRender();
+    if (activeTimer) {
+      clearTimeout(activeTimer);
+      activeTimer = null;
     }
-  },
-  { flush: 'post' }
+    if (isActive) {
+      // 延迟 220ms 执行重算，彻底避开 Tab 切换 inkBar 动画执行期，防止同步回流卡顿
+      activeTimer = setTimeout(() => {
+        recalculateHeight();
+        activeTimer = null;
+      }, 220);
+    }
+  }
 );
+
+onBeforeUnmount(() => {
+  if (activeTimer) {
+    clearTimeout(activeTimer);
+    activeTimer = null;
+  }
+});
 
 watch(
   () => props.servers,
@@ -243,6 +258,8 @@ const handleRowDragEnd = (params: any) => {
         :loading="loading"
         :action-config="actionConfig"
         :max-height="tableHeight"
+        :virtual-x-config="{ enabled: true, gt: 0 }"
+        :virtual-y-config="{ enabled: true, gt: 0 }"
         :row-config="{ keyField: 'id', useKey: true, drag: isDragable }"
         :row-dragable="isDragable"
         :pageable="false"
