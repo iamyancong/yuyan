@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import { useScaffold } from './hooks/useScaffold';
 import { useScaffoldDownload } from './hooks/useScaffoldDownload';
 import { FRAMEWORK_OPTIONS } from './constant';
 import ApplicationInfoCard from './components/ApplicationInfoCard.vue';
 import GitLabConfigCard from './components/GitLabConfigCard.vue';
+
+const router = useRouter();
 
 const {
   form,
@@ -42,6 +45,25 @@ const currentTemplateLabel = computed(() => {
  */
 const handleCreateClick = async () => {
   await handleCreate();
+};
+
+/**
+ * 从创建结果跳转到部署中心（带上下文深链）。
+ */
+const handleGotoDeploy = () => {
+  progress.visible = false;
+  const gitlab = result.value?.gitlab;
+  router.push({
+    path: '/deploy',
+    query: {
+      projectId: String(gitlab?.id || 0),
+      projectName: result.value?.appName || form.appName,
+      projectDescription: result.value?.description || form.description || '',
+      projectPath: gitlab?.path_with_namespace || '',
+      repositoryUrl: gitlab?.httpUrl || '',
+      defaultBranch: 'dev',
+    },
+  });
 };
 
 /**
@@ -137,6 +159,7 @@ const handleGitOpsUpdateOpen = (visible: boolean) => {
       :progress="progress"
       :form="form"
       @close="handleWorkbenchClose"
+      @goto-deploy="handleGotoDeploy"
       @goto-gitops="handleGotoGitOps"
       @download="handleDownload"
     />

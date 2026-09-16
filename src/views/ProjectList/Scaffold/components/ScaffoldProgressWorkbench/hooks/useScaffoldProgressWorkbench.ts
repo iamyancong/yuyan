@@ -53,6 +53,7 @@ export interface ScaffoldProgressWorkbenchProps {
 
 type ScaffoldProgressWorkbenchEmit = {
   (e: 'update:open', value: boolean): void;
+  (e: 'goto-deploy'): void;
   (e: 'goto-gitops'): void;
   (e: 'download'): void;
   (e: 'close'): void;
@@ -67,6 +68,7 @@ export interface ScaffoldProgressSnapshot {
   proxyTarget: string;
   description: string;
   downloadPath: string;
+  gitlabId: number;
   gitlabWebUrl: string;
   gitlabHttpUrl: string;
   gitlabPath: string;
@@ -149,6 +151,7 @@ export const useScaffoldProgressWorkbench = (
       proxyTarget,
       description,
       downloadPath,
+      gitlabId: gitlab?.id || 0,
       gitlabWebUrl: gitlab?.webUrl || '',
       gitlabHttpUrl: gitlab?.httpUrl || '',
       gitlabPath: gitlab?.path_with_namespace || '',
@@ -183,7 +186,7 @@ export const useScaffoldProgressWorkbench = (
   });
   const heroDescription = computed(() => {
     if (isDownloadSuccessHero.value) return '项目文件已准备完成，可直接下载并接入主应用配置。';
-    if (isGitlabSuccessHero.value) return '仓库入口已生成，可以直接跳转到 GitLab 继续查看和协作。';
+    if (isGitlabSuccessHero.value) return '仓库入口已生成，可直接前往部署中心配置环境并发布，或在 GitLab 查看源码与协作。';
     if (props.progress.status === 'error') {
       return props.progress.createRepo ? '仓库创建或推送失败，请查看下方错误详情。' : '项目创建失败，请查看下方错误详情。';
     }
@@ -239,6 +242,13 @@ export const useScaffoldProgressWorkbench = (
     await openExternal(snapshot.value.gitlabWebUrl);
   };
 
+  /**
+   * 跳转到部署中心
+   */
+  const handleGotoDeploy = () => {
+    emit('goto-deploy');
+  };
+
   const handleClose = () => {
     emit('close');
     visible.value = false;
@@ -264,6 +274,7 @@ export const useScaffoldProgressWorkbench = (
     stageStatusLabel,
     copyText,
     openGitlab,
+    handleGotoDeploy,
     handleClose,
   };
 };
