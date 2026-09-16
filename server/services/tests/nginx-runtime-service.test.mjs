@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildArchiveTarCommand, buildSelectedArchiveTarCommand } from '../nginx-runtime-service.mjs';
+import {
+  buildArchiveTarCommand,
+  buildExternalArchivePrecheckCommand,
+  buildExternalArchiveTarCommand,
+  buildSelectedArchiveTarCommand,
+  resolveArchiveRuntimeConfig,
+} from '../nginx-runtime-service.mjs';
 import {
   parseNginxArchiveSites,
   resolveNginxArchiveSelection,
@@ -135,3 +141,78 @@ test('所选完整运行包只包含 Nginx 目录、所选 root 与裁剪配置'
   assert.equal(command.includes("--exclude='opt/yuyan/nginx/conf/nginx.conf'"), true);
   assert.match(command, /--transform=/);
 });
+
+test('解析无 http 包裹的顶层 server 块（兼容 conf.d/*.conf 分离配置）', () => {
+  const confSnippet = `
+  # 独立分发文件 conf.d/my-app.conf
+  server {
+    listen 80;
+    server_name my-app.example.com;
+    root /var/www/my-app/dist;
+    location / {
+      try_files $uri $uri/ /index.html;
+    }
+  }
+  `;
+  const parsed = parseNginxArchiveSites(confSnippet);
+  assert.equal(parsed.sites.length, 1);
+  assert.deepEqual(parsed.sites[0].listenPorts, [80]);
+  assert.deepEqual(parsed.sites[0].serverNames, ['my-app.example.com']);
+  assert.deepEqual(parsed.sites[0].roots, ['/var/www/my-app/dist']);
+});
+
+test('已有实例预检命令不检查管理脚本与托管安装根目录', () => {
+  const precheck = buildExternalArchivePrecheckCommand(
+    {
+      useSudo: true,
+      mainConfPath: '/etc/nginx/nginx.conf',
+    },
+    'all',
+    ['/var/www/site1']
+  );
+
+  assert.equal(precheck.includes('yuyan-nginx.sh'), false);
+  assert.equal(precheck.includes('installRoot'), false);
+  assert.equal(precheck.includes('command -v tar'), true);
+  assert.equal(precheck.includes('sudo -n true'), true);
+  assert.equal(precheck.includes("test -f '/etc/nginx/nginx.conf'"), true);
+  assert.equal(precheck.includes("test -d '/var/www/site1'"), true);
+});
+
+test('已有实例 tar 命令打包配置与站点 root 且不包含托管二进制', () => {
+  const tarCmd = buildExternalArchiveTarCommand(
+    {
+      useSudo: true,
+      mainConfPath: '/etc/nginx/conf.d/app.conf',
+    },
+    ['/var/www/site1'],
+    'all',
+    'server { listen 80; root /var/www/site1; }'
+  );
+
+  assert.equal(tarCmd.includes('opt/yuyan'), false);
+  assert.equal(tarCmd.includes("'var/www/site1'"), true);
+  assert.match(tarCmd, /--transform=/);
+  assert.equal(tarCmd.includes('etc/nginx/conf.d/app.conf'), true);
+});
+
+test('resolveArchiveRuntimeConfig 正确分流托管与已有实例', () => {
+  const managed = resolveArchiveRuntimeConfig({
+    instanceType: 'managed',
+    baseRoot: '/opt/yuyan',
+    useSudo: true,
+  });
+  assert.equal(managed.mainConfPath, '/opt/yuyan/nginx/conf/nginx.conf');
+  assert.equal(managed.scriptPath, '/opt/yuyan/nginx/yuyan-nginx.sh');
+
+  const external = resolveArchiveRuntimeConfig({
+    instanceType: 'external',
+    defaultNginxConfPath: '/etc/nginx/nginx.conf',
+    htmlRoot: '/var/www/html',
+    useSudo: false,
+  });
+  assert.equal(external.mainConfPath, '/etc/nginx/nginx.conf');
+  assert.equal(external.scriptPath, '');
+  assert.equal(external.webRoot, '/var/www/html');
+});
+

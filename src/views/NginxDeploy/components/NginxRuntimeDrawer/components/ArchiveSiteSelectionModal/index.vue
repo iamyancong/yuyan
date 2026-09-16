@@ -49,10 +49,10 @@ const {
       <div class="archive-modal-title">
         <span class="archive-modal-title__icon"><CloudDownloadOutlined /></span>
         <span class="archive-modal-title__copy">
-          <strong>选择要下载的 Nginx 项目</strong>
+          <strong>{{ isManagedInstance !== false ? '选择要下载的 Nginx 项目' : '选择要导出的 Nginx 项目 / 站点' }}</strong>
           <small>从在线配置中精准裁剪，只带走这次需要的 server</small>
         </span>
-        <span class="archive-modal-title__status"><i />安全打包</span>
+        <span class="archive-modal-title__status"><i />{{ isManagedInstance !== false ? '安全打包' : '安全导出' }}</span>
       </div>
     </template>
 
@@ -75,10 +75,10 @@ const {
             <span class="archive-section-heading__index">01</span>
             <span class="archive-section-heading__copy">
               <strong>选择交付内容</strong>
-              <small>选择运行级整包，或只下载本次需要的部分</small>
+              <small>{{ isManagedInstance !== false ? '选择运行级整包，或只下载本次需要的部分' : '选择配置与站点产物，或只导出本次需要的部分' }}</small>
             </span>
           </div>
-          <ArchiveTypeSelector v-model="selectedType" :disabled="downloading" />
+          <ArchiveTypeSelector v-model="selectedType" :disabled="downloading" :is-managed-instance="isManagedInstance" />
         </section>
 
         <section class="archive-selection-section archive-selection-section--sites">
@@ -116,7 +116,7 @@ const {
           <YButton :disabled="downloading" @click="emit('update:open', false)">取消</YButton>
           <YButton type="primary" :loading="downloading" :disabled="!canConfirm" @click="confirmSelection">
             <template #icon><DownloadOutlined /></template>
-            开始下载
+            {{ isManagedInstance !== false ? '开始下载' : '开始导出' }}
           </YButton>
         </span>
       </div>

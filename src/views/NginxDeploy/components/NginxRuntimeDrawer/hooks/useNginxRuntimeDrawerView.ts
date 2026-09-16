@@ -77,9 +77,14 @@ export function useNginxRuntimeDrawerView(props: Readonly<NginxRuntimeDrawerProp
   const initialized = computed(() => Boolean(props.status?.initialized));
   const canOperate = computed(() => initialized.value && !props.initializing && !props.loading);
   const canManagedOperate = computed(() => canOperate.value && isManagedInstance.value);
-  const canDownloadArchive = computed(() => isManagedInstance.value && initialized.value && !props.initializing && !props.loading && !props.archiveDownloading);
+  const canDownloadArchive = computed(() => {
+    if (isManagedInstance.value) {
+      return initialized.value && !props.initializing && !props.loading && !props.archiveDownloading;
+    }
+    return Boolean(activeInstance.value?.defaultNginxConfPath) && !props.loading && !props.archiveDownloading;
+  });
   const pathPreviewTip = computed(() => {
-    if (!isManagedInstance.value) return '平台不会安装或覆盖已有 Nginx；部署只使用这里登记的目录、配置文件和操作命令';
+    if (!isManagedInstance.value) return '用于备份或迁站材料，不是托管运行时迁移包';
     if (!initialized.value) return '请先完成初始化，再下载可迁移运行包';
     return '下载包用于迁移当前托管实例，目标机需解压到原路径';
   });

@@ -220,6 +220,7 @@ const openConnectedNginx = (instanceId: number) => {
     :type="archiveSelectionType"
     :config-path="archiveConfigPath"
     :sites="archiveSites"
+    :is-managed-instance="isManagedInstance"
     @update:open="(value) => emit('update:archiveSelectionOpen', value)"
     @refresh="emit('refreshArchiveSites')"
     @confirm="(value) => emit('confirmArchiveDownload', value)"

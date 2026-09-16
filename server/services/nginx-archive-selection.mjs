@@ -9,6 +9,23 @@ import path from 'node:path';
 /** 支持导出的运行包类型。 */
 export const NGINX_ARCHIVE_TYPES = new Set(['all', 'html', 'conf']);
 
+/** 系统高危根目录黑名单，禁止作为静态根目录打包。 */
+const DANGEROUS_SYSTEM_ROOTS = new Set([
+  '/',
+  '/etc',
+  '/bin',
+  '/sbin',
+  '/usr',
+  '/var',
+  '/root',
+  '/boot',
+  '/proc',
+  '/sys',
+  '/dev',
+  '/lib',
+  '/lib64',
+]);
+
 /**
  * 规范化 Nginx 绝对路径。
  * @param {string} value - 原始路径
@@ -17,6 +34,9 @@ export const NGINX_ARCHIVE_TYPES = new Set(['all', 'html', 'conf']);
 export function normalizeNginxArchivePath(value) {
   const normalized = path.posix.normalize(String(value || '').trim().replace(/\\/g, '/')).replace(/\/+$/, '');
   if (!normalized || normalized === '.' || normalized === '/' || !normalized.startsWith('/') || normalized.startsWith('/../')) {
+    return '';
+  }
+  if (DANGEROUS_SYSTEM_ROOTS.has(normalized)) {
     return '';
   }
   return normalized;
@@ -199,7 +219,7 @@ export function parseNginxArchiveSites(content) {
       contextStack.push(context);
       pendingContext = [];
 
-      if (context.name !== 'server' || parent?.name !== 'http') continue;
+      if (context.name !== 'server' || (parent && parent.name !== 'http')) continue;
       let nestedDepth = 1;
       let closeIndex = index + 1;
       for (; closeIndex < tokens.length; closeIndex += 1) {
