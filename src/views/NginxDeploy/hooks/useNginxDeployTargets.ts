@@ -580,11 +580,13 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
    */
   const applyTargetServerDefaults = (server: DeployServer | undefined, appName: string, nginxInstance = getSelectedNginxInstance(server)) => {
     if (!server || !appName) return;
-    // 新增部署目标弹窗默认不自动开启「校验/重载 Nginx」。
-    // 仅当用户在弹窗内手动切换后，才保留其选择结果。
-    const shouldKeepNginxFlags = activeTargetId.value === null;
+    const isEditMode = activeTargetId.value !== null;
     const prevEnableNginxTest = targetForm.enableNginxTest;
     const prevEnableNginxReload = targetForm.enableNginxReload;
+    const prevNginxSiteManaged = targetForm.nginxSiteManaged;
+    const prevListenPort = targetForm.listenPort;
+    const prevVisitUrl = targetForm.visitUrl;
+    const prevServerName = targetForm.serverName;
     const previousDeployRoot = String(targetForm.deployRoot || '').trim();
     Object.assign(
       targetForm,
@@ -600,10 +602,21 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
         allTargets.value.length ? allTargets.value : targets.value
       )
     );
-    if (shouldKeepNginxFlags) {
-      targetForm.enableNginxTest = prevEnableNginxTest;
-      targetForm.enableNginxReload = prevEnableNginxReload;
+
+    // 无论新增还是编辑，均保留现有的校验与重载开关状态，避免被服务器命令的存在性强行重置为开
+    targetForm.enableNginxTest = prevEnableNginxTest;
+    targetForm.enableNginxReload = prevEnableNginxReload;
+
+    // 编辑已有部署目标时，保留已有的站点托管与端口配置，防止被默认推导覆盖
+    if (isEditMode) {
+      targetForm.nginxSiteManaged = prevNginxSiteManaged;
+      targetForm.listenPort = prevListenPort;
+      targetForm.visitUrl = prevVisitUrl;
+      if (prevServerName) {
+        targetForm.serverName = prevServerName;
+      }
     }
+
     if (targetForm.projectType === 'backend') {
       const backendRoot = String(server.defaultBackendRoot || '').replace(/\/+$/, '');
       const serviceDir = String(targetForm.serviceName || appName)
@@ -617,7 +630,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       /** 前端部署目录由代码标识与服务器目录共同推荐，服务端默认值只负责其余字段。 */
       targetForm.deployRoot = previousDeployRoot;
     }
-    if (nginxInstance?.instanceType !== 'managed') {
+    if (!isEditMode && nginxInstance?.instanceType !== 'managed') {
       targetForm.listenPort = 0;
       targetForm.visitUrl = '';
     }
@@ -634,6 +647,8 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       targetForm.visitUrl = '';
       return;
     }
+    // 编辑已有部署目标时，保留原有的站点管理与端口配置，严禁使用新建推导规则覆盖
+    if (activeTargetId.value !== null) return;
     if (!server || !nginxInstance || nginxInstance.instanceType !== 'managed' || !nginxInstance.initializedAt || nginxInstance.status === 'uninitialized') return;
     if (!isMainDeployProject(targetForm)) {
       targetForm.nginxSiteManaged = false;
@@ -979,7 +994,6 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     const targetSource = normalizeProjectSource(target.projectSource);
     Object.assign(targetForm, { ...target, projectSource: targetSource, serverName: target.nginxServerName || '_' });
     activeProjectSource.value = targetSource;
-    initializingTargetForm.value = false;
     targetModalOpen.value = true;
     try {
       await refreshServerList();
@@ -992,7 +1006,6 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       if (target.projectId) {
         await ensureProjectLoaded(Number(target.projectId), targetSource);
       }
-      initializingTargetForm.value = true;
       Object.assign(targetForm, { ...target, projectSource: targetSource, serverName: target.nginxServerName || '_' });
       if (targetForm.projectType === 'backend') {
         targetForm.requiredJdkAlias = parseMajorVersionFromAlias(targetForm.requiredJdkAlias);
@@ -1006,7 +1019,6 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
         const selectedServer = servers.value.find((server) => server.id === Number(targetForm.serverId));
         targetForm.nginxInstanceId = getDefaultNginxInstance(selectedServer)?.id || 0;
       }
-      initializingTargetForm.value = false;
       await loadBranches(Number(target.projectId));
       await nextTick();
       syncTargetProjectSourceFieldState();
@@ -1016,11 +1028,12 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       syncTargetNginxInstanceFieldState();
       syncTargetNginxSiteManagedState();
       syncTargetFormValues();
+      await nextTick();
     } catch (error: any) {
-      initializingTargetForm.value = false;
       message.error(getErrorMessage(error));
       targetModalOpen.value = false; // 加载异常时自动关闭弹窗
     } finally {
+      initializingTargetForm.value = false;
       targetFormLoading.value = false;
     }
   };
@@ -1398,7 +1411,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
   watch(
     () => targetForm.serverId,
     (serverId, oldServerId) => {
-      if (!serverId || initializingTargetForm.value) return;
+      if (!serverId || initializingTargetForm.value || !targetModalOpen.value || targetFormLoading.value) return;
       if (oldServerId && Number(oldServerId) !== Number(serverId) && targetForm.projectType === 'backend') {
         targetForm.serverJavaRuntimeId = undefined;
         targetForm.runtimeJavaHome = '';
@@ -1417,7 +1430,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
   watch(
     () => targetForm.nginxInstanceId,
     (nginxInstanceId, oldNginxInstanceId) => {
-      if (initializingTargetForm.value || !targetModalOpen.value || !nginxInstanceId || nginxInstanceId === oldNginxInstanceId) return;
+      if (initializingTargetForm.value || !targetModalOpen.value || targetFormLoading.value || !nginxInstanceId || nginxInstanceId === oldNginxInstanceId) return;
       const server = servers.value.find((item) => item.id === Number(targetForm.serverId));
       const instance = getSelectedNginxInstance(server);
       applyTargetServerDefaults(server, targetForm.projectName, instance);
@@ -1428,7 +1441,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
   watch(
     () => targetForm.projectId,
     (projectId, oldProjectId) => {
-      if (initializingTargetForm.value || !targetModalOpen.value || !projectId || projectId === oldProjectId) return;
+      if (initializingTargetForm.value || !targetModalOpen.value || targetFormLoading.value || !projectId || projectId === oldProjectId) return;
       if (syncingProjectId.value === Number(projectId)) return;
       void syncTargetProject(Number(projectId));
     },
@@ -1457,6 +1470,25 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       if (targetModalOpen.value) syncTargetNginxSiteManagedState();
     }
   );
+
+  watch(targetFormRef, (newRef) => {
+    if (newRef && targetModalOpen.value) {
+      syncTargetProjectSourceFieldState();
+      syncTargetProjectFieldState();
+      syncTargetBranchFieldState();
+      syncTargetServerFieldState();
+      syncTargetNginxInstanceFieldState();
+      syncTargetNginxSiteManagedState();
+      syncTargetFormValues();
+    }
+  });
+
+  watch(targetModalOpen, (isOpen) => {
+    if (!isOpen) {
+      activeTargetId.value = null;
+      initializingTargetForm.value = false;
+    }
+  });
 
   watch(
     () => targetForm.projectType,
