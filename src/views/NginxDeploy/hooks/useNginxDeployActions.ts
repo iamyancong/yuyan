@@ -25,6 +25,7 @@ interface UseNginxDeployActionsParams {
   deleteTarget?: (target: DeployTarget) => Promise<void>;
   getTargetRuntimeSnapshot?: (target: Pick<DeployTarget, 'id'>) => DeployProgressSnapshot | undefined;
   openRecordLogs?: (record: DeployRecord) => Promise<void>;
+  openRollbackConfirm?: (record: DeployRecord, action: 'rollback' | 'undoRollback') => void;
   runRollback?: (record: DeployRecord) => Promise<void>;
   runUndoRollback?: (record: DeployRecord) => Promise<void>;
 }
@@ -102,6 +103,7 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
   const syncTargetSite = params?.syncTargetSite;
   const deleteTarget = params?.deleteTarget;
   const openRecordLogs = params?.openRecordLogs;
+  const openRollbackConfirm = params?.openRollbackConfirm;
   const runRollback = params?.runRollback;
   const runUndoRollback = params?.runUndoRollback;
 
@@ -173,8 +175,9 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
   }));
 
   const targetActionConfig = computed<YTableActionConfig>(() => ({
-    width: 280,
+    width: 220,
     fixed: 'right',
+    displayLimit: 2,
     buttons: [
       {
         key: 'progress',
@@ -199,6 +202,16 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
         },
       },
       {
+        key: 'nginx',
+        text: 'Nginx 配置',
+        type: 'link',
+        hideFn: ({ row }) => row.projectType === 'backend',
+        disabledFn: ({ row }) => isTargetRunning(row),
+        clickFn: ({ row }) => {
+          openNginxConfig?.(row);
+        },
+      },
+      {
         key: 'openapi',
         text: '生成 OpenAPI',
         type: 'link',
@@ -212,14 +225,11 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
         },
       },
       {
-        key: 'nginx',
-        text: 'Nginx',
+        key: 'edit',
+        text: '编辑',
         type: 'link',
-        hideFn: ({ row }) => row.projectType === 'backend',
-        disabledFn: ({ row }) => isTargetRunning(row),
-        clickFn: ({ row }) => {
-          openNginxConfig?.(row);
-        },
+        disabledFn: ({ row }) => isTargetRunning(row) || Boolean(targetFormLoading?.value && activeTargetId?.value !== row.id),
+        clickFn: ({ row }) => openEditTarget?.(row),
       },
       {
         key: 'syncSite',
@@ -300,13 +310,6 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
         clickFn: ({ row }) => void openServiceLogs?.(row),
       },
       {
-        key: 'edit',
-        text: '编辑',
-        type: 'link',
-        disabledFn: ({ row }) => isTargetRunning(row) || Boolean(targetFormLoading?.value && activeTargetId?.value !== row.id),
-        clickFn: ({ row }) => openEditTarget?.(row),
-      },
-      {
         key: 'delete',
         text: '删除',
         type: 'link',
@@ -329,19 +332,27 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
         key: 'rollback',
         text: '回滚',
         type: 'link',
-        isConfirm: true,
         hideFn: ({ row }) => !row.canRollback,
-        confirmProps: { title: '确认回滚到当前记录的可恢复版本？', okText: '回滚', cancelText: '取消' },
-        clickFn: ({ row }) => runRollback?.(row),
+        clickFn: ({ row }) => {
+          if (openRollbackConfirm) {
+            openRollbackConfirm(row, 'rollback');
+            return;
+          }
+          runRollback?.(row);
+        },
       },
       {
         key: 'undoRollback',
         text: '撤销回滚',
         type: 'link',
-        isConfirm: true,
         hideFn: ({ row }) => !row.canUndoRollback,
-        confirmProps: { title: '确认撤销本次回滚并恢复到回滚前版本？', okText: '撤销回滚', cancelText: '取消' },
-        clickFn: ({ row }) => runUndoRollback?.(row),
+        clickFn: ({ row }) => {
+          if (openRollbackConfirm) {
+            openRollbackConfirm(row, 'undoRollback');
+            return;
+          }
+          runUndoRollback?.(row);
+        },
       },
     ],
   }));

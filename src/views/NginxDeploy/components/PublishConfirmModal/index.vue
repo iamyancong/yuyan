@@ -3,7 +3,9 @@ import {
   CheckCircleOutlined,
   ClockCircleOutlined,
   CloseCircleOutlined,
+  CopyOutlined,
   ExclamationCircleOutlined,
+  ExportOutlined,
   InfoCircleOutlined,
   RocketOutlined,
   StopOutlined,
@@ -14,6 +16,7 @@ import { Modal } from 'ant-design-vue';
 import { YButton } from '@yss-ui/components/lite';
 import { YMonaco } from 'virtual:yss-heavy-components';
 import { computed, h, ref, watch } from 'vue';
+import type { DeployTarget } from '@/api/deploy';
 import type { PublishConfirmModalProps, PublishStartOptions } from './constant';
 import { usePublishConfirm } from './hooks/usePublishConfirm';
 
@@ -26,6 +29,7 @@ const emit = defineEmits<{
   (e: 'start', value: PublishStartOptions): void;
   (e: 'republish', value: PublishStartOptions): void;
   (e: 'stop'): void;
+  (e: 'view-record', target: DeployTarget): void;
 }>();
 
 /** 是否强制重新安装依赖 */
@@ -36,6 +40,12 @@ const {
   logMonacoRef,
   finished,
   hasError,
+  isSuccessFinished,
+  hasValidVisitUrl,
+  successDurationText,
+  successVersionText,
+  openSite,
+  copySiteUrl,
   visibleStages,
   headerDescription,
   statusText,
@@ -54,6 +64,14 @@ const {
   getStageStatus,
   getStageLabel,
 } = usePublishConfirm(props);
+
+/** 查看本条发布记录 */
+const handleViewRecord = () => {
+  visible.value = false;
+  if (props.target) {
+    emit('view-record', props.target);
+  }
+};
 
 /** 弹窗显隐状态 */
 const visible = computed({
@@ -171,6 +189,21 @@ watch(
         </div>
       </section>
 
+      <div v-if="isSuccessFinished" class="publish-success-banner">
+        <div class="publish-success-banner__icon">
+          <CheckCircleOutlined />
+        </div>
+        <div class="publish-success-banner__content">
+          <div class="publish-success-banner__title">发布成功，站点已就绪！</div>
+          <div class="publish-success-banner__meta">
+            <span>环境：<strong>{{ target?.envName || '测试' }}</strong></span>
+            <span v-if="successVersionText">分支：<strong>{{ successVersionText }}</strong></span>
+            <span v-if="successDurationText">耗时：<strong>{{ successDurationText }}</strong></span>
+            <span>操作人：<strong>{{ displayOperator }}</strong></span>
+          </div>
+        </div>
+      </div>
+
       <section v-if="started" class="publish-log-panel">
         <div class="publish-log-panel__head">
           <h4>发布日志</h4>
@@ -203,27 +236,47 @@ watch(
           <span>依赖缓存异常时使用，会清理旧 node_modules 后重新安装。</span>
         </div>
         <div class="publish-workbench__actions">
-          <YButton @click="visible = false">{{ started && running ? '收起' : started ? '关闭' : '取消' }}</YButton>
-          <a-tooltip :title="stopButtonTooltip">
-            <YButton
-              v-if="started && running"
-              danger
-              :disabled="!canStop"
-              :loading="stopping"
-              @click="handleStopClick"
-            >
-              <template #icon><StopOutlined /></template>
-              {{ stopButtonText }}
+          <template v-if="isSuccessFinished">
+            <YButton @click="visible = false">关闭</YButton>
+            <YButton v-if="hasValidVisitUrl" @click="copySiteUrl">
+              <template #icon><CopyOutlined /></template>
+              复制地址
             </YButton>
-          </a-tooltip>
-          <YButton v-if="!started" type="primary" :disabled="!target" @click="handleStart">
-            <template #icon><RocketOutlined /></template>
-            开始发布
-          </YButton>
-          <YButton v-if="started && !running" type="primary" :disabled="!target" @click="handleRepublish">
-            <template #icon><SyncOutlined /></template>
-            重新发布
-          </YButton>
+            <YButton :type="hasValidVisitUrl ? 'default' : 'primary'" @click="handleViewRecord">
+              查看发布记录
+            </YButton>
+            <YButton v-if="hasValidVisitUrl" type="primary" @click="openSite">
+              <template #icon><ExportOutlined /></template>
+              打开站点
+            </YButton>
+            <YButton @click="handleRepublish">
+              <template #icon><SyncOutlined /></template>
+              重新发布
+            </YButton>
+          </template>
+          <template v-else>
+            <YButton @click="visible = false">{{ started && running ? '收起' : started ? '关闭' : '取消' }}</YButton>
+            <a-tooltip :title="stopButtonTooltip">
+              <YButton
+                v-if="started && running"
+                danger
+                :disabled="!canStop"
+                :loading="stopping"
+                @click="handleStopClick"
+              >
+                <template #icon><StopOutlined /></template>
+                {{ stopButtonText }}
+              </YButton>
+            </a-tooltip>
+            <YButton v-if="!started" type="primary" :disabled="!target" @click="handleStart">
+              <template #icon><RocketOutlined /></template>
+              开始发布
+            </YButton>
+            <YButton v-if="started && !running" type="primary" :disabled="!target" @click="handleRepublish">
+              <template #icon><SyncOutlined /></template>
+              重新发布
+            </YButton>
+          </template>
         </div>
       </footer>
     </template>

@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, ref, unref, watch } from 'vue';
+import { YButton } from '@yss-ui/components/lite';
+import { openExternal } from '@/utils/open';
 import type { DeployTargetPayload } from '@/api/deploy';
 import type { FormilyRef } from '../../types';
 
@@ -7,6 +9,7 @@ defineOptions({ name: 'NginxDeployOverlays' });
 
 /** 部署中心弹窗容器属性 */
 interface NginxDeployOverlaysProps {
+  lifecycleState?: Record<string, any>;
   serverState: Record<string, any>;
   targetState: Record<string, any>;
   recordState: Record<string, any>;
@@ -19,6 +22,7 @@ const props = defineProps<NginxDeployOverlaysProps>();
 /** 各业务弹层完全按需异步加载，阻断首开大包与 Monaco 等重型依赖 */
 const ProgressPanel = defineAsyncComponent(() => import('../ProgressPanel/index.vue'));
 const PublishConfirmModal = defineAsyncComponent(() => import('../PublishConfirmModal/index.vue'));
+const RollbackConfirmModal = defineAsyncComponent(() => import('../RollbackConfirmModal/index.vue'));
 const NginxConfigDrawer = defineAsyncComponent(() => import('../NginxConfigDrawer/index.vue'));
 const RecordLogDrawer = defineAsyncComponent(() => import('../RecordLogDrawer/index.vue'));
 const DeployTargetConfigModal = defineAsyncComponent(() => import('../DeployTargetConfigModal/index.vue'));
@@ -30,13 +34,14 @@ const BackendServiceProgressModal = defineAsyncComponent(() => import('../Backen
 const serverOverlaysEverOpened = ref(false);
 const targetModalEverOpened = ref(false);
 const publishConfirmEverOpened = ref(false);
+const rollbackConfirmEverOpened = ref(false);
 const rollbackProgressEverOpened = ref(false);
 const nginxConfigEverOpened = ref(false);
 const recordLogEverOpened = ref(false);
 const backendOverlaysEverOpened = ref(false);
 
 watch(
-  () => Boolean(props.serverState?.serverModalOpen?.value || props.serverState?.runtimeDrawerOpen?.value),
+  () => Boolean(unref(props.serverState?.serverModalOpen) || unref(props.serverState?.runtimeDrawerOpen)),
   (val) => {
     if (val && !serverOverlaysEverOpened.value) serverOverlaysEverOpened.value = true;
   },
@@ -44,7 +49,7 @@ watch(
 );
 
 watch(
-  () => Boolean(props.targetState?.targetModalOpen?.value),
+  () => Boolean(unref(props.targetState?.targetModalOpen)),
   (val) => {
     if (val && !targetModalEverOpened.value) targetModalEverOpened.value = true;
   },
@@ -52,7 +57,7 @@ watch(
 );
 
 watch(
-  () => Boolean(props.progressState?.publishConfirmOpen?.value),
+  () => Boolean(unref(props.progressState?.publishConfirmOpen)),
   (val) => {
     if (val && !publishConfirmEverOpened.value) publishConfirmEverOpened.value = true;
   },
@@ -60,7 +65,15 @@ watch(
 );
 
 watch(
-  () => Boolean(props.progressState?.rollbackProgressOpen?.value),
+  () => Boolean(unref(props.progressState?.rollbackConfirmOpen)),
+  (val) => {
+    if (val && !rollbackConfirmEverOpened.value) rollbackConfirmEverOpened.value = true;
+  },
+  { immediate: true }
+);
+
+watch(
+  () => Boolean(unref(props.progressState?.rollbackProgressOpen)),
   (val) => {
     if (val && !rollbackProgressEverOpened.value) rollbackProgressEverOpened.value = true;
   },
@@ -68,7 +81,7 @@ watch(
 );
 
 watch(
-  () => Boolean(props.targetState?.nginxTargetId?.value),
+  () => Boolean(unref(props.targetState?.nginxTargetId)),
   (val) => {
     if (val && !nginxConfigEverOpened.value) nginxConfigEverOpened.value = true;
   },
@@ -76,7 +89,7 @@ watch(
 );
 
 watch(
-  () => Boolean(props.recordState?.recordLogOpen?.value),
+  () => Boolean(unref(props.recordState?.recordLogOpen)),
   (val) => {
     if (val && !recordLogEverOpened.value) recordLogEverOpened.value = true;
   },
@@ -86,16 +99,46 @@ watch(
 watch(
   () =>
     Boolean(
-      props.openApiState?.drawerOpen?.value ||
-        props.targetState?.serviceLogOpen?.value ||
-        props.targetState?.javaManagerOpen?.value ||
-        props.targetState?.environmentManagerOpen?.value
+      unref(props.openApiState?.drawerOpen) ||
+        unref(props.targetState?.serviceLogOpen) ||
+        unref(props.targetState?.javaManagerOpen) ||
+        unref(props.targetState?.environmentManagerOpen)
     ),
   (val) => {
     if (val && !backendOverlaysEverOpened.value) backendOverlaysEverOpened.value = true;
   },
   { immediate: true }
 );
+
+/** 当前回滚/操作的目标访问地址 */
+const currentRollbackTargetVisitUrl = computed(() => {
+  const targetId =
+    props.progressState?.activePublishTarget?.value?.id ||
+    props.progressState?.activeRecord?.value?.targetId ||
+    props.progressState?.pendingRollbackRecord?.value?.targetId;
+  if (!targetId) return '';
+  const found = props.targetState?.targets?.value?.find((t: any) => t.id === targetId);
+  return found?.visitUrl || '';
+});
+
+/** 打开回滚后的站点 */
+const openRollbackSite = async () => {
+  if (currentRollbackTargetVisitUrl.value) {
+    await openExternal(currentRollbackTargetVisitUrl.value);
+  }
+};
+
+/** 跳转查看发布记录 */
+const handleViewRecord = (target: any) => {
+  props.progressState.publishConfirmOpen.value = false;
+  if (props.recordState && target?.projectName) {
+    props.recordState.recordProjectFilter.value = target.projectName;
+    void props.recordState.handleRecordProjectChange?.(target.projectName);
+  }
+  if (props.lifecycleState) {
+    props.lifecycleState.handleTabChange?.('records');
+  }
+};
 
 const activeNginxTarget = computed(() => {
   const targetId = Number(props.targetState.nginxTargetId.value || 0);
@@ -164,6 +207,17 @@ const updateTargetForm = (values: Partial<DeployTargetPayload>) => {
     @start="progressState.startPublishFromConfirm"
     @republish="progressState.republishFromConfirm"
     @stop="progressState.stopCurrentPublish"
+    @view-record="handleViewRecord"
+  />
+
+  <RollbackConfirmModal
+    v-if="rollbackConfirmEverOpened"
+    v-model:open="progressState.rollbackConfirmOpen.value"
+    :record="progressState.pendingRollbackRecord.value"
+    :records="recordState?.records?.value || []"
+    :action="progressState.pendingRollbackAction.value"
+    :loading="progressState.progressState.running"
+    @confirm="progressState.confirmRollback"
   />
 
   <template v-if="rollbackProgressEverOpened">
@@ -186,7 +240,6 @@ const updateTargetForm = (values: Partial<DeployTargetPayload>) => {
       width="860px"
       :bodyStyle="{ maxHeight: 'calc(100vh - 200px)', overflowY: 'auto', padding: '24px' }"
       style="top: 40px"
-      :footer="null"
       :closable="!progressState.progressState.running"
       :maskClosable="!progressState.progressState.running"
     >
@@ -197,6 +250,23 @@ const updateTargetForm = (values: Partial<DeployTargetPayload>) => {
         :logs="progressState.progressState.logs"
         :running="progressState.progressState.running"
       />
+      <template #footer>
+        <div style="display: flex; justify-content: flex-end; gap: 8px">
+          <YButton
+            v-if="progressState.progressState.percent === 100 && currentRollbackTargetVisitUrl"
+            type="primary"
+            @click="openRollbackSite"
+          >
+            打开站点
+          </YButton>
+          <YButton
+            :disabled="progressState.progressState.running"
+            @click="progressState.rollbackProgressOpen.value = false"
+          >
+            关闭
+          </YButton>
+        </div>
+      </template>
     </a-modal>
   </template>
 

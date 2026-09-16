@@ -1,4 +1,6 @@
 import { computed, nextTick, ref, watch } from 'vue';
+import { message } from 'ant-design-vue';
+import { openExternal } from '@/utils/open';
 import {
   DEPLOY_FAILURE_BRIEF,
   formatDeployDateTime,
@@ -9,7 +11,7 @@ import {
   UPLOAD_STRATEGY_LABEL_MAP,
 } from '../../../constant';
 import { calcStageStatus, getLogText, type PublishConfirmModalProps } from '../constant';
-import { resolveRuntimeLockState } from '../../../hooks/runtimeLockPolicy';
+import { formatDeployDuration, resolveRuntimeLockState } from '../../../hooks/runtimeLockPolicy';
 
 /** YMonaco 日志模式暴露方法 */
 interface MonacoLogViewerExpose {
@@ -180,6 +182,44 @@ export function usePublishConfirm(props: PublishConfirmModalProps) {
     return getStageStatus(stage) === 'error' ? `${stage.title}失败` : stage.title;
   };
 
+  /** 是否发布成功并已就绪 */
+  const isSuccessFinished = computed(() => finished.value && !hasError.value && !props.stopped);
+
+  /** 是否有可用的有效站点访问 URL */
+  const hasValidVisitUrl = computed(() => {
+    const url = String(props.target?.visitUrl || '').trim();
+    if (!url || url === '未配置' || url === '-') return false;
+    return /^https?:\/\//i.test(url);
+  });
+
+  /** 成功耗时文案 */
+  const successDurationText = computed(() => {
+    if (!isSuccessFinished.value || !props.startedAt) return '';
+    return formatDeployDuration(props.startedAt, new Date().toISOString());
+  });
+
+  /** 成功版本文案 */
+  const successVersionText = computed(() => branchText.value);
+
+  /** 打开访问站点 */
+  const openSite = async () => {
+    const url = props.target?.visitUrl;
+    if (!url) return;
+    await openExternal(url);
+  };
+
+  /** 复制站点访问地址 */
+  const copySiteUrl = async () => {
+    const url = props.target?.visitUrl;
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      message.success('访问地址已复制');
+    } catch {
+      message.error('复制失败');
+    }
+  };
+
   /** 滚动日志到底部 */
   const scrollLogsToBottom = async () => {
     await nextTick();
@@ -203,6 +243,12 @@ export function usePublishConfirm(props: PublishConfirmModalProps) {
     logMonacoRef,
     finished,
     hasError,
+    isSuccessFinished,
+    hasValidVisitUrl,
+    successDurationText,
+    successVersionText,
+    openSite,
+    copySiteUrl,
     visibleStages,
     headerDescription,
     statusText,

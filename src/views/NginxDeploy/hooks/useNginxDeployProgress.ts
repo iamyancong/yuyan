@@ -12,6 +12,7 @@ import {
   type DeployProgressEvent,
   type DeployProgressSnapshot,
   type DeployRecord,
+  type DeployRecordAction,
   type DeployTarget,
 } from '@/api/deploy';
 import { DEPLOY_FAILURE_BRIEF, getDeployProgressActionLabel, getDeployProgressFailureTitle, getDeployProgressStageLabel } from '../constant';
@@ -67,6 +68,9 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
   const setTargetRuntimeSnapshot = params?.setTargetRuntimeSnapshot ?? context?.setTargetRuntimeSnapshot!;
   const clearTargetRuntimeSnapshot = params?.clearTargetRuntimeSnapshot ?? context?.clearTargetRuntimeSnapshot!;
   const rollbackProgressOpen = ref(false);
+  const rollbackConfirmOpen = ref(false);
+  const pendingRollbackRecord = ref<DeployRecord | null>(null);
+  const pendingRollbackAction = ref<DeployRecordAction>('rollback');
   const publishConfirmOpen = ref(false);
   const publishStarted = ref(false);
   const progressMode = ref<DeployProgressMode>('deploy');
@@ -628,6 +632,32 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
   };
 
   /**
+   * 打开结构化回滚确认卡片。
+   * @param record 发布记录
+   * @param action 回滚类型
+   */
+  const openRollbackConfirm = (record: DeployRecord, action: DeployRecordAction = 'rollback') => {
+    pendingRollbackRecord.value = record;
+    pendingRollbackAction.value = action;
+    rollbackConfirmOpen.value = true;
+  };
+
+  /**
+   * 确认执行回滚或撤销回滚。
+   */
+  const confirmRollback = async () => {
+    if (!pendingRollbackRecord.value) return;
+    const record = pendingRollbackRecord.value;
+    const action = pendingRollbackAction.value;
+    rollbackConfirmOpen.value = false;
+    if (action === 'undoRollback') {
+      await runUndoRollback(record);
+    } else {
+      await runRollback(record);
+    }
+  };
+
+  /**
    * 打开部署目标当前运行任务进度。
    * @param target 部署目标
    */
@@ -666,9 +696,11 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     }
     try {
       const runningTask = await getTargetDeployProgress(target.id, target.projectType);
-      detachPublishProgressStream();
-      void subscribeRunningTargetProgress(target, runningTask);
-      return;
+      if (runningTask && runningTask.running) {
+        detachPublishProgressStream();
+        void subscribeRunningTargetProgress(target, runningTask);
+        return;
+      }
     } catch (error: any) {
       if (!isNotFoundError(error)) {
         message.error(getErrorMessage(error));
@@ -717,6 +749,8 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     detachPublishProgressStream();
     activePublishTarget.value = null;
     rollbackProgressOpen.value = false;
+    rollbackConfirmOpen.value = false;
+    pendingRollbackRecord.value = null;
     publishConfirmOpen.value = false;
     publishStarted.value = false;
     publishStopping.value = false;
@@ -732,6 +766,9 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
   return {
     progressMode,
     rollbackProgressOpen,
+    rollbackConfirmOpen,
+    pendingRollbackRecord,
+    pendingRollbackAction,
     publishConfirmOpen,
     publishStarted,
     publishStopping,
@@ -745,6 +782,8 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     startPublishFromConfirm,
     republishFromConfirm,
     stopCurrentPublish,
+    openRollbackConfirm,
+    confirmRollback,
     runRollback,
     runUndoRollback,
     runTargetServiceAction,

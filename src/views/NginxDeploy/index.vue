@@ -148,6 +148,7 @@ const { serverActionConfig, targetActionConfig, recordActionConfig } = useNginxD
   deleteTarget: targetState.deleteTarget,
   getTargetRuntimeSnapshot: targetState.getTargetRuntimeSnapshot,
   openRecordLogs: recordState.openRecordLogs,
+  openRollbackConfirm: progressState.openRollbackConfirm,
   runRollback: progressState.runRollback,
   runUndoRollback: progressState.runUndoRollback,
 });
@@ -204,6 +205,7 @@ onMounted(() => {
       :record-action-config="recordActionConfig"
     />
     <NginxDeployOverlayHost
+      :lifecycle-state="lifecycleState"
       :server-state="serverState"
       :target-state="targetState"
       :record-state="recordState"
