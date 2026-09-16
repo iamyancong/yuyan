@@ -4,8 +4,9 @@ import { YssFormily } from '@yss-ui/components/lite';
 import type { DeployTargetPayload } from '@/api/deploy';
 import type { FormilyRef } from '../../../../types';
 import { useNginxDeployContext } from '../../../../hooks/useNginxDeployContext';
+import { getPreferredNginxInstance } from '../../../../utils';
 import DeployRootField from '../DeployRootField/index.vue';
-import NginxBindingPreviewCard from '../../../NginxBindingPreviewCard/index.vue';
+import NginxInstanceField from '../NginxInstanceField/index.vue';
 
 defineOptions({ name: 'DeployTargetForm' });
 
@@ -39,10 +40,15 @@ const selectedServer = computed(() => {
   return servers.value.find((s) => s.id === Number(formModel.value.serverId)) || null;
 });
 
-/** 当前选中的 Nginx 实例 */
+/** 当前选中的 Nginx 实例（未指定时自动回退为默认托管实例） */
 const selectedInstance = computed(() => {
-  if (!selectedServer.value || !formModel.value.nginxInstanceId) return null;
-  return selectedServer.value.nginxInstances?.find((i) => i.id === Number(formModel.value.nginxInstanceId)) || null;
+  if (!selectedServer.value) return null;
+  const currentId = Number(formModel.value.nginxInstanceId || 0);
+  if (currentId) {
+    const matched = selectedServer.value.nginxInstances?.find((i) => i.id === currentId);
+    if (matched) return matched;
+  }
+  return getPreferredNginxInstance(selectedServer.value);
 });
 
 watch(formRef, (instance) => emit('formRefChange', instance), { flush: 'post' });
@@ -59,14 +65,19 @@ onUnmounted(() => emit('formRefChange', null));
             <span>选择发布源代码分支和部署服务器</span>
           </div>
         </template>
-        <template #targetNginxBindingPreview>
-          <NginxBindingPreviewCard
-            v-if="selectedServer && selectedInstance"
+        <template #nginxInstanceField="{ value, onChange, disabled }">
+          <NginxInstanceField
+            :model-value="value ?? formModel.nginxInstanceId"
             :server="selectedServer"
             :instance="selectedInstance"
             :domain="formModel.serverName"
             :port="formModel.listenPort"
             :deploy-root="formModel.deployRoot"
+            :disabled="disabled || formModel.projectType === 'backend'"
+            @update:model-value="(val) => {
+              onChange(val);
+              formModel.nginxInstanceId = val || 0;
+            }"
           />
         </template>
         <template #targetPathSection>

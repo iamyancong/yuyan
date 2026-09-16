@@ -1,116 +1,172 @@
-.nginx-binding-preview-card {
-  margin: 12px 0 16px;
-  padding: 12px 16px;
-  border-radius: 8px;
-  background: var(--ant-color-fill-quaternary, rgba(0, 0, 0, 0.02));
-  border: 1px solid var(--ant-color-border-secondary, #e8e8e8);
+.nginx-binding-preview-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 2px 0 14px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, rgba(24, 144, 255, 0.05) 0%, rgba(114, 46, 209, 0.03) 100%);
+  border: 1px solid rgba(24, 144, 255, 0.16);
+  min-height: 38px;
   transition: all 0.2s ease;
 
-  &__header {
+  .strip-flow {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    margin-bottom: 8px;
-    padding-bottom: 6px;
-    border-bottom: 1px dashed var(--ant-color-border-secondary, #f0f0f0);
+    gap: 8px;
+    flex-wrap: wrap;
+    min-width: 0;
 
-    .header-title {
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--ant-color-text-heading, #262626);
+    .flow-pill--title {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
+      gap: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--primary-color, #1890ff);
+      background: rgba(24, 144, 255, 0.1);
+      padding: 2px 6px;
+      border-radius: 4px;
+      white-space: nowrap;
 
-      .anticon {
-        color: var(--primary-color, #1890ff);
+      .icon-link {
+        font-size: 11px;
       }
     }
 
-    .header-extra {
-      display: flex;
+    .flow-node {
+      display: inline-flex;
       align-items: center;
-      gap: 6px;
-    }
-  }
-
-  &__grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 8px 16px;
-  }
-
-  &__item {
-    display: flex;
-    align-items: baseline;
-    font-size: 12px;
-    line-height: 20px;
-
-    .item-label {
-      color: var(--ant-color-text-tertiary, #8c8c8c);
-      white-space: nowrap;
-      min-width: 72px;
-    }
-
-    .item-value {
+      gap: 4px;
+      font-size: 12px;
       color: var(--ant-color-text, #262626);
       font-weight: 500;
-      word-break: break-all;
+      white-space: nowrap;
 
-      &.code {
-        font-family: var(--font-mono, monospace);
-        font-size: 11px;
-        color: var(--ant-color-text-secondary, #595959);
+      .node-icon {
+        font-size: 12px;
+        color: var(--primary-color, #1890ff);
       }
 
+      .node-sub,
+      .node-version {
+        font-size: 11px;
+        color: var(--ant-color-text-tertiary, #8c8c8c);
+        font-weight: normal;
+      }
+    }
+
+    .flow-connector {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      white-space: nowrap;
+
+      .connector-badge {
+        font-size: 10px;
+        line-height: 14px;
+        padding: 1px 5px;
+        border-radius: 3px;
+        background: rgba(24, 144, 255, 0.12);
+        color: var(--primary-color, #1890ff);
+        font-weight: 500;
+
+        &.external {
+          background: rgba(114, 46, 209, 0.1);
+          color: #722ed1;
+        }
+      }
+
+      .connector-arrow {
+        font-size: 10px;
+        color: var(--primary-color, #1890ff);
+        opacity: 0.8;
+      }
+    }
+
+    .status-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding-left: 4px;
+      white-space: nowrap;
+
       .status-dot {
-        display: inline-block;
         width: 6px;
         height: 6px;
         border-radius: 50%;
-        margin-right: 4px;
+        display: inline-block;
+        box-shadow: 0 0 4px currentColor;
+      }
+
+      .status-text {
+        font-size: 11px;
+        color: var(--ant-color-text-secondary, #595959);
       }
     }
   }
 
-  &__hint {
-    margin-top: 8px;
-    font-size: 11px;
-    color: var(--ant-color-text-quaternary, #8c8c8c);
+  .strip-meta {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
+    flex-shrink: 0;
+    white-space: nowrap;
+
+    .root-dir {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      color: var(--ant-color-text-secondary, #595959);
+
+      .meta-icon {
+        font-size: 11px;
+        color: var(--ant-color-text-tertiary, #8c8c8c);
+      }
+
+      .meta-code {
+        font-family: var(--font-mono, monospace);
+        font-size: 11px;
+        background: rgba(0, 0, 0, 0.04);
+        padding: 1px 5px;
+        border-radius: 3px;
+        color: var(--ant-color-text, #262626);
+      }
+    }
+
+    .help-trigger {
+      font-size: 12px;
+      color: var(--ant-color-text-tertiary, #8c8c8c);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      transition: color 0.2s;
+
+      &:hover {
+        color: var(--primary-color, #1890ff);
+      }
+    }
   }
 }
 
 // 暗色模式适配
-html[data-theme='dark'] .nginx-binding-preview-card {
-  background: rgba(255, 255, 255, 0.03);
-  border-color: rgba(255, 255, 255, 0.1);
+html[data-theme='dark'] .nginx-binding-preview-strip {
+  background: linear-gradient(90deg, rgba(24, 144, 255, 0.08) 0%, rgba(114, 46, 209, 0.06) 100%);
+  border-color: rgba(24, 144, 255, 0.25);
 
-  &__header {
-    border-bottom-color: rgba(255, 255, 255, 0.08);
-
-    .header-title {
-      color: rgba(255, 255, 255, 0.9);
-    }
-  }
-
-  &__item {
-    .item-label {
-      color: rgba(255, 255, 255, 0.45);
-    }
-
-    .item-value {
+  .strip-flow {
+    .flow-node {
       color: rgba(255, 255, 255, 0.85);
-
-      &.code {
-        color: rgba(255, 255, 255, 0.65);
-      }
     }
   }
 
-  &__hint {
-    color: rgba(255, 255, 255, 0.35);
+  .strip-meta {
+    .root-dir .meta-code {
+      background: rgba(255, 255, 255, 0.08);
+      color: rgba(255, 255, 255, 0.85);
+    }
   }
 }
+

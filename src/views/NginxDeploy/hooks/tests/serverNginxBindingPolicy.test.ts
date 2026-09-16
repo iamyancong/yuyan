@@ -35,6 +35,62 @@ test('calcServerNginxSummary: 实例类型计数与最差健康状态优先级',
   assert.equal(calcServerNginxSummary(server).health, 'error'); // error 最优先
 });
 
+test('calcServerNginxSummary: 过滤幽灵系统实例并准确推导真实健康状态', () => {
+  const serverWithGhost: DeployServer = {
+    id: 1,
+    name: 'prod-01',
+    nginxInstances: [
+      { id: 101, name: 'yuyan托管', instanceType: 'managed', status: 'running', initializedAt: '2026-01-01' } as unknown as NginxInstance,
+      // 幽灵占位实例：external，名称为“系统 Nginx”，targetCount=0，未初始化
+      { id: 102, name: '系统 Nginx', instanceType: 'external', status: 'unknown', initializedAt: '', targetCount: 0 } as unknown as NginxInstance,
+    ],
+  } as unknown as DeployServer;
+
+  const res = calcServerNginxSummary(serverWithGhost);
+  assert.equal(res.totalCount, 1);
+  assert.equal(res.managedCount, 1);
+  assert.equal(res.externalCount, 0);
+  assert.equal(res.health, 'running');
+  assert.equal(res.healthLabel, '运行中');
+
+  // 仅包含幽灵占位实例的服务器，应判定为无实例
+  const serverOnlyGhost: DeployServer = {
+    id: 2,
+    name: 'prod-02',
+    nginxInstances: [
+      { id: 103, name: '系统 Nginx', instanceType: 'external', status: 'unknown', initializedAt: '', targetCount: 0 } as unknown as NginxInstance,
+    ],
+  } as unknown as DeployServer;
+  assert.equal(calcServerNginxSummary(serverOnlyGhost).hasInstance, false);
+
+  // 绑定了业务站点的已有外部实例，未报错时应判定为已接入健康态（connected），绝不可判定为未就绪
+  const serverWithExternal: DeployServer = {
+    id: 3,
+    name: 'prod-03',
+    nginxInstances: [
+      { id: 104, name: '系统 Nginx', instanceType: 'external', status: 'unknown', initializedAt: '', targetCount: 5 } as unknown as NginxInstance,
+    ],
+  } as unknown as DeployServer;
+  const extRes = calcServerNginxSummary(serverWithExternal);
+  assert.equal(extRes.hasInstance, true);
+  assert.equal(extRes.health, 'connected');
+  assert.equal(extRes.healthLabel, '已接入');
+  assert.equal(extRes.healthColor, 'success');
+
+  // 已有外部实例校验或重载成功（status === 'running'）时应判定为运行中
+  const serverWithRunningExternal: DeployServer = {
+    id: 4,
+    name: 'prod-04',
+    nginxInstances: [
+      { id: 105, name: '系统 Nginx', instanceType: 'external', status: 'running', initializedAt: '', targetCount: 3 } as unknown as NginxInstance,
+    ],
+  } as unknown as DeployServer;
+  const runningRes = calcServerNginxSummary(serverWithRunningExternal);
+  assert.equal(runningRes.health, 'running');
+  assert.equal(runningRes.healthLabel, '运行中');
+  assert.equal(runningRes.healthColor, 'success');
+});
+
 test('getSiteReadinessStatus: 前端部署目标就绪度四态判定', () => {
   // 1. 未关联实例
   const unlinkedTarget = { id: 1, nginxInstanceId: 0, deployRoot: '/opt/yuyan/html' } as unknown as DeployTarget;
@@ -78,6 +134,22 @@ test('getSiteReadinessStatus: 前端部署目标就绪度四态判定', () => {
     visitUrl: '',
   } as unknown as DeployTarget;
   assert.equal(getSiteReadinessStatus(readyTarget).status, 'ready');
+
+  // 微应用仅关联实例、不管理门户站点时不展示域名与配置完整性提示
+  const microTarget = {
+    id: 5,
+    projectType: 'frontend',
+    nginxInstanceId: 10,
+    nginxInstanceName: 'managed-1',
+    nginxSiteManaged: false,
+    nginxServerName: '',
+    listenPort: 0,
+    deployRoot: '/opt/yuyan/html/taskFlow',
+    visitUrl: '',
+  } as unknown as DeployTarget;
+  assert.equal(getSiteReadinessStatus(microTarget).showSiteConfig, false);
+  assert.equal(getSiteReadinessStatus({ ...microTarget, visitUrl: 'https://legacy.example.com' }).showSiteConfig, false);
+  assert.equal(getSiteReadinessStatus(microTarget).showDeploymentPath, true);
 });
 
 test('calcStep2Diagnostic: Hero Checklist 流程状态机诊断', () => {

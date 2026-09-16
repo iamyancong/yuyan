@@ -1,0 +1,62 @@
+.nginx-instance-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+
+  .instance-select {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .binding-badge-trigger {
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    border-radius: 6px;
+    cursor: pointer;
+    background: rgba(24, 144, 255, 0.08);
+    border: 1px solid rgba(24, 144, 255, 0.25);
+    color: var(--primary-color, #1890ff);
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+
+    &.external {
+      background: rgba(114, 46, 209, 0.08);
+      border-color: rgba(114, 46, 209, 0.25);
+      color: #722ed1;
+    }
+
+    &:hover,
+    &.is-active {
+      background: rgba(24, 144, 255, 0.16);
+      border-color: rgba(24, 144, 255, 0.4);
+      transform: translateY(-1px);
+      box-shadow: 0 2px 8px rgba(24, 144, 255, 0.2);
+
+      &.external {
+        background: rgba(114, 46, 209, 0.16);
+        border-color: rgba(114, 46, 209, 0.4);
+        box-shadow: 0 2px 8px rgba(114, 46, 209, 0.2);
+      }
+    }
+
+    .trigger-icon {
+      font-size: 15px;
+    }
+
+    .trigger-dot {
+      position: absolute;
+      right: 3px;
+      bottom: 3px;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      border: 1.5px solid #fff;
+      box-shadow: 0 0 3px currentColor;
+    }
+  }
+}
