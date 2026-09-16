@@ -350,11 +350,6 @@ export const targetColumns: YTableColumn[] = [
   },
   { field: 'serverName', title: '服务器', minWidth: 160, showOverflow: false, slots: { default: 'serverName' } },
   { field: 'siteSummary', title: '站点摘要 (Nginx)', minWidth: 260, showOverflow: false, slots: { default: 'siteSummary' } },
-  { field: 'deployRoot', title: '部署根目录', minWidth: 240 },
-  { field: 'serviceRole', title: '服务角色', width: 90, align: 'center', formatter: ({ row }) => row.projectType === 'backend' ? (row.serviceRole === 'gateway' ? 'Gateway' : '业务服务') : '-' },
-  { field: 'serverPort', title: '服务端口', width: 90, align: 'center', formatter: ({ row }) => row.projectType === 'backend' ? row.serverPort || '-' : '-' },
-  { field: 'serviceLinks', title: '服务地址', minWidth: 230, showOverflow: false, slots: { default: 'serviceLinks' } },
-  { field: 'visitUrl', title: '页面访问地址', minWidth: 220, showOverflow: false, slots: { default: 'visitUrl' } },
   { field: 'nginxInstanceName', title: 'Nginx 实例', minWidth: 90, formatter: ({ row }) => row.nginxInstanceName || '-' },
   { field: 'listenPort', title: '监听端口', width: 90, align: 'center', formatter: ({ row }) => (row.nginxSiteManaged ? row.listenPort || '-' : '-') },
   { field: 'nginxServerName', title: 'server_name', minWidth: 120, formatter: ({ row }) => (row.nginxSiteManaged ? row.nginxServerName || '_' : '-') },
@@ -672,17 +667,17 @@ export const targetFormSchema = {
                 spellcheck: false,
               },
             },
-            remark: {
+            projectType: {
               type: 'string',
-              title: '备注',
+              title: '项目类型',
+              required: true,
+              enum: [
+                { label: '前端项目', value: 'frontend' },
+                { label: '后端项目', value: 'backend' },
+              ],
               'x-decorator': 'FormItem',
-              'x-component': 'Input',
-              'x-component-props': {
-                placeholder: '请输入备注',
-                autocapitalize: 'none',
-                autocorrect: 'off',
-                spellcheck: false,
-              },
+              'x-component': 'Select',
+              'x-component-props': { placeholder: '请选择项目类型' },
             },
             defaultBranch: {
               type: 'string',
@@ -727,7 +722,8 @@ export const targetFormSchema = {
               required: true,
               enum: [],
               'x-decorator': 'FormItem',
-              'x-component': 'Select',
+              'x-component': 'Slot',
+              'x-component-props': { name: 'nginxInstanceField' },
               'x-reactions': {
                 dependencies: ['.projectType'],
                 fulfill: {
@@ -736,33 +732,6 @@ export const targetFormSchema = {
                   },
                 },
               },
-            },
-            nginxBindingPreview: {
-              type: 'void',
-              'x-component': 'Slot',
-              'x-component-props': { name: 'targetNginxBindingPreview' },
-              'x-decorator': 'FormItem',
-              'x-decorator-props': { gridSpan: 2 },
-              'x-reactions': {
-                dependencies: ['.projectType', '.serverId', '.nginxInstanceId'],
-                fulfill: {
-                  state: {
-                    visible: '{{$deps[0] !== "backend" && Boolean($deps[1]) && Boolean($deps[2])}}',
-                  },
-                },
-              },
-            },
-            projectType: {
-              type: 'string',
-              title: '项目类型',
-              required: true,
-              enum: [
-                { label: '前端项目', value: 'frontend' },
-                { label: '后端项目', value: 'backend' },
-              ],
-              'x-decorator': 'FormItem',
-              'x-component': 'Select',
-              'x-component-props': { placeholder: '请选择项目类型' },
             },
             backendTemplate: {
               type: 'string',
@@ -817,18 +786,6 @@ export const targetFormSchema = {
                 fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } },
               },
             },
-            environmentId: {
-              type: 'number',
-              title: '共享环境配置',
-              enum: [],
-              'x-decorator': 'FormItem',
-              'x-component': 'Select',
-              'x-component-props': { allowClear: true, placeholder: '可选；继承 Nacos/Gateway 地址' },
-              'x-reactions': {
-                dependencies: ['.projectType'],
-                fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } },
-              },
-            },
             serviceName: {
               type: 'string',
               title: '服务名称',
@@ -836,6 +793,18 @@ export const targetFormSchema = {
               'x-decorator': 'FormItem',
               'x-component': 'Input',
               'x-component-props': { placeholder: '例如 trade-service 或 valuation-outsourced' },
+              'x-reactions': {
+                dependencies: ['.projectType'],
+                fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } },
+              },
+            },
+            serverPort: {
+              type: 'number',
+              title: '服务端口',
+              required: true,
+              'x-decorator': 'FormItem',
+              'x-component': 'InputNumber',
+              'x-component-props': { min: 1, max: 65535, style: { width: '100%' } },
               'x-reactions': {
                 dependencies: ['.projectType'],
                 fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } },
@@ -853,16 +822,29 @@ export const targetFormSchema = {
                 fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } },
               },
             },
-            serverPort: {
+            environmentId: {
               type: 'number',
-              title: '服务端口',
-              required: true,
+              title: '共享环境配置',
+              enum: [],
               'x-decorator': 'FormItem',
-              'x-component': 'InputNumber',
-              'x-component-props': { min: 1, max: 65535, style: { width: '100%' } },
+              'x-component': 'Select',
+              'x-component-props': { allowClear: true, placeholder: '可选；继承 Nacos/Gateway 地址' },
               'x-reactions': {
                 dependencies: ['.projectType'],
                 fulfill: { state: { visible: '{{$deps[0] === "backend"}}' } },
+              },
+            },
+            remark: {
+              type: 'string',
+              title: '备注',
+              'x-decorator': 'FormItem',
+              'x-decorator-props': { gridSpan: 2 },
+              'x-component': 'Input',
+              'x-component-props': {
+                placeholder: '请输入备注（可选）',
+                autocapitalize: 'none',
+                autocorrect: 'off',
+                spellcheck: false,
               },
             },
             processMode: {

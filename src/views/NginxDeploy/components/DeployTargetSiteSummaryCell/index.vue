@@ -43,7 +43,7 @@ const handleBindClick = () => {
 <template>
   <div class="deploy-target-site-summary">
     <!-- 主行：域名 → 目录:端口 路由映射 -->
-    <a-tooltip :title="`${meta.domainText} → ${meta.destinationText}`">
+    <a-tooltip v-if="meta.showSiteConfig" :title="`${meta.domainText} → ${meta.destinationText}`">
       <div class="deploy-target-site-summary__route">
         <span :class="['route-domain', { 'is-fallback': meta.domainText === '未填域名' }]">
           {{ meta.domainText }}
@@ -53,9 +53,19 @@ const handleBindClick = () => {
       </div>
     </a-tooltip>
 
+    <!-- 微应用没有门户域名时仍展示实际部署路径，但不显示虚假的域名状态。 -->
+    <a-tooltip v-else-if="meta.showDeploymentPath" :title="meta.destinationText">
+      <div class="deploy-target-site-summary__route deploy-target-site-summary__route--path-only">
+        <span class="route-path-label">部署路径</span>
+        <span class="route-arrow">→</span>
+        <span class="route-dest">{{ meta.destinationText }}</span>
+      </div>
+    </a-tooltip>
+
     <!-- 副行：状态微标、去绑定动作、实例胶囊 -->
     <div class="deploy-target-site-summary__meta">
       <a-tag
+        v-if="meta.status !== 'accessible' && (meta.showSiteConfig || meta.status === 'unlinked')"
         :color="meta.statusColor"
         :class="['status-badge', `status-${meta.status}`]"
         @click.stop="meta.isAccessible ? handleOpenVisit() : undefined"

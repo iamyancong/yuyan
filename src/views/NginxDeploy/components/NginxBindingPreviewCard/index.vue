@@ -1,13 +1,20 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { ApiOutlined, InfoCircleOutlined } from '@ant-design/icons-vue';
+import {
+  ArrowRightOutlined,
+  FolderOpenOutlined,
+  HddOutlined,
+  InfoCircleOutlined,
+  LinkOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons-vue';
 import type { DeployServer, NginxInstance } from '@/api/deploy';
 import { resolveBindingPreviewInfo } from './constant';
 
 defineOptions({ name: 'NginxBindingPreviewCard' });
 
 /**
- * 绑定预览卡片组件属性
+ * 绑定拓扑指示条属性
  */
 interface NginxBindingPreviewCardProps {
   /** 关联服务器 */
@@ -20,13 +27,9 @@ interface NginxBindingPreviewCardProps {
   port?: number | string;
   /** 部署根目录 */
   deployRoot?: string;
-  /** 底部提示文案 */
-  hint?: string;
 }
 
-const props = withDefaults(defineProps<NginxBindingPreviewCardProps>(), {
-  hint: '保存后将通过该 Nginx 实例管理此站点的静态代理与配置文件',
-});
+const props = defineProps<NginxBindingPreviewCardProps>();
 
 const preview = computed(() =>
   resolveBindingPreviewInfo(
@@ -40,48 +43,51 @@ const preview = computed(() =>
 </script>
 
 <template>
-  <div v-if="preview.isComplete" class="nginx-binding-preview-card">
-    <div class="nginx-binding-preview-card__header">
-      <span class="header-title">
-        <ApiOutlined />
-        绑定预览
-      </span>
-      <div class="header-extra">
-        <a-tag :color="preview.instanceTypeColor">
+  <div v-if="preview.isComplete" class="nginx-binding-preview-strip">
+    <div class="strip-flow">
+      <div class="flow-pill flow-pill--title">
+        <LinkOutlined class="icon-link" />
+        <span class="label">绑定关联</span>
+      </div>
+
+      <div class="flow-node node-server" :title="preview.serverDisplay">
+        <HddOutlined class="node-icon" />
+        <span class="node-name">{{ preview.serverName }}</span>
+        <span v-if="preview.serverHost" class="node-sub">({{ preview.serverHost }})</span>
+      </div>
+
+      <div class="flow-connector">
+        <span class="connector-line" />
+        <span class="connector-badge" :class="preview.instanceType">
           {{ preview.instanceTypeLabel }}
-        </a-tag>
-        <span class="status-indicator">
-          <span class="status-dot" :style="{ backgroundColor: preview.statusColor }" />
-          {{ preview.statusLabel }}
         </span>
+        <ArrowRightOutlined class="connector-arrow" />
+      </div>
+
+      <div class="flow-node node-instance" :title="preview.instanceDisplay">
+        <ThunderboltOutlined class="node-icon" />
+        <span class="node-name">{{ preview.instanceName }}</span>
+        <span v-if="preview.instanceVersion" class="node-version">{{ preview.instanceVersion }}</span>
+      </div>
+
+      <div class="status-indicator">
+        <span class="status-dot" :style="{ backgroundColor: preview.statusColor }" />
+        <span class="status-text">{{ preview.statusLabel }}</span>
       </div>
     </div>
 
-    <div class="nginx-binding-preview-card__grid">
-      <div class="nginx-binding-preview-card__item">
-        <span class="item-label">目标服务器：</span>
-        <span class="item-value">{{ preview.serverDisplay }}</span>
+    <div class="strip-meta">
+      <div class="meta-item root-dir" :title="'基准部署根目录: ' + preview.defaultRoot">
+        <FolderOpenOutlined class="meta-icon" />
+        <span class="meta-label">基准目录:</span>
+        <code class="meta-code">{{ preview.defaultRoot }}</code>
       </div>
 
-      <div class="nginx-binding-preview-card__item">
-        <span class="item-label">Nginx 实例：</span>
-        <span class="item-value">{{ preview.instanceDisplay }}</span>
-      </div>
-
-      <div class="nginx-binding-preview-card__item">
-        <span class="item-label">默认根目录：</span>
-        <span class="item-value code">{{ preview.defaultRoot }}</span>
-      </div>
-
-      <div class="nginx-binding-preview-card__item">
-        <span class="item-label">站点映射：</span>
-        <span class="item-value code">{{ preview.routeSummary }}</span>
-      </div>
-    </div>
-
-    <div v-if="hint" class="nginx-binding-preview-card__hint">
-      <InfoCircleOutlined />
-      <span>{{ hint }}</span>
+      <a-tooltip :title="preview.tooltipText" placement="top">
+        <span class="help-trigger">
+          <InfoCircleOutlined />
+        </span>
+      </a-tooltip>
     </div>
   </div>
 </template>
@@ -89,3 +95,4 @@ const preview = computed(() =>
 <style scoped lang="less">
 @import './style.less';
 </style>
+

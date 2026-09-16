@@ -1,0 +1,386 @@
+// 全局下拉与气泡弹层样式（挂载在 body 上，由全局非 scoped 样式加载）
+
+.nginx-instance-select-dropdown {
+  padding: 6px;
+  border-radius: 10px;
+  min-width: 280px;
+
+  .ant-select-item {
+    padding: 6px 10px;
+    border-radius: 8px;
+    margin-bottom: 2px;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+
+    &:last-child {
+      margin-bottom: 0;
+    }
+
+    &-option-active:not(&-option-disabled) {
+      background: var(--ant-color-bg-text-hover, rgba(0, 0, 0, 0.04));
+    }
+
+    &-option-selected:not(&-option-disabled) {
+      background: var(--primary-color-lighter, rgba(24, 144, 255, 0.08));
+      font-weight: 500;
+    }
+  }
+
+  .instance-select-option {
+    padding: 2px 0;
+
+    .option-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+
+      .option-name {
+        font-weight: 600;
+        color: var(--ant-color-text, #262626);
+        font-size: 13px;
+        line-height: 18px;
+      }
+
+      .option-tag {
+        font-size: 10px;
+        line-height: 16px;
+        padding: 0 5px;
+        margin-right: 0;
+        border-radius: 3px;
+        flex-shrink: 0;
+      }
+    }
+
+    .option-desc {
+      font-size: 11px;
+      color: var(--ant-color-text-tertiary, #8c8c8c);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 4px;
+      line-height: 16px;
+
+      .status-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        display: inline-block;
+        flex-shrink: 0;
+      }
+    }
+  }
+}
+
+.nginx-binding-popover-card {
+  z-index: 1060 !important;
+
+  .ant-popover-inner {
+    border-radius: 10px !important;
+    box-shadow: 0 10px 32px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06) !important;
+    border: 1px solid var(--ant-color-border-secondary, #eef0f4) !important;
+    padding: 0 !important;
+    overflow: hidden;
+  }
+
+  .ant-popover-inner-content {
+    padding: 12px 14px !important;
+  }
+
+  .binding-popover-card {
+    width: 100%;
+    box-sizing: border-box;
+
+    // 气泡内容使用 popover-card__* 类名；这里必须使用后代选择器，
+    // 不能用 Less 的 &__ 前缀（否则会编译成 binding-popover-card__*）。
+    .popover-card__header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-bottom: 8px;
+      border-bottom: 1px dashed var(--ant-color-border-secondary, #f0f0f0);
+      margin-bottom: 10px;
+
+      .header-title {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--ant-color-text-heading, #262626);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+
+        .icon {
+          color: var(--primary-color, #1890ff);
+        }
+      }
+
+      .header-extra {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+
+        .ant-tag {
+          margin-right: 0;
+          font-size: 10px;
+          line-height: 16px;
+          padding: 0 5px;
+          border-radius: 3px;
+        }
+
+        .status-pill {
+          font-size: 11px;
+          color: var(--ant-color-text-secondary, #595959);
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+
+          .status-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            display: inline-block;
+            box-shadow: 0 0 3px currentColor;
+          }
+        }
+      }
+    }
+
+    .popover-card__topology {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 9px 12px;
+      border-radius: 6px;
+      background: linear-gradient(180deg, #f8faff 0%, #f4f7fc 100%);
+      border: 1px solid #e6f0ff;
+      margin-bottom: 10px;
+
+      .node-box {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+
+        .box-icon {
+          font-size: 15px;
+          color: var(--primary-color, #1890ff);
+          flex-shrink: 0;
+        }
+
+        .box-content {
+          min-width: 0;
+          flex: 1;
+          display: flex;
+          align-items: baseline;
+          justify-content: space-between;
+          gap: 6px;
+
+          .box-name {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--ant-color-text, #262626);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+          }
+
+          .box-sub {
+            font-size: 11px;
+            color: var(--ant-color-text-tertiary, #8c8c8c);
+            white-space: nowrap;
+          }
+        }
+
+        &.is-instance .box-icon {
+          color: #722ed1;
+        }
+      }
+
+      .flow-arrow-box {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding-left: 23px;
+        color: var(--ant-color-text-tertiary, #8c8c8c);
+        font-size: 10px;
+        margin: 2px 0;
+
+        .arrow-text {
+          background: rgba(24, 144, 255, 0.08);
+          color: var(--primary-color, #1890ff);
+          padding: 1px 6px;
+          border-radius: 3px;
+          font-weight: 500;
+          font-size: 10px;
+          line-height: 14px;
+        }
+
+        .arrow-icon {
+          font-size: 10px;
+          color: var(--primary-color, #1890ff);
+        }
+      }
+    }
+
+    .popover-card__rows {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 10px;
+
+      .meta-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 11px;
+        gap: 8px;
+
+        .row-label {
+          color: var(--ant-color-text-tertiary, #8c8c8c);
+          white-space: nowrap;
+          flex-shrink: 0;
+        }
+
+        .row-value-wrap {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 4px;
+          min-width: 0;
+          flex: 1;
+        }
+
+        .row-value-preview {
+          display: block;
+          min-width: 0;
+          flex: 1;
+          overflow: hidden;
+        }
+
+        .row-val {
+          display: block;
+          min-width: 0;
+          width: 100%;
+          box-sizing: border-box;
+          font-family: var(--font-mono, monospace);
+          font-size: 11px;
+          color: var(--ant-color-text, #262626);
+          background: rgba(0, 0, 0, 0.04);
+          padding: 2px 6px;
+          border-radius: 4px;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          text-align: right;
+          max-width: none;
+        }
+
+        .row-copy {
+          width: 24px;
+          height: 24px;
+          padding: 0;
+          border: 0;
+          border-radius: 4px;
+          flex: 0 0 24px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          color: var(--ant-color-text-tertiary, #8c8c8c);
+          background: transparent;
+          cursor: pointer;
+          transition: color 0.2s, background-color 0.2s;
+
+          &:hover:not(:disabled),
+          &:focus-visible:not(:disabled) {
+            color: var(--primary-color, #1890ff);
+            background: rgba(24, 144, 255, 0.1);
+            outline: none;
+          }
+
+          &:disabled {
+            cursor: not-allowed;
+            opacity: 0.4;
+          }
+        }
+      }
+    }
+
+    .popover-card__footer {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--ant-color-text-quaternary, #8c8c8c);
+      line-height: 16px;
+      padding-top: 8px;
+      border-top: 1px solid var(--ant-color-border-secondary, #f0f0f0);
+
+      .footer-icon {
+        font-size: 12px;
+        color: var(--primary-color, #1890ff);
+        margin-top: 2px;
+        flex-shrink: 0;
+      }
+    }
+  }
+}
+
+// 完整路径提示需要允许长路径换行，避免 Tooltip 撑出视口。
+.nginx-binding-path-tooltip {
+  .ant-tooltip-inner {
+    max-width: min(560px, calc(100vw - 32px));
+    word-break: break-all;
+    white-space: normal;
+  }
+}
+
+// 暗色主题适配
+html[data-theme='dark'] {
+  .nginx-instance-select-dropdown {
+    .ant-select-item-option-active:not(.ant-select-item-option-disabled) {
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .instance-select-option .option-header .option-name {
+      color: rgba(255, 255, 255, 0.85);
+    }
+  }
+
+  .nginx-binding-popover-card {
+    .ant-popover-inner {
+      background: #1f1f1f !important;
+      border-color: rgba(255, 255, 255, 0.12) !important;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35) !important;
+    }
+
+    .binding-popover-card {
+      .popover-card__header {
+        border-bottom-color: rgba(255, 255, 255, 0.08);
+
+        .header-title {
+          color: rgba(255, 255, 255, 0.9);
+        }
+      }
+
+      .popover-card__topology {
+        background: rgba(255, 255, 255, 0.04);
+        border-color: rgba(255, 255, 255, 0.08);
+
+        .node-box .box-content .box-name {
+          color: rgba(255, 255, 255, 0.85);
+        }
+      }
+
+      .popover-card__rows .meta-row .row-val {
+        background: rgba(255, 255, 255, 0.08);
+        color: rgba(255, 255, 255, 0.85);
+      }
+
+      .popover-card__rows .meta-row .row-copy:hover:not(:disabled),
+      .popover-card__rows .meta-row .row-copy:focus-visible:not(:disabled) {
+        background: rgba(24, 144, 255, 0.2);
+      }
+
+      .popover-card__footer {
+        border-top-color: rgba(255, 255, 255, 0.08);
+      }
+    }
+  }
+}

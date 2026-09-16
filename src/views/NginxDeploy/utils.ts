@@ -20,8 +20,19 @@ type MainProjectCandidate = {
   projectDescription?: string;
 };
 
-/** 系统自动生成的外部 Nginx 实例名称 */
-const SYSTEM_NGINX_INSTANCE_NAME = '系统 Nginx';
+import {
+  SYSTEM_NGINX_INSTANCE_NAME,
+  isSystemNginxInstance,
+  isVisibleNginxInstance,
+  getVisibleNginxInstances,
+} from './components/DeployServerNginxCell/constant';
+
+export {
+  SYSTEM_NGINX_INSTANCE_NAME,
+  isSystemNginxInstance,
+  isVisibleNginxInstance,
+  getVisibleNginxInstances,
+};
 
 /**
  * 判断错误是否由主动停止触发。
@@ -335,33 +346,6 @@ export function isMainDeployProject(project: MainProjectCandidate | null | undef
   return text.includes('主应用');
 }
 
-/**
- * 判断是否为历史自动生成的系统 Nginx 实例。
- * @param instance Nginx 实例
- * @returns 是否系统实例
- */
-export function isSystemNginxInstance(instance: NginxInstance | null | undefined) {
-  return Boolean(instance?.instanceType === 'external' && instance.name === SYSTEM_NGINX_INSTANCE_NAME);
-}
-
-/**
- * 判断实例是否应在业务选择中展示。
- * @param instance Nginx 实例
- * @returns 是否展示
- */
-export function isVisibleNginxInstance(instance: NginxInstance | null | undefined) {
-  if (!instance) return false;
-  return !(isSystemNginxInstance(instance) && !Number(instance.targetCount || 0));
-}
-
-/**
- * 获取可展示的 Nginx 实例列表。
- * @param server 部署服务器
- * @returns 可展示实例列表
- */
-export function getVisibleNginxInstances(server?: DeployServer | null) {
-  return (server?.nginxInstances || []).filter(isVisibleNginxInstance);
-}
 
 /**
  * 获取默认 Nginx 实例，优先选择托管实例。

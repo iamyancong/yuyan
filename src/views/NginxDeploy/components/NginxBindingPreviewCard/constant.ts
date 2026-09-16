@@ -2,9 +2,17 @@ import type { DeployServer, NginxInstance } from '@/api/deploy';
 
 /** 绑定预览卡片信息快照 */
 export interface BindingPreviewSnapshot {
-  /** 服务器展示名称与 IP */
+  /** 服务器名称 */
+  serverName: string;
+  /** 服务器主机或 IP */
+  serverHost: string;
+  /** 服务器展示名称与 IP 组合 */
   serverDisplay: string;
-  /** 实例名称与版本 */
+  /** 实例名称 */
+  instanceName: string;
+  /** 实例版本 */
+  instanceVersion: string;
+  /** 实例名称与版本组合 */
   instanceDisplay: string;
   /** 实例类型 */
   instanceType: 'managed' | 'external' | '';
@@ -22,6 +30,8 @@ export interface BindingPreviewSnapshot {
   confPath: string;
   /** 站点路由简要表达 */
   routeSummary: string;
+  /** 浮层详细解释 */
+  tooltipText: string;
   /** 是否具备完整上下文展示卡片 */
   isComplete: boolean;
 }
@@ -44,7 +54,11 @@ export function resolveBindingPreviewInfo(
 ): BindingPreviewSnapshot {
   if (!server || !instance) {
     return {
+      serverName: '—',
+      serverHost: '',
       serverDisplay: '—',
+      instanceName: '—',
+      instanceVersion: '',
       instanceDisplay: '—',
       instanceType: '',
       instanceTypeLabel: '',
@@ -54,16 +68,21 @@ export function resolveBindingPreviewInfo(
       defaultRoot: '—',
       confPath: '—',
       routeSummary: '—',
+      tooltipText: '',
       isComplete: false,
     };
   }
 
-  const serverDisplay = `${server.name} (${server.host})`;
+  const serverName = server.name || '未知服务器';
+  const serverHost = server.host || '';
+  const serverDisplay = serverHost ? `${serverName} (${serverHost})` : serverName;
+
   const isManaged = instance.instanceType === 'managed';
   const instanceTypeLabel = isManaged ? '平台托管' : '已有外部';
   const instanceTypeColor = isManaged ? 'blue' : 'purple';
-  const versionText = instance.runtimeVersion ? ` · v${instance.runtimeVersion}` : '';
-  const instanceDisplay = `${instance.name}${versionText}`;
+  const instanceName = instance.name || (isManaged ? 'yuyan托管' : '外部实例');
+  const instanceVersion = instance.runtimeVersion ? `v${instance.runtimeVersion}` : '';
+  const instanceDisplay = instanceVersion ? `${instanceName} · ${instanceVersion}` : instanceName;
 
   const isRunning = instance.status === 'running';
   const statusLabel = isRunning
@@ -89,8 +108,14 @@ export function resolveBindingPreviewInfo(
   const portText = port ? `:${port}` : '';
   const routeSummary = `${domainText} → ${resolvedRoot}${portText}`;
 
+  const tooltipText = `该目标将通过【${serverName}】上的 Nginx 实例【${instanceName}】（${instanceTypeLabel} · ${statusLabel}）进行静态代理。发布时自动在该实例下生成站点配置与路由。`;
+
   return {
+    serverName,
+    serverHost,
     serverDisplay,
+    instanceName,
+    instanceVersion,
     instanceDisplay,
     instanceType: instance.instanceType,
     instanceTypeLabel,
@@ -100,6 +125,7 @@ export function resolveBindingPreviewInfo(
     defaultRoot,
     confPath,
     routeSummary,
+    tooltipText,
     isComplete: true,
   };
 }

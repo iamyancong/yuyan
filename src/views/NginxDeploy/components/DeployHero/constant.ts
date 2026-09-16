@@ -1,4 +1,5 @@
 import type { DeployServer } from '@/api/deploy';
+import { getVisibleNginxInstances } from '../DeployServerNginxCell/constant.ts';
 import type { RuntimeAwareDeployTarget } from '../../types';
 
 /** 流程第二步（Nginx 关联配置）诊断状态 */
@@ -32,7 +33,7 @@ export function calcStep2Diagnostic(
   }
 
   const hasAnyInstance = servers.some(
-    (s) => (s.nginxInstances && s.nginxInstances.length > 0) || Boolean(s.nginxRuntime?.initializedAt)
+    (s) => getVisibleNginxInstances(s).length > 0 || Boolean(s.nginxRuntime?.initializedAt)
   );
   if (!hasAnyInstance) {
     return {

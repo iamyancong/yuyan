@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { YTable } from '@yss-ui/components/lite';
-import { openExternal } from '@/utils/open';
 import { useTableHeight } from '@yss-ui/hooks';
 import type { YTableActionConfig } from '@yss-ui/components/lite';
 import type { RuntimeAwareDeployTarget, TargetFilterForm } from '../../types';
@@ -98,10 +97,10 @@ const { projectType } = useNginxDeployContext();
 
 const activeColumns = computed(() => {
   if (projectType.value === 'backend') {
-    const excludedFields = ['siteSummary', 'visitUrl', 'nginxInstanceName', 'listenPort', 'nginxServerName', 'nginxConfPath', 'uploadStrategy', 'preserveSubDirs', 'projectType'];
+    const excludedFields = ['siteSummary', 'nginxInstanceName', 'listenPort', 'nginxServerName', 'nginxConfPath', 'uploadStrategy', 'preserveSubDirs', 'projectType'];
     return targetColumns.filter((col) => !excludedFields.includes(col.field || ''));
   } else if (projectType.value === 'frontend') {
-    const excludedFields = ['projectType', 'serviceRole', 'serverPort', 'serviceLinks', 'nginxInstanceName', 'listenPort', 'nginxServerName', 'visitUrl'];
+    const excludedFields = ['projectType', 'nginxInstanceName', 'listenPort', 'nginxServerName'];
     return targetColumns.filter((col) => !excludedFields.includes(col.field || ''));
   }
   return targetColumns;
@@ -135,7 +134,7 @@ const activeColumns = computed(() => {
         id="nginx-deploy-targets"
       >
         <template #projectName="{ row }">
-          <NginxProjectNameCell :record="row" />
+          <NginxProjectNameCell :record="row" show-access-status />
         </template>
         <template #serverName="{ row }">
           <DeployServerCell :server-name="row.serverName" :server-host="row.serverHost" />
@@ -150,23 +149,6 @@ const activeColumns = computed(() => {
         </template>
         <template #runtimeStatus="{ row }">
           <DeployTargetRuntimeCell :record="row" @click="emit('openProgress', row)" />
-        </template>
-        <template #visitUrl="{ row }">
-          <a v-if="row.visitUrl" :href="row.visitUrl" class="visit-link" @click.prevent.stop="openExternal(row.visitUrl)">
-            {{ row.visitUrl }}
-          </a>
-          <span v-else>-</span>
-        </template>
-        <template #serviceLinks="{ row }">
-          <div v-if="row.projectType === 'backend'" class="service-links">
-            <a v-if="row.directUrl" :href="row.directUrl" @click.prevent.stop="openExternal(row.directUrl)">直连</a>
-            <a v-if="row.gatewayUrl" :href="row.gatewayUrl" @click.prevent.stop="openExternal(row.gatewayUrl)">Gateway</a>
-            <a v-if="row.nacosConsoleUrl" :href="row.nacosConsoleUrl" @click.prevent.stop="openExternal(row.nacosConsoleUrl)">
-              Nacos{{ row.nacosStatus === 'online' ? ' · 在线' : row.nacosStatus === 'offline' ? ' · 离线' : '' }}
-            </a>
-            <span v-if="!row.directUrl && !row.gatewayUrl && !row.nacosConsoleUrl">-</span>
-          </div>
-          <span v-else>-</span>
         </template>
       </YTable>
     </div>

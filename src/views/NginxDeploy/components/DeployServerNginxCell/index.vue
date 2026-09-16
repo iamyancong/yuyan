@@ -33,7 +33,7 @@ const handleClick = () => {
 </script>
 
 <template>
-  <a-tooltip :title="summary.hasInstance ? '点击管理该服务器的 Nginx 实例' : '点击初始化或发现 Nginx 实例'">
+  <a-tooltip :title="summary.tooltipText">
     <div class="deploy-server-nginx-cell" @click.stop="handleClick">
       <template v-if="!summary.hasInstance">
         <span class="deploy-server-nginx-cell__empty">
@@ -44,10 +44,10 @@ const handleClick = () => {
       <template v-else>
         <div class="deploy-server-nginx-cell__tags">
           <span v-if="summary.managedCount > 0" class="instance-tag managed">
-            ●×{{ summary.managedCount }} 托管
+            {{ summary.managedCount > 1 ? `${summary.managedCount} 托管` : '托管' }}
           </span>
           <span v-if="summary.externalCount > 0" class="instance-tag external">
-            ○×{{ summary.externalCount }} 已有
+            {{ summary.externalCount > 1 ? `${summary.externalCount} 已有` : '已有' }}
           </span>
         </div>
 

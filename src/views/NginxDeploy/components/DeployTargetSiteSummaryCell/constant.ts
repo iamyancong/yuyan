@@ -23,6 +23,10 @@ export interface TargetSiteMeta {
   isAccessible: boolean;
   /** 访问地址 */
   visitUrl: string;
+  /** 是否存在可展示的门户站点配置 */
+  showSiteConfig: boolean;
+  /** 是否存在可展示的部署路径 */
+  showDeploymentPath: boolean;
 }
 
 /**
@@ -42,6 +46,8 @@ export function getSiteReadinessStatus(target?: DeployTarget | null): TargetSite
       instanceTypeLabel: '',
       isAccessible: false,
       visitUrl: '',
+      showSiteConfig: false,
+      showDeploymentPath: false,
     };
   }
 
@@ -57,11 +63,16 @@ export function getSiteReadinessStatus(target?: DeployTarget | null): TargetSite
       instanceTypeLabel: '',
       isAccessible: false,
       visitUrl: '',
+      showSiteConfig: false,
+      showDeploymentPath: Boolean(target.deployRoot?.trim()),
     };
   }
 
   const hasDomain = Boolean(String(target.nginxServerName || '').trim() && target.nginxServerName !== '_');
   const hasPort = Boolean(target.listenPort);
+  // 仅门户站点配置或明确填写域名时展示域名/就绪状态，避免微应用的历史访问地址触发虚假提示。
+  const showSiteConfig = Boolean(target.nginxSiteManaged || hasDomain);
+  const showDeploymentPath = Boolean(target.deployRoot?.trim());
   const domainText = hasDomain ? String(target.nginxServerName).trim() : '未填域名';
   const portSuffix = hasPort ? `:${target.listenPort}` : '';
   const destinationText = `${target.deployRoot || '未设路径'}${portSuffix}`;
@@ -79,6 +90,8 @@ export function getSiteReadinessStatus(target?: DeployTarget | null): TargetSite
       instanceTypeLabel,
       isAccessible: false,
       visitUrl: '',
+      showSiteConfig,
+      showDeploymentPath,
     };
   }
 
@@ -94,6 +107,8 @@ export function getSiteReadinessStatus(target?: DeployTarget | null): TargetSite
       instanceTypeLabel,
       isAccessible: true,
       visitUrl: target.visitUrl.trim(),
+      showSiteConfig,
+      showDeploymentPath,
     };
   }
 
@@ -108,5 +123,7 @@ export function getSiteReadinessStatus(target?: DeployTarget | null): TargetSite
     instanceTypeLabel,
     isAccessible: false,
     visitUrl: '',
+    showSiteConfig,
+    showDeploymentPath,
   };
 }
