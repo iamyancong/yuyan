@@ -209,22 +209,47 @@
   max-width: 36ch;
 }
 
-.hero-gitlab-btn {
+.hero-deploy-btn {
   width: 100%;
-  height: 40px;
-  margin-top: 6px;
+  height: 38px;
+  margin-top: 4px;
   border: none;
-  border-radius: 14px;
+  border-radius: 12px;
   background: linear-gradient(135deg, var(--primary-color), var(--primary-color-hover));
-  box-shadow: 0 10px 24px var(--primary-color-light);
+  box-shadow: 0 8px 20px var(--primary-color-light);
   color: #08111f;
   font-weight: 700;
 }
 
-.hero-gitlab-btn:hover,
-:deep(.hero-gitlab-btn:hover) {
+.hero-deploy-btn:hover,
+:deep(.hero-deploy-btn:hover) {
   background: linear-gradient(135deg, var(--primary-color-hover), var(--primary-color));
   color: #08111f;
+}
+
+.hero-gitlab-btn {
+  width: 100%;
+  height: 34px;
+  margin-top: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.9);
+  font-weight: 500;
+}
+
+.hero-gitlab-btn:hover,
+:deep(.hero-gitlab-btn:hover) {
+  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+}
+
+.download-deploy-hint {
+  font-size: 13px;
+  font-weight: normal;
+  color: rgba(229, 234, 255, 0.72);
+  line-height: 1.5;
 }
 
 .content-grid {

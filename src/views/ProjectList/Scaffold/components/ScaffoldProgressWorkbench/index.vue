@@ -6,6 +6,7 @@ const props = defineProps<ScaffoldProgressWorkbenchProps>();
 
 const emit = defineEmits<{
   (e: 'update:open', value: boolean): void;
+  (e: 'goto-deploy'): void;
   (e: 'goto-gitops'): void;
   (e: 'download'): void;
   (e: 'close'): void;
@@ -31,6 +32,7 @@ const {
   stageStatusLabel,
   copyText,
   openGitlab,
+  handleGotoDeploy,
   handleClose,
 } = useScaffoldProgressWorkbench(props, emit);
 </script>
@@ -82,7 +84,10 @@ const {
           <a-tag :color="statusTagColor" class="status-tag">{{ statusText }}</a-tag>
           <div class="hero-percent">{{ progress.percent }}%</div>
           <span class="hero-subtext">{{ modeText }}</span>
-          <a-button v-if="isGitlabSuccessHero" class="hero-gitlab-btn" type="primary" @click="openGitlab">打开 GitLab</a-button>
+          <template v-if="isGitlabSuccessHero">
+            <a-button class="hero-deploy-btn" type="primary" @click="handleGotoDeploy">去部署中心</a-button>
+            <a-button class="hero-gitlab-btn" @click="openGitlab">打开 GitLab</a-button>
+          </template>
         </div>
       </header>
 
@@ -225,6 +230,16 @@ const {
             </div>
           </section>
 
+          <section v-if="isDownloadSuccessHero" class="info-section">
+            <div class="section-title">后续部署指引</div>
+            <div class="info-grid">
+              <div class="info-item info-item-wide">
+                <span>独立部署</span>
+                <strong class="download-deploy-hint">当前为下载模式。本地解压调试完成后推送到 GitLab 仓库，即可在部署中心一键配置发布。</strong>
+              </div>
+            </div>
+          </section>
+
           <section class="code-disclosure" :class="{ expanded: codeExpanded }">
             <div class="code-disclosure-head">
               <button class="code-toggle" type="button" :aria-expanded="codeExpanded" @click="codeExpanded = !codeExpanded">
@@ -263,7 +278,8 @@ const {
     <template #footer>
       <div class="drawer-footer">
         <a-space>
-          <a-button v-if="snapshot.gitlabWebUrl || snapshot.gitlabPath" type="primary" @click="emit('goto-gitops')">GitOps 配置</a-button>
+          <a-button v-if="snapshot.gitlabWebUrl || snapshot.gitlabPath" type="primary" @click="handleGotoDeploy">去部署中心</a-button>
+          <a-button v-if="snapshot.gitlabWebUrl || snapshot.gitlabPath" @click="emit('goto-gitops')">GitOps 配置</a-button>
         </a-space>
         <a-button :disabled="loading" @click="handleClose">关闭</a-button>
       </div>
