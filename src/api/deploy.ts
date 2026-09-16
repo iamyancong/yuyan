@@ -1171,7 +1171,28 @@ export async function getTargetDeployProgress(
     return mapCentralDeployOperation(operation, targetId);
   }
   const url = await getTargetExecutionApiUrl(`/targets/${targetId}/deploy-progress`, projectType);
-  return axios.get(url, { headers: getDeployApiAuthHeaders(), signal }).then(unwrap<DeployProgressSnapshot>);
+  try {
+    const response = await axios.get(url, { headers: getDeployApiAuthHeaders(), signal });
+    return unwrap<DeployProgressSnapshot>(response);
+  } catch (error: any) {
+    if (Number(error?.status || error?.response?.status || 0) === 404) {
+      const emptySnapshot: DeployProgressSnapshot = {
+        targetId,
+        action: 'deploy',
+        operator: '',
+        startedAt: '',
+        currentStage: '',
+        running: false,
+        result: null,
+        error: null,
+        events: [],
+        maxConcurrent: 1,
+        runningCount: 0,
+      };
+      return emptySnapshot;
+    }
+    throw error;
+  }
 }
 
 /** 获取当前团队全部运行中部署目标的聚合快照。 */

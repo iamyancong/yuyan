@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, onMounted, ref, unref, watch } from 'vue';
 
 defineOptions({ name: 'NginxDeployOverlayHost' });
 
 /** 部署中心弹层宿主属性 */
 interface NginxDeployOverlayHostProps {
+  lifecycleState?: Record<string, any>;
   serverState: Record<string, any>;
   targetState: Record<string, any>;
   recordState: Record<string, any>;
@@ -20,17 +21,18 @@ const NginxDeployOverlays = defineAsyncComponent(() => import('../NginxDeployOve
 /** 当前是否存在需要渲染的部署弹层 */
 const hasVisibleOverlay = computed(() =>
   Boolean(
-    props.serverState.serverModalOpen.value ||
-      props.serverState.runtimeDrawerOpen.value ||
-      props.targetState.targetModalOpen.value ||
-      props.targetState.nginxTargetId.value ||
-      props.targetState.serviceLogOpen.value ||
-      props.targetState.javaManagerOpen.value ||
-      props.targetState.environmentManagerOpen.value ||
-      props.recordState.recordLogOpen.value ||
-      props.progressState.publishConfirmOpen.value ||
-      props.progressState.rollbackProgressOpen.value ||
-      props.openApiState.drawerOpen.value
+    unref(props.serverState?.serverModalOpen) ||
+      unref(props.serverState?.runtimeDrawerOpen) ||
+      unref(props.targetState?.targetModalOpen) ||
+      unref(props.targetState?.nginxTargetId) ||
+      unref(props.targetState?.serviceLogOpen) ||
+      unref(props.targetState?.javaManagerOpen) ||
+      unref(props.targetState?.environmentManagerOpen) ||
+      unref(props.recordState?.recordLogOpen) ||
+      unref(props.progressState?.publishConfirmOpen) ||
+      unref(props.progressState?.rollbackProgressOpen) ||
+      unref(props.progressState?.rollbackConfirmOpen) ||
+      unref(props.openApiState?.drawerOpen)
   )
 );
 
@@ -63,6 +65,7 @@ onMounted(() => {
 <template>
   <NginxDeployOverlays
     v-if="hasEverOpened"
+    :lifecycle-state="lifecycleState"
     :server-state="serverState"
     :target-state="targetState"
     :record-state="recordState"

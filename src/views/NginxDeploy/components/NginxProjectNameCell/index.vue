@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { ExportOutlined } from '@ant-design/icons-vue';
 import type { DeployRecord, DeployTarget } from '@/api/deploy';
 import { openExternal } from '@/utils/open';
 import { getProjectDescription } from './constant';
