@@ -20,11 +20,22 @@ import {
 import { isTauri } from '@/utils/env';
 import { getErrorMessage } from '../utils';
 
-/** 归档类型文案。 */
-const ARCHIVE_TYPE_LABEL: Record<NginxArchiveDownloadType, string> = {
+/** 归档类型文案字典。 */
+const MANAGED_ARCHIVE_TYPE_LABEL: Record<NginxArchiveDownloadType, string> = {
   all: '完整运行包',
   html: '前端静态产物',
   conf: 'Nginx 配置文件',
+};
+
+const EXTERNAL_ARCHIVE_TYPE_LABEL: Record<NginxArchiveDownloadType, string> = {
+  all: '配置与站点产物',
+  html: '站点静态资源',
+  conf: 'Nginx 配置文件',
+};
+
+/** 获取归档类型文案。 */
+export const getArchiveTypeLabel = (type: NginxArchiveDownloadType, isManaged = true) => {
+  return (isManaged ? MANAGED_ARCHIVE_TYPE_LABEL : EXTERNAL_ARCHIVE_TYPE_LABEL)[type] || MANAGED_ARCHIVE_TYPE_LABEL[type];
 };
 
 /** 创建可访问的下载通知关闭图标。 */
@@ -130,13 +141,16 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
     if (!params.ensureLoggedIn()) return null;
     const instance = params.getActiveInstance();
     if (!instance) return null;
-    if (instance.instanceType !== 'managed') {
-      message.warning('只有托管 Nginx 实例支持下载运行包');
-      return null;
-    }
-    if (!params.runtimeStatus.value?.initialized) {
-      message.warning('请先初始化托管 Nginx 实例，再下载运行包');
-      return null;
+    if (instance.instanceType === 'managed') {
+      if (!params.runtimeStatus.value?.initialized) {
+        message.warning('请先初始化托管 Nginx 实例，再下载运行包');
+        return null;
+      }
+    } else {
+      if (!String(instance.defaultNginxConfPath || '').trim()) {
+        message.warning('当前已有 Nginx 实例未配置配置文件路径，无法导出');
+        return null;
+      }
     }
     return instance;
   };
@@ -185,18 +199,20 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
   /** 渲染下载中的常驻通知。 */
   const showProgressNotification = (
     type: NginxArchiveDownloadType,
-    progress: NativeFileDownloadProgress
+    progress: NativeFileDownloadProgress,
+    isManaged = true
   ) => {
     const percent = progress.totalBytes && progress.totalBytes > 0
       ? Math.min(100, Math.floor((progress.loadedBytes / progress.totalBytes) * 100))
       : null;
+    const actionLabel = isManaged ? '下载' : '导出';
     notification.info({
       key: activeNotificationKey,
       class: 'c4d-download-notification',
-      message: `正在下载${ARCHIVE_TYPE_LABEL[type]}`,
+      message: `正在${actionLabel}${getArchiveTypeLabel(type, isManaged)}`,
       description: h('div', null, [
         h('p', { style: 'margin-bottom: 8px;' }, progress.stage === 'connecting'
-          ? '正在连接中央归档服务并等待远程打包'
+          ? (isManaged ? '正在连接中央归档服务并等待远程打包' : '正在连接中央服务并等待导出配置/站点')
           : `已写入 ${formatArchiveBytes(progress.loadedBytes)}${progress.totalBytes ? ` / ${formatArchiveBytes(progress.totalBytes)}` : ''}`),
         h('div', { class: 'c4d-progress-wrapper' }, [
           h('div', { class: 'c4d-progress-track' }, [
@@ -210,7 +226,7 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
           class: 'ant-btn ant-btn-sm',
           style: 'margin-top: 10px;',
           onClick: () => void cancelActiveArchiveDownload(),
-        }, '取消下载'),
+        }, `取消${actionLabel}`),
       ]),
       duration: 0,
       closeIcon: createDownloadNotificationCloseIcon(),
@@ -218,7 +234,7 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
   };
 
   /** 显示真实落盘后的常驻成功通知。 */
-  const showNativeSuccess = async (result: NativeFileDownloadResult) => {
+  const showNativeSuccess = async (result: NativeFileDownloadResult, isManaged = true) => {
     const revealFile = async () => {
       try {
         await invoke('reveal_in_file_manager', { path: result.path });
@@ -230,7 +246,7 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
     notification.success({
       key: activeNotificationKey,
       class: 'c4d-download-notification',
-      message: '下载已完成',
+      message: isManaged ? '下载已完成' : '导出已完成',
       description: h('div', null, [
         h('p', { style: 'margin-bottom: 4px; font-weight: 600;' }, result.fileName),
         h('p', { style: 'margin-bottom: 4px;' }, `文件大小：${formatArchiveBytes(result.fileSize)}`),
@@ -243,12 +259,12 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
   };
 
   /** 显示中央服务返回的真实失败原因。 */
-  const showDownloadFailure = (error: unknown, type: NginxArchiveDownloadType) => {
+  const showDownloadFailure = (error: unknown, type: NginxArchiveDownloadType, isManaged = true) => {
     const errorMessage = getErrorMessage(error);
     notification.error({
       key: activeNotificationKey,
       class: 'c4d-download-notification',
-      message: '下载失败',
+      message: isManaged ? '下载失败' : '导出失败',
       description: h('div', null, [
         h('p', { style: 'margin-bottom: 10px; white-space: pre-wrap;' }, errorMessage),
         h('button', {
@@ -268,6 +284,7 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
   const confirmArchiveDownload = async (submit: NginxArchiveSelectionSubmit) => {
     const instance = validateActiveInstance();
     if (!instance || runtimeArchiveDownloading.value) return;
+    const isManaged = instance.instanceType === 'managed';
     if (!submit.siteIds.length) {
       message.warning('请至少选择一个 server');
       return;
@@ -291,17 +308,17 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
       stage: 'connecting',
       loadedBytes: 0,
       totalBytes: null,
-    });
+    }, isManaged);
 
     try {
       if (!isTauri()) {
         const browserResult = await saveArchiveInBrowser(instance.id, selection, (loadedBytes) => {
-          showProgressNotification(submit.type, { stage: 'writing', loadedBytes, totalBytes: null });
+          showProgressNotification(submit.type, { stage: 'writing', loadedBytes, totalBytes: null }, isManaged);
         });
         notification.success({
           key: activeNotificationKey,
           class: 'c4d-download-notification',
-          message: '浏览器下载已开始',
+          message: isManaged ? '浏览器下载已开始' : '浏览器导出已开始',
           description: `${browserResult.fileName}（${formatArchiveBytes(browserResult.fileSize)}）`,
           duration: 0,
           closeIcon: createDownloadNotificationCloseIcon(),
@@ -312,7 +329,7 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
       const progressChannel = new Channel<NativeFileDownloadProgress>();
       let acceptsProgress = true;
       progressChannel.onmessage = (progress) => {
-        if (acceptsProgress) showProgressNotification(submit.type, progress);
+        if (acceptsProgress) showProgressNotification(submit.type, progress, isManaged);
       };
       const result = await invoke<NativeFileDownloadResult>('start_file_download', {
         url: await getNginxInstanceArchiveDownloadUrl(instance.id, submit.type, selection),
@@ -321,14 +338,14 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
         onProgress: progressChannel,
       });
       acceptsProgress = false;
-      await showNativeSuccess(result);
+      await showNativeSuccess(result, isManaged);
     } catch (error: unknown) {
-      if (getErrorMessage(error).includes('下载已取消')) {
+      if (getErrorMessage(error).includes('下载已取消') || getErrorMessage(error).includes('导出已取消')) {
         notification.close(activeNotificationKey);
-        message.info(`已取消下载${ARCHIVE_TYPE_LABEL[submit.type]}`);
+        message.info(`已取消${isManaged ? '下载' : '导出'}${getArchiveTypeLabel(submit.type, isManaged)}`);
         return;
       }
-      showDownloadFailure(error, submit.type);
+      showDownloadFailure(error, submit.type, isManaged);
     } finally {
       runtimeArchiveDownloading.value = false;
     }

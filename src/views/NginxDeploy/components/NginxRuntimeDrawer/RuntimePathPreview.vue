@@ -49,10 +49,10 @@ const copyPath = async (value?: string) => {
         <strong>{{ title }}</strong>
         <span>{{ tip }}</span>
       </div>
-      <div v-if="isManagedInstance" class="nginx-runtime-download-group">
+      <div class="nginx-runtime-download-group">
         <YButton class="nginx-runtime-download-btn" :disabled="!canDownloadArchive" :loading="archiveDownloading" @click="emit('downloadArchive', 'all')">
           <template #icon><CloudDownloadOutlined /></template>
-          下载运行包
+          {{ isManagedInstance ? '下载运行包' : '导出配置 / 站点' }}
         </YButton>
         <a-dropdown :disabled="!canDownloadArchive" placement="bottomRight">
           <YButton class="nginx-runtime-download-arrow" :disabled="!canDownloadArchive">
@@ -60,9 +60,9 @@ const copyPath = async (value?: string) => {
           </YButton>
           <template #overlay>
             <a-menu @click="(e: any) => emit('downloadArchive', e.key)">
-              <a-menu-item key="all">📦 完整运行包 (tar.gz)</a-menu-item>
-              <a-menu-item key="html">🌐 仅前端静态产物 (tar.gz)</a-menu-item>
-              <a-menu-item key="conf">⚙️ 仅 Nginx 配置文件 (nginx.conf)</a-menu-item>
+              <a-menu-item key="all">📦 {{ isManagedInstance ? '完整运行包 (tar.gz)' : '完整导出 (配置+站点) (tar.gz)' }}</a-menu-item>
+              <a-menu-item key="html">🌐 {{ isManagedInstance ? '仅前端静态产物 (tar.gz)' : '仅站点静态资源 (tar.gz)' }}</a-menu-item>
+              <a-menu-item key="conf">⚙️ {{ isManagedInstance ? '仅 Nginx 配置文件 (nginx.conf)' : '仅 Nginx 配置文件 (.conf)' }}</a-menu-item>
             </a-menu>
           </template>
         </a-dropdown>

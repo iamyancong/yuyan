@@ -1,12 +1,12 @@
 <script setup lang="ts">
+import { computed, type Component } from 'vue';
 import {
   FileTextOutlined,
   FolderOpenOutlined,
   InboxOutlined,
 } from '@ant-design/icons-vue';
-import type { Component } from 'vue';
 import type { NginxArchiveDownloadType } from '@/api/deploy';
-import { ARCHIVE_TYPE_OPTIONS } from '../../constant';
+import { getArchiveTypeOptions } from '../../constant';
 
 defineOptions({ name: 'NginxArchiveTypeSelector' });
 
@@ -14,13 +14,19 @@ defineOptions({ name: 'NginxArchiveTypeSelector' });
 interface ArchiveTypeSelectorProps {
   modelValue: NginxArchiveDownloadType;
   disabled?: boolean;
+  isManagedInstance?: boolean;
 }
 
-defineProps<ArchiveTypeSelectorProps>();
+const props = withDefaults(defineProps<ArchiveTypeSelectorProps>(), {
+  disabled: false,
+  isManagedInstance: true,
+});
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: NginxArchiveDownloadType): void;
 }>();
+
+const options = computed(() => getArchiveTypeOptions(props.isManagedInstance));
 
 /** 归档类型图标映射。 */
 const ARCHIVE_TYPE_ICONS: Record<NginxArchiveDownloadType, Component> = {
@@ -33,7 +39,7 @@ const ARCHIVE_TYPE_ICONS: Record<NginxArchiveDownloadType, Component> = {
 <template>
   <div class="archive-type-selector" role="radiogroup" aria-label="下载内容类型">
     <button
-      v-for="option in ARCHIVE_TYPE_OPTIONS"
+      v-for="option in options"
       :key="option.value"
       type="button"
       role="radio"

@@ -1,6 +1,6 @@
 import { computed, ref, watch } from 'vue';
 import type { NginxArchiveDownloadType } from '@/api/deploy';
-import { ARCHIVE_TYPE_OPTIONS, type ArchiveSiteSelectionModalProps } from '../constant';
+import { getArchiveTypeOptions, type ArchiveSiteSelectionModalProps } from '../constant';
 import {
   canSubmitArchiveSelection,
   getSelectableArchiveSites,
@@ -32,8 +32,9 @@ export const useArchiveSelection = (
     props.loading,
     props.downloading
   ));
+  const currentOptions = computed(() => getArchiveTypeOptions(props.isManagedInstance !== false));
   const selectedArchiveOption = computed(() => (
-    ARCHIVE_TYPE_OPTIONS.find((option) => option.value === selectedType.value) ?? ARCHIVE_TYPE_OPTIONS[0]
+    currentOptions.value.find((option) => option.value === selectedType.value) ?? currentOptions.value[0]
   ));
 
   watch(
