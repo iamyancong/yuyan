@@ -59,6 +59,8 @@ test('SUPPORTED_DOWNLOAD_PLATFORMS: 平台安装包配置完整且无缺失', ()
     assert.ok(item.key);
     assert.ok(item.title);
     assert.ok(item.ctaLabel);
+    assert.ok(item.ctaTitle);
+    assert.ok(item.ctaRecommendDesc);
     assert.ok(item.desc);
     if (item.platform === 'darwin') {
       assert.equal(item.ext, '.dmg');

@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { KeyOutlined, GlobalOutlined, QuestionCircleOutlined } from '@ant-design/icons-vue';
+import {
+  KeyOutlined,
+  GlobalOutlined,
+  QuestionCircleOutlined,
+  LoadingOutlined,
+} from '@ant-design/icons-vue';
 import LogoSwift from '@/components/LogoSwift.vue';
 import DesktopC4dIcon from '@/layouts/BasicLayout/components/LayoutHeader/components/DesktopDownloadPopover/components/DesktopC4dIcon.vue';
 import { isTauri } from '@/utils/env';
@@ -24,7 +29,8 @@ const visible = computed({
   set: (val: boolean) => emit('update:visible', val),
 });
 
-const { currentPlatform, triggerDownload } = useDesktopDownload();
+const { currentPlatform, triggerDownload, downloadingKey } = useDesktopDownload();
+const isDownloading = computed(() => downloadingKey.value !== null);
 const handleDownloadDesktop = () => {
   triggerDownload();
 };
@@ -92,10 +98,13 @@ const { loading, loginForm, handleLogin, handleCancel } = useLoginForm(
             <span class="tip-prompt">嫌每次登录反复输入令牌麻烦？</span>
             <a
               class="tip-cta"
-              :title="`支持免密登录并自动恢复会话，适用于 ${currentPlatform.title}`"
+              :class="{ 'is-loading': isDownloading }"
+              :title="isDownloading ? '正在识别并准备安装包，请稍候...' : `支持免密登录并自动恢复会话，已自动适配您的系统：${currentPlatform.title}`"
               @click="handleDownloadDesktop"
             >
-              <DesktopC4dIcon :size="16" /> 下载雨燕桌面端 ({{ currentPlatform.title }})
+              <LoadingOutlined v-if="isDownloading" />
+              <DesktopC4dIcon v-else :size="16" />
+              {{ isDownloading ? '正在识别并准备下载...' : '下载雨燕桌面端，免密恢复会话' }}
             </a>
           </div>
         </div>

@@ -127,29 +127,26 @@
     }
   }
 
-  // 主 CTA 区域（C4D 立体大按钮）
+  // 主 CTA 区域（C4D 立体大按钮：双层高质感排版，绝对杜绝折行）
   .main-cta-section {
     margin-bottom: 12px;
 
     .btn-main-cta {
       display: flex;
       align-items: center;
-      justify-content: center;
+      justify-content: space-between;
       width: 100%;
-      height: 42px;
-      padding: 0 14px;
-      font-size: 13px;
-      font-weight: 600;
-      color: #ffffff;
+      height: 48px;
+      padding: 0 13px;
       border: none;
-      border-radius: 11px;
+      border-radius: 12px;
       cursor: pointer;
 
       // 3D 渐变与立体高光
       background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #c026d3 100%);
       box-shadow:
-        0 4px 16px rgba(124, 58, 237, 0.35),
-        inset 0 1px 1.5px rgba(255, 255, 255, 0.45);
+        0 5px 18px rgba(124, 58, 237, 0.35),
+        inset 0 1px 1.5px rgba(255, 255, 255, 0.5);
       transition: all 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
 
       &:disabled {
@@ -157,31 +154,80 @@
         cursor: not-allowed;
       }
 
-      .cta-icon {
-        font-size: 16px;
-        margin-right: 6px;
+      .cta-inner-left {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        min-width: 0;
+        flex: 1;
+
+        .cta-icon-box {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 24px;
+          height: 24px;
+          font-size: 18px;
+          color: #ffffff;
+          flex-shrink: 0;
+        }
+
+        .cta-text-group {
+          display: flex;
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 1px;
+          min-width: 0;
+          overflow: hidden;
+
+          .cta-primary-title {
+            font-size: 13.5px;
+            font-weight: 700;
+            color: #ffffff;
+            letter-spacing: 0.2px;
+            line-height: 1.25;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+          }
+
+          .cta-sub-recommend {
+            font-size: 10.5px;
+            font-weight: 500;
+            color: rgba(255, 255, 255, 0.88);
+            line-height: 1.2;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+          }
+        }
       }
 
-      .cta-label {
-        letter-spacing: 0.2px;
-      }
+      .cta-inner-right {
+        display: flex;
+        align-items: center;
+        flex-shrink: 0;
+        margin-left: 8px;
 
-      .cta-size {
-        margin-left: 6px;
-        padding: 1px 6px;
-        font-size: 11px;
-        font-weight: 500;
-        background: rgba(255, 255, 255, 0.22);
-        border-radius: 8px;
-        opacity: 0.95;
+        .cta-size-tag {
+          padding: 2px 7px;
+          font-size: 11px;
+          font-weight: 600;
+          background: rgba(255, 255, 255, 0.24);
+          border: 1px solid rgba(255, 255, 255, 0.35);
+          border-radius: 7px;
+          color: #ffffff;
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+        }
       }
 
       &:hover:not(:disabled) {
         transform: translateY(-1.5px) scale(1.01);
         background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #d946ef 100%);
         box-shadow:
-          0 8px 22px rgba(124, 58, 237, 0.45),
-          inset 0 1px 1.5px rgba(255, 255, 255, 0.6);
+          0 9px 24px rgba(124, 58, 237, 0.45),
+          inset 0 1px 1.5px rgba(255, 255, 255, 0.65);
       }
 
       &:active:not(:disabled) {
@@ -505,6 +551,63 @@
 }
 
 
+// 🔮 极光玻璃拟态微骨架屏流光占位条
+.skeleton-shimmer-tag {
+  width: 50px;
+  height: 19px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.22);
+  position: relative;
+  overflow: hidden;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.08);
+
+  &.mini {
+    width: 44px;
+    height: 15px;
+    border-radius: 4px;
+    background: rgba(99, 102, 241, 0.08);
+
+    &::after {
+      background: linear-gradient(90deg, transparent, rgba(99, 102, 241, 0.18), transparent);
+    }
+  }
+
+  &::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.45), transparent);
+    animation: shimmer-swipe 1.4s infinite ease-in-out;
+  }
+}
+
+.fade-in {
+  animation: fadeIn 0.24s ease-out forwards;
+}
+
+@keyframes shimmer-swipe {
+  0% {
+    left: -100%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 .spin {
   animation: spin 1s linear infinite;
 }
@@ -523,5 +626,17 @@
   50% {
     opacity: 0.5;
     transform: scale(1.2);
+  }
+}
+
+// 暗色模式下的骨架屏适配
+:global(body.dark),
+:global(.is-dark) {
+  .skeleton-shimmer-tag.mini {
+    background: rgba(255, 255, 255, 0.06);
+
+    &::after {
+      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.15), transparent);
+    }
   }
 }
