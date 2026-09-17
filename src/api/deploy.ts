@@ -1750,6 +1750,41 @@ export const getAppUpdateCacheStatus = (statusUrl: string): Promise<AppUpdateCac
   });
 };
 
+/**
+ * 查询桌面端离线安装包（.dmg / .exe）下载地址与最新版本信息。
+ * @description 专供内网网页版（Web）引导下载桌面端使用，不请求带签名的 .app.tar.gz Updater 资源。
+ * @param platform - 目标操作系统 'darwin' | 'windows'
+ * @param arch - 目标 CPU 架构 'aarch64' | 'x86_64'
+ * @param channel - 发布渠道，默认 'stable'
+ * @returns 安装包信息与下载链接
+ */
+export const fetchDesktopInstallerInfo = (
+  platform: string,
+  arch: string,
+  channel = 'stable'
+): Promise<AppUpdateCheckResult> => {
+  return axios.get(getApiBase('/deploy-api/app-update/check'), {
+    params: {
+      currentVersion: '0.0.0',
+      platform,
+      arch,
+      channel,
+      cacheAware: 0,
+      updaterCapable: 0,
+    },
+    headers: getDeployApiAuthHeaders(),
+  }).then((res) => {
+    const data = res.data as AppUpdateCheckResult;
+    if (data && data.downloadUrl && !data.downloadUrl.startsWith('http')) {
+      data.downloadUrl = getApiBase(data.downloadUrl);
+    }
+    if (data && data.url && !data.url.startsWith('http')) {
+      data.url = getApiBase(data.url);
+    }
+    return data;
+  });
+};
+
 /** JDK 配置 */
 export interface BuildJdk {
   id: number;

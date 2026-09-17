@@ -1,0 +1,485 @@
+/* ==========================================================================
+   🔮 雨燕桌面端下载浮层：C4D 3D 玻璃拟态 (Glassmorphism) 高级 UI
+   ========================================================================== */
+
+.desktop-download-container {
+  display: inline-flex;
+  align-items: center;
+}
+
+// 顶栏 C4D 电脑图标按键
+.btn-desktop-download {
+  position: relative;
+
+  &.has-guide {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--theme-primary) 40%, transparent),
+      0 2px 8px color-mix(in srgb, var(--theme-primary) 25%, transparent);
+  }
+
+  &:hover {
+    box-shadow:
+      0 4px 16px color-mix(in srgb, var(--theme-primary) 35%, transparent),
+      inset 0 1px 1.5px rgba(255, 255, 255, 0.85);
+    border-color: color-mix(in srgb, var(--theme-primary) 35%, var(--header-control-border));
+  }
+}
+
+// 玻璃拟态主卡片（自包含完整样式，确保任何容器下均能展现高细节质感）
+.download-card {
+  width: 328px;
+  box-sizing: border-box;
+  padding: 16px 18px;
+  border-radius: 16px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  user-select: none;
+
+  // 🔮 玻璃拟态多重渐变底色与饱和度增强毛玻璃
+  background: linear-gradient(
+    145deg,
+    rgba(255, 255, 255, 0.94) 0%,
+    rgba(248, 250, 255, 0.9) 45%,
+    rgba(241, 245, 254, 0.86) 100%
+  );
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  box-shadow:
+    0 18px 40px -8px rgba(99, 102, 241, 0.2),
+    0 4px 16px -2px rgba(15, 23, 42, 0.08),
+    inset 0 1px 1.5px rgba(255, 255, 255, 0.95);
+
+  // 头部区域
+  .card-header {
+    margin-bottom: 12px;
+
+    .brand-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+
+      .brand-title-wrap {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+
+        .brand-icon-box {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 30px;
+          height: 30px;
+          border-radius: 9px;
+          background: linear-gradient(135deg, rgba(255, 255, 255, 0.9), rgba(238, 242, 255, 0.7));
+          border: 1px solid rgba(255, 255, 255, 0.9);
+          box-shadow: 0 2px 6px rgba(99, 102, 241, 0.16);
+        }
+
+        .brand-title {
+          font-size: 15px;
+          font-weight: 700;
+          letter-spacing: 0.2px;
+          background: linear-gradient(135deg, #3730a3 0%, #6366f1 45%, #a855f7 100%);
+          -webkit-background-clip: text;
+          background-clip: text;
+          color: transparent;
+        }
+      }
+
+      .version-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 2px 7px;
+        font-size: 11px;
+        font-family: var(--font-family-code, monospace);
+        font-weight: 600;
+        color: #6366f1;
+        background: rgba(99, 102, 241, 0.09);
+        border: 1px solid rgba(99, 102, 241, 0.2);
+        border-radius: 12px;
+        box-shadow: 0 1px 3px rgba(99, 102, 241, 0.08);
+      }
+    }
+
+    // 产品卖点特性清单
+    .features-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+
+      .feature-item {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        line-height: 1.5;
+        color: #475569;
+
+        .feature-icon {
+          font-size: 11px;
+          color: #6366f1;
+        }
+      }
+    }
+  }
+
+  // 主 CTA 区域（C4D 立体按钮）
+  .main-cta-section {
+    margin-bottom: 10px;
+
+    .btn-main-cta {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 40px;
+      padding: 0 14px;
+      font-size: 13px;
+      font-weight: 600;
+      color: #ffffff;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+
+      // 3D 渐变与立体高光
+      background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #c026d3 100%);
+      box-shadow:
+        0 4px 16px rgba(124, 58, 237, 0.35),
+        inset 0 1px 1.5px rgba(255, 255, 255, 0.45);
+      transition: all 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+
+      .cta-icon {
+        font-size: 15px;
+        margin-right: 6px;
+      }
+
+      .cta-label {
+        letter-spacing: 0.2px;
+      }
+
+      .cta-size {
+        margin-left: 6px;
+        padding: 1px 6px;
+        font-size: 11px;
+        font-weight: 500;
+        background: rgba(255, 255, 255, 0.22);
+        border-radius: 8px;
+        opacity: 0.95;
+      }
+
+      &:hover {
+        transform: translateY(-1.5px) scale(1.01);
+        background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #d946ef 100%);
+        box-shadow:
+          0 8px 22px rgba(124, 58, 237, 0.45),
+          inset 0 1px 1.5px rgba(255, 255, 255, 0.6);
+      }
+
+      &:active {
+        transform: translateY(0) scale(0.99);
+        box-shadow:
+          0 2px 8px rgba(124, 58, 237, 0.3),
+          inset 0 1px 2px rgba(0, 0, 0, 0.2);
+      }
+    }
+  }
+
+  // 其他平台切换抽屉
+  .other-platforms-section {
+    border-radius: 8px;
+    background: rgba(241, 245, 249, 0.55);
+    border: 1px solid rgba(226, 232, 240, 0.75);
+    overflow: hidden;
+
+    .toggle-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 10px;
+      font-size: 12px;
+      font-weight: 500;
+      color: #64748b;
+      cursor: pointer;
+      transition: all 0.2s ease;
+
+      &:hover {
+        color: #4f46e5;
+        background: rgba(255, 255, 255, 0.6);
+      }
+
+      .toggle-icon {
+        font-size: 10px;
+        transition: transform 0.2s ease;
+      }
+    }
+
+    .platform-list {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      padding: 4px 8px 8px;
+      border-top: 1px dashed rgba(203, 213, 225, 0.7);
+
+      .platform-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 6px 8px;
+        font-size: 12px;
+        color: #334155;
+        background: rgba(255, 255, 255, 0.5);
+        border: 1px solid rgba(255, 255, 255, 0.8);
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.18s ease;
+
+        .platform-item-left {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+
+          .platform-icon {
+            font-size: 13px;
+            color: #64748b;
+          }
+
+          .platform-label {
+            font-weight: 500;
+          }
+        }
+
+        .platform-item-right {
+          display: flex;
+          align-items: center;
+          gap: 4px;
+
+          .platform-ext {
+            font-size: 11px;
+            color: #94a3b8;
+            font-family: monospace;
+          }
+
+          .download-glyph {
+            font-size: 11px;
+            opacity: 0;
+            transform: translateX(-3px);
+            transition: all 0.18s ease;
+          }
+        }
+
+        &:hover {
+          color: #4f46e5;
+          background: #ffffff;
+          border-color: rgba(99, 102, 241, 0.35);
+          box-shadow: 0 2px 6px rgba(99, 102, 241, 0.12);
+
+          .platform-icon {
+            color: #4f46e5;
+          }
+
+          .platform-item-right {
+            .platform-ext {
+              color: #4f46e5;
+            }
+            .download-glyph {
+              opacity: 1;
+              transform: translateX(0);
+              color: #4f46e5;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // 底部信息栏
+  .card-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(226, 232, 240, 0.8);
+    font-size: 11px;
+    color: #94a3b8;
+
+    .footer-source {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+
+      .status-pulse-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #10b981;
+        box-shadow: 0 0 6px #10b981;
+        animation: status-pulse 2s infinite ease-in-out;
+      }
+    }
+
+    .footer-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      color: #64748b;
+      cursor: pointer;
+      font-weight: 500;
+      transition: color 0.18s ease;
+
+      &:hover {
+        color: #4f46e5;
+      }
+    }
+  }
+}
+
+// 全局覆盖 Ant Design Popover 的弹层结构，消除白底硬框
+:global(.desktop-download-popover) {
+  padding-top: 4px;
+
+  .ant-popover-inner {
+    padding: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    border: none !important;
+    border-radius: 16px !important;
+  }
+
+  .ant-popover-inner-content {
+    padding: 0 !important;
+  }
+
+  // 定制箭头颜色与卡片玻璃边框完全融入
+  .ant-popover-arrow {
+    &::before {
+      background: linear-gradient(135deg, rgba(255, 255, 255, 0.94), rgba(248, 250, 255, 0.9)) !important;
+    }
+  }
+}
+
+// 暗黑模式全面适配
+:global(body.dark .desktop-download-popover),
+:global(.is-dark .desktop-download-popover) {
+  .download-card {
+    background: linear-gradient(
+      145deg,
+      rgba(24, 27, 42, 0.96) 0%,
+      rgba(18, 21, 35, 0.94) 50%,
+      rgba(15, 17, 28, 0.92) 100%
+    );
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow:
+      0 18px 40px -8px rgba(0, 0, 0, 0.55),
+      0 6px 18px -2px rgba(0, 0, 0, 0.35),
+      inset 0 1px 1px rgba(255, 255, 255, 0.08);
+
+    .card-header {
+      .brand-row {
+        .brand-title-wrap {
+          .brand-icon-box {
+            background: rgba(255, 255, 255, 0.06);
+            border-color: rgba(255, 255, 255, 0.12);
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+          }
+
+          .brand-title {
+            background: linear-gradient(135deg, #c7d2fe 0%, #a5b4fc 45%, #f472b6 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+          }
+        }
+
+        .version-badge {
+          color: #a5b4fc;
+          background: rgba(129, 140, 248, 0.14);
+          border-color: rgba(129, 140, 248, 0.3);
+        }
+      }
+
+      .features-list .feature-item {
+        color: #94a3b8;
+        .feature-icon {
+          color: #a5b4fc;
+        }
+      }
+    }
+
+    .other-platforms-section {
+      background: rgba(255, 255, 255, 0.03);
+      border-color: rgba(255, 255, 255, 0.08);
+
+      .toggle-bar {
+        color: #94a3b8;
+        &:hover {
+          color: #c7d2fe;
+          background: rgba(255, 255, 255, 0.05);
+        }
+      }
+
+      .platform-list {
+        border-top-color: rgba(255, 255, 255, 0.08);
+
+        .platform-item {
+          color: #cbd5e1;
+          background: rgba(255, 255, 255, 0.04);
+          border-color: rgba(255, 255, 255, 0.06);
+
+          .platform-icon {
+            color: #94a3b8;
+          }
+
+          &:hover {
+            color: #c7d2fe;
+            background: rgba(99, 102, 241, 0.18);
+            border-color: rgba(129, 140, 248, 0.35);
+
+            .platform-icon {
+              color: #c7d2fe;
+            }
+            .platform-item-right {
+              .platform-ext,
+              .download-glyph {
+                color: #c7d2fe;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    .card-footer {
+      border-top-color: rgba(255, 255, 255, 0.08);
+      color: #64748b;
+
+      .footer-link {
+        color: #94a3b8;
+        &:hover {
+          color: #c7d2fe;
+        }
+      }
+    }
+  }
+
+  .ant-popover-arrow {
+    &::before {
+      background: #181b26 !important;
+    }
+  }
+}
+
+@keyframes status-pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(1.2);
+  }
+}
