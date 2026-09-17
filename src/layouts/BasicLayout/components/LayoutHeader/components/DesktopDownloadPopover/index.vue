@@ -13,7 +13,7 @@ import { useDownloadGuide } from './hooks/useDownloadGuide';
 defineOptions({ name: 'DesktopDownloadPopover' });
 
 const {
-  popoverVisible, downloadingKey, currentPlatform,
+  popoverVisible, downloadingKey, fetchingMeta, currentPlatform,
   currentAssetMeta, latestVersion, assetsMap,
   otherPlatforms, triggerDownload, openReleaseNotes,
 } = useDesktopDownload();
@@ -39,7 +39,9 @@ const { guideVisible, dismissGuide } = useDownloadGuide();
                 <div class="brand-icon-box"><DesktopC4dIcon :size="19" /></div>
                 <span class="brand-title">雨燕桌面端</span>
               </div>
-              <span class="version-badge">v{{ latestVersion }}</span>
+              <span class="version-badge" :class="{ 'is-loading': fetchingMeta && !latestVersion }">
+                v{{ latestVersion }}
+              </span>
             </div>
             <ul class="features-list">
               <li class="feature-item">
@@ -53,7 +55,7 @@ const { guideVisible, dismissGuide } = useDownloadGuide();
             </ul>
           </div>
 
-          <!-- 🔮 主 CTA 按钮（当前系统推荐，1-Click 直达下载） -->
+          <!-- 🔮 主 CTA 按钮（双层高质感排版，彻底杜绝折行，带骨架屏微光） -->
           <div class="main-cta-section">
             <button
               type="button"
@@ -61,15 +63,29 @@ const { guideVisible, dismissGuide } = useDownloadGuide();
               :disabled="Boolean(downloadingKey)"
               @click="triggerDownload()"
             >
-              <LoadingOutlined v-if="downloadingKey === currentPlatform.key" class="cta-icon spin" />
-              <AppleOutlined v-else-if="currentPlatform.icon === 'apple'" class="cta-icon" />
-              <WindowsOutlined v-else class="cta-icon" />
-              <span class="cta-label">{{ downloadingKey === currentPlatform.key ? '准备下载中...' : currentPlatform.ctaLabel }}</span>
-              <span v-if="currentAssetMeta?.size" class="cta-size">{{ formatFileSize(currentAssetMeta.size) }}</span>
+              <div class="cta-inner-left">
+                <div class="cta-icon-box">
+                  <LoadingOutlined v-if="downloadingKey === currentPlatform.key" class="spin" />
+                  <AppleOutlined v-else-if="currentPlatform.icon === 'apple'" />
+                  <WindowsOutlined v-else />
+                </div>
+                <div class="cta-text-group">
+                  <span class="cta-primary-title">
+                    {{ downloadingKey === currentPlatform.key ? '准备下载中...' : currentPlatform.ctaTitle }}
+                  </span>
+                  <span class="cta-sub-recommend">{{ currentPlatform.ctaRecommendDesc }}</span>
+                </div>
+              </div>
+              <div class="cta-inner-right">
+                <div v-if="fetchingMeta && !currentAssetMeta?.size" class="skeleton-shimmer-tag" />
+                <span v-else-if="currentAssetMeta?.size" class="cta-size-tag fade-in">
+                  {{ formatFileSize(currentAssetMeta.size) }}
+                </span>
+              </div>
             </button>
           </div>
 
-          <!-- 🔮 另外两种平台免折叠平铺展示（1-Click 直达下载） -->
+          <!-- 🔮 另外两种平台免折叠平铺展示（1-Click 直达，带骨架屏） -->
           <div class="other-platforms-section">
             <div class="section-sub-title">其他系统 / 架构免切换直达：</div>
             <div class="platform-list">
@@ -88,7 +104,8 @@ const { guideVisible, dismissGuide } = useDownloadGuide();
                   </div>
                 </div>
                 <div class="platform-item-right">
-                  <span v-if="assetsMap[platform.key]?.size" class="platform-size-tag">
+                  <div v-if="fetchingMeta && !assetsMap[platform.key]?.size" class="skeleton-shimmer-tag mini" />
+                  <span v-else-if="assetsMap[platform.key]?.size" class="platform-size-tag fade-in">
                     {{ formatFileSize(assetsMap[platform.key]?.size) }}
                   </span>
                   <button type="button" class="btn-quick-download" :disabled="Boolean(downloadingKey)" :title="`直接下载 ${platform.title}`">

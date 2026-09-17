@@ -21,8 +21,12 @@ export interface DownloadPlatformOption {
   title: string;
   /** 芯片/系统详细说明 */
   desc: string;
-  /** 主 CTA 按钮文案 */
+  /** 主 CTA 按钮单例文案（精炼短文案） */
   ctaLabel: string;
+  /** 主 CTA 双层排版主标题 */
+  ctaTitle: string;
+  /** 主 CTA 智能推荐说明 */
+  ctaRecommendDesc: string;
   /** 图标类型 */
   icon: 'apple' | 'windows';
   /** 安装包后缀 */
@@ -37,7 +41,9 @@ export const SUPPORTED_DOWNLOAD_PLATFORMS: DownloadPlatformOption[] = [
     arch: 'aarch64',
     title: 'macOS (Apple Silicon)',
     desc: '适用于 M1 / M2 / M3 / M4 及后续芯片',
-    ctaLabel: '下载 macOS 版 (Apple Silicon)',
+    ctaLabel: '下载 macOS 版 (Apple 芯片)',
+    ctaTitle: '下载 macOS 桌面端',
+    ctaRecommendDesc: '智能匹配 · Apple Silicon (M系列)',
     icon: 'apple',
     ext: '.dmg',
   },
@@ -48,6 +54,8 @@ export const SUPPORTED_DOWNLOAD_PLATFORMS: DownloadPlatformOption[] = [
     title: 'macOS (Intel 芯片)',
     desc: '适用于传统 Intel 处理器 Mac',
     ctaLabel: '下载 macOS 版 (Intel 芯片)',
+    ctaTitle: '下载 macOS 桌面端',
+    ctaRecommendDesc: '智能匹配 · Intel 处理器',
     icon: 'apple',
     ext: '.dmg',
   },
@@ -57,7 +65,9 @@ export const SUPPORTED_DOWNLOAD_PLATFORMS: DownloadPlatformOption[] = [
     arch: 'x86_64',
     title: 'Windows (64位)',
     desc: '适用于 Windows 10 / 11 64位系统',
-    ctaLabel: '下载 Windows 版 (x64)',
+    ctaLabel: '下载 Windows 版 (64位)',
+    ctaTitle: '下载 Windows 桌面端',
+    ctaRecommendDesc: '智能匹配 · 64 位系统',
     icon: 'windows',
     ext: '.exe',
   },
