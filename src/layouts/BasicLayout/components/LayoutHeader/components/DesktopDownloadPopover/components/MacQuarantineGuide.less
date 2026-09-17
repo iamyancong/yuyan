@@ -1,0 +1,199 @@
+/* ==========================================================================
+   🍎 macOS Gatekeeper 终端隔离解除卡片样式
+   ========================================================================== */
+
+.mac-quarantine-card {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 11px;
+  background: rgba(241, 245, 249, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  box-shadow:
+    inset 0 1px 1.5px rgba(255, 255, 255, 0.8),
+    0 2px 6px rgba(15, 23, 42, 0.04);
+  transition: all 0.2s ease;
+
+  .quarantine-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 7px;
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+
+      .mac-traffic-lights {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+
+        .dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+
+          &.dot-close {
+            background: #ff5f56;
+            box-shadow: 0 0 2px rgba(255, 95, 86, 0.5);
+          }
+
+          &.dot-min {
+            background: #ffbd2e;
+            box-shadow: 0 0 2px rgba(255, 189, 46, 0.5);
+          }
+
+          &.dot-max {
+            background: #27c93f;
+            box-shadow: 0 0 2px rgba(39, 201, 63, 0.5);
+          }
+        }
+      }
+
+      .quarantine-title {
+        font-size: 11px;
+        font-weight: 600;
+        color: #334155;
+        letter-spacing: 0.1px;
+      }
+    }
+
+    .quarantine-help-icon {
+      font-size: 11px;
+      color: #94a3b8;
+      cursor: pointer;
+      transition: color 0.18s ease;
+
+      &:hover {
+        color: #6366f1;
+      }
+    }
+  }
+
+  .command-box {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 9px;
+    background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
+    border-radius: 7px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow:
+      inset 0 1px 3px rgba(0, 0, 0, 0.45),
+      0 2px 5px rgba(15, 23, 42, 0.1);
+
+    .command-content {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      flex: 1;
+
+      .command-prompt {
+        font-family: Menlo, Monaco, Consolas, 'Courier New', monospace;
+        font-size: 11px;
+        font-weight: bold;
+        color: #10b981;
+        user-select: none;
+        flex-shrink: 0;
+        text-shadow: 0 0 4px rgba(16, 185, 129, 0.4);
+      }
+
+      .command-text {
+        font-family: Menlo, Monaco, Consolas, 'Courier New', monospace;
+        font-size: 10px;
+        color: #f1f5f9;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        user-select: all;
+        line-height: 1.4;
+      }
+    }
+
+    .btn-copy-command {
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      height: 22px;
+      padding: 0 8px;
+      font-size: 10.5px;
+      font-weight: 500;
+      color: #ffffff;
+      background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      box-shadow: 0 2px 6px rgba(124, 58, 237, 0.35);
+      transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+
+      &:hover {
+        background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+        box-shadow: 0 4px 10px rgba(124, 58, 237, 0.45);
+        transform: translateY(-0.5px);
+      }
+
+      &:active {
+        transform: translateY(0);
+        box-shadow: 0 1px 3px rgba(124, 58, 237, 0.3);
+      }
+
+      &.is-copied {
+        background: linear-gradient(135deg, #059669 0%, #10b981 100%);
+        box-shadow: 0 2px 6px rgba(16, 185, 129, 0.4);
+      }
+
+      .copy-icon {
+        font-size: 10px;
+      }
+
+      .copy-text {
+        line-height: 1;
+      }
+    }
+  }
+
+  .quarantine-footer {
+    margin-top: 6px;
+    padding-left: 2px;
+    font-size: 10px;
+    color: #64748b;
+    line-height: 1.4;
+  }
+}
+
+// 暗色主题适配
+:global(body.dark) .mac-quarantine-card,
+:global(.is-dark) .mac-quarantine-card {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.06);
+
+  .quarantine-header {
+    .header-left .quarantine-title {
+      color: #cbd5e1;
+    }
+
+    .quarantine-help-icon {
+      color: #64748b;
+
+      &:hover {
+        color: #a5b4fc;
+      }
+    }
+  }
+
+  .command-box {
+    background: rgba(0, 0, 0, 0.55);
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .quarantine-footer {
+    color: #64748b;
+  }
+}

@@ -69,6 +69,12 @@ export const GITHUB_RELEASES_URL = 'https://github.com/iamyancong/yuyan/releases
 /** 首次弱引导气泡已关闭持久化键名 */
 export const DESKTOP_DOWNLOAD_GUIDE_STORAGE_KEY = 'yuyan_web_desktop_download_guide_dismissed';
 
+/** macOS Gatekeeper 首次隔离解除终端命令 */
+export const MAC_QUARANTINE_COMMAND = 'sudo xattr -rd com.apple.quarantine /Applications/雨燕.app/';
+
+/** macOS 隔离说明提示文案 */
+export const MAC_QUARANTINE_TIP = '在终端 (Terminal) 粘贴执行并输入密码即可正常打开';
+
 /**
  * 根据操作系统与 CPU 架构自动匹配默认推荐的安装包选项。
  * @param os - 探测所得操作系统

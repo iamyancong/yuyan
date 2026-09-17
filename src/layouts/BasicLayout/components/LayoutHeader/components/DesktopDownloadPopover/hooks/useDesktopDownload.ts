@@ -2,6 +2,7 @@ import { ref, computed, watch } from 'vue';
 import { message } from 'ant-design-vue';
 import { detectPlatform } from '@/utils/platformDetect';
 import { fetchDesktopInstallerInfo } from '@/api/deploy';
+import { showMacQuarantineNotification } from './useMacNotification';
 import {
   type DownloadPlatformOption,
   type PlatformKey,
@@ -37,66 +38,70 @@ const executeBrowserDownload = (url: string, filename?: string) => {
 
 /**
  * 桌面端下载业务逻辑 Hook。
- * @description 负责客户端平台嗅探、服务端安装包元数据拉取、平台切换及触发浏览器文件下载流。
+ * @description 负责平台识别、多架构全量元数据并发拉取、各平台一键直接下载流管理以及 macOS 隔离引导。
  */
 export const useDesktopDownload = () => {
   const platformInfo = detectPlatform();
+  const isMac = computed(() => platformInfo.platform === 'darwin');
+
   const currentPlatform = ref<DownloadPlatformOption>(
     matchDefaultPlatform(platformInfo.platform, platformInfo.arch)
   );
 
   const popoverVisible = ref(false);
-  const downloading = ref(false);
+  const downloadingKey = ref<string | null>(null);
   const fetchingMeta = ref(false);
-  const showOtherPlatforms = ref(false);
   const latestVersion = ref('1.2.54');
   const assetsMap = ref<Partial<Record<PlatformKey, CachedAssetMeta>>>({});
 
-  /** 其他平台列表（排除当前选中的主平台） */
+  /** 其他平台列表（排除当前选中的主推荐平台） */
   const otherPlatforms = computed(() =>
     SUPPORTED_DOWNLOAD_PLATFORMS.filter((p) => p.key !== currentPlatform.value.key)
   );
 
-  /** 当前选中平台的缓存资产元数据 */
+  /** 当前推荐平台的缓存资产元数据 */
   const currentAssetMeta = computed(() => assetsMap.value[currentPlatform.value.key]);
 
   /**
-   * 拉取指定平台的安装包信息。
-   * @param platformOption - 目标平台
+   * 并发拉取全部平台的安装包元数据（确保所有平铺项均可瞬间展示文件大小）。
    */
-  const loadInstallerMeta = async (platformOption: DownloadPlatformOption) => {
-    if (assetsMap.value[platformOption.key]?.downloadUrl) return;
+  const loadAllInstallerMeta = async () => {
     fetchingMeta.value = true;
     try {
-      const result = await fetchDesktopInstallerInfo(
-        platformOption.platform,
-        platformOption.arch
+      await Promise.allSettled(
+        SUPPORTED_DOWNLOAD_PLATFORMS.map(async (platformOption) => {
+          if (assetsMap.value[platformOption.key]?.downloadUrl) return;
+          const result = await fetchDesktopInstallerInfo(
+            platformOption.platform,
+            platformOption.arch
+          );
+          if (result && result.downloadUrl) {
+            assetsMap.value[platformOption.key] = {
+              downloadUrl: result.downloadUrl,
+              filename: result.filename,
+              size: result.size,
+              version: result.latestVersion || result.version,
+            };
+            if (result.latestVersion || result.version) {
+              latestVersion.value = String(result.latestVersion || result.version).replace(/^v/, '');
+            }
+          }
+        })
       );
-      if (result && result.downloadUrl) {
-        assetsMap.value[platformOption.key] = {
-          downloadUrl: result.downloadUrl,
-          filename: result.filename,
-          size: result.size,
-          version: result.latestVersion || result.version,
-        };
-        if (result.latestVersion || result.version) {
-          latestVersion.value = String(result.latestVersion || result.version).replace(/^v/, '');
-        }
-      }
     } catch (error) {
-      console.warn('[DesktopDownload] 获取安装包元数据失败，保留默认链接:', error);
+      console.warn('[DesktopDownload] 并行预热安装包元数据失败:', error);
     } finally {
       fetchingMeta.value = false;
     }
   };
 
   /**
-   * 触发下载指定平台的安装包。
-   * @param target - 目标平台（默认当前选中平台）
+   * 触发下载指定平台的安装包（直接下载，不切换主状态）。
+   * @param target - 目标平台（默认当前推荐平台）
    */
   const triggerDownload = async (target = currentPlatform.value) => {
-    if (downloading.value) return;
-    downloading.value = true;
+    if (downloadingKey.value) return;
+    downloadingKey.value = target.key;
 
     try {
       let asset = assetsMap.value[target.key];
@@ -118,7 +123,12 @@ export const useDesktopDownload = () => {
 
       if (asset?.downloadUrl) {
         executeBrowserDownload(asset.downloadUrl, asset.filename);
-        message.success(`已开始下载雨燕桌面端 (${target.title})，请留意浏览器下载进度`);
+        message.success(`已开始下载雨燕桌面端 (${target.title})，请留意浏览器下载栏`);
+
+        // 若下载的是 macOS 安装包，额外提供贴心的系统风格首次安装 Gatekeeper 提示
+        if (target.platform === 'darwin') {
+          showMacQuarantineNotification();
+        }
       } else {
         // 安全降级：跳转 GitHub Releases
         window.open(GITHUB_RELEASES_URL, '_blank', 'noopener,noreferrer');
@@ -129,23 +139,8 @@ export const useDesktopDownload = () => {
       window.open(GITHUB_RELEASES_URL, '_blank', 'noopener,noreferrer');
       message.info('正在打开 GitHub Releases 官方发布页');
     } finally {
-      downloading.value = false;
+      downloadingKey.value = null;
     }
-  };
-
-  /**
-   * 切换选中的主下载平台。
-   * @param option - 目标平台选项
-   */
-  const selectPlatform = (option: DownloadPlatformOption) => {
-    currentPlatform.value = option;
-    showOtherPlatforms.value = false;
-    loadInstallerMeta(option);
-  };
-
-  /** 展开或收起其他平台列表 */
-  const toggleOtherPlatforms = () => {
-    showOtherPlatforms.value = !showOtherPlatforms.value;
   };
 
   /** 打开 GitHub Releases 发布说明 */
@@ -153,25 +148,24 @@ export const useDesktopDownload = () => {
     window.open(GITHUB_RELEASES_URL, '_blank', 'noopener,noreferrer');
   };
 
-  // 展开 Popover 时预热当前平台的安装包元数据
+  // 展开 Popover 时预热全部支持平台的安装包元数据
   watch(popoverVisible, (visible) => {
     if (visible) {
-      loadInstallerMeta(currentPlatform.value);
+      loadAllInstallerMeta();
     }
   });
 
   return {
     popoverVisible,
-    downloading,
+    downloadingKey,
     fetchingMeta,
+    isMac,
     currentPlatform,
     currentAssetMeta,
     latestVersion,
-    showOtherPlatforms,
+    assetsMap,
     otherPlatforms,
     triggerDownload,
-    selectPlatform,
-    toggleOtherPlatforms,
     openReleaseNotes,
   };
 };
