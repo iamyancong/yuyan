@@ -209,19 +209,28 @@ function createRuntimeNpmrcContent() {
 }
 
 /**
- * 为本次发布准备临时 npm 认证配置。
+ * 为本次发布准备临时 npm 认证配置与 CI 环境优化参数。
  * @param {string} repoDir - 本次发布 clone 出来的仓库目录
  * @param {(level: string, message: string, stage?: string) => void} log - 日志函数
  * @returns {Promise<Object>} 需要注入命令执行环境的变量
  */
-async function prepareRuntimeNpmConfig(repoDir, log) {
+export async function prepareRuntimeNpmConfig(repoDir, log) {
+  const baseCiEnv = {
+    CYPRESS_INSTALL_BINARY: '0',
+    PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'true',
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1',
+    ELECTRON_SKIP_BINARY_DOWNLOAD: '1',
+  };
   const content = createRuntimeNpmrcContent();
-  if (!content) return {};
+  if (!content) return baseCiEnv;
 
   const npmrcPath = path.join(repoDir, '.yuyan.npmrc');
   await fs.writeFile(npmrcPath, `${content}\n`, { mode: 0o600 });
   log('info', '已注入运行时 npm 私服配置，用于本次依赖安装', 'install');
-  return { NPM_CONFIG_USERCONFIG: npmrcPath };
+  return {
+    ...baseCiEnv,
+    NPM_CONFIG_USERCONFIG: npmrcPath,
+  };
 }
 
 /**
@@ -913,24 +922,34 @@ function inferPackageManager(command) {
 
 /**
  * 判断安装命令是否为可安全跳过的标准依赖安装命令。
+ * 支持 yarn、yarn [flags...]、yarn install [flags...]（flags 可在 action 前后）等规范写法。
  * @param {string} command - 安装命令
  * @returns {boolean} 是否标准安装命令
  */
-function isStandardInstallCommand(command) {
+export function isStandardInstallCommand(command) {
   if (splitCommandList(command).length !== 1) return false;
   const normalized = normalizeInstallCommand(command);
   if (!normalized || hasShellControlOperator(normalized)) return false;
   const tokens = normalized.split(/\s+/).filter(Boolean);
   const managerIndex = tokens[0] === 'corepack' ? 1 : 0;
   const manager = tokens[managerIndex];
-  const action = tokens[managerIndex + 1];
-  const trailingTokens = tokens.slice(managerIndex + 2);
-  const hasOnlyFlags = trailingTokens.every((token) => token.startsWith('-'));
-  if (!hasOnlyFlags) return false;
-  if (manager === 'pnpm') return ['install', 'i'].includes(action);
-  if (manager === 'npm') return ['install', 'i', 'ci'].includes(action);
-  if (manager === 'yarn') return action === 'install';
-  if (manager === 'bun') return action === 'install';
+  if (!['pnpm', 'npm', 'yarn', 'bun'].includes(manager)) return false;
+
+  const args = tokens.slice(managerIndex + 1);
+  const subcommands = args.filter((token) => !token.startsWith('-'));
+
+  if (manager === 'yarn') {
+    return subcommands.length === 0 || (subcommands.length === 1 && subcommands[0] === 'install');
+  }
+  if (manager === 'npm') {
+    return subcommands.length === 1 && ['install', 'i', 'ci'].includes(subcommands[0]);
+  }
+  if (manager === 'pnpm') {
+    return subcommands.length === 0 || (subcommands.length === 1 && ['install', 'i'].includes(subcommands[0]));
+  }
+  if (manager === 'bun') {
+    return subcommands.length === 0 || (subcommands.length === 1 && ['install', 'i'].includes(subcommands[0]));
+  }
   return false;
 }
 
@@ -1079,6 +1098,57 @@ async function removeDependencyInstallArtifacts(repoDir) {
     }
   };
   await walk(repoDir);
+}
+
+/**
+ * 执行依赖安装命令，在检测到 Yarn 全局缓存损坏时自动清理并重试。
+ * @param {Object} options - 安装参数
+ * @param {string} options.command - 安装命令
+ * @param {string} options.cwd - 执行目录
+ * @param {Object} options.env - 环境变量
+ * @param {AbortSignal} [options.signal] - 停止信号
+ * @param {(level: string, message: string, stage?: string) => void} options.log - 日志函数
+ */
+export async function executeDependencyInstallWithHealing({ command, cwd, env, signal, log }) {
+  try {
+    await runLocalCommandList(command, {
+      cwd,
+      env,
+      label: '安装依赖',
+      onLog: (level, message) => log(level, message, 'install'),
+      signal,
+    });
+  } catch (error) {
+    const combinedOutput = `${error?.stdout || ''}\n${error?.stderr || ''}\n${error?.message || ''}`;
+    const isYarnMetadataCorrupted =
+      combinedOutput.includes('Unexpected end of JSON input') &&
+      (combinedOutput.includes('.yarn-metadata.json') || combinedOutput.includes('.cache/yarn'));
+
+    if (isYarnMetadataCorrupted && !signal?.aborted) {
+      log('warn', '检测到 Yarn 全局缓存损坏（.yarn-metadata.json 出现 Unexpected end of JSON input），正在自动清理全局缓存并重新安装...', 'install');
+      await runLocalCommand('yarn cache clean', {
+        cwd,
+        env,
+        label: '清理损坏的 Yarn 全局缓存',
+        signal,
+      }).catch((cleanErr) => {
+        log('warn', `执行 yarn cache clean 遇到异常: ${cleanErr.message}，将直接重试依赖安装`, 'install');
+      });
+
+      log('info', '正在进行依赖安装重试（第 2 次）...', 'install');
+      await runLocalCommandList(command, {
+        cwd,
+        env,
+        label: '安装依赖（重试）',
+        onLog: (level, message) => log(level, message, 'install'),
+        signal,
+      });
+      log('success', '依赖安装重试成功，Yarn 缓存损坏已自动自愈', 'install');
+      return;
+    }
+
+    throw error;
+  }
 }
 
 /**
@@ -1752,12 +1822,12 @@ export async function deployTarget(targetId, payload, emit) {
         await removeDependencyInstallArtifacts(repoDir);
         log('info', '已清理旧依赖目录，准备重新安装依赖', 'install');
         await ensureLegacyHuskyPreparePlaceholder(repoDir, log);
-        await runLocalCommandList(target.installCommand, {
+        await executeDependencyInstallWithHealing({
+          command: target.installCommand,
           cwd: repoDir,
           env: npmConfigEnv,
-          label: '安装依赖',
-          onLog: (level, message) => log(level, message, 'install'),
           signal,
+          log,
         });
         if (installPlan.cacheable) {
           await writeDependencyCacheMeta(metaPath, {
