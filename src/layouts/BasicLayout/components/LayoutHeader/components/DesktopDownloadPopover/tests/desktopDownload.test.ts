@@ -6,6 +6,8 @@ import {
   DESKTOP_DOWNLOAD_GUIDE_STORAGE_KEY,
   matchDefaultPlatform,
   formatFileSize,
+  MAC_QUARANTINE_COMMAND,
+  MAC_QUARANTINE_TIP,
 } from '../constant.ts';
 
 test('matchDefaultPlatform: 根据操作系统和架构正确匹配默认推荐平台', () => {
@@ -71,4 +73,14 @@ test('SUPPORTED_DOWNLOAD_PLATFORMS: 平台安装包配置完整且无缺失', ()
 test('constant: 官方发布兜底链接与持久化键名规范', () => {
   assert.match(GITHUB_RELEASES_URL, /^https:\/\/github\.com\/iamyancong\/yuyan\/releases/);
   assert.equal(DESKTOP_DOWNLOAD_GUIDE_STORAGE_KEY, 'yuyan_web_desktop_download_guide_dismissed');
+});
+
+test('constant: macOS 隔离解除命令与提示规范', () => {
+  assert.equal(
+    MAC_QUARANTINE_COMMAND,
+    'sudo xattr -rd com.apple.quarantine /Applications/雨燕.app/'
+  );
+  assert.match(MAC_QUARANTINE_COMMAND, /com\.apple\.quarantine/);
+  assert.match(MAC_QUARANTINE_COMMAND, /\/Applications\/雨燕\.app\//);
+  assert.ok(MAC_QUARANTINE_TIP.length > 0);
 });

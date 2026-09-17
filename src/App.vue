@@ -314,6 +314,238 @@ html[data-theme='dark'] {
   }
 }
 
+/* 🔮 雨燕全局右上角通知避让顶部导航栏（防止紧贴顶部或被截断） */
+.ant-notification.ant-notification-topRight {
+  top: 76px !important;
+}
+
+/* 🔮 雨燕 macOS 首次安装 Gatekeeper 玻璃拟态通知卡片 */
+.ant-notification-notice.yuyan-glass-notification {
+  width: 410px !important;
+  max-width: calc(100vw - 32px) !important;
+  padding: 16px 18px !important;
+  border-radius: 16px !important;
+  background: linear-gradient(
+    145deg,
+    rgba(255, 255, 255, 0.96) 0%,
+    rgba(248, 250, 255, 0.92) 50%,
+    rgba(241, 245, 254, 0.9) 100%
+  ) !important;
+  backdrop-filter: blur(24px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(24px) saturate(180%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.9) !important;
+  box-shadow:
+    0 20px 45px -8px rgba(99, 102, 241, 0.22),
+    0 4px 16px -2px rgba(15, 23, 42, 0.08),
+    inset 0 1px 1.5px rgba(255, 255, 255, 0.95) !important;
+  overflow: visible !important;
+
+  .ant-notification-notice-content {
+    overflow: visible;
+  }
+
+  .ant-notification-notice-message {
+    margin-bottom: 8px !important;
+    margin-left: 0 !important;
+
+    .glass-noti-title-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+
+      .glass-noti-icon-box {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border-radius: 8px;
+        background: linear-gradient(135deg, rgba(99, 102, 241, 0.15) 0%, rgba(168, 85, 247, 0.18) 100%);
+        border: 1px solid rgba(99, 102, 241, 0.25);
+        box-shadow: 0 2px 6px rgba(99, 102, 241, 0.12);
+
+        .glass-noti-apple-icon {
+          font-size: 16px;
+          color: #4f46e5;
+        }
+      }
+
+      .glass-noti-title {
+        font-size: 14px;
+        font-weight: 700;
+        color: #1e1b4b;
+        letter-spacing: 0.2px;
+      }
+
+      .glass-noti-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 1px 6px;
+        font-size: 10px;
+        font-weight: 600;
+        font-family: var(--font-family-code, monospace);
+        color: #6366f1;
+        background: rgba(99, 102, 241, 0.09);
+        border: 1px solid rgba(99, 102, 241, 0.2);
+        border-radius: 6px;
+      }
+    }
+  }
+
+  .ant-notification-notice-description {
+    margin-left: 0 !important;
+
+    .glass-noti-body {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+
+      .glass-noti-desc {
+        margin: 0;
+        font-size: 12px;
+        line-height: 1.5;
+        color: #475569;
+      }
+
+      .glass-noti-cmd-box {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 6px 9px;
+        background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
+        border-radius: 7px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.5);
+
+        .glass-noti-cmd-content {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          min-width: 0;
+          flex: 1;
+
+          .glass-noti-cmd-prompt {
+            font-family: Menlo, Monaco, monospace;
+            font-size: 11px;
+            font-weight: bold;
+            color: #10b981;
+            user-select: none;
+            text-shadow: 0 0 4px rgba(16, 185, 129, 0.4);
+          }
+
+          .glass-noti-cmd-code {
+            font-family: Menlo, Monaco, monospace;
+            font-size: 10.5px;
+            color: #f1f5f9;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            user-select: all;
+          }
+        }
+
+        .glass-noti-btn-copy {
+          flex-shrink: 0;
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          height: 22px;
+          padding: 0 8px;
+          font-size: 10.5px;
+          font-weight: 500;
+          color: #ffffff;
+          background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+          border: none;
+          border-radius: 5px;
+          cursor: pointer;
+          box-shadow: 0 2px 6px rgba(124, 58, 237, 0.35);
+          transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+
+          &:hover {
+            background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+            transform: translateY(-0.5px);
+          }
+
+          .copy-icon {
+            font-size: 10px;
+          }
+        }
+      }
+
+      .glass-noti-tip {
+        font-size: 10.5px;
+        color: #94a3b8;
+        line-height: 1.4;
+      }
+    }
+  }
+
+  .ant-notification-notice-close {
+    top: 14px !important;
+    right: 14px !important;
+    color: #94a3b8 !important;
+    transition: all 0.2s ease !important;
+
+    &:hover {
+      color: #4f46e5 !important;
+      transform: scale(1.1) !important;
+    }
+  }
+}
+
+/* 暗色模式适配 */
+body.dark .ant-notification-notice.yuyan-glass-notification,
+.is-dark .ant-notification-notice.yuyan-glass-notification {
+  background: linear-gradient(
+    145deg,
+    rgba(24, 27, 42, 0.96) 0%,
+    rgba(18, 21, 35, 0.94) 50%,
+    rgba(15, 17, 28, 0.92) 100%
+  ) !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  box-shadow:
+    0 20px 45px -8px rgba(0, 0, 0, 0.6),
+    0 6px 18px -2px rgba(0, 0, 0, 0.4),
+    inset 0 1px 1px rgba(255, 255, 255, 0.08) !important;
+
+  .glass-noti-icon-box {
+    background: rgba(255, 255, 255, 0.06) !important;
+    border-color: rgba(255, 255, 255, 0.12) !important;
+
+    .glass-noti-apple-icon {
+      color: #a5b4fc !important;
+    }
+  }
+
+  .ant-notification-notice-message .glass-noti-title-wrap {
+    .glass-noti-title {
+      color: #e2e8f0 !important;
+    }
+
+    .glass-noti-badge {
+      color: #a5b4fc !important;
+      background: rgba(129, 140, 248, 0.15) !important;
+      border-color: rgba(129, 140, 248, 0.3) !important;
+    }
+  }
+
+  .ant-notification-notice-description .glass-noti-body {
+    .glass-noti-desc {
+      color: #94a3b8 !important;
+    }
+
+    .glass-noti-cmd-box {
+      background: rgba(0, 0, 0, 0.6) !important;
+      border-color: rgba(255, 255, 255, 0.08) !important;
+    }
+
+    .glass-noti-tip {
+      color: #64748b !important;
+    }
+  }
+}
+
 /* 🔮 C4D风格百分比字体样式 */
 .c4d-percent-text {
   font-family: 'Outfit', 'Inter', monospace;
