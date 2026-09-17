@@ -3,9 +3,19 @@ import { ref, reactive, computed } from 'vue';
 import { message } from 'ant-design-vue';
 import { KeyOutlined, GlobalOutlined } from '@ant-design/icons-vue';
 import LogoSwift from '@/components/LogoSwift.vue';
+import DesktopC4dIcon from '@/layouts/BasicLayout/components/LayoutHeader/components/DesktopDownloadPopover/components/DesktopC4dIcon.vue';
 import { useAuth } from '@/composables/useAuth';
+import { isTauri } from '@/utils/env';
+import { useDesktopDownload } from '@/layouts/BasicLayout/components/LayoutHeader/components/DesktopDownloadPopover/hooks/useDesktopDownload';
 
 defineOptions({ name: 'LoginModal' });
+
+const { triggerDownload } = useDesktopDownload();
+
+/** 触发下载桌面端安装包 */
+const handleDownloadDesktop = () => {
+  triggerDownload();
+};
 
 interface LoginForm {
   token: string;
@@ -127,6 +137,14 @@ const handleCancel = () => {
             show-icon
             :closable="true"
           />
+
+          <!-- 网页端引导下载桌面端（免密会话体验） -->
+          <div v-if="!isTauri()" class="desktop-download-tip">
+            <span class="tip-prompt">嫌每次登录反复输入令牌麻烦？</span>
+            <a class="tip-cta" @click="handleDownloadDesktop">
+              <DesktopC4dIcon :size="16" /> 下载雨燕桌面端，免密恢复会话
+            </a>
+          </div>
         </div>
       </div>
 
@@ -485,6 +503,38 @@ const handleCancel = () => {
     .ant-alert-icon {
       color: var(--primary-color);
       font-size: 16px;
+    }
+  }
+
+  .desktop-download-tip {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 12px;
+    padding: 10px 16px;
+    font-size: 12px;
+    background: color-mix(in srgb, var(--primary-color) 7%, transparent);
+    border: 1px dashed color-mix(in srgb, var(--primary-color) 32%, transparent);
+    border-radius: 12px;
+
+    .tip-prompt {
+      color: var(--text-color-secondary, #64748b);
+    }
+
+    .tip-cta {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-weight: 600;
+      color: var(--primary-color);
+      cursor: pointer;
+      transition: color 0.2s ease, transform 0.2s ease;
+
+      &:hover {
+        color: var(--primary-color-active, #4338ca);
+        text-decoration: underline;
+        transform: translateY(-0.5px);
+      }
     }
   }
 }

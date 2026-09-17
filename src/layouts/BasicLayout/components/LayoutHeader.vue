@@ -5,6 +5,7 @@ import UpdateCapsule from '@/components/UpdateCapsule/index.vue';
 import { useAppUpdate } from '@/components/UpdateCapsule/hooks/useAppUpdate';
 import { useTheme } from '@/hooks/useTheme';
 import AiIntegrationTrigger from '@/components/AiIntegrationDrawer/components/AiIntegrationTrigger.vue';
+import DesktopDownloadPopover from './LayoutHeader/components/DesktopDownloadPopover/index.vue';
 import ThemePaintIcon from './LayoutHeader/components/ThemePaintIcon.vue';
 import {
   UserOutlined,
@@ -66,6 +67,9 @@ const handleLogout = async () => {
       <a-tooltip v-if="isTauriClient" title="AI 集成" overlayClassName="header-tooltip">
         <AiIntegrationTrigger @open="emit('open-ai-integration')" />
       </a-tooltip>
+
+      <!-- 网页端下载桌面端入口与引导交互（仅在非 Tauri 环境下展示） -->
+      <DesktopDownloadPopover v-if="!isTauriClient" />
 
       <a-tooltip title="平台设置" overlayClassName="header-tooltip">
         <a-button type="text" class="header-action-btn btn-settings" @click="$emit('openSettings')">
