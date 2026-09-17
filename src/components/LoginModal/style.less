@@ -1,0 +1,437 @@
+/* 去掉弹窗四角白边 - 覆盖 ant-modal-content 默认样式 */
+:global(.premium-login-modal1 .ant-modal-content) {
+  padding: 0 !important;
+  background: transparent !important;
+  border-radius: 24px !important;
+  overflow: hidden !important;
+}
+
+:global(.premium-login-modal1 .ant-modal-body) {
+  padding: 0 !important;
+}
+
+.premium-login-modal {
+  :deep(.ant-modal-content) {
+    padding: 0 !important;
+  }
+  :deep(.ant-modal-content) {
+    background: transparent;
+    box-shadow: none;
+    padding: 0 !important;
+  }
+
+  :deep(.ant-modal-body) {
+    padding: 0 !important;
+  }
+
+  :deep(.ant-modal-wrap) {
+    overflow: hidden;
+  }
+
+  :deep(.ant-modal-mask) {
+    background: linear-gradient(180deg, rgba(10, 20, 60, 0.75), rgba(8, 14, 40, 0.85));
+    backdrop-filter: blur(10px);
+  }
+}
+
+.modal-content-wrapper {
+  display: flex;
+  min-height: 680px;
+  border-radius: 24px;
+  overflow: hidden;
+  box-shadow: 0 32px 96px rgba(0, 0, 0, 0.4), 0 16px 48px rgba(0, 0, 0, 0.3);
+  position: relative;
+  perspective: 2000px;
+  transform-style: preserve-3d;
+
+  /* 统一的背景 - 带有弯曲弧线的分隔效果 */
+  &::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+      /* 左侧浅色区域 - 新拟态风格背景 */ radial-gradient(
+        ellipse 220% 240% at -30% 50%,
+        #f5f6f8 0%,
+        #f3f4f6 32%,
+        rgba(243, 244, 246, 0.95) 40%,
+        rgba(243, 244, 246, 0.4) 46%,
+        transparent 52%
+      ),
+      /* 右侧蓝色渐变背景 */ radial-gradient(ellipse 1400px 700px at 68% -12%, rgba(140, 160, 255, 0.35) 0%, transparent 58%),
+      radial-gradient(ellipse 800px 800px at 20% 110%, rgba(124, 58, 237, 0.25) 0%, transparent 65%),
+      linear-gradient(142deg, #5876eb 0%, #4a63d8 30%, #3d52c6 60%, #2e3f9f 100%);
+    z-index: 0;
+  }
+}
+
+/* 左侧内容区 */
+.login-content {
+  width: 520px;
+  padding: 48px 40px 40px;
+  position: relative;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+}
+
+.brand-header {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-bottom: 36px;
+  position: relative;
+  z-index: 1;
+
+  .logo-wrapper {
+    width: 64px;
+    height: 64px;
+    border-radius: 20px;
+    background: #f5f6f8;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* 新拟态凸起效果 */
+    box-shadow: -4px -4px 8px rgba(255, 255, 255, 0.9), 4px 4px 8px rgba(0, 0, 0, 0.08);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+
+    &:hover {
+      box-shadow: -5px -5px 10px rgba(255, 255, 255, 0.95), 5px 5px 10px rgba(0, 0, 0, 0.1), 0 0 0 3px rgba(88, 118, 235, 0.08);
+    }
+  }
+
+  .brand-info {
+    flex: 1;
+  }
+
+  .brand-name {
+    margin: 0;
+    font-size: 28px;
+    font-weight: 800;
+    color: var(--text-color);
+    letter-spacing: -0.03em;
+    line-height: 1.2;
+  }
+
+  .brand-desc {
+    margin: 6px 0 0;
+    color: var(--text-color-secondary);
+    font-size: 14px;
+    font-weight: 600;
+  }
+}
+
+.login-form-wrapper {
+  margin-bottom: 24px;
+
+  :deep(.ant-form-item) {
+    margin-bottom: 22px;
+  }
+
+  :deep(.ant-form-item-label > label) {
+    font-weight: 700;
+    color: var(--text-color);
+    font-size: 15px;
+    margin-bottom: 8px;
+  }
+
+  :deep(.ant-input-affix-wrapper),
+  :deep(.ant-input) {
+    border-radius: 16px;
+    border: none;
+    padding: 16px 20px;
+    font-size: 15px;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    background: var(--bg-color-elevated);
+    /* 新拟态凹陷效果 - 内阴影 + 外阴影 */
+    box-shadow: inset 3px 3px 6px rgba(0, 0, 0, 0.08), inset -3px -3px 6px rgba(255, 255, 255, 0.8), 0 1px 2px rgba(0, 0, 0, 0.02);
+
+    &:hover {
+      background: var(--bg-color);
+      box-shadow: inset 4px 4px 8px rgba(0, 0, 0, 0.1), inset -4px -4px 8px rgba(255, 255, 255, 0.9), 0 2px 4px var(--primary-color-lighter);
+    }
+
+    &:focus,
+    &.ant-input-affix-wrapper-focused {
+      background: var(--bg-color);
+      box-shadow: inset 4px 4px 10px var(--primary-color-light), inset -4px -4px 10px rgba(255, 255, 255, 0.95),
+        0 0 0 3px var(--primary-color-lighter);
+    }
+  }
+
+  :deep(.ant-input-prefix) {
+    margin-right: 12px;
+    color: var(--primary-color);
+    font-size: 16px;
+  }
+
+  :deep(.ant-input-clear-icon) {
+    color: var(--text-color-secondary);
+    font-size: 14px;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    opacity: 0.6;
+
+    &:hover {
+      color: var(--primary-color);
+      opacity: 1;
+      transform: scale(1.1);
+    }
+  }
+
+  :deep(.ant-input-suffix) {
+    margin-left: 8px;
+  }
+
+  :deep(.ant-input) {
+    font-size: 15px;
+    background: transparent;
+
+    &::placeholder {
+      color: var(--text-color-tertiary);
+      font-weight: 400;
+    }
+  }
+
+  .login-options-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: -6px;
+    margin-bottom: 20px;
+    padding: 0 4px;
+
+    :deep(.ant-checkbox-wrapper) {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-color-secondary);
+      user-select: none;
+
+      &:hover {
+        color: var(--primary-color);
+      }
+    }
+
+    .security-tip-icon {
+      color: var(--text-color-tertiary);
+      font-size: 14px;
+      cursor: help;
+      transition: color 0.2s ease;
+
+      &:hover {
+        color: var(--primary-color);
+      }
+    }
+  }
+
+  .submit-btn {
+    height: 56px;
+    border-radius: 16px;
+    font-size: 17px;
+    font-weight: 700;
+    background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-color-hover) 50%, var(--primary-color-active) 100%);
+    border: none;
+    margin-top: 8px;
+    transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    letter-spacing: 1.2px;
+    /* 新拟态凸起效果 + 主题色光晕 */
+    box-shadow: -4px -4px 10px var(--primary-color-light), 4px 4px 10px var(--primary-color-light), 0 6px 20px var(--primary-color-light);
+    position: relative;
+    overflow: hidden;
+
+    /* 按钮光泽效果 */
+    &::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: -100%;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.25), transparent);
+      transition: left 0.6s;
+    }
+
+    &:hover {
+      background: linear-gradient(135deg, var(--primary-color-hover) 0%, var(--primary-color-active) 50%, var(--primary-color-active) 100%);
+      transform: translateY(-2px);
+      box-shadow: -5px -5px 12px var(--primary-color-light), 5px 5px 12px var(--primary-color-light), 0 10px 28px var(--primary-color-light);
+
+      &::before {
+        left: 100%;
+      }
+    }
+
+    &:active {
+      transform: translateY(0);
+      box-shadow: inset 3px 3px 8px var(--primary-color-active), inset -3px -3px 8px var(--primary-color-light);
+    }
+  }
+}
+
+.help-section {
+  :deep(.ant-alert) {
+    border-radius: 14px;
+    background: var(--bg-color-elevated);
+    border: none;
+    padding: 16px 18px;
+    /* 新拟态轻微凹陷效果 */
+    box-shadow: inset 2px 2px 4px rgba(0, 0, 0, 0.06), inset -2px -2px 4px rgba(255, 255, 255, 0.7);
+
+    .ant-alert-message {
+      color: var(--primary-color);
+      font-weight: 700;
+      font-size: 14px;
+      letter-spacing: 0.02em;
+    }
+
+    .ant-alert-description {
+      color: var(--text-color);
+      font-size: 13px;
+      line-height: 1.65;
+      margin-top: 6px;
+      font-weight: 500;
+    }
+
+    .ant-alert-icon {
+      color: var(--primary-color);
+      font-size: 16px;
+    }
+  }
+
+  .desktop-download-tip {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 14px;
+    padding: 10px 16px;
+    font-size: 12px;
+    background: rgba(255, 255, 255, 0.9);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(88, 118, 235, 0.22);
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.03);
+
+    .tip-prompt {
+      color: #475569;
+      font-weight: 500;
+    }
+
+    .tip-cta {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 600;
+      color: #4338ca;
+      cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+
+      &:hover {
+        color: #312e81;
+        text-decoration: underline;
+        transform: translateY(-0.5px);
+      }
+    }
+  }
+}
+
+/* 响应式适配 */
+@media (max-width: 960px) {
+  .modal-content-wrapper {
+    flex-direction: column;
+    border-radius: 16px;
+
+    &::before {
+      background: radial-gradient(ellipse 150% 100% at 50% -30%, rgba(255, 255, 255, 0.98) 0%, rgba(255, 255, 255, 0.95) 40%, transparent 60%),
+        linear-gradient(180deg, #5876eb 0%, #4a63d8 40%, #3d52c6 70%, #2e3f9f 100%);
+    }
+
+    &::after {
+      display: none;
+    }
+  }
+
+  .login-content {
+    width: 100%;
+  }
+}
+
+@media (max-width: 640px) {
+  .premium-login-modal {
+    :deep(.ant-modal) {
+      max-width: 95vw;
+      margin: 16px auto;
+    }
+  }
+}
+
+/* 深色模式适配 */
+:global(html[data-theme="dark"]) {
+  .premium-login-modal {
+    .modal-content-wrapper {
+      &::before {
+        background:
+          /* 左侧暗色区域 - 新拟态风格背景 */ radial-gradient(
+            ellipse 220% 240% at -30% 50%,
+            #1e1f22 0%,
+            #18191c 32%,
+            rgba(24, 25, 28, 0.95) 40%,
+            rgba(24, 25, 28, 0.4) 46%,
+            transparent 52%
+          ),
+          /* 右侧蓝色渐变背景 */ radial-gradient(ellipse 1400px 700px at 68% -12%, rgba(140, 160, 255, 0.25) 0%, transparent 58%),
+          radial-gradient(ellipse 800px 800px at 20% 110%, rgba(124, 58, 237, 0.15) 0%, transparent 65%),
+          linear-gradient(142deg, #3d52c6 0%, #2e3f9f 30%, #1a237e 100%);
+      }
+    }
+
+    .desktop-download-tip {
+      background: rgba(30, 31, 34, 0.9);
+      border-color: rgba(255, 255, 255, 0.12);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+
+      .tip-prompt {
+        color: #94a3b8;
+      }
+
+      .tip-cta {
+        color: #818cf8;
+
+        &:hover {
+          color: #a5b4fc;
+        }
+      }
+    }
+  }
+
+  .brand-header {
+    .logo-wrapper {
+      background: #1e1f22;
+      box-shadow: -4px -4px 8px rgba(255, 255, 255, 0.05), 4px 4px 8px rgba(0, 0, 0, 0.3);
+
+      &:hover {
+        box-shadow: -5px -5px 10px rgba(255, 255, 255, 0.08), 5px 5px 10px rgba(0, 0, 0, 0.4), 0 0 0 3px rgba(88, 118, 235, 0.2);
+      }
+    }
+  }
+
+  .login-form-wrapper {
+    :deep(.ant-input-affix-wrapper),
+    :deep(.ant-input) {
+      background: #141416;
+      box-shadow: inset 3px 3px 6px rgba(0, 0, 0, 0.4), inset -3px -3px 6px rgba(255, 255, 255, 0.03), 0 1px 2px rgba(0, 0, 0, 0.2);
+
+      &:hover {
+        background: #111214;
+        box-shadow: inset 4px 4px 8px rgba(0, 0, 0, 0.5), inset -4px -4px 8px rgba(255, 255, 255, 0.05), 0 2px 4px var(--primary-color-lighter);
+      }
+
+      &:focus,
+      &.ant-input-affix-wrapper-focused {
+        background: #111214;
+        box-shadow: inset 4px 4px 10px var(--primary-color-light), inset -4px -4px 10px rgba(255, 255, 255, 0.05),
+          0 0 0 3px var(--primary-color-lighter);
+      }
+    }
+  }
+}

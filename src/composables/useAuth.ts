@@ -13,6 +13,7 @@ import {
   loadActiveSecureAccount,
   saveSecureAccount,
   signDeviceChallenge,
+  WEB_ACCOUNT_LOCAL_KEY,
   type SecureAccountState,
 } from '@/services/secureAuth';
 import { isTauri } from '@/utils/env';
@@ -238,8 +239,8 @@ function createWebSecureState(token: string, host: string, user: User): SecureAc
   };
 }
 
-/** GitLab PAT 登录；桌面端注册设备，网页端建立当前标签页会话。 */
-const login = async (token: string, host: string): Promise<boolean> => {
+/** GitLab PAT 登录；桌面端注册设备，网页端建立会话并按需持久化。 */
+const login = async (token: string, host: string, rememberMe = false): Promise<boolean> => {
   authState.value.loading = true;
   const normalizedHost = host.trim().replace(/\/+$/, '');
   try {
@@ -250,7 +251,7 @@ const login = async (token: string, host: string): Promise<boolean> => {
     if (!user) throw new Error('GitLab 令牌或服务器地址无效');
     if (!isTauri()) {
       const webState = createWebSecureState(token, normalizedHost, user);
-      await saveSecureAccount(webState);
+      await saveSecureAccount(webState, rememberMe);
       applySecureState(webState, user);
       await nextTick();
       message.success(`欢迎回来，${user.name}！`);
@@ -363,10 +364,30 @@ const setupWatchers = () => {
   );
 };
 
+let hasSetupStorageSync = false;
+
+/** 监听浏览器跨标签页本地持久化账号状态变更（多 Tab 同步登出与登录恢复）。 */
+const setupStorageSync = () => {
+  if (hasSetupStorageSync || typeof window === 'undefined' || isTauri()) return;
+  hasSetupStorageSync = true;
+  window.addEventListener('storage', (event) => {
+    if (event.key === WEB_ACCOUNT_LOCAL_KEY) {
+      if (!event.newValue && authState.value.isAuthenticated) {
+        // 其他标签页退出了登录，当前标签页同步退出
+        logout(true).catch(() => undefined);
+      } else if (event.newValue && !authState.value.isAuthenticated) {
+        // 其他标签页通过「记住我」登录成功，当前标签页同步恢复
+        checkAuth().catch(() => undefined);
+      }
+    }
+  });
+};
+
 /** 共享认证单例。 */
 export const useAuth = () => {
   setupWatchers();
   setupSessionRefresh();
+  setupStorageSync();
   nextTick(() => initAuth()).catch((error) => console.error('认证初始化失败:', error));
   return {
     authState: readonly(authState),
