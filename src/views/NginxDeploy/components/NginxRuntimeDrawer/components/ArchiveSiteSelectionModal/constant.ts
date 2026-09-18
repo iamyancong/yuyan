@@ -29,7 +29,7 @@ export const MANAGED_ARCHIVE_TYPE_OPTIONS: ArchiveTypeOption[] = [
 
 /** 已有实例导出类型选项。 */
 export const EXTERNAL_ARCHIVE_TYPE_OPTIONS: ArchiveTypeOption[] = [
-  { value: 'all', index: '01', label: '完整导出 (配置+站点)', description: '配置文件与所选站点静态资源', badge: '推荐' },
+  { value: 'all', index: '01', label: '完整导出', description: '配置文件与所选站点静态资源', badge: '推荐' },
   { value: 'html', index: '02', label: '仅站点静态资源', description: '仅包含所选项目的 root 目录', badge: '轻量' },
   { value: 'conf', index: '03', label: '仅 Nginx 配置', description: '公共配置与所选 server 块', badge: '配置' },
 ];

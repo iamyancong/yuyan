@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CheckOutlined, FolderOutlined, GlobalOutlined } from '@ant-design/icons-vue';
+import { FolderOutlined, GlobalOutlined } from '@ant-design/icons-vue';
 import { computed } from 'vue';
 import type { NginxArchiveDownloadType, NginxArchiveSiteOption } from '@/api/deploy';
 
@@ -41,40 +41,62 @@ const formatListenPorts = (site: NginxArchiveSiteOption) => (
 
 <template>
   <a-empty v-if="!loading && !sites.length" description="主配置中没有可选择的 server 块" />
-  <div v-else class="archive-site-list" aria-label="可下载的 Nginx server 列表">
-    <button
-      v-for="(site, index) in sites"
+  <div v-else class="archive-site-list" role="listbox" aria-label="可下载的 Nginx server 列表">
+    <div
+      v-for="site in sites"
       :key="site.id"
-      type="button"
-      class="archive-site-card"
+      role="option"
+      class="archive-site-row"
       :class="{
         'is-disabled': isSiteDisabled(site),
         'is-selected': selectedIdSet.has(site.id),
       }"
-      :disabled="isSiteDisabled(site)"
-      :aria-pressed="selectedIdSet.has(site.id)"
+      :aria-selected="selectedIdSet.has(site.id)"
+      :aria-disabled="isSiteDisabled(site)"
+      tabindex="0"
       @click="toggleSite(site)"
+      @keydown.space.prevent="toggleSite(site)"
+      @keydown.enter.prevent="toggleSite(site)"
     >
-      <span class="archive-site-card__rail">
-        <span class="archive-site-card__order">{{ String(index + 1).padStart(2, '0') }}</span>
-        <span class="archive-site-card__check"><CheckOutlined v-if="selectedIdSet.has(site.id)" /></span>
-      </span>
+      <div class="archive-site-row__checkbox">
+        <span
+          class="checkbox-inner"
+          :class="{
+            'is-checked': selectedIdSet.has(site.id),
+            'is-disabled': isSiteDisabled(site),
+          }"
+        />
+      </div>
 
-      <span class="archive-site-card__body">
-        <span class="archive-site-card__title-row">
-          <strong>{{ formatListenPorts(site) }}</strong>
-          <span v-for="name in site.projectNames" :key="name" class="archive-site-card__project">{{ name }}</span>
-          <span v-if="!site.canDownloadFiles" class="archive-site-card__warning">仅配置</span>
-        </span>
+      <div class="archive-site-row__body">
+        <div class="archive-site-row__header">
+          <div class="archive-site-row__primary">
+            <span class="archive-site-row__ports">{{ formatListenPorts(site) }}</span>
+            <span v-for="name in site.projectNames" :key="name" class="archive-site-row__project-tag">
+              {{ name }}
+            </span>
+          </div>
+          <div class="archive-site-row__status">
+            <span v-if="!site.canDownloadFiles" class="archive-site-row__warning-tag">
+              仅配置
+            </span>
+          </div>
+        </div>
 
-        <span class="archive-site-card__meta">
-          <span><FolderOutlined /><b>项目根目录</b><code>{{ site.roots.join('、') || '未配置' }}</code></span>
-          <span><GlobalOutlined /><b>访问域名</b><code>{{ site.serverNames.join('、') || '-' }}</code></span>
-        </span>
-      </span>
-
-      <span class="archive-site-card__state">{{ selectedIdSet.has(site.id) ? '已选择' : '选择' }}</span>
-    </button>
+        <div class="archive-site-row__secondary">
+          <span class="archive-site-row__meta-item archive-site-row__meta-item--left" :title="site.roots.join('、') || '未配置'">
+            <FolderOutlined class="meta-icon" />
+            <span class="meta-label">根目录:</span>
+            <span class="meta-value">{{ site.roots.join('、') || '未配置' }}</span>
+          </span>
+          <span class="archive-site-row__meta-item archive-site-row__meta-item--right" :title="site.serverNames.join('、') || '-'">
+            <GlobalOutlined class="meta-icon" />
+            <span class="meta-label">域名:</span>
+            <span class="meta-value">{{ site.serverNames.join('、') || '-' }}</span>
+          </span>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 

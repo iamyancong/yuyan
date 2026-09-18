@@ -253,7 +253,7 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
         h('p', { style: 'margin-bottom: 10px; word-break: break-all;' }, `保存位置：${result.path}`),
         h('a', { href: 'javascript:;', class: 'c4d-locate-btn', onClick: revealFile }, '打开文件位置'),
       ]),
-      duration: 0,
+      duration: 4.5,
       closeIcon: createDownloadNotificationCloseIcon(),
     });
   };
@@ -275,7 +275,7 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
           },
         }, '刷新配置后重试'),
       ]),
-      duration: 0,
+      duration: 6.0,
       closeIcon: createDownloadNotificationCloseIcon(),
     });
   };
@@ -320,7 +320,7 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
           class: 'c4d-download-notification',
           message: isManaged ? '浏览器下载已开始' : '浏览器导出已开始',
           description: `${browserResult.fileName}（${formatArchiveBytes(browserResult.fileSize)}）`,
-          duration: 0,
+          duration: 3.5,
           closeIcon: createDownloadNotificationCloseIcon(),
         });
         return;

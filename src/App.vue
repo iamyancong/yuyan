@@ -52,6 +52,14 @@ body,
 }
 
 /* =====================================================
+ * 🪟 全局抽屉（Drawer）内边距规范
+ * 将 Ant Design Vue 默认 24px 内边距全局收窄为 16px，提升空间利用率
+ * ===================================================== */
+.ant-drawer .ant-drawer-body {
+  padding: 16px;
+}
+
+/* =====================================================
  * 🎨 全局精致现代滚动条规范
  * 特性：6px/7px 胶囊滑块、半透明、自适应亮/暗主题、悬浮过渡
  * ===================================================== */
@@ -161,6 +169,29 @@ html[data-theme='dark'] {
         opacity: 0.5;
         cursor: not-allowed;
       }
+    }
+  }
+}
+
+/* =====================================================
+ * 🎯 YTable 操作列按钮与 Loading 样式对齐规范
+ * 解决 a-button 在 inline-block 下 loading-icon 与文本 baseline 不一致导致图标下沉的问题
+ * ===================================================== */
+.y-table-action-list,
+.y-table-action-pop-list {
+  .ant-btn.y-table-action-link,
+  .ant-btn.y-table-action-btn,
+  .ant-btn-link,
+  .ant-btn-text {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    vertical-align: middle !important;
+
+    .ant-btn-loading-icon {
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
     }
   }
 }
@@ -319,7 +350,19 @@ html[data-theme='dark'] {
   top: 76px !important;
 }
 
-/* 🔮 雨燕 macOS 首次安装 Gatekeeper 玻璃拟态通知卡片 */
+/* 🔮 雨燕原生 Notification 兜底拟态美化：即使未指定自定义类名，也自动享有高级玻璃拟态与大圆角 */
+.ant-notification-notice:not(.c4d-download-notification) {
+  border-radius: 16px !important;
+  backdrop-filter: blur(24px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(24px) saturate(180%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.85) !important;
+  box-shadow:
+    0 20px 45px -8px rgba(99, 102, 241, 0.18),
+    0 4px 16px -2px rgba(15, 23, 42, 0.06),
+    inset 0 1px 1.5px rgba(255, 255, 255, 0.95) !important;
+}
+
+/* 🔮 雨燕高阶 C4D 玻璃拟态通知卡片（与 macOS 下载通知同规） */
 .ant-notification-notice.yuyan-glass-notification {
   width: 410px !important;
   max-width: calc(100vw - 32px) !important;
@@ -364,9 +407,31 @@ html[data-theme='dark'] {
         border: 1px solid rgba(99, 102, 241, 0.25);
         box-shadow: 0 2px 6px rgba(99, 102, 241, 0.12);
 
+        .glass-noti-type-icon,
         .glass-noti-apple-icon {
           font-size: 16px;
           color: #4f46e5;
+        }
+
+        &.is-success {
+          background: linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(5, 150, 105, 0.22) 100%);
+          border-color: rgba(16, 185, 129, 0.32);
+          box-shadow: 0 2px 8px rgba(16, 185, 129, 0.18);
+          .glass-noti-type-icon { color: #059669; }
+        }
+
+        &.is-warning {
+          background: linear-gradient(135deg, rgba(245, 158, 11, 0.16) 0%, rgba(217, 119, 6, 0.22) 100%);
+          border-color: rgba(245, 158, 11, 0.32);
+          box-shadow: 0 2px 8px rgba(245, 158, 11, 0.18);
+          .glass-noti-type-icon { color: #d97706; }
+        }
+
+        &.is-error {
+          background: linear-gradient(135deg, rgba(239, 68, 68, 0.16) 0%, rgba(220, 38, 38, 0.22) 100%);
+          border-color: rgba(239, 68, 68, 0.32);
+          box-shadow: 0 2px 8px rgba(239, 68, 68, 0.18);
+          .glass-noti-type-icon { color: #dc2626; }
         }
       }
 
@@ -375,12 +440,16 @@ html[data-theme='dark'] {
         font-weight: 700;
         color: #1e1b4b;
         letter-spacing: 0.2px;
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .glass-noti-badge {
         display: inline-flex;
         align-items: center;
-        padding: 1px 6px;
+        padding: 1px 7px;
         font-size: 10px;
         font-weight: 600;
         font-family: var(--font-family-code, monospace);
@@ -388,6 +457,25 @@ html[data-theme='dark'] {
         background: rgba(99, 102, 241, 0.09);
         border: 1px solid rgba(99, 102, 241, 0.2);
         border-radius: 6px;
+        white-space: nowrap;
+
+        &.is-success {
+          color: #059669;
+          background: rgba(16, 185, 129, 0.1);
+          border-color: rgba(16, 185, 129, 0.25);
+        }
+
+        &.is-warning {
+          color: #d97706;
+          background: rgba(245, 158, 11, 0.1);
+          border-color: rgba(245, 158, 11, 0.25);
+        }
+
+        &.is-error {
+          color: #dc2626;
+          background: rgba(239, 68, 68, 0.1);
+          border-color: rgba(239, 68, 68, 0.25);
+        }
       }
     }
   }
@@ -402,9 +490,56 @@ html[data-theme='dark'] {
 
       .glass-noti-desc {
         margin: 0;
-        font-size: 12px;
+        font-size: 12.5px;
         line-height: 1.5;
         color: #475569;
+        word-break: break-all;
+      }
+
+      .glass-noti-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 4px;
+
+        .glass-noti-action-btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          height: 24px;
+          padding: 0 10px;
+          font-size: 11.5px;
+          font-weight: 500;
+          border-radius: 6px;
+          cursor: pointer;
+          transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+
+          &.is-primary {
+            color: #ffffff;
+            background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+            border: none;
+            box-shadow: 0 2px 6px rgba(124, 58, 237, 0.35);
+
+            &:hover {
+              background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+              transform: translateY(-1px);
+              box-shadow: 0 4px 10px rgba(124, 58, 237, 0.45);
+            }
+          }
+
+          &.is-default {
+            color: var(--primary-color, #4f46e5);
+            background: rgba(99, 102, 241, 0.08);
+            border: 1px solid rgba(99, 102, 241, 0.2);
+
+            &:hover {
+              background: rgba(99, 102, 241, 0.15);
+              border-color: rgba(99, 102, 241, 0.35);
+              transform: translateY(-0.5px);
+            }
+          }
+        }
       }
 
       .glass-noti-cmd-box {
@@ -489,7 +624,7 @@ html[data-theme='dark'] {
 
     &:hover {
       color: #4f46e5 !important;
-      transform: scale(1.1) !important;
+      transform: scale(1.1) rotate(90deg) !important;
     }
   }
 }
@@ -513,9 +648,14 @@ body.dark .ant-notification-notice.yuyan-glass-notification,
     background: rgba(255, 255, 255, 0.06) !important;
     border-color: rgba(255, 255, 255, 0.12) !important;
 
+    .glass-noti-type-icon,
     .glass-noti-apple-icon {
       color: #a5b4fc !important;
     }
+
+    &.is-success .glass-noti-type-icon { color: #34d399 !important; }
+    &.is-warning .glass-noti-type-icon { color: #fbbf24 !important; }
+    &.is-error .glass-noti-type-icon { color: #f87171 !important; }
   }
 
   .ant-notification-notice-message .glass-noti-title-wrap {
@@ -527,12 +667,42 @@ body.dark .ant-notification-notice.yuyan-glass-notification,
       color: #a5b4fc !important;
       background: rgba(129, 140, 248, 0.15) !important;
       border-color: rgba(129, 140, 248, 0.3) !important;
+
+      &.is-success {
+        color: #34d399 !important;
+        background: rgba(16, 185, 129, 0.18) !important;
+        border-color: rgba(16, 185, 129, 0.35) !important;
+      }
+
+      &.is-warning {
+        color: #fbbf24 !important;
+        background: rgba(245, 158, 11, 0.18) !important;
+        border-color: rgba(245, 158, 11, 0.35) !important;
+      }
+
+      &.is-error {
+        color: #f87171 !important;
+        background: rgba(239, 68, 68, 0.18) !important;
+        border-color: rgba(239, 68, 68, 0.35) !important;
+      }
     }
   }
 
   .ant-notification-notice-description .glass-noti-body {
     .glass-noti-desc {
       color: #94a3b8 !important;
+    }
+
+    .glass-noti-actions {
+      .glass-noti-action-btn.is-default {
+        color: #c7d2fe !important;
+        background: rgba(99, 102, 241, 0.15) !important;
+        border-color: rgba(99, 102, 241, 0.3) !important;
+
+        &:hover {
+          background: rgba(99, 102, 241, 0.25) !important;
+        }
+      }
     }
 
     .glass-noti-cmd-box {

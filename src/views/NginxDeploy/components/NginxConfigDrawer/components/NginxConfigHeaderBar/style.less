@@ -1,93 +1,441 @@
 .nginx-config-header-bar {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 16px;
-  background: var(--ant-color-fill-quaternary, rgba(0, 0, 0, 0.02));
-  border-bottom: 1px solid var(--ant-color-border-secondary, #e8e8e8);
-  font-size: 12px;
-  line-height: 22px;
+  flex-direction: column;
+  margin-bottom: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color-split, #e8e8e8);
+  background: var(--bg-color-container, #ffffff);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+  overflow: hidden;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 
-  &__left {
+  // 第一层：拓扑与运行态上下文条
+  &__topology {
     display: flex;
     align-items: center;
-    gap: 8px;
-    overflow: hidden;
-    white-space: nowrap;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 7px 14px;
+    background: linear-gradient(90deg, rgba(24, 144, 255, 0.05) 0%, rgba(114, 46, 209, 0.03) 100%);
+    border-bottom: 1px solid var(--border-color-split, #f0f0f0);
+    font-size: 12px;
+    line-height: 20px;
 
-    .route-domain {
-      font-weight: 600;
-      color: var(--ant-color-text-heading, #1f1f1f);
-      font-size: 13px;
+    .topology-chain {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      min-width: 0;
+
+      .chain-node {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--text-color, #262626);
+        font-weight: 500;
+        white-space: nowrap;
+
+        .node-icon {
+          font-size: 13px;
+          color: var(--primary-color, #1890ff);
+
+          &--instance {
+            color: #722ed1;
+          }
+        }
+
+        .node-title {
+          font-weight: 600;
+          max-width: 200px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .node-sub {
+          font-size: 11px;
+          color: var(--text-color-secondary, #8c8c8c);
+          font-weight: normal;
+        }
+      }
+
+      .chain-arrow {
+        display: inline-flex;
+        align-items: center;
+        color: var(--text-color-tertiary, #bfbfbf);
+        font-size: 10px;
+        margin: 0 2px;
+      }
+
+      .instance-badge {
+        font-size: 11px;
+        line-height: 16px;
+        padding: 1px 6px;
+        border-radius: 4px;
+        font-weight: 500;
+        white-space: nowrap;
+
+        &.managed {
+          background: rgba(19, 194, 194, 0.12);
+          color: #08979c;
+          border: 1px solid rgba(19, 194, 194, 0.3);
+        }
+
+        &.external {
+          background: rgba(114, 46, 209, 0.1);
+          color: #722ed1;
+          border: 1px solid rgba(114, 46, 209, 0.25);
+        }
+      }
     }
 
-    .route-arrow {
-      color: var(--ant-color-text-quaternary, #bfbfbf);
-    }
+    .topology-status {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
 
-    .route-dest {
-      color: var(--primary-color, #1890ff);
-      font-family: var(--font-mono, monospace);
-    }
+      .status-indicator {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        font-weight: 500;
+        color: #389e0d;
+        background: rgba(82, 196, 26, 0.08);
+        border: 1px solid rgba(82, 196, 26, 0.25);
+        padding: 1px 8px;
+        border-radius: 12px;
+        white-space: nowrap;
 
-    .config-path-tag {
-      font-family: var(--font-mono, monospace);
-      font-size: 11px;
-      margin: 0;
-      max-width: 280px;
-      overflow: hidden;
-      text-overflow: ellipsis;
+        .status-dot {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          display: inline-block;
+
+          &--online {
+            background: #52c41a;
+            box-shadow: 0 0 6px rgba(82, 196, 26, 0.8);
+            animation: statusPulse 2.4s infinite ease-in-out;
+          }
+        }
+      }
+
+      .ssl-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 11px;
+        color: var(--text-color-secondary, #8c8c8c);
+        background: rgba(0, 0, 0, 0.03);
+        border: 1px dashed var(--border-color-split, #d9d9d9);
+        padding: 1px 8px;
+        border-radius: 12px;
+        cursor: help;
+        transition: all 0.2s;
+        white-space: nowrap;
+
+        &:hover {
+          color: var(--primary-color, #1890ff);
+          border-color: var(--primary-color, #1890ff);
+        }
+
+        .ssl-icon {
+          font-size: 11px;
+          color: var(--text-color-tertiary, #bfbfbf);
+        }
+      }
+
+      .visit-action-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 11px;
+        color: var(--primary-color, #1890ff);
+        background: rgba(24, 144, 255, 0.06);
+        border: 1px solid rgba(24, 144, 255, 0.25);
+        border-radius: 4px;
+        padding: 1px 8px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        white-space: nowrap;
+
+        &:hover {
+          background: rgba(24, 144, 255, 0.12);
+          border-color: var(--primary-color, #1890ff);
+        }
+
+        .visit-icon {
+          font-size: 10px;
+        }
+      }
     }
   }
 
-  &__right {
+  // 第二层：代码编辑器文件与路由工具条
+  &__editor-bar {
     display: flex;
     align-items: center;
-    gap: 6px;
-    flex-shrink: 0;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 14px;
+    background: var(--bg-color-container, #ffffff);
+    font-size: 12px;
+    line-height: 22px;
 
-    .instance-pill {
-      color: var(--ant-color-text-secondary, #595959);
-      background: var(--ant-color-fill-secondary, rgba(0, 0, 0, 0.06));
-      border: 1px solid var(--ant-color-border, #d9d9d9);
-      border-radius: 4px;
-      padding: 0 6px;
-      font-size: 11px;
+    .file-workspace {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      flex: 1;
+
+      .file-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--text-color, #262626);
+        background: rgba(0, 0, 0, 0.04);
+        padding: 1px 6px;
+        border-radius: 4px;
+        white-space: nowrap;
+
+        .file-icon {
+          color: #fa8c16;
+          font-size: 12px;
+        }
+      }
+
+      .file-path-container {
+        display: inline-flex;
+        align-items: baseline;
+        font-family: Menlo, Monaco, Consolas, 'Courier New', monospace;
+        font-size: 12px;
+        line-height: 20px;
+        min-width: 0;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        cursor: default;
+
+        .file-path-dir {
+          color: var(--text-color-secondary, #8c8c8c);
+          margin-right: 1px;
+        }
+
+        .file-path-name {
+          color: var(--primary-color, #1890ff);
+          font-weight: 600;
+        }
+      }
+
+      .copy-action-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 22px;
+        height: 22px;
+        padding: 0;
+        border: none;
+        border-radius: 4px;
+        background: rgba(0, 0, 0, 0.04);
+        color: var(--text-color-secondary, #8c8c8c);
+        cursor: pointer;
+        transition: all 0.2s ease;
+        flex-shrink: 0;
+
+        &:hover {
+          background: rgba(24, 144, 255, 0.12);
+          color: var(--primary-color, #1890ff);
+        }
+
+        &.is-copied {
+          background: rgba(82, 196, 26, 0.12);
+          color: #52c41a;
+        }
+
+        .copy-icon {
+          font-size: 11px;
+
+          &.is-success {
+            font-size: 11px;
+          }
+        }
+      }
     }
 
-    .ssl-placeholder {
-      font-size: 11px;
-      color: var(--ant-color-text-quaternary, #8c8c8c);
-      padding: 0 4px;
+    .route-mapping {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+      white-space: nowrap;
+
+      .mapping-label {
+        font-size: 11px;
+        color: var(--text-color-tertiary, #bfbfbf);
+      }
+
+      .mapping-content {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+
+        .mapping-domain {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          font-weight: 500;
+          color: var(--text-color, #262626);
+
+          .domain-icon {
+            color: var(--text-color-tertiary, #bfbfbf);
+            font-size: 12px;
+          }
+        }
+
+        .mapping-arrow {
+          color: var(--text-color-quaternary, #d9d9d9);
+          font-size: 11px;
+        }
+
+        .mapping-dest {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          color: var(--text-color-secondary, #595959);
+
+          .dest-icon {
+            color: var(--text-color-tertiary, #8c8c8c);
+            font-size: 12px;
+          }
+
+          .dest-code {
+            font-family: Menlo, Monaco, Consolas, monospace;
+            font-size: 11px;
+            background: rgba(0, 0, 0, 0.04);
+            padding: 1px 6px;
+            border-radius: 4px;
+            color: var(--primary-color, #1890ff);
+            max-width: 240px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+        }
+      }
     }
   }
 }
 
-// 暗色模式样式
+@keyframes statusPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(82, 196, 26, 0.6);
+  }
+  70% {
+    box-shadow: 0 0 0 5px rgba(82, 196, 26, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(82, 196, 26, 0);
+  }
+}
+
+// 暗色主题适配
 html[data-theme='dark'] .nginx-config-header-bar {
+  border-color: rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.03);
-  border-bottom-color: rgba(255, 255, 255, 0.08);
 
-  &__left {
-    .route-domain {
-      color: rgba(255, 255, 255, 0.9);
+  &__topology {
+    background: linear-gradient(90deg, rgba(24, 144, 255, 0.08) 0%, rgba(114, 46, 209, 0.05) 100%);
+    border-bottom-color: rgba(255, 255, 255, 0.08);
+
+    .topology-chain {
+      .chain-node {
+        color: rgba(255, 255, 255, 0.88);
+
+        .node-sub {
+          color: rgba(255, 255, 255, 0.45);
+        }
+      }
+
+      .instance-badge {
+        &.managed {
+          background: rgba(19, 194, 194, 0.2);
+          color: #13c2c2;
+          border-color: rgba(19, 194, 194, 0.4);
+        }
+
+        &.external {
+          background: rgba(114, 46, 209, 0.2);
+          color: #b37feb;
+          border-color: rgba(114, 46, 209, 0.4);
+        }
+      }
     }
 
-    .route-dest {
-      color: #3c9ae8;
+    .topology-status {
+      .ssl-badge {
+        background: rgba(255, 255, 255, 0.05);
+        border-color: rgba(255, 255, 255, 0.15);
+        color: rgba(255, 255, 255, 0.45);
+      }
+
+      .visit-action-btn {
+        background: rgba(24, 144, 255, 0.15);
+        border-color: rgba(24, 144, 255, 0.4);
+        color: #4096ff;
+      }
     }
   }
 
-  &__right {
-    .instance-pill {
-      color: rgba(255, 255, 255, 0.65);
-      background: rgba(255, 255, 255, 0.08);
-      border-color: rgba(255, 255, 255, 0.15);
+  &__editor-bar {
+    background: rgba(255, 255, 255, 0.02);
+
+    .file-workspace {
+      .file-badge {
+        background: rgba(255, 255, 255, 0.08);
+        color: rgba(255, 255, 255, 0.85);
+      }
+
+      .file-path-container {
+        .file-path-dir {
+          color: rgba(255, 255, 255, 0.45);
+        }
+
+        .file-path-name {
+          color: #4096ff;
+        }
+      }
+
+      .copy-action-btn {
+        background: rgba(255, 255, 255, 0.08);
+        color: rgba(255, 255, 255, 0.65);
+
+        &:hover {
+          background: rgba(24, 144, 255, 0.25);
+          color: #4096ff;
+        }
+      }
     }
 
-    .ssl-placeholder {
-      color: rgba(255, 255, 255, 0.35);
+    .route-mapping {
+      .mapping-content {
+        .mapping-domain {
+          color: rgba(255, 255, 255, 0.85);
+        }
+
+        .mapping-dest .dest-code {
+          background: rgba(255, 255, 255, 0.08);
+          color: #4096ff;
+        }
+      }
     }
   }
 }
+

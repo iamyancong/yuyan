@@ -1,6 +1,7 @@
 import { computed, reactive, ref, watch, type Ref } from 'vue';
 import message from 'ant-design-vue/es/message';
-import notification from 'ant-design-vue/es/notification';
+import { showGlassNotification } from '@/utils/globalNotification';
+import { openExternal } from '@/utils/open';
 import {
   deployTargetWithProgress,
   getTargetDeployProgress,
@@ -304,19 +305,35 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
         progressState.stopped = true;
         progressState.title = '已停止';
         progressState.detail = '发布任务已停止，未进入上传产物阶段。';
-        notification.warning({
-          message: '发布已停止',
+        showGlassNotification({
+          type: 'warning',
+          title: '发布已停止',
+          badge: target.envName || '已停止',
           description: `${target.projectName || '项目'} 发布任务已停止，未进入上传产物阶段。`,
-          duration: 4.5,
+          duration: 3.5,
         });
         await refreshActiveTab({ resetRecordsPage: true, force: true });
         return;
       }
       message.success('发布完成');
-      notification.success({
-        message: '发布完成',
+      const visitUrl = String(target.visitUrl || '').trim();
+      const hasValidVisitUrl = Boolean(visitUrl && visitUrl !== '未配置' && visitUrl !== '-' && /^https?:\/\//i.test(visitUrl));
+
+      showGlassNotification({
+        type: 'success',
+        title: '发布完成',
+        badge: target.envName || '已就绪',
         description: `${target.projectName || '项目'} 已成功发布到「${target.serverName || target.envName || '服务器'}」`,
-        duration: 4.5,
+        actions: hasValidVisitUrl
+          ? [
+              {
+                text: '打开站点',
+                primary: true,
+                onClick: () => openExternal(visitUrl),
+              },
+            ]
+          : undefined,
+        duration: 3.5,
       });
       await refreshActiveTab({ resetRecordsPage: true, force: true });
     } catch (error: any) {
@@ -329,10 +346,12 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
             stopped: true,
           });
           message.warning('发布任务已停止');
-          notification.warning({
-            message: '发布已停止',
+          showGlassNotification({
+            type: 'warning',
+            title: '发布已停止',
+            badge: target.envName || '已停止',
             description: `${target.projectName || '项目'} 发布任务已停止。`,
-            duration: 4.5,
+            duration: 3.5,
           });
           await new Promise((resolve) => window.setTimeout(resolve, 500));
           await refreshActiveTab({ resetRecordsPage: true, force: true });
@@ -360,10 +379,12 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
         fallbackStage: currentPublishStageKey.value,
       });
       progressState.detail = DEPLOY_FAILURE_BRIEF;
-      notification.error({
-        message: '发布失败',
+      showGlassNotification({
+        type: 'error',
+        title: '发布失败',
+        badge: target.envName || '异常',
         description: `${target.projectName || '项目'} 发布失败：${errorMessage}`,
-        duration: 6,
+        duration: 5.0,
       });
     } finally {
       if (sessionId === progressSessionId) {
@@ -417,10 +438,12 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
         progressState.stopped = true;
         progressState.title = '已停止';
         progressState.detail = '发布任务已停止，未进入上传产物阶段。';
-        notification.warning({
-          message: '任务已停止',
+        showGlassNotification({
+          type: 'warning',
+          title: '任务已停止',
+          badge: '已停止',
           description: `${target.projectName || '项目'} 任务已停止，未进入上传产物阶段。`,
-          duration: 4.5,
+          duration: 3.5,
         });
         await refreshActiveTab({ resetRecordsPage: true, force: true });
         return;
@@ -428,10 +451,24 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       shouldClearRuntime = true;
       const actionLabel = getDeployProgressActionLabel(snapshot.action);
       message.success(`${actionLabel}完成`);
-      notification.success({
-        message: `${actionLabel}完成`,
+      const visitUrl = String(target.visitUrl || '').trim();
+      const hasValidVisitUrl = Boolean(visitUrl && visitUrl !== '未配置' && visitUrl !== '-' && /^https?:\/\//i.test(visitUrl));
+
+      showGlassNotification({
+        type: 'success',
+        title: `${actionLabel}完成`,
+        badge: target.envName || '已就绪',
         description: `${target.projectName || '项目'} ${actionLabel}成功。`,
-        duration: 4.5,
+        actions: hasValidVisitUrl
+          ? [
+              {
+                text: '打开站点',
+                primary: true,
+                onClick: () => openExternal(visitUrl),
+              },
+            ]
+          : undefined,
+        duration: 3.5,
       });
       await refreshActiveTab({ resetRecordsPage: true, force: true });
     } catch (error: any) {
@@ -454,10 +491,12 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
         fallbackStage: currentPublishStageKey.value || snapshot.currentStage,
       });
       progressState.detail = snapshot.action === 'deploy' ? DEPLOY_FAILURE_BRIEF : errorMessage;
-      notification.error({
-        message: `${getDeployProgressActionLabel(snapshot.action)}失败`,
+      showGlassNotification({
+        type: 'error',
+        title: `${getDeployProgressActionLabel(snapshot.action)}失败`,
+        badge: '失败',
         description: `${target.projectName || '项目'} ${getDeployProgressActionLabel(snapshot.action)}失败：${errorMessage}`,
-        duration: 6,
+        duration: 5.0,
       });
     } finally {
       if (sessionId === progressSessionId) {

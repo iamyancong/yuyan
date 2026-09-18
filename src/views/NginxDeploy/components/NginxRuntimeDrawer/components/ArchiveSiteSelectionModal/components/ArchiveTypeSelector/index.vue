@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, type Component } from 'vue';
+import { computed } from 'vue';
 import {
   FileTextOutlined,
   FolderOpenOutlined,
@@ -29,7 +29,7 @@ const emit = defineEmits<{
 const options = computed(() => getArchiveTypeOptions(props.isManagedInstance));
 
 /** 归档类型图标映射。 */
-const ARCHIVE_TYPE_ICONS: Record<NginxArchiveDownloadType, Component> = {
+const ARCHIVE_TYPE_ICONS: Record<NginxArchiveDownloadType, any> = {
   all: InboxOutlined,
   html: FolderOpenOutlined,
   conf: FileTextOutlined,
@@ -37,28 +37,36 @@ const ARCHIVE_TYPE_ICONS: Record<NginxArchiveDownloadType, Component> = {
 </script>
 
 <template>
-  <div class="archive-type-selector" role="radiogroup" aria-label="下载内容类型">
-    <button
+  <div class="archive-type-selector" role="radiogroup" aria-label="交付内容类型">
+    <div
       v-for="option in options"
       :key="option.value"
-      type="button"
       role="radio"
       class="archive-type-card"
-      :class="{ 'is-selected': modelValue === option.value }"
+      :class="{
+        'is-selected': modelValue === option.value,
+        'is-disabled': disabled,
+      }"
       :aria-checked="modelValue === option.value"
-      :disabled="disabled"
-      @click="emit('update:modelValue', option.value)"
+      tabindex="0"
+      @click="!disabled && emit('update:modelValue', option.value)"
+      @keydown.space.prevent="!disabled && emit('update:modelValue', option.value)"
+      @keydown.enter.prevent="!disabled && emit('update:modelValue', option.value)"
     >
-      <span class="archive-type-card__index">{{ option.index }}</span>
-      <span class="archive-type-card__icon"><component :is="ARCHIVE_TYPE_ICONS[option.value]" /></span>
-      <span class="archive-type-card__copy">
-        <span class="archive-type-card__title">
-          <strong>{{ option.label }}</strong>
-          <small>{{ option.badge }}</small>
-        </span>
-        <span class="archive-type-card__description">{{ option.description }}</span>
-      </span>
-    </button>
+      <div class="archive-type-card__header">
+        <div class="archive-type-card__title-wrap">
+          <span class="archive-type-card__icon">
+            <component :is="ARCHIVE_TYPE_ICONS[option.value]" />
+          </span>
+          <span class="archive-type-card__title">{{ option.label }}</span>
+          <span v-if="option.badge === '推荐'" class="archive-type-card__badge">推荐</span>
+        </div>
+        <div class="archive-type-card__radio" aria-hidden="true">
+          <span class="archive-type-card__radio-dot" />
+        </div>
+      </div>
+      <div class="archive-type-card__description">{{ option.description }}</div>
+    </div>
   </div>
 </template>
 
