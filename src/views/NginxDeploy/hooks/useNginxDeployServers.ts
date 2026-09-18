@@ -50,6 +50,33 @@ export function useNginxDeployServers(params?: UseNginxDeployServersParams) {
   const serverFormRef = ref<FormilyRef | null>(null);
   const serverForm = reactive<DeployServerPayload>(createDefaultServerForm());
 
+  const fsDrawerOpen = ref(false);
+  const fsDrawerServer = ref<DeployServer | null>(null);
+  const fsDrawerInitialPath = ref<string>('');
+  let fsDrawerSelectCallback: ((path: string) => void) | null = null;
+
+  /**
+   * 打开远程目录浏览抽屉。
+   * @param server 服务器配置
+   * @param initialPath 可选初始路径
+   * @param onSelect 可选选择路径回填回调
+   */
+  const openRemoteFsBrowse = (server: DeployServer, initialPath?: string, onSelect?: (path: string) => void) => {
+    if (!ensureLoggedIn()) return;
+    fsDrawerServer.value = server;
+    fsDrawerInitialPath.value = initialPath || '';
+    fsDrawerSelectCallback = onSelect || null;
+    fsDrawerOpen.value = true;
+  };
+
+  /**
+   * 处理远程目录选择回填。
+   * @param path 选中的远程路径
+   */
+  const handleFsDrawerSelectPath = (path: string) => {
+    fsDrawerSelectCallback?.(path);
+  };
+
   /** 重置服务器表单 */
   const resetServerForm = () => {
     Object.assign(serverForm, createDefaultServerForm());
@@ -180,6 +207,9 @@ export function useNginxDeployServers(params?: UseNginxDeployServersParams) {
     servers.value = [];
     activeServerId.value = null;
     serverModalOpen.value = false;
+    fsDrawerOpen.value = false;
+    fsDrawerServer.value = null;
+    fsDrawerSelectCallback = null;
     runtimeState.clearNginxRuntimeDrawer();
   };
 
@@ -192,11 +222,16 @@ export function useNginxDeployServers(params?: UseNginxDeployServersParams) {
     activeServerId,
     serverFormRef,
     serverForm,
+    fsDrawerOpen,
+    fsDrawerServer,
+    fsDrawerInitialPath,
     ...runtimeState,
     refreshServerList,
     reorderServerList,
     openCreateServer,
     openEditServer,
+    openRemoteFsBrowse,
+    handleFsDrawerSelectPath,
     saveServer,
     deleteServer,
     testServer,

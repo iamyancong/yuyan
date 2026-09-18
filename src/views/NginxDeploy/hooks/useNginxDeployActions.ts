@@ -11,6 +11,7 @@ interface UseNginxDeployActionsParams {
   targetFormLoading?: Ref<boolean>;
   activeTargetId?: Ref<number | null>;
   testServer?: (server: DeployServer) => Promise<void>;
+  openRemoteFsBrowse?: (server: DeployServer) => void;
   openNginxRuntime?: (server: DeployServer) => Promise<void>;
   openEditServer?: (server: DeployServer) => Promise<void>;
   deleteServer?: (server: DeployServer) => Promise<void>;
@@ -51,6 +52,7 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
   const activeTargetId = params?.activeTargetId ?? context?.activeTargetId;
 
   const testServer = params?.testServer;
+  const openRemoteFsBrowse = params?.openRemoteFsBrowse;
   const openNginxRuntime = params?.openNginxRuntime;
   const openEditServer = params?.openEditServer;
   const deleteServer = params?.deleteServer;
@@ -121,8 +123,9 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
   const isTargetRunning = (target: DeployTarget) => Boolean(getTargetRuntimeSnapshot(target)?.running);
 
   const serverActionConfig = computed<YTableActionConfig>(() => ({
-    width: 300,
+    width: 310,
     fixed: 'right',
+    displayLimit: 3,
     buttons: [
       {
         key: 'test',
@@ -135,6 +138,14 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
           } finally {
             helpers?.hideLoading?.();
           }
+        },
+      },
+      {
+        key: 'browseFs',
+        text: '浏览目录',
+        type: 'link',
+        clickFn: ({ row }) => {
+          openRemoteFsBrowse?.(row);
         },
       },
       {
