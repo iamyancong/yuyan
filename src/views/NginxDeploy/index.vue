@@ -134,6 +134,7 @@ const { serverActionConfig, targetActionConfig, recordActionConfig } = useNginxD
   targetFormLoading: targetState.targetFormLoading,
   activeTargetId: targetState.activeTargetId,
   testServer: serverState.testServer,
+  openRemoteFsBrowse: serverState.openRemoteFsBrowse,
   openNginxRuntime: serverState.openNginxRuntime,
   openEditServer: serverState.openEditServer,
   deleteServer: serverState.deleteServer,
@@ -180,6 +181,7 @@ provideNginxDeployContext({
   refreshTargetList: targetState.refreshTargetList,
   refreshRecordList: recordState.refreshRecordList,
   resetRecordPage: recordState.resetRecordPage,
+  openRemoteFsBrowse: serverState.openRemoteFsBrowse,
 
   targetRuntimeSnapshots: targetState.targetRuntimeSnapshots,
   setTargetRuntimeSnapshot: targetState.setTargetRuntimeSnapshot,

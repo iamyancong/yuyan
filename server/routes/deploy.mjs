@@ -34,6 +34,10 @@ import {
   handleInitNginxInstance,
   handleListNginxInstances,
   handleListDeployRootOptions,
+  handleGetServerFsRoots,
+  handleListServerFsEntries,
+  handleReadServerFsContent,
+  handleExecServerCommand,
   handleListRecords,
   handleListServers,
   handleReorderServers,
@@ -139,6 +143,10 @@ router.post('/environments', handleCreateDeployEnvironment);
 router.put('/environments/:id', handleUpdateDeployEnvironment);
 router.delete('/environments/:id', handleDeleteDeployEnvironment);
 router.get('/servers/:id/deploy-root-options', handleListDeployRootOptions);
+router.get('/servers/:id/fs/roots', handleGetServerFsRoots);
+router.get('/servers/:id/fs/list', handleListServerFsEntries);
+router.get('/servers/:id/fs/read', handleReadServerFsContent);
+router.post('/servers/:id/exec', handleExecServerCommand);
 router.get('/servers/:id/nginx-discovery', handleDiscoverServerNginx);
 router.get('/servers/:id/nginx-instances', handleListNginxInstances);
 router.post('/servers/:id/nginx-instances', handleCreateNginxInstance);

@@ -365,7 +365,7 @@ export function streamSshCommand(conn, command, output, options = {}) {
  * @param {Client} conn - SSH 客户端
  * @returns {Promise<Object>} SFTP 实例
  */
-function getSftp(conn) {
+export function getSftp(conn) {
   return new Promise((resolve, reject) => {
     conn.sftp((error, sftp) => {
       if (error) reject(error);

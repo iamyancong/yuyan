@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { defineAsyncComponent, ref, watch } from 'vue';
+import { defineAsyncComponent, ref, unref, watch } from 'vue';
 import type { DeployServerPayload, NginxInstancePayload, NginxRuntimePayload } from '@/api/deploy';
 import type { FormilyRef } from '../../types';
 
@@ -10,13 +10,15 @@ const props = defineProps<{ serverState: Record<string, any> }>();
 /** 抽屉组件按需异步加载，避免相互污染与整包加载 */
 const ServerConfigDrawer = defineAsyncComponent(() => import('../ServerConfigDrawer/index.vue'));
 const NginxRuntimeDrawer = defineAsyncComponent(() => import('../NginxRuntimeDrawer/index.vue'));
+const RemoteFsBrowseDrawer = defineAsyncComponent(() => import('../RemoteFsBrowseDrawer/index.vue'));
 
 /** 首次激活标记，确保首次打开前零下载，关闭后常驻保活 */
 const serverModalEverOpened = ref(false);
 const runtimeDrawerEverOpened = ref(false);
+const fsDrawerEverOpened = ref(false);
 
 watch(
-  () => Boolean(props.serverState?.serverModalOpen?.value),
+  () => Boolean(unref(props.serverState?.serverModalOpen)),
   (val) => {
     if (val && !serverModalEverOpened.value) serverModalEverOpened.value = true;
   },
@@ -24,9 +26,17 @@ watch(
 );
 
 watch(
-  () => Boolean(props.serverState?.runtimeDrawerOpen?.value),
+  () => Boolean(unref(props.serverState?.runtimeDrawerOpen)),
   (val) => {
     if (val && !runtimeDrawerEverOpened.value) runtimeDrawerEverOpened.value = true;
+  },
+  { immediate: true }
+);
+
+watch(
+  () => Boolean(unref(props.serverState?.fsDrawerOpen)),
+  (val) => {
+    if (val && !fsDrawerEverOpened.value) fsDrawerEverOpened.value = true;
   },
   { immediate: true }
 );
@@ -105,5 +115,12 @@ const updateRuntimeInstanceForm = (values: Partial<NginxInstancePayload>) => {
     @refresh-archive-sites="serverState.refreshArchiveSites"
     @confirm-archive-download="serverState.confirmArchiveDownload"
     @refresh="serverState.refreshRuntimeStatus"
+  />
+  <RemoteFsBrowseDrawer
+    v-if="fsDrawerEverOpened"
+    v-model:open="serverState.fsDrawerOpen.value"
+    :server="serverState.fsDrawerServer.value"
+    :initial-path="serverState.fsDrawerInitialPath.value"
+    @select-path="(path: string) => serverState.handleFsDrawerSelectPath(path)"
   />
 </template>

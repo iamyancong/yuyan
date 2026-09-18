@@ -60,6 +60,8 @@ export interface NginxDeployContext {
   refreshRecordList: (options?: RefreshActiveTabOptions) => Promise<void>;
   /** 重置发布历史列表的分页参数 */
   resetRecordPage: () => void;
+  /** 打开远程服务器目录浏览抽屉并支持路径回填 */
+  openRemoteFsBrowse?: (server: DeployServer, initialPath?: string, onSelect?: (path: string) => void) => void;
 
   // --- 运行态快照与轮询状态 ---
   /** 部署目标的实时运行态快照缓存字典 */

@@ -41,7 +41,12 @@ const recordLogEverOpened = ref(false);
 const backendOverlaysEverOpened = ref(false);
 
 watch(
-  () => Boolean(unref(props.serverState?.serverModalOpen) || unref(props.serverState?.runtimeDrawerOpen)),
+  () =>
+    Boolean(
+      unref(props.serverState?.serverModalOpen) ||
+        unref(props.serverState?.runtimeDrawerOpen) ||
+        unref(props.serverState?.fsDrawerOpen)
+    ),
   (val) => {
     if (val && !serverOverlaysEverOpened.value) serverOverlaysEverOpened.value = true;
   },

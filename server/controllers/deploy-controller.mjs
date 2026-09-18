@@ -102,6 +102,12 @@ import { listActiveCentralDeployOperations } from '../services/artifact-job-serv
 import { mergeDeployRuntimeSnapshots } from '../services/deploy-runtime-snapshot-service.mjs';
 import { listDeployRootOptions } from '../services/deploy-root-options-service.mjs';
 import { discoverServerNginx } from '../services/nginx-discovery-service.mjs';
+import {
+  getServerFsRoots,
+  listRemoteFsDirectory,
+  readRemoteFsFile,
+  execRemoteFsCommand,
+} from '../services/remote-fs-service.mjs';
 
 /** GitHub 托管仓库名（主库或 Fork 库） */
 const GITHUB_REPO = process.env.GITHUB_REPOSITORY || 'ycwang-dev/yuyan';
@@ -2155,3 +2161,66 @@ export async function handleDeleteJdk(req, res) {
     sendError(res, error, 400);
   }
 }
+
+/**
+ * 获取服务器远程文件浏览允许根列表
+ */
+export async function handleGetServerFsRoots(req, res) {
+  try {
+    const serverId = Number(req.params.id);
+    if (!serverId) throw new Error('无效的服务器 ID');
+    const data = await getServerFsRoots(serverId);
+    res.json({ success: true, data });
+  } catch (error) {
+    sendError(res, error, 400);
+  }
+}
+
+/**
+ * 获取服务器指定目录下的文件与子目录列表
+ */
+export async function handleListServerFsEntries(req, res) {
+  try {
+    const serverId = Number(req.params.id);
+    if (!serverId) throw new Error('无效的服务器 ID');
+    const targetPath = req.query.path ? String(req.query.path) : undefined;
+    const limit = req.query.limit ? Number(req.query.limit) : undefined;
+    const data = await listRemoteFsDirectory(serverId, targetPath, { limit });
+    res.json({ success: true, data });
+  } catch (error) {
+    sendError(res, error, 400);
+  }
+}
+
+/**
+ * 读取服务器远程文本文件进行只读预览
+ */
+export async function handleReadServerFsContent(req, res) {
+  try {
+    const serverId = Number(req.params.id);
+    if (!serverId) throw new Error('无效的服务器 ID');
+    const targetPath = String(req.query.path || '').trim();
+    if (!targetPath) throw new Error('缺少预览文件路径');
+    const maxBytes = req.query.maxBytes ? Number(req.query.maxBytes) : undefined;
+    const data = await readRemoteFsFile(serverId, targetPath, { maxBytes });
+    res.json({ success: true, data });
+  } catch (error) {
+    sendError(res, error, 400);
+  }
+}
+
+/**
+ * 执行受控单次远程命令（P2）
+ */
+export async function handleExecServerCommand(req, res) {
+  try {
+    const serverId = Number(req.params.id);
+    if (!serverId) throw new Error('无效的服务器 ID');
+    const { command, cwd, timeoutMs } = req.body || {};
+    const data = await execRemoteFsCommand(serverId, command, cwd, { timeoutMs });
+    res.json({ success: true, data });
+  } catch (error) {
+    sendError(res, error, 400);
+  }
+}
+

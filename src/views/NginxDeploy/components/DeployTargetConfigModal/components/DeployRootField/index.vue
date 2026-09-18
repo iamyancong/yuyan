@@ -1,27 +1,31 @@
 <script setup lang="ts">
-import { computed } from 'vue';
-import { BulbOutlined, LoadingOutlined } from '@ant-design/icons-vue';
+import { computed, defineAsyncComponent, ref } from 'vue';
+import { BulbOutlined, FolderOpenOutlined, LoadingOutlined } from '@ant-design/icons-vue';
 import { useDeployRootRecommendation, type DeployRootSelectOption } from '../../../../hooks/useDeployRootRecommendation';
+import { useNginxDeployContext } from '../../../../hooks/useNginxDeployContext';
+import type { DeployRootFieldProps } from './constant';
 
 defineOptions({ name: 'DeployRootField' });
 
-/** 部署根目录字段属性。 */
-interface DeployRootFieldProps {
-  modelValue?: string;
-  projectType?: 'frontend' | 'backend';
-  projectId?: number;
-  projectName?: string;
-  projectDescription?: string;
-  defaultBranch?: string;
-  serverId?: number;
-  nginxInstanceId?: number;
-  buildCommand?: string;
-  artifactDir?: string;
-  targetId?: number | null;
-}
+const RemoteFsSelectModal = defineAsyncComponent(() => import('../../../RemoteFsSelectModal/index.vue'));
 
 const props = defineProps<DeployRootFieldProps>();
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>();
+
+const context = useNginxDeployContext();
+const selectModalOpen = ref(false);
+
+const currentServer = computed(() => {
+  if (!props.serverId) return null;
+  return context?.servers?.value?.find((s) => s.id === Number(props.serverId)) || null;
+});
+
+const handleBrowseRemoteFs = () => {
+  if (!currentServer.value) return;
+  selectModalOpen.value = true;
+};
+
+const handleSelectRemotePath = (selectedPath: string) => emit('update:modelValue', selectedPath);
 
 const {
   loading,
@@ -61,7 +65,20 @@ const getPopupContainer = (triggerNode: HTMLElement) =>
     :value="modelValue"
     placeholder="请输入后端服务部署根目录"
     @update:value="onBackendValueChange"
-  />
+  >
+    <template #addonAfter>
+      <a-button
+        type="link"
+        size="small"
+        :disabled="!currentServer"
+        title="在服务器上浏览并选择目录"
+        style="padding: 0 4px; height: auto"
+        @click="handleBrowseRemoteFs"
+      >
+        <FolderOpenOutlined /> 浏览
+      </a-button>
+    </template>
+  </a-input>
   <div v-else class="deploy-root-field">
     <a-auto-complete
       :value="modelValue"
@@ -101,8 +118,24 @@ const getPopupContainer = (triggerNode: HTMLElement) =>
       >
         使用推荐值
       </a-button>
+      <a-button
+        v-if="currentServer"
+        type="link"
+        size="small"
+        class="deploy-root-field__apply"
+        @click="handleBrowseRemoteFs"
+      >
+        <FolderOpenOutlined /> 浏览服务器
+      </a-button>
     </div>
   </div>
+  <RemoteFsSelectModal
+    v-if="currentServer"
+    v-model:open="selectModalOpen"
+    :server="currentServer"
+    :initial-path="modelValue"
+    @select="handleSelectRemotePath"
+  />
 </template>
 
 <style scoped lang="less">

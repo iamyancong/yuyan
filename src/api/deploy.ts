@@ -1873,3 +1873,81 @@ export const updateDeployEnvironment = (id: number, payload: DeployEnvironmentPa
 /** 删除共享环境依赖配置 */
 export const deleteDeployEnvironment = (id: number): Promise<{ deletedEnvironments: number }> =>
   client.delete(`/environments/${id}`).then(unwrap<{ deletedEnvironments: number }>);
+
+/** 远程文件系统作用域允许根 */
+export interface RemoteFsRoot {
+  id: string;
+  label: string;
+  path: string;
+  isDefault?: boolean;
+}
+
+/** 远程文件/目录条目 */
+export interface RemoteFsEntry {
+  name: string;
+  path: string;
+  type: 'directory' | 'file' | 'symlink' | 'parent_dir';
+  extension?: string;
+  size: number | null;
+  mtime: number | null;
+  permissions?: string;
+  readable?: boolean;
+}
+
+/** 远程目录读取结果 */
+export interface RemoteFsListResult {
+  currentPath: string;
+  rootPath: string;
+  isAtRoot: boolean;
+  truncated: boolean;
+  entries: RemoteFsEntry[];
+}
+
+/** 远程文件只读预览结果 */
+export interface RemoteFsReadResult {
+  path: string;
+  size: number;
+  content: string;
+  encoding: string;
+  extension: string;
+}
+
+/** 远程受控单次命令执行结果 (P2) */
+export interface RemoteExecResult {
+  command: string;
+  cwd: string;
+  code: number;
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+}
+
+/** 获取服务器远程文件浏览允许根列表 */
+export const getServerFsRoots = (serverId: number): Promise<{ roots: RemoteFsRoot[] }> =>
+  client.get(`/servers/${serverId}/fs/roots`).then(unwrap<{ roots: RemoteFsRoot[] }>);
+
+/** 获取服务器指定目录下的文件与目录列表 */
+export const listServerFsEntries = (
+  serverId: number,
+  path?: string,
+  options?: { limit?: number }
+): Promise<RemoteFsListResult> =>
+  client.get(`/servers/${serverId}/fs/list`, { params: { path, ...options } }).then(unwrap<RemoteFsListResult>);
+
+/** 读取服务器远程文本文件进行只读预览 */
+export const readServerFsContent = (
+  serverId: number,
+  path: string,
+  options?: { maxBytes?: number }
+): Promise<RemoteFsReadResult> =>
+  client.get(`/servers/${serverId}/fs/read`, { params: { path, ...options } }).then(unwrap<RemoteFsReadResult>);
+
+/** 执行服务器受控单次远程命令 (P2) */
+export const execServerCommand = (
+  serverId: number,
+  command: string,
+  cwd?: string,
+  options?: { timeoutMs?: number }
+): Promise<RemoteExecResult> =>
+  client.post(`/servers/${serverId}/exec`, { command, cwd, ...options }).then(unwrap<RemoteExecResult>);
+
