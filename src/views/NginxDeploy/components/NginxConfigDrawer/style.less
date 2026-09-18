@@ -1,39 +1,37 @@
-.nginx-config-path-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-
-  .nginx-config-path-label {
-    color: #606266;
-    font-size: 13px;
+:global(.nginx-config-drawer-root) {
+  .ant-drawer-body {
+    padding: 16px !important;
   }
 }
 
-.nginx-config-path {
-  max-width: calc(100% - 96px);
-  margin-right: 0;
+.nginx-config-drawer-body {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.nginx-config-editor-shell {
+  border-radius: 8px;
   overflow: hidden;
-  font-family: Menlo, Monaco, Consolas, monospace;
-  font-size: 13px;
-  line-height: 24px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  border: 1px solid var(--border-color-split, #2d2d2d);
+  background: #1e1e1e;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
 }
 
 .nginx-config-footer {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 12px;
 
   .nginx-config-action-tip {
     margin-right: auto;
-    color: #8c8c8c;
+    color: var(--text-color-secondary, #8c8c8c);
     font-size: 13px;
 
     &.is-ready {
       color: #389e0d;
+      font-weight: 500;
     }
   }
 }

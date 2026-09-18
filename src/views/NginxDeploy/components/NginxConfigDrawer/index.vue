@@ -40,22 +40,37 @@ const open = computed({
 </script>
 
 <template>
-  <a-drawer v-model:open="open" width="72%" placement="right" title="Nginx 配置文件管理" destroyOnClose>
+  <a-drawer
+    v-model:open="open"
+    width="72%"
+    placement="right"
+    title="Nginx 配置文件管理"
+    destroy-on-close
+    root-class-name="nginx-config-drawer-root"
+    :body-style="{ padding: '16px' }"
+  >
     <a-spin :spinning="loading">
-      <NginxConfigHeaderBar :target="target" :config-path="configPath" />
-      <YMonaco
-        v-model:modelValue="content"
-        language="nginx"
-        theme="vs-dark"
-        height="calc(100vh - 180px)"
-        :format-on-mount="false"
-        :options="{ minimap: { enabled: false }, fontSize: 13 }"
-      />
+      <div class="nginx-config-drawer-body">
+        <NginxConfigHeaderBar :target="target" :config-path="configPath" />
+        <div class="nginx-config-editor-shell">
+          <YMonaco
+            v-model:modelValue="content"
+            language="nginx"
+            theme="vs-dark"
+            height="calc(100vh - 200px)"
+            :format-on-mount="false"
+            :options="{ minimap: { enabled: false }, fontSize: 13 }"
+          />
+        </div>
+      </div>
     </a-spin>
     <template #footer>
       <div class="nginx-config-footer">
         <span :class="['nginx-config-action-tip', { 'is-ready': isDirty }]">{{ actionTip }}</span>
-        <a-button type="primary" :disabled="!isDirty" :loading="saving" @click="handleSave">保存并重载</a-button>
+        <a-space>
+          <a-button @click="open = false">关闭</a-button>
+          <a-button type="primary" :disabled="!isDirty" :loading="saving" @click="handleSave">保存并重载</a-button>
+        </a-space>
       </div>
     </template>
   </a-drawer>

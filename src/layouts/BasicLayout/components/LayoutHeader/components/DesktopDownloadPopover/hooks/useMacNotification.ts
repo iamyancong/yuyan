@@ -1,6 +1,7 @@
 import { h, ref } from 'vue';
 import { notification, message } from 'ant-design-vue';
 import { AppleFilled, CopyOutlined, CheckOutlined } from '@ant-design/icons-vue';
+import { createGlassCloseIcon } from '@/utils/globalNotification';
 import { MAC_QUARANTINE_COMMAND } from '../constant';
 
 /**
@@ -51,11 +52,12 @@ export const showMacQuarantineNotification = () => {
     key: 'yuyan-mac-quarantine-notification',
     class: 'yuyan-glass-notification',
     top: '76px', // 避开顶部 Header 区域
-    duration: 10,
+    duration: 8,
     placement: 'topRight',
     style: {
       width: '410px',
     },
+    closeIcon: createGlassCloseIcon(),
     message: h('div', { class: 'glass-noti-title-wrap' }, [
       h('div', { class: 'glass-noti-icon-box' }, [
         h(AppleFilled, { class: 'glass-noti-apple-icon' }),

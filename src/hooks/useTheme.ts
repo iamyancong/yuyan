@@ -297,6 +297,11 @@ const themeConfig = computed(() => {
       colorPrimary: themeState.primaryColor,
       borderRadius: themeState.borderRadius,
     },
+    components: {
+      Drawer: {
+        paddingLG: 16,
+      },
+    },
     algorithm,
   };
 });
