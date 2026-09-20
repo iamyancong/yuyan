@@ -15,6 +15,36 @@ export function formatFileSize(bytes: number | null): string {
   return `${size.toFixed(size >= 10 || normalizedIndex === 0 ? 0 : 1)} ${units[normalizedIndex]}`;
 }
 
+/** 面包屑分段类型 */
+export interface BreadcrumbSegment {
+  name: string;
+  path: string;
+  isLast: boolean;
+  disabled?: boolean;
+  disabledReason?: string;
+}
+
+/** 规范化 POSIX 路径 */
+export function normalizePosix(raw: string): string {
+  const trimmed = String(raw || '').trim().replace(/\\/g, '/');
+  if (!trimmed) return '/';
+  const parts = trimmed.split('/').filter(Boolean);
+  return `/${parts.join('/')}`;
+}
+
+/** 判断路径是否在允许根内 */
+export function isSubPathOrEqual(targetPath: string, rootPath: string): boolean {
+  const normTarget = normalizePosix(targetPath);
+  const normRoot = normalizePosix(rootPath);
+  return normTarget === normRoot || normTarget.startsWith(`${normRoot}/`);
+}
+
+/** 判断路径是否在任一允许根内 */
+export function isPathWithinAnyRoot(targetPath: string, roots: Array<{ path: string }>): boolean {
+  if (!roots || roots.length === 0) return true;
+  return roots.some((r) => isSubPathOrEqual(targetPath, r.path));
+}
+
 /** 时间格式化为 YYYY-MM-DD HH:mm:ss */
 export function formatDateTime(timeMs: number | null): string {
   if (!timeMs) return '-';

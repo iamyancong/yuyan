@@ -12,27 +12,21 @@ import {
   type RemoteFsEntry,
   type RemoteFsRoot,
 } from '@/api/deploy';
+import {
+  normalizePosix,
+  isPathWithinAnyRoot,
+  isSubPathOrEqual,
+  type BreadcrumbSegment,
+} from '../constant';
 
-/** 路径片段 */
-export interface BreadcrumbSegment {
-  name: string;
-  path: string;
-  isLast: boolean;
-}
-
-/** 规范化 POSIX 路径 */
-function normalizePosix(raw: string): string {
-  const trimmed = String(raw || '').trim().replace(/\\/g, '/');
-  if (!trimmed) return '/';
-  const parts = trimmed.split('/').filter(Boolean);
-  return `/${parts.join('/')}`;
-}
+export type { BreadcrumbSegment } from '../constant';
 
 export function useRemoteFsBrowse(
   props: { open: boolean; server?: DeployServer | null; initialPath?: string },
   emit: { (e: 'selectPath', path: string): void; (e: 'update:open', val: boolean): void }
 ) {
   const loading = ref(false);
+  const showHidden = ref(false);
   const roots = ref<RemoteFsRoot[]>([]);
   const currentPath = ref<string>('');
   const rootPath = ref<string>('');
@@ -47,10 +41,13 @@ export function useRemoteFsBrowse(
   });
 
   /**
-   * 表格呈现条目：非根目录时，首行注入桌面级虚拟 .. (返回上一级) 项
+   * 表格呈现条目：支持隐藏文件/文件夹过滤，非根目录时注入虚拟 .. (返回上一级) 项
    */
   const tableEntries = computed<RemoteFsEntry[]>(() => {
-    const list = [...rawEntries.value];
+    const list = rawEntries.value.filter((item) => {
+      if (!showHidden.value && item.name.startsWith('.')) return false;
+      return true;
+    });
     if (!isAtRoot.value && currentPath.value && currentPath.value !== '/') {
       const parentDir = normalizePosix(currentPath.value.split('/').slice(0, -1).join('/') || '/');
       const parentEntry: RemoteFsEntry = {
@@ -68,7 +65,7 @@ export function useRemoteFsBrowse(
   });
 
   /**
-   * 面包屑导航列表
+   * 面包屑导航列表（超出允许根边界的祖先段置为 disabled，防止越权 403）
    */
   const breadcrumbs = computed<BreadcrumbSegment[]>(() => {
     if (!currentPath.value) return [];
@@ -78,10 +75,14 @@ export function useRemoteFsBrowse(
 
     segments.forEach((seg, idx) => {
       accumulated += `/${seg}`;
+      const isLast = idx === segments.length - 1;
+      const isAccessible = isPathWithinAnyRoot(accumulated, roots.value);
       result.push({
         name: seg,
         path: accumulated,
-        isLast: idx === segments.length - 1,
+        isLast,
+        disabled: !isAccessible,
+        disabledReason: !isAccessible ? '当前受限作用域无法访问上级目录' : undefined,
       });
     });
 
@@ -95,6 +96,10 @@ export function useRemoteFsBrowse(
   const fetchDirectory = async (targetPath?: string) => {
     const serverId = props.server?.id;
     if (!serverId) return;
+    if (targetPath && roots.value.length > 0 && !isPathWithinAnyRoot(targetPath, roots.value)) {
+      message.warning('所选路径超出当前服务器受限作用域');
+      return;
+    }
     loading.value = true;
     try {
       const res = await listServerFsEntries(serverId, targetPath);
@@ -154,6 +159,10 @@ export function useRemoteFsBrowse(
     const parts = currentPath.value.split('/').filter(Boolean);
     if (parts.length <= 1) return;
     const parentPath = `/${parts.slice(0, -1).join('/')}`;
+    if (!isPathWithinAnyRoot(parentPath, roots.value)) {
+      message.info('已到达当前允许根目录顶部');
+      return;
+    }
     void fetchDirectory(parentPath);
   };
 
@@ -225,6 +234,7 @@ export function useRemoteFsBrowse(
 
   return {
     loading,
+    showHidden,
     roots,
     activeRoot,
     currentPath,

@@ -7,7 +7,7 @@ import {
 } from '@ant-design/icons-vue';
 import { YButton } from '@yss-ui/components/lite';
 import type { RemoteFsRoot } from '@/api/deploy';
-import type { BreadcrumbSegment } from '../../hooks/useRemoteFsBrowse';
+import type { BreadcrumbSegment } from '../../constant';
 
 defineOptions({ name: 'RemoteFsToolbar' });
 
@@ -15,6 +15,7 @@ interface RemoteFsToolbarProps {
   currentPath: string;
   isAtRoot: boolean;
   loading: boolean;
+  showHidden?: boolean;
   breadcrumbs: BreadcrumbSegment[];
   roots: RemoteFsRoot[];
   activeRoot: RemoteFsRoot | null;
@@ -23,6 +24,7 @@ interface RemoteFsToolbarProps {
 defineProps<RemoteFsToolbarProps>();
 const emit = defineEmits<{
   (e: 'update:currentPath', val: string): void;
+  (e: 'update:showHidden', val: boolean): void;
   (e: 'navigateUp'): void;
   (e: 'refresh'): void;
   (e: 'usePath'): void;
@@ -54,6 +56,13 @@ const emit = defineEmits<{
         />
       </div>
       <div class="action-buttons">
+        <a-checkbox
+          :checked="showHidden"
+          class="toolbar-show-hidden"
+          @update:checked="(val: boolean) => emit('update:showHidden', val)"
+        >
+          显示隐藏项
+        </a-checkbox>
         <YButton type="primary" size="small" @click="emit('usePath')">
           <template #icon><CheckOutlined /></template>
           使用此路径
@@ -66,8 +75,9 @@ const emit = defineEmits<{
         v-for="(crumb, idx) in breadcrumbs"
         :key="crumb.path"
         class="crumb-item"
-        :class="{ 'is-active': crumb.isLast }"
-        @click="!crumb.isLast && emit('jumpBreadcrumb', crumb.path)"
+        :class="{ 'is-active': crumb.isLast, 'is-disabled': crumb.disabled }"
+        :title="crumb.disabled ? crumb.disabledReason : `跳转到 ${crumb.path}`"
+        @click="!crumb.disabled && !crumb.isLast && emit('jumpBreadcrumb', crumb.path)"
       >
         {{ crumb.name }}
         <span v-if="idx < breadcrumbs.length - 1" class="crumb-separator">/</span>
@@ -120,7 +130,14 @@ const emit = defineEmits<{
   .action-buttons {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
+
+    .toolbar-show-hidden {
+      font-size: 12px;
+      color: #595959;
+      user-select: none;
+      white-space: nowrap;
+    }
   }
 }
 
@@ -150,6 +167,17 @@ const emit = defineEmits<{
       font-weight: 600;
       cursor: default;
       background: transparent;
+    }
+
+    &.is-disabled {
+      color: #bfbfbf;
+      cursor: not-allowed;
+      background: transparent;
+
+      &:hover {
+        background: transparent;
+        color: #bfbfbf;
+      }
     }
   }
 

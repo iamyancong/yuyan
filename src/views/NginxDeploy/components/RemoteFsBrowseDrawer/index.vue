@@ -1,11 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import {
-  ArrowUpOutlined,
-  FileOutlined,
-  FolderOpenOutlined,
-  InfoCircleOutlined,
-} from '@ant-design/icons-vue';
+import { ArrowUpOutlined, FileOutlined, FolderOpenOutlined, InfoCircleOutlined } from '@ant-design/icons-vue';
 import { YButton, YTable } from '@yss-ui/components/lite';
 import type { DeployServer, RemoteFsEntry } from '@/api/deploy';
 import RemoteFsExecPanel from './components/RemoteFsExecPanel/index.vue';
@@ -26,18 +21,12 @@ interface RemoteFsBrowseDrawerProps {
 }
 
 const props = defineProps<RemoteFsBrowseDrawerProps>();
-const emit = defineEmits<{
-  (e: 'update:open', value: boolean): void;
-  (e: 'selectPath', path: string): void;
-}>();
-
-const visible = computed({
-  get: () => props.open,
-  set: (val: boolean) => emit('update:open', val),
-});
+const emit = defineEmits<{ (e: 'update:open', val: boolean): void; (e: 'selectPath', path: string): void }>();
+const visible = computed({ get: () => props.open, set: (val: boolean) => emit('update:open', val) });
 
 const {
   loading,
+  showHidden,
   roots,
   activeRoot,
   currentPath,
@@ -57,9 +46,6 @@ const {
 
 const { previewVisible, previewLoading, previewFileName, previewContent, openPreview } = useFilePreview(props);
 const { execPanelVisible, commandText, executing, execResult, toggleExecPanel, runCommand } = useRemoteExec(props);
-
-const onCellClick = (params: any) => handleRowClick(params?.row as RemoteFsEntry);
-const onCellDblClick = (params: any) => handleRowDblClick(params?.row as RemoteFsEntry, openPreview);
 </script>
 
 <template>
@@ -86,6 +72,7 @@ const onCellDblClick = (params: any) => handleRowDblClick(params?.row as RemoteF
 
       <RemoteFsToolbar
         v-model:current-path="currentPath"
+        v-model:show-hidden="showHidden"
         :is-at-root="isAtRoot"
         :loading="loading"
         :breadcrumbs="breadcrumbs"
@@ -108,8 +95,8 @@ const onCellDblClick = (params: any) => handleRowDblClick(params?.row as RemoteF
           size="small"
           :max-height="420"
           :row-config="{ keyField: 'name', isCurrent: true }"
-          @cell-click="onCellClick"
-          @cell-dblclick="onCellDblClick"
+          @cell-click="({ row }: any) => handleRowClick(row as RemoteFsEntry)"
+          @cell-dblclick="({ row }: any) => handleRowDblClick(row as RemoteFsEntry, openPreview)"
         >
           <template #nameSlot="{ row }">
             <div class="fs-entry-row" :title="row.type === 'parent_dir' ? '双击返回上一级' : row.type === 'directory' ? '双击进入目录' : '双击预览文件'">

@@ -12,7 +12,7 @@ import {
   type RemoteFsEntry,
   type RemoteFsRoot,
 } from '@/api/deploy';
-import { normalizePosix, type SelectBreadcrumbSegment } from '../constant';
+import { normalizePosix, isPathWithinAnyRoot, isSubPathOrEqual, type SelectBreadcrumbSegment } from '../constant';
 
 /**
  * 远程目录选择状态管理
@@ -25,6 +25,7 @@ export function useRemoteFsSelect(
   emit: { (e: 'update:open', val: boolean): void; (e: 'select', path: string): void }
 ) {
   const loading = ref(false);
+  const showHidden = ref(false);
   const roots = ref<RemoteFsRoot[]>([]);
   const activeRoot = ref<RemoteFsRoot | null>(null);
   const currentPath = ref<string>('');
@@ -38,7 +39,7 @@ export function useRemoteFsSelect(
     return normalizePosix(currentPath.value) === normalizePosix(rootPath.value);
   });
 
-  /** 面包屑分段列表 */
+  /** 面包屑分段列表（受限根之上的祖先分段自动禁用点击，防止越界 403） */
   const breadcrumbs = computed<SelectBreadcrumbSegment[]>(() => {
     if (!currentPath.value) return [];
     const normalized = normalizePosix(currentPath.value);
@@ -47,18 +48,26 @@ export function useRemoteFsSelect(
     let accumulated = '';
     for (let i = 0; i < parts.length; i += 1) {
       accumulated += `/${parts[i]}`;
+      const isLast = i === parts.length - 1;
+      const isAccessible = isPathWithinAnyRoot(accumulated, roots.value);
       list.push({
         name: parts[i],
         path: accumulated,
-        isLast: i === parts.length - 1,
+        isLast,
+        disabled: !isAccessible,
+        disabledReason: !isAccessible ? '当前受限作用域无法向上访问' : undefined,
       });
     }
     return list;
   });
 
-  /** 表格展示条目，只筛选展示目录及首行虚拟上一级 */
+  /** 表格展示条目，只筛选展示目录及首行虚拟上一级（支持隐藏项过滤） */
   const tableEntries = computed<RemoteFsEntry[]>(() => {
-    const dirEntries = rawEntries.value.filter((item) => item.type === 'directory');
+    const dirEntries = rawEntries.value.filter((item) => {
+      if (item.type !== 'directory') return false;
+      if (!showHidden.value && item.name.startsWith('.')) return false;
+      return true;
+    });
     if (isAtRoot.value) return dirEntries;
     const parentRow: RemoteFsEntry = {
       name: '..',
@@ -79,6 +88,10 @@ export function useRemoteFsSelect(
    */
   const fetchDirectory = async (targetPath?: string) => {
     if (!props.server) return;
+    if (targetPath && roots.value.length > 0 && !isPathWithinAnyRoot(targetPath, roots.value)) {
+      message.warning('所选路径超出当前服务器受限作用域');
+      return;
+    }
     loading.value = true;
     try {
       const res = await listServerFsEntries(props.server.id, targetPath);
@@ -142,6 +155,10 @@ export function useRemoteFsSelect(
     const parts = currentPath.value.split('/').filter(Boolean);
     if (parts.length <= 1) return;
     const parentPath = `/${parts.slice(0, -1).join('/')}`;
+    if (!isPathWithinAnyRoot(parentPath, roots.value)) {
+      message.info('已到达当前受限根目录顶部');
+      return;
+    }
     void fetchDirectory(parentPath);
   };
 
@@ -216,6 +233,7 @@ export function useRemoteFsSelect(
 
   return {
     loading,
+    showHidden,
     roots,
     activeRoot,
     currentPath,
