@@ -82,7 +82,7 @@ export const fsTableColumns: YTableColumn[] = [
     title: '名称',
     minWidth: 260,
     showOverflow: false,
-    slots: { default: 'nameSlot' },
+    slots: { default: 'name' },
   },
   {
     field: 'size',
@@ -111,6 +111,6 @@ export const fsTableColumns: YTableColumn[] = [
     width: 90,
     align: 'center',
     fixed: 'right',
-    slots: { default: 'actionSlot' },
+    slots: { default: 'action' },
   },
 ];

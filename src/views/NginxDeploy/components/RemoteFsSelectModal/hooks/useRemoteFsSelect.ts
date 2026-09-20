@@ -8,11 +8,18 @@ import message from 'ant-design-vue/es/message';
 import {
   getServerFsRoots,
   listServerFsEntries,
-  type DeployServer,
   type RemoteFsEntry,
   type RemoteFsRoot,
 } from '@/api/deploy';
-import { normalizePosix, isPathWithinAnyRoot, isSubPathOrEqual, type SelectBreadcrumbSegment } from '../constant';
+import {
+  normalizePosix,
+  isPathWithinAnyRoot,
+  isSubPathOrEqual,
+  getEntryOccupant,
+  type RemoteFsSelectModalProps,
+  type SelectBreadcrumbSegment,
+  type SelectFsEntry,
+} from '../constant';
 
 /**
  * 远程目录选择状态管理
@@ -21,7 +28,7 @@ import { normalizePosix, isPathWithinAnyRoot, isSubPathOrEqual, type SelectBread
  * @returns 目录浏览与选择状态及操作方法
  */
 export function useRemoteFsSelect(
-  props: { open: boolean; server?: DeployServer | null; initialPath?: string },
+  props: RemoteFsSelectModalProps,
   emit: { (e: 'update:open', val: boolean): void; (e: 'select', path: string): void }
 ) {
   const loading = ref(false);
@@ -33,10 +40,16 @@ export function useRemoteFsSelect(
   const selectedPath = ref<string>('');
   const rawEntries = ref<RemoteFsEntry[]>([]);
 
+  /** 实际生效的受限根边界 */
+  const effectiveRootPath = computed(() => {
+    if (props.lockedRoot) return normalizePosix(props.lockedRoot);
+    return rootPath.value ? normalizePosix(rootPath.value) : '';
+  });
+
   /** 当前是否位于受限根顶部 */
   const isAtRoot = computed(() => {
-    if (!rootPath.value || !currentPath.value) return true;
-    return normalizePosix(currentPath.value) === normalizePosix(rootPath.value);
+    if (!effectiveRootPath.value || !currentPath.value) return true;
+    return normalizePosix(currentPath.value) === effectiveRootPath.value;
   });
 
   /** 面包屑分段列表（受限根之上的祖先分段自动禁用点击，防止越界 403） */
@@ -46,10 +59,15 @@ export function useRemoteFsSelect(
     const parts = normalized.split('/').filter(Boolean);
     const list: SelectBreadcrumbSegment[] = [];
     let accumulated = '';
+    const normLocked = props.lockedRoot ? normalizePosix(props.lockedRoot) : '';
+
     for (let i = 0; i < parts.length; i += 1) {
       accumulated += `/${parts[i]}`;
       const isLast = i === parts.length - 1;
-      const isAccessible = isPathWithinAnyRoot(accumulated, roots.value);
+      let isAccessible = isPathWithinAnyRoot(accumulated, roots.value);
+      if (normLocked && !isSubPathOrEqual(accumulated, normLocked)) {
+        isAccessible = false;
+      }
       list.push({
         name: parts[i],
         path: accumulated,
@@ -61,15 +79,25 @@ export function useRemoteFsSelect(
     return list;
   });
 
-  /** 表格展示条目，只筛选展示目录及首行虚拟上一级（支持隐藏项过滤） */
-  const tableEntries = computed<RemoteFsEntry[]>(() => {
-    const dirEntries = rawEntries.value.filter((item) => {
-      if (item.type !== 'directory') return false;
-      if (!showHidden.value && item.name.startsWith('.')) return false;
-      return true;
-    });
+  /** 表格展示条目，只筛选展示目录及首行虚拟上一级（注入目录占用元数据） */
+  const tableEntries = computed<SelectFsEntry[]>(() => {
+    const dirEntries: SelectFsEntry[] = rawEntries.value
+      .filter((item) => {
+        if (item.type !== 'directory') return false;
+        if (!showHidden.value && item.name.startsWith('.')) return false;
+        return true;
+      })
+      .map((item) => {
+        const fullPath = item.path || normalizePosix(`${currentPath.value}/${item.name}`);
+        const occupiedBy = getEntryOccupant(fullPath, props.occupiedMap);
+        return {
+          ...item,
+          path: fullPath,
+          occupiedBy,
+        };
+      });
     if (isAtRoot.value) return dirEntries;
-    const parentRow: RemoteFsEntry = {
+    const parentRow: SelectFsEntry = {
       name: '..',
       path: '..',
       type: 'parent_dir',
@@ -82,12 +110,23 @@ export function useRemoteFsSelect(
     return [parentRow, ...dirEntries];
   });
 
+  /** 当前选定路径对应的占用者说明 */
+  const selectedOccupant = computed(() => {
+    const pathToCheck = selectedPath.value || currentPath.value;
+    if (!pathToCheck) return undefined;
+    return getEntryOccupant(pathToCheck, props.occupiedMap);
+  });
+
   /**
    * 拉取远程指定目录内容。
    * @param targetPath 目标绝对路径
    */
   const fetchDirectory = async (targetPath?: string) => {
     if (!props.server) return;
+    if (props.lockedRoot && targetPath && !isSubPathOrEqual(targetPath, props.lockedRoot)) {
+      message.warning('所选路径超出当前锁定作用域');
+      return;
+    }
     if (targetPath && roots.value.length > 0 && !isPathWithinAnyRoot(targetPath, roots.value)) {
       message.warning('所选路径超出当前服务器受限作用域');
       return;
@@ -96,7 +135,7 @@ export function useRemoteFsSelect(
     try {
       const res = await listServerFsEntries(props.server.id, targetPath);
       currentPath.value = res.currentPath;
-      rootPath.value = res.rootPath;
+      rootPath.value = props.lockedRoot ? normalizePosix(props.lockedRoot) : res.rootPath;
       rawEntries.value = res.entries;
       selectedPath.value = res.currentPath;
 
@@ -117,19 +156,52 @@ export function useRemoteFsSelect(
     loading.value = true;
     try {
       const { roots: serverRoots } = await getServerFsRoots(props.server.id);
-      roots.value = serverRoots;
       if (!serverRoots || serverRoots.length === 0) {
         message.warning('该服务器未配置受限作用域根目录');
         return;
       }
 
-      const defaultRoot = serverRoots.find((r) => r.isDefault) || serverRoots[0];
+      // 清洗伪根（过滤掉已有部署目标的业务叶子目录）
+      const cleanRoots = serverRoots.filter(
+        (r) => !r.id.startsWith('target-') && !r.label.startsWith('部署目标')
+      );
+
+      // 若指定了 lockedRoot（如当前 Nginx 实例站点根），则强行限定作用域
+      if (props.lockedRoot) {
+        const normLocked = normalizePosix(props.lockedRoot);
+        const matched = (cleanRoots.length > 0 ? cleanRoots : serverRoots).find(
+          (r) => normalizePosix(r.path) === normLocked
+        );
+        const lockedItem: RemoteFsRoot = {
+          id: matched?.id || 'locked-scope',
+          label: props.scopeLabel || matched?.label || '锁定站点根',
+          path: normLocked,
+          isDefault: true,
+        };
+        roots.value = [lockedItem];
+        activeRoot.value = lockedItem;
+        rootPath.value = normLocked;
+
+        let preferredPath = normLocked;
+        if (props.initialPath) {
+          const normInitial = normalizePosix(props.initialPath);
+          if (isSubPathOrEqual(normInitial, normLocked)) {
+            preferredPath = normInitial;
+          }
+        }
+        await fetchDirectory(preferredPath);
+        return;
+      }
+
+      // 否则使用清洗后的系统根列表
+      roots.value = cleanRoots.length > 0 ? cleanRoots : serverRoots;
+      const defaultRoot = roots.value.find((r) => r.isDefault) || roots.value[0];
       activeRoot.value = defaultRoot;
 
       let preferredPath = defaultRoot.path;
       if (props.initialPath) {
         const normalizedInitial = normalizePosix(props.initialPath);
-        const matched = serverRoots.find((r) => normalizedInitial.startsWith(normalizePosix(r.path)));
+        const matched = roots.value.find((r) => normalizedInitial.startsWith(normalizePosix(r.path)));
         if (matched) {
           activeRoot.value = matched;
           preferredPath = normalizedInitial;
@@ -155,6 +227,10 @@ export function useRemoteFsSelect(
     const parts = currentPath.value.split('/').filter(Boolean);
     if (parts.length <= 1) return;
     const parentPath = `/${parts.slice(0, -1).join('/')}`;
+    if (props.lockedRoot && !isSubPathOrEqual(parentPath, props.lockedRoot)) {
+      message.info('已到达当前受限根目录顶部');
+      return;
+    }
     if (!isPathWithinAnyRoot(parentPath, roots.value)) {
       message.info('已到达当前受限根目录顶部');
       return;
@@ -181,12 +257,28 @@ export function useRemoteFsSelect(
   };
 
   /**
+   * 判断某行是否处于当前选定状态。
+   * @param entry 目录条目
+   * @returns 是否已被选定
+   */
+  const isRowSelected = (entry: RemoteFsEntry): boolean => {
+    if (!selectedPath.value) return false;
+    const normSelected = normalizePosix(selectedPath.value);
+    if (entry.type === 'parent_dir') {
+      return normSelected === normalizePosix(currentPath.value);
+    }
+    const itemFullPath = normalizePosix(entry.path || `${currentPath.value}/${entry.name}`);
+    return normSelected === itemFullPath;
+  };
+
+  /**
    * 单击行：高亮并标记选定路径。
    * @param entry 行条目
    */
   const handleRowClick = (entry: RemoteFsEntry) => {
     if (entry.type === 'directory') {
-      selectedPath.value = entry.path;
+      const fullPath = entry.path || normalizePosix(`${currentPath.value}/${entry.name}`);
+      selectedPath.value = fullPath;
     } else if (entry.type === 'parent_dir') {
       selectedPath.value = currentPath.value;
     }
@@ -211,6 +303,10 @@ export function useRemoteFsSelect(
     const finalPath = selectedPath.value || currentPath.value;
     if (!finalPath) {
       message.warning('请先选择有效的目录');
+      return;
+    }
+    if (selectedOccupant.value) {
+      message.warning(`该目录已被 ${selectedOccupant.value} 占用，请选择其他目录`);
       return;
     }
     emit('select', finalPath);
@@ -238,6 +334,7 @@ export function useRemoteFsSelect(
     activeRoot,
     currentPath,
     selectedPath,
+    selectedOccupant,
     isAtRoot,
     breadcrumbs,
     tableEntries,
@@ -248,5 +345,6 @@ export function useRemoteFsSelect(
     handleRowClick,
     handleRowDblClick,
     confirmSelection,
+    isRowSelected,
   };
 }

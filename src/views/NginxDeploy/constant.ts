@@ -903,6 +903,13 @@ export const targetFormSchema = {
                 fulfill: { state: { visible: '{{$deps[0] !== "backend"}}' } },
               },
             },
+            fsExplorer: {
+              type: 'void',
+              'x-decorator': 'FormItem',
+              'x-decorator-props': { gridSpan: 2, class: 'full-width-fs-explorer-item' },
+              'x-component': 'Slot',
+              'x-component-props': { name: 'fsExplorerSlot' },
+            },
             nginxSiteManaged: {
               type: 'boolean',
               title: '平台管理站点',
