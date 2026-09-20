@@ -27,6 +27,7 @@ const visible = computed({
 
 const {
   loading,
+  showHidden,
   roots,
   activeRoot,
   currentPath,
@@ -42,9 +43,6 @@ const {
   handleRowDblClick,
   confirmSelection,
 } = useRemoteFsSelect(props, emit);
-
-const onCellClick = (params: any) => handleRowClick(params?.row as RemoteFsEntry);
-const onCellDblClick = (params: any) => handleRowDblClick(params?.row as RemoteFsEntry);
 </script>
 
 <template>
@@ -74,10 +72,7 @@ const onCellDblClick = (params: any) => handleRowDblClick(params?.row as RemoteF
           size="small"
           class="root-select"
           placeholder="切换受限作用域"
-          @change="(val: any) => {
-            const found = roots.find((r) => r.id === val);
-            if (found) switchRoot(found);
-          }"
+          @change="(val: any) => { const found = roots.find((r) => r.id === val); if (found) switchRoot(found); }"
         >
           <a-select-option v-for="item in roots" :key="item.id" :value="item.id">
             {{ item.label }}
@@ -88,9 +83,9 @@ const onCellDblClick = (params: any) => handleRowDblClick(params?.row as RemoteF
             <span class="crumb-sep">/</span>
             <span
               class="crumb-item"
-              :class="{ 'is-active': seg.isLast }"
-              :title="`跳转到 ${seg.path}`"
-              @click="fetchDirectory(seg.path)"
+              :class="{ 'is-active': seg.isLast, 'is-disabled': seg.disabled }"
+              :title="seg.disabled ? seg.disabledReason : `跳转到 ${seg.path}`"
+              @click="!seg.disabled && !seg.isLast && fetchDirectory(seg.path)"
             >
               {{ seg.name }}
             </span>
@@ -110,8 +105,8 @@ const onCellDblClick = (params: any) => handleRowDblClick(params?.row as RemoteF
           size="small"
           :max-height="340"
           :row-config="{ keyField: 'name', isCurrent: true }"
-          @cell-click="onCellClick"
-          @cell-dblclick="onCellDblClick"
+          @cell-click="({ row }: any) => handleRowClick(row as RemoteFsEntry)"
+          @cell-dblclick="({ row }: any) => handleRowDblClick(row as RemoteFsEntry)"
         >
           <template #nameSlot="{ row }">
             <div class="select-entry-row" :title="row.type === 'parent_dir' ? '双击返回上一级' : '双击进入目录，单击选中'">
@@ -130,9 +125,12 @@ const onCellDblClick = (params: any) => handleRowDblClick(params?.row as RemoteF
 
     <template #footer>
       <div class="select-modal-footer">
-        <div class="footer-hint" :title="selectedPath || currentPath">
-          <span>当前选定:</span>
-          <span class="hint-path">{{ selectedPath || currentPath || '(未选择)' }}</span>
+        <div class="footer-left">
+          <a-checkbox v-model:checked="showHidden" class="show-hidden-checkbox">显示隐藏项</a-checkbox>
+          <div class="footer-hint" :title="selectedPath || currentPath">
+            <span>选定:</span>
+            <span class="hint-path">{{ selectedPath || currentPath || '(未选择)' }}</span>
+          </div>
         </div>
         <div class="footer-actions">
           <YButton @click="emit('update:open', false)">取消</YButton>

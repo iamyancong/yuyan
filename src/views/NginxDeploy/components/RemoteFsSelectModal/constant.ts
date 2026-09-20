@@ -10,6 +10,8 @@ export interface SelectBreadcrumbSegment {
   name: string;
   path: string;
   isLast: boolean;
+  disabled?: boolean;
+  disabledReason?: string;
 }
 
 /**
@@ -22,6 +24,29 @@ export function normalizePosix(raw: string): string {
   if (!trimmed) return '/';
   const parts = trimmed.split('/').filter(Boolean);
   return `/${parts.join('/')}`;
+}
+
+/**
+ * 判断目标路径是否为受限根或其合法子路径。
+ * @param targetPath 目标路径
+ * @param rootPath 允许根路径
+ * @returns 是否在允许根范围内
+ */
+export function isSubPathOrEqual(targetPath: string, rootPath: string): boolean {
+  const normTarget = normalizePosix(targetPath);
+  const normRoot = normalizePosix(rootPath);
+  return normTarget === normRoot || normTarget.startsWith(`${normRoot}/`);
+}
+
+/**
+ * 判断目标路径是否落在任一允许根范围内。
+ * @param targetPath 目标路径
+ * @param roots 允许根列表
+ * @returns 是否落在任一根范围内
+ */
+export function isPathWithinAnyRoot(targetPath: string, roots: Array<{ path: string }>): boolean {
+  if (!roots || roots.length === 0) return true;
+  return roots.some((r) => isSubPathOrEqual(targetPath, r.path));
 }
 
 /**
