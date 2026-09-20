@@ -46,12 +46,14 @@ test('resolveServerAllowedRoots 从服务器和部署目标动态推导允许根
 
   const roots = resolveServerAllowedRoots(fakeServer, fakeTargets);
 
-  assert.equal(roots.length, 5);
+  assert.equal(roots.length, 7);
   assert.equal(roots[0].path, '/data/web/html');
   assert.equal(roots[0].isDefault, true);
 
   const paths = roots.map((r) => r.path);
   assert.ok(paths.includes('/var/www/site1'));
+  assert.ok(paths.includes('/var/www'));
+  assert.ok(paths.includes('/data/web'));
   assert.ok(paths.includes('/etc/nginx/conf.d'));
   assert.ok(paths.includes('/opt/apps/backend'));
   assert.ok(paths.includes('/data/web/html/sub-project-a'));

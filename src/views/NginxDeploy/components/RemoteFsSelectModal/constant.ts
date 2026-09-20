@@ -4,6 +4,22 @@
  */
 
 import type { YTableColumn } from '@yss-ui/components/lite';
+import type { DeployServer, RemoteFsEntry } from '@/api/deploy';
+
+/** 远程目录选择弹窗属性 */
+export interface RemoteFsSelectModalProps {
+  open: boolean;
+  server?: DeployServer | null;
+  initialPath?: string;
+  lockedRoot?: string;
+  scopeLabel?: string;
+  occupiedMap?: Record<string, string>;
+}
+
+/** 目录条目扩展类型（注入占用信息） */
+export interface SelectFsEntry extends RemoteFsEntry {
+  occupiedBy?: string;
+}
 
 /** 路径片段 */
 export interface SelectBreadcrumbSegment {
@@ -50,6 +66,18 @@ export function isPathWithinAnyRoot(targetPath: string, roots: Array<{ path: str
 }
 
 /**
+ * 从目录条目中获取被占用说明（如有）。
+ * @param entryPath 条目路径
+ * @param occupiedMap 占用字典
+ * @returns 占用说明或 undefined
+ */
+export function getEntryOccupant(entryPath: string, occupiedMap?: Record<string, string>): string | undefined {
+  if (!entryPath || !occupiedMap) return undefined;
+  const norm = normalizePosix(entryPath);
+  return occupiedMap[norm];
+}
+
+/**
  * 格式化文件最后修改时间戳。
  * @param mtime 毫秒时间戳
  * @returns 紧凑日期时间文本
@@ -66,32 +94,35 @@ export function formatMtime(mtime: number | null): string {
   return `${month}-${day} ${hours}:${minutes}`;
 }
 
-/** 目录选择列表列配置 */
+/** 目录选择列表列配置（剔除冗余权限列，状态独立成列以保证整齐） */
 export const fsSelectTableColumns: YTableColumn[] = [
   {
     field: 'name',
-    title: '名称',
-    minWidth: 260,
+    title: '目录名称',
+    minWidth: 230,
     showOverflow: false,
-    slots: { default: 'nameSlot' },
+    slots: { default: 'name' },
   },
   {
-    field: 'permissions',
-    title: '权限',
-    width: 100,
-    align: 'center',
+    field: 'status',
+    title: '部署状态',
+    width: 270,
+    showOverflow: false,
+    slots: { default: 'status' },
   },
   {
     field: 'mtime',
     title: '修改时间',
-    width: 130,
+    width: 120,
     align: 'center',
     formatter: ({ cellValue }: { cellValue: unknown }) => formatMtime(cellValue as number | null),
   },
   {
+    field: 'action',
     title: '操作',
-    width: 80,
+    width: 90,
     align: 'center',
-    slots: { default: 'actionSlot' },
+    fixed: 'right',
+    slots: { default: 'action' },
   },
 ];

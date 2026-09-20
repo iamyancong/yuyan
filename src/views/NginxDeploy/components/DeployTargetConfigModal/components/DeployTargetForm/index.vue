@@ -1,58 +1,31 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue';
+import { defineAsyncComponent } from 'vue';
 import { YssFormily } from '@yss-ui/components/lite';
-import type { DeployTargetPayload } from '@/api/deploy';
-import type { FormilyRef } from '../../../../types';
-import { useNginxDeployContext } from '../../../../hooks/useNginxDeployContext';
-import { getPreferredNginxInstance } from '../../../../utils';
 import DeployRootField from '../DeployRootField/index.vue';
 import NginxInstanceField from '../NginxInstanceField/index.vue';
+import type { DeployTargetFormEmits, DeployTargetFormProps } from './constant';
+import { useDeployTargetForm } from './hooks/useDeployTargetForm';
 
 defineOptions({ name: 'DeployTargetForm' });
 
-/** 部署目标表单属性。 */
-interface DeployTargetFormProps {
-  loading: boolean;
-  form: DeployTargetPayload;
-  schema: Record<string, unknown>;
-  targetId?: number | null;
-}
+const InlineFsExplorer = defineAsyncComponent(() => import('../InlineFsExplorer/index.vue'));
 
 const props = defineProps<DeployTargetFormProps>();
-const emit = defineEmits<{
-  'update:form': [value: Partial<DeployTargetPayload>];
-  formRefChange: [value: FormilyRef | null];
-}>();
-const formRef = ref<FormilyRef | null>(null);
+const emit = defineEmits<DeployTargetFormEmits>();
 
-/** 全局服务器列表上下文 */
-const { servers } = useNginxDeployContext();
-
-/** 部署目标表单双向绑定模型。 */
-const formModel = computed({
-  get: () => props.form,
-  set: (value: Partial<DeployTargetPayload>) => emit('update:form', value || {}),
-});
-
-/** 当前选中的部署服务器 */
-const selectedServer = computed(() => {
-  if (!formModel.value.serverId) return null;
-  return servers.value.find((s) => s.id === Number(formModel.value.serverId)) || null;
-});
-
-/** 当前选中的 Nginx 实例（未指定时自动回退为默认托管实例） */
-const selectedInstance = computed(() => {
-  if (!selectedServer.value) return null;
-  const currentId = Number(formModel.value.nginxInstanceId || 0);
-  if (currentId) {
-    const matched = selectedServer.value.nginxInstances?.find((i) => i.id === currentId);
-    if (matched) return matched;
-  }
-  return getPreferredNginxInstance(selectedServer.value);
-});
-
-watch(formRef, (instance) => emit('formRefChange', instance), { flush: 'post' });
-onUnmounted(() => emit('formRefChange', null));
+const {
+  formRef,
+  formModel,
+  selectedServer,
+  selectedInstance,
+  lockedScope,
+  isExplorerOpen,
+  occupiedMap,
+  toggleExplorer,
+  closeExplorer,
+  handleSelectPath,
+  handleUpdateOccupiedMap,
+} = useDeployTargetForm(props, emit);
 </script>
 
 <template>
@@ -99,8 +72,26 @@ onUnmounted(() => emit('formRefChange', null));
             :build-command="formModel.buildCommand"
             :artifact-dir="formModel.artifactDir"
             :target-id="targetId"
+            :is-explorer-open="isExplorerOpen"
             @update:model-value="onChange"
+            @toggle-explorer="toggleExplorer"
+            @update:occupied-map="handleUpdateOccupiedMap"
           />
+        </template>
+        <template #fsExplorerSlot>
+          <transition name="explorer-slide">
+            <InlineFsExplorer
+              v-if="isExplorerOpen && selectedServer"
+              :model-value="formModel.deployRoot"
+              :server="selectedServer"
+              :locked-root="lockedScope.root"
+              :default-path="lockedScope.defaultPath"
+              :scope-label="lockedScope.label"
+              :occupied-map="occupiedMap"
+              @update:model-value="handleSelectPath"
+              @close="closeExplorer"
+            />
+          </transition>
         </template>
         <template #targetPublishSection>
           <div class="target-form-section">

@@ -1,45 +1,39 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, ref } from 'vue';
-import { BulbOutlined, FolderOpenOutlined, LoadingOutlined } from '@ant-design/icons-vue';
+import { computed, watch } from 'vue';
+import { BulbOutlined, FolderOpenFilled, FolderOpenOutlined, LoadingOutlined } from '@ant-design/icons-vue';
 import { useDeployRootRecommendation, type DeployRootSelectOption } from '../../../../hooks/useDeployRootRecommendation';
 import { useNginxDeployContext } from '../../../../hooks/useNginxDeployContext';
-import type { DeployRootFieldProps } from './constant';
+import { extractOccupiedMap, type DeployRootFieldProps } from './constant';
 
 defineOptions({ name: 'DeployRootField' });
 
-const RemoteFsSelectModal = defineAsyncComponent(() => import('../../../RemoteFsSelectModal/index.vue'));
-
 const props = defineProps<DeployRootFieldProps>();
-const emit = defineEmits<{ 'update:modelValue': [value: string] }>();
+const emit = defineEmits<{
+  'update:modelValue': [value: string];
+  'toggleExplorer': [];
+  'update:occupiedMap': [value: Record<string, string>];
+}>();
 
 const context = useNginxDeployContext();
-const selectModalOpen = ref(false);
 
 const currentServer = computed(() => {
   if (!props.serverId) return null;
   return context?.servers?.value?.find((s) => s.id === Number(props.serverId)) || null;
 });
 
-const handleBrowseRemoteFs = () => {
-  if (!currentServer.value) return;
-  selectModalOpen.value = true;
-};
-
-const handleSelectRemotePath = (selectedPath: string) => emit('update:modelValue', selectedPath);
-
 const {
-  loading,
-  hint,
-  options,
-  recommendation,
-  autoManaged,
-  canApplyRecommendation,
-  applyRecommendation,
-  filterOption,
-  handleFocus,
-  handleSelect,
-  handleValueChange,
+  loading, hint, options, recommendation, autoManaged, canApplyRecommendation,
+  applyRecommendation, filterOption, handleFocus, handleSelect, handleValueChange,
 } = useDeployRootRecommendation(props, emit);
+
+// 提取并向外同步被占用的目录字典
+watch(
+  options,
+  (opts) => {
+    emit('update:occupiedMap', extractOccupiedMap(opts || []));
+  },
+  { immediate: true, deep: true }
+);
 
 /** 当前提示是否属于警告状态。 */
 const warning = computed(() => /失败|未能|未生成|未识别|已被|已由|冲突/.test(hint.value));
@@ -50,11 +44,7 @@ const onSelect = (value: string, option: DeployRootSelectOption) => handleSelect
 /** 转发后端路径输入值。 */
 const onBackendValueChange = (value: string) => emit('update:modelValue', value || '');
 
-/**
- * 将下拉面板挂载到字段容器，使其跟随弹窗内容滚动。
- * @param triggerNode AutoComplete 触发节点
- * @returns 下拉面板挂载容器
- */
+/** 将下拉面板挂载到字段容器，使其跟随弹窗内容滚动。 */
 const getPopupContainer = (triggerNode: HTMLElement) =>
   triggerNode.closest<HTMLElement>('.deploy-root-field') || triggerNode.parentElement || triggerNode;
 </script>
@@ -71,11 +61,11 @@ const getPopupContainer = (triggerNode: HTMLElement) =>
         type="link"
         size="small"
         :disabled="!currentServer"
-        title="在服务器上浏览并选择目录"
         style="padding: 0 4px; height: auto"
-        @click="handleBrowseRemoteFs"
+        @click="emit('toggleExplorer')"
       >
-        <FolderOpenOutlined /> 浏览
+        <component :is="isExplorerOpen ? FolderOpenFilled : FolderOpenOutlined" />
+        {{ isExplorerOpen ? '收起' : '浏览' }}
       </a-button>
     </template>
   </a-input>
@@ -123,19 +113,14 @@ const getPopupContainer = (triggerNode: HTMLElement) =>
         type="link"
         size="small"
         class="deploy-root-field__apply"
-        @click="handleBrowseRemoteFs"
+        :class="{ 'is-active': isExplorerOpen }"
+        @click="emit('toggleExplorer')"
       >
-        <FolderOpenOutlined /> 浏览服务器
+        <component :is="isExplorerOpen ? FolderOpenFilled : FolderOpenOutlined" />
+        {{ isExplorerOpen ? '收起目录' : '浏览服务器' }}
       </a-button>
     </div>
   </div>
-  <RemoteFsSelectModal
-    v-if="currentServer"
-    v-model:open="selectModalOpen"
-    :server="currentServer"
-    :initial-path="modelValue"
-    @select="handleSelectRemotePath"
-  />
 </template>
 
 <style scoped lang="less">

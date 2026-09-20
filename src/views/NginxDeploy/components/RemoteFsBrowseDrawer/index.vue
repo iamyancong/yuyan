@@ -98,7 +98,7 @@ const { execPanelVisible, commandText, executing, execResult, toggleExecPanel, r
           @cell-click="({ row }: any) => handleRowClick(row as RemoteFsEntry)"
           @cell-dblclick="({ row }: any) => handleRowDblClick(row as RemoteFsEntry, openPreview)"
         >
-          <template #nameSlot="{ row }">
+          <template #name="{ row }">
             <div class="fs-entry-row" :title="row.type === 'parent_dir' ? '双击返回上一级' : row.type === 'directory' ? '双击进入目录' : '双击预览文件'">
               <ArrowUpOutlined v-if="row.type === 'parent_dir'" class="entry-icon is-parent" />
               <FolderOpenOutlined v-else-if="row.type === 'directory'" class="entry-icon is-dir" />
@@ -106,7 +106,7 @@ const { execPanelVisible, commandText, executing, execResult, toggleExecPanel, r
               <span class="entry-name" :class="{ 'is-parent': row.type === 'parent_dir' }">{{ row.name }}</span>
             </div>
           </template>
-          <template #actionSlot="{ row }">
+          <template #action="{ row }">
             <YButton v-if="row.type === 'directory'" type="link" size="small" @click.stop="drillDown(row.name)">进入</YButton>
             <YButton v-else-if="row.type === 'parent_dir'" type="link" size="small" @click.stop="navigateUp">返回</YButton>
             <YButton v-else type="link" size="small" @click.stop="openPreview(row)">预览</YButton>

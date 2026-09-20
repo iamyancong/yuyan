@@ -1,6 +1,6 @@
 /**
- * 远程目录选择状态机 Hook
- * @description 封装 Finder/资源管理器风格的目录钻取、快捷根切换与路径选定逻辑
+ * 行内文件选择器业务状态 Hook
+ * @description 管理行内目录浏览、实时回填与占用防御
  */
 
 import { computed, ref, watch } from 'vue';
@@ -16,20 +16,20 @@ import {
   isPathWithinAnyRoot,
   isSubPathOrEqual,
   getEntryOccupant,
-  type RemoteFsSelectModalProps,
+  type InlineFsExplorerProps,
   type SelectBreadcrumbSegment,
   type SelectFsEntry,
-} from '../constant';
+} from '../constant.ts';
 
 /**
- * 远程目录选择状态管理
+ * 行内文件浏览器状态逻辑
  * @param props 组件属性
  * @param emit 事件发射器
- * @returns 目录浏览与选择状态及操作方法
+ * @returns 状态与交互操作
  */
-export function useRemoteFsSelect(
-  props: RemoteFsSelectModalProps,
-  emit: { (e: 'update:open', val: boolean): void; (e: 'select', path: string): void }
+export function useInlineFsExplorer(
+  props: InlineFsExplorerProps,
+  emit: { (e: 'update:modelValue', val: string): void; (e: 'close'): void }
 ) {
   const loading = ref(false);
   const showHidden = ref(false);
@@ -37,7 +37,7 @@ export function useRemoteFsSelect(
   const activeRoot = ref<RemoteFsRoot | null>(null);
   const currentPath = ref<string>('');
   const rootPath = ref<string>('');
-  const selectedPath = ref<string>('');
+  const selectedPath = ref<string>(props.modelValue ? normalizePosix(props.modelValue) : '');
   const rawEntries = ref<RemoteFsEntry[]>([]);
 
   /** 实际生效的受限根边界 */
@@ -52,7 +52,7 @@ export function useRemoteFsSelect(
     return normalizePosix(currentPath.value) === effectiveRootPath.value;
   });
 
-  /** 面包屑分段列表（受限根之上的祖先分段自动禁用点击，防止越界 403） */
+  /** 面包屑分段列表 */
   const breadcrumbs = computed<SelectBreadcrumbSegment[]>(() => {
     if (!currentPath.value) return [];
     const normalized = normalizePosix(currentPath.value);
@@ -73,13 +73,13 @@ export function useRemoteFsSelect(
         path: accumulated,
         isLast,
         disabled: !isAccessible,
-        disabledReason: !isAccessible ? '当前受限作用域无法向上访问' : undefined,
+        disabledReason: !isAccessible ? '超出锁定作用域' : undefined,
       });
     }
     return list;
   });
 
-  /** 表格展示条目，只筛选展示目录及首行虚拟上一级（注入目录占用元数据） */
+  /** 表格展示条目，只筛选展示目录及首行虚拟上一级（注入占用信息） */
   const tableEntries = computed<SelectFsEntry[]>(() => {
     const dirEntries: SelectFsEntry[] = rawEntries.value
       .filter((item) => {
@@ -137,7 +137,6 @@ export function useRemoteFsSelect(
       currentPath.value = res.currentPath;
       rootPath.value = props.lockedRoot ? normalizePosix(props.lockedRoot) : res.rootPath;
       rawEntries.value = res.entries;
-      selectedPath.value = res.currentPath;
 
       const matchedRoot = roots.value.find((r) => r.path === res.rootPath);
       if (matchedRoot) activeRoot.value = matchedRoot;
@@ -183,28 +182,35 @@ export function useRemoteFsSelect(
         rootPath.value = normLocked;
 
         let preferredPath = normLocked;
-        if (props.initialPath) {
-          const normInitial = normalizePosix(props.initialPath);
-          if (isSubPathOrEqual(normInitial, normLocked)) {
-            preferredPath = normInitial;
+        if (props.defaultPath) {
+          const normDefault = normalizePosix(props.defaultPath);
+          if (isSubPathOrEqual(normDefault, normLocked)) {
+            preferredPath = normDefault;
+          }
+        }
+        if (props.modelValue) {
+          const normModel = normalizePosix(props.modelValue);
+          if (isSubPathOrEqual(normModel, normLocked)) {
+            preferredPath = normModel;
+            selectedPath.value = normModel;
           }
         }
         await fetchDirectory(preferredPath);
         return;
       }
 
-      // 否则使用清洗后的系统根列表
       roots.value = cleanRoots.length > 0 ? cleanRoots : serverRoots;
       const defaultRoot = roots.value.find((r) => r.isDefault) || roots.value[0];
       activeRoot.value = defaultRoot;
 
       let preferredPath = defaultRoot.path;
-      if (props.initialPath) {
-        const normalizedInitial = normalizePosix(props.initialPath);
-        const matched = roots.value.find((r) => normalizedInitial.startsWith(normalizePosix(r.path)));
+      if (props.modelValue) {
+        const normModel = normalizePosix(props.modelValue);
+        const matched = roots.value.find((r) => normModel.startsWith(normalizePosix(r.path)));
         if (matched) {
           activeRoot.value = matched;
-          preferredPath = normalizedInitial;
+          preferredPath = normModel;
+          selectedPath.value = normModel;
         }
       }
 
@@ -248,15 +254,6 @@ export function useRemoteFsSelect(
   };
 
   /**
-   * 切换快捷允许根。
-   * @param root 选中的允许根
-   */
-  const switchRoot = (root: RemoteFsRoot) => {
-    if (currentPath.value === root.path) return;
-    void fetchDirectory(root.path);
-  };
-
-  /**
    * 判断某行是否处于当前选定状态。
    * @param entry 目录条目
    * @returns 是否已被选定
@@ -272,15 +269,26 @@ export function useRemoteFsSelect(
   };
 
   /**
-   * 单击行：高亮并标记选定路径。
+   * 单击行：高亮并实时回填选定路径（若未占用）。
    * @param entry 行条目
    */
   const handleRowClick = (entry: RemoteFsEntry) => {
     if (entry.type === 'directory') {
       const fullPath = entry.path || normalizePosix(`${currentPath.value}/${entry.name}`);
       selectedPath.value = fullPath;
+      const occupant = getEntryOccupant(fullPath, props.occupiedMap);
+      if (occupant) {
+        message.warning(`该目录已被 ${occupant} 占用，不可复用`);
+      } else {
+        emit('update:modelValue', fullPath);
+        message.success({ content: `已选定: ${fullPath}`, key: 'inline-fs-select', duration: 1.5 });
+      }
     } else if (entry.type === 'parent_dir') {
       selectedPath.value = currentPath.value;
+      const occupant = getEntryOccupant(currentPath.value, props.occupiedMap);
+      if (!occupant) {
+        emit('update:modelValue', currentPath.value);
+      }
     }
   };
 
@@ -296,33 +304,11 @@ export function useRemoteFsSelect(
     }
   };
 
-  /**
-   * 确认选择当前选中的路径并关闭弹窗。
-   */
-  const confirmSelection = () => {
-    const finalPath = selectedPath.value || currentPath.value;
-    if (!finalPath) {
-      message.warning('请先选择有效的目录');
-      return;
-    }
-    if (selectedOccupant.value) {
-      message.warning(`该目录已被 ${selectedOccupant.value} 占用，请选择其他目录`);
-      return;
-    }
-    emit('select', finalPath);
-    emit('update:open', false);
-    message.success(`已选定部署根目录: ${finalPath}`);
-  };
-
+  // 挂载时立即拉取允许根
   watch(
-    () => props.open,
-    (isOpen) => {
-      if (isOpen && props.server) {
-        void initRootsAndBrowse();
-      } else {
-        rawEntries.value = [];
-        selectedPath.value = '';
-      }
+    () => props.server?.id,
+    (serverId) => {
+      if (serverId) void initRootsAndBrowse();
     },
     { immediate: true }
   );
@@ -341,10 +327,8 @@ export function useRemoteFsSelect(
     fetchDirectory,
     navigateUp,
     drillDown,
-    switchRoot,
     handleRowClick,
     handleRowDblClick,
-    confirmSelection,
     isRowSelected,
   };
 }

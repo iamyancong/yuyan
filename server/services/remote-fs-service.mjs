@@ -106,6 +106,8 @@ export function resolveServerAllowedRoots(server, targets = []) {
   // 1. 服务器默认部署根
   if (server?.defaultDeployRoot) {
     addRoot('server-deploy-root', '站点根目录', server.defaultDeployRoot, true);
+    const parentDir = path.posix.dirname(normalizePosixPath(server.defaultDeployRoot));
+    addRoot('server-deploy-parent', '站点根上级', parentDir);
   }
 
   // 2. Nginx 实例静态站点与配置目录
@@ -114,9 +116,13 @@ export function resolveServerAllowedRoots(server, targets = []) {
     const name = instance.name || `实例 ${instance.id}`;
     if (instance.htmlRoot) {
       addRoot(`nginx-html-${instance.id}`, `站点目录 (${name})`, instance.htmlRoot);
+      const parentDir = path.posix.dirname(normalizePosixPath(instance.htmlRoot));
+      addRoot(`nginx-parent-${instance.id}`, `部署根 (${name})`, parentDir);
     }
     if (instance.defaultDeployRoot) {
       addRoot(`nginx-deploy-${instance.id}`, `部署根 (${name})`, instance.defaultDeployRoot);
+      const parentDir = path.posix.dirname(normalizePosixPath(instance.defaultDeployRoot));
+      addRoot(`nginx-deploy-parent-${instance.id}`, `部署根上级 (${name})`, parentDir);
     }
     if (instance.configPath) {
       const confDir = path.posix.dirname(normalizePosixPath(instance.configPath));

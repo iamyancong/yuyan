@@ -18,8 +18,26 @@
     column-gap: 18px !important;
   }
 
-  :deep([class*='formily-form-grid'] > [data-grid-span='2']) {
+  :deep([class*='formily-form-grid'] > [data-grid-span='2']),
+  :deep(.full-width-fs-explorer-item) {
     grid-column: span 2 / auto !important;
+  }
+
+  :deep(.full-width-fs-explorer-item) {
+    margin-bottom: 0 !important;
+
+    &:not(:has(.inline-fs-card)) {
+      display: none !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      height: 0 !important;
+      overflow: hidden !important;
+    }
+
+    &:has(.inline-fs-card) {
+      margin-top: 4px;
+      margin-bottom: 16px !important;
+    }
   }
 }
 
@@ -56,4 +74,21 @@
       grid-column: span 1 / auto !important;
     }
   }
+}
+
+.explorer-slide-enter-active,
+.explorer-slide-leave-active {
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  max-height: 460px;
+  opacity: 1;
+  overflow: hidden;
+}
+
+.explorer-slide-enter-from,
+.explorer-slide-leave-to {
+  max-height: 0;
+  opacity: 0;
+  margin-top: 0;
+  margin-bottom: 0;
+  overflow: hidden;
 }
