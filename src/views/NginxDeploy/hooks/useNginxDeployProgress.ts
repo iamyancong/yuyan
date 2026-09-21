@@ -1,7 +1,6 @@
 import { computed, reactive, ref, watch, type Ref } from 'vue';
 import message from 'ant-design-vue/es/message';
-import { showGlassNotification } from '@/utils/globalNotification';
-import { openExternal } from '@/utils/open';
+import { notifyDeployResult } from '@/utils/deployNotification';
 import {
   deployTargetWithProgress,
   getTargetDeployProgress,
@@ -305,13 +304,6 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
         progressState.stopped = true;
         progressState.title = '已停止';
         progressState.detail = '发布任务已停止，未进入上传产物阶段。';
-        showGlassNotification({
-          type: 'warning',
-          title: '发布已停止',
-          badge: target.envName || '已停止',
-          description: `${target.projectName || '项目'} 发布任务已停止，未进入上传产物阶段。`,
-          duration: 3.5,
-        });
         await refreshActiveTab({ resetRecordsPage: true, force: true });
         return;
       }
@@ -319,21 +311,13 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       const visitUrl = String(target.visitUrl || '').trim();
       const hasValidVisitUrl = Boolean(visitUrl && visitUrl !== '未配置' && visitUrl !== '-' && /^https?:\/\//i.test(visitUrl));
 
-      showGlassNotification({
-        type: 'success',
-        title: '发布完成',
-        badge: target.envName || '已就绪',
-        description: `${target.projectName || '项目'} 已成功发布到「${target.serverName || target.envName || '服务器'}」`,
-        actions: hasValidVisitUrl
-          ? [
-              {
-                text: '打开站点',
-                primary: true,
-                onClick: () => openExternal(visitUrl),
-              },
-            ]
-          : undefined,
-        duration: 3.5,
+      void notifyDeployResult({
+        status: 'success',
+        projectName: target.projectName,
+        targetName: target.serverName || target.envName,
+        envName: target.envName,
+        deployId: sessionId,
+        visitUrl: hasValidVisitUrl ? visitUrl : undefined,
       });
       await refreshActiveTab({ resetRecordsPage: true, force: true });
     } catch (error: any) {
@@ -346,13 +330,6 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
             stopped: true,
           });
           message.warning('发布任务已停止');
-          showGlassNotification({
-            type: 'warning',
-            title: '发布已停止',
-            badge: target.envName || '已停止',
-            description: `${target.projectName || '项目'} 发布任务已停止。`,
-            duration: 3.5,
-          });
           await new Promise((resolve) => window.setTimeout(resolve, 500));
           await refreshActiveTab({ resetRecordsPage: true, force: true });
         }
@@ -379,12 +356,12 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
         fallbackStage: currentPublishStageKey.value,
       });
       progressState.detail = DEPLOY_FAILURE_BRIEF;
-      showGlassNotification({
-        type: 'error',
-        title: '发布失败',
-        badge: target.envName || '异常',
-        description: `${target.projectName || '项目'} 发布失败：${errorMessage}`,
-        duration: 5.0,
+      void notifyDeployResult({
+        status: 'error',
+        projectName: target.projectName,
+        stage: currentPublishStageKey.value,
+        errorMessage,
+        deployId: sessionId,
       });
     } finally {
       if (sessionId === progressSessionId) {
@@ -438,13 +415,6 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
         progressState.stopped = true;
         progressState.title = '已停止';
         progressState.detail = '发布任务已停止，未进入上传产物阶段。';
-        showGlassNotification({
-          type: 'warning',
-          title: '任务已停止',
-          badge: '已停止',
-          description: `${target.projectName || '项目'} 任务已停止，未进入上传产物阶段。`,
-          duration: 3.5,
-        });
         await refreshActiveTab({ resetRecordsPage: true, force: true });
         return;
       }
@@ -454,22 +424,16 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       const visitUrl = String(target.visitUrl || '').trim();
       const hasValidVisitUrl = Boolean(visitUrl && visitUrl !== '未配置' && visitUrl !== '-' && /^https?:\/\//i.test(visitUrl));
 
-      showGlassNotification({
-        type: 'success',
-        title: `${actionLabel}完成`,
-        badge: target.envName || '已就绪',
-        description: `${target.projectName || '项目'} ${actionLabel}成功。`,
-        actions: hasValidVisitUrl
-          ? [
-              {
-                text: '打开站点',
-                primary: true,
-                onClick: () => openExternal(visitUrl),
-              },
-            ]
-          : undefined,
-        duration: 3.5,
-      });
+      if (snapshot.action === 'deploy') {
+        void notifyDeployResult({
+          status: 'success',
+          projectName: target.projectName,
+          targetName: target.serverName || target.envName,
+          envName: target.envName,
+          deployId: sessionId,
+          visitUrl: hasValidVisitUrl ? visitUrl : undefined,
+        });
+      }
       await refreshActiveTab({ resetRecordsPage: true, force: true });
     } catch (error: any) {
       if (isAbortError(error) || abortController.signal.aborted || sessionId !== progressSessionId) return;
@@ -491,13 +455,15 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
         fallbackStage: currentPublishStageKey.value || snapshot.currentStage,
       });
       progressState.detail = snapshot.action === 'deploy' ? DEPLOY_FAILURE_BRIEF : errorMessage;
-      showGlassNotification({
-        type: 'error',
-        title: `${getDeployProgressActionLabel(snapshot.action)}失败`,
-        badge: '失败',
-        description: `${target.projectName || '项目'} ${getDeployProgressActionLabel(snapshot.action)}失败：${errorMessage}`,
-        duration: 5.0,
-      });
+      if (snapshot.action === 'deploy') {
+        void notifyDeployResult({
+          status: 'error',
+          projectName: target.projectName,
+          stage: currentPublishStageKey.value || snapshot.currentStage,
+          errorMessage,
+          deployId: sessionId,
+        });
+      }
     } finally {
       if (sessionId === progressSessionId) {
         progressState.running = false;

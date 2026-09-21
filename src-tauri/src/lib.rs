@@ -2,6 +2,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -19,6 +20,85 @@ const LIGHT_ICON: &[u8] = include_bytes!("../resources/yuyan_light_clean.png");
 const DEFAULT_LOCAL_SERVER_PORT: u16 = 3101;
 const LOCAL_SERVER_STARTUP_TIMEOUT: Duration = Duration::from_secs(12);
 const LOCAL_SERVER_STOP_TIMEOUT: Duration = Duration::from_secs(3);
+
+/** 浮窗内当前是否存在鼠标悬停或键盘焦点交互。 */
+static FLOATING_NOTIFICATION_INTERACTING: AtomicBool = AtomicBool::new(false);
+
+/** 缓存最近一次派发的桌面悬浮通知数据，解决浮窗初次挂载时漏收事件的时序竞争。 */
+static LATEST_FLOATING_TASK: std::sync::Mutex<Option<serde_json::Value>> = std::sync::Mutex::new(None);
+
+/** 判断本次浮窗隐藏请求是否允许执行。 */
+fn can_hide_floating_notification(force: bool) -> bool {
+    force || !FLOATING_NOTIFICATION_INTERACTING.load(Ordering::Acquire)
+}
+
+/** 判断物理坐标点是否位于指定窗口矩形内。 */
+fn is_point_inside_window(
+    point_x: f64,
+    point_y: f64,
+    window_x: i32,
+    window_y: i32,
+    window_width: u32,
+    window_height: u32,
+) -> bool {
+    point_x >= f64::from(window_x)
+        && point_x < f64::from(window_x) + f64::from(window_width)
+        && point_y >= f64::from(window_y)
+        && point_y < f64::from(window_y) + f64::from(window_height)
+}
+
+/**
+ * 从桌面全局坐标判断鼠标是否位于浮窗范围内。
+ * 该检测不依赖 WebView DOM 事件，因此应用处于后台时仍然有效。
+ */
+fn cursor_is_over_floating_notification(app: &tauri::AppHandle) -> bool {
+    let Some(window) = app.get_webview_window("floating-notification") else {
+        return false;
+    };
+    if !window.is_visible().unwrap_or(false) {
+        return false;
+    }
+
+    let (Ok(cursor), Ok(position), Ok(size)) = (
+        window.cursor_position(),
+        window.outer_position(),
+        window.outer_size(),
+    ) else {
+        return false;
+    };
+
+    is_point_inside_window(
+        cursor.x,
+        cursor.y,
+        position.x,
+        position.y,
+        size.width,
+        size.height,
+    )
+}
+
+#[cfg(test)]
+mod floating_notification_tests {
+    use super::*;
+
+    #[test]
+    fn 交互期间拒绝自动隐藏但允许用户主动关闭() {
+        FLOATING_NOTIFICATION_INTERACTING.store(true, Ordering::Release);
+        assert!(!can_hide_floating_notification(false));
+        assert!(can_hide_floating_notification(true));
+
+        FLOATING_NOTIFICATION_INTERACTING.store(false, Ordering::Release);
+        assert!(can_hide_floating_notification(false));
+    }
+
+    #[test]
+    fn 窗口命中检测包含左上边界但不包含右下边界() {
+        assert!(is_point_inside_window(100.0, 50.0, 100, 50, 430, 156));
+        assert!(is_point_inside_window(529.9, 205.9, 100, 50, 430, 156));
+        assert!(!is_point_inside_window(530.0, 100.0, 100, 50, 430, 156));
+        assert!(!is_point_inside_window(200.0, 206.0, 100, 50, 430, 156));
+    }
+}
 
 /** Windows 后台控制台进程的无窗口创建标志。 */
 #[cfg(target_os = "windows")]
@@ -873,14 +953,18 @@ fn reveal_in_file_manager(path: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        let status = Command::new("explorer.exe")
-            .arg("/select,")
-            .arg(&path)
-            .status()
+        // 1. 规范化 Windows 路径，将正斜杠统一转换为反斜杠，避免 explorer.exe 无法识别
+        let clean_path = path.replace('/', "\\");
+        // explorer.exe 的 /select, 必须与路径紧密相连无空格
+        let arg = format!("/select,{}", clean_path);
+
+        let mut cmd = Command::new("explorer.exe");
+        cmd.arg(&arg);
+        hide_background_command_window(&mut cmd);
+
+        // explorer.exe 作为 GUI 进程派发给现有 Shell 桌面进程，使用 spawn 避免因退出码非 0 导致误判或阻塞
+        cmd.spawn()
             .map_err(|error| format!("启动文件资源管理器失败：{error}"))?;
-        if !status.success() {
-            return Err(format!("文件资源管理器定位文件失败：{status}"));
-        }
         Ok(())
     }
 
@@ -1004,6 +1088,290 @@ pub fn run_mcp_sidecar() -> Result<(), String> {
     Ok(())
 }
 
+/** 检查桌面端主窗口是否在前台且处于活跃聚焦状态。 */
+#[tauri::command]
+fn is_desktop_window_focused(app: tauri::AppHandle) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use cocoa::base::id;
+        use objc::{msg_send, sel, sel_impl};
+        let is_active = unsafe {
+            let shared_app: id = msg_send![objc::class!(NSApplication), sharedApplication];
+            let active: cocoa::base::BOOL = msg_send![shared_app, isActive];
+            active == cocoa::base::YES
+        };
+        // 若 macOS 平台应用本身未处于前台活跃激活态，直接判定为未聚焦
+        if !is_active {
+            return false;
+        }
+    }
+
+    if let Some(main_window) = app.get_webview_window("main") {
+        if let Ok(minimized) = main_window.is_minimized() {
+            if minimized {
+                return false;
+            }
+        }
+        main_window.is_focused().unwrap_or(false)
+    } else {
+        false
+    }
+}
+
+/** 发送桌面系统通知，提供开发模式与跨平台稳健兜底。 */
+#[tauri::command]
+fn send_desktop_notification(
+    app: tauri::AppHandle,
+    title: String,
+    body: String,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        // 在 macOS 开发模式（tauri::is_dev()）下，notify_rust 伪装 com.apple.Terminal 会因系统通知权限拦截而静默失败。
+        // 通过 osascript display notification 能够确保开发调试期 100% 弹出通知横幅与提示音。
+        if tauri::is_dev() {
+            let escaped_title = title.replace('\\', "\\\\").replace('"', "\\\"");
+            let escaped_body = body.replace('\\', "\\\\").replace('"', "\\\"");
+            let script = format!(
+                "display notification \"{}\" with title \"{}\" sound name \"default\"",
+                escaped_body, escaped_title
+            );
+            let mut cmd = Command::new("osascript");
+            cmd.arg("-e").arg(script);
+            hide_background_command_window(&mut cmd);
+            match cmd.status() {
+                Ok(status) if status.success() => return Ok(()),
+                Ok(status) => {
+                    eprintln!("[Notification] osascript failed with status: {:?}", status)
+                }
+                Err(e) => eprintln!("[Notification] osascript exec error: {:?}", e),
+            }
+        }
+    }
+
+    // 正式发布包或通用桌面端：优先尝试 tauri-plugin-notification
+    use tauri_plugin_notification::NotificationExt;
+    let plugin_result = app
+        .notification()
+        .builder()
+        .title(title.clone())
+        .body(body.clone())
+        .show();
+
+    match plugin_result {
+        Ok(_) => Ok(()),
+        Err(err) => {
+            #[cfg(target_os = "macos")]
+            {
+                // macOS 下如果插件层发送失败，自动降级至 osascript 兜底
+                let escaped_title = title.replace('\\', "\\\\").replace('"', "\\\"");
+                let escaped_body = body.replace('\\', "\\\\").replace('"', "\\\"");
+                let script = format!(
+                    "display notification \"{}\" with title \"{}\" sound name \"default\"",
+                    escaped_body, escaped_title
+                );
+                let mut cmd = Command::new("osascript");
+                cmd.arg("-e").arg(script);
+                hide_background_command_window(&mut cmd);
+                if let Ok(status) = cmd.status() {
+                    if status.success() {
+                        return Ok(());
+                    }
+                }
+            }
+            Err(err.to_string())
+        }
+    }
+}
+
+/** 展示雨燕专属 C4D 3D 玻璃拟态跨桌面全局悬浮窗。 */
+#[tauri::command]
+fn show_floating_notification(
+    app: tauri::AppHandle,
+    payload: serde_json::Value,
+) -> Result<(), String> {
+    FLOATING_NOTIFICATION_INTERACTING.store(false, Ordering::Release);
+    if let Ok(mut lock) = LATEST_FLOATING_TASK.lock() {
+        *lock = Some(payload.clone());
+    }
+    let window = match app.get_webview_window("floating-notification") {
+        Some(w) => w,
+        None => {
+            let builder = tauri::WebviewWindowBuilder::new(
+                &app,
+                "floating-notification",
+                tauri::WebviewUrl::App("/#/floating-notification".into()),
+            )
+            .title("雨燕通知")
+            .inner_size(430.0, 126.0)
+            .decorations(false)
+            .transparent(true)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .resizable(false)
+            .shadow(false)
+            .accept_first_mouse(true)
+            .visible(false);
+
+            let win = builder
+                .build()
+                .map_err(|e| format!("创建悬浮通知窗口失败: {e}"))?;
+
+            #[cfg(target_os = "macos")]
+            {
+                use cocoa::base::id;
+                use objc::{msg_send, sel, sel_impl};
+                if let Ok(ptr) = win.ns_window() {
+                    unsafe {
+                        let ns_window = ptr as id;
+                        let clear_color: id = msg_send![objc::class!(NSColor), clearColor];
+                        let _: () = msg_send![ns_window, setBackgroundColor: clear_color];
+                        let _: () = msg_send![ns_window, setOpaque: cocoa::base::NO];
+                        let _: () = msg_send![ns_window, setHasShadow: cocoa::base::NO];
+                        let _: () =
+                            msg_send![ns_window, setAcceptsMouseMovedEvents: cocoa::base::YES];
+                        let _: () = msg_send![ns_window, setIgnoresMouseEvents: cocoa::base::NO];
+                        let _: () = msg_send![ns_window, setHidesOnDeactivate: cocoa::base::NO];
+                    }
+                }
+            }
+
+            win
+        }
+    };
+
+    #[cfg(target_os = "macos")]
+    {
+        use cocoa::base::id;
+        use objc::{msg_send, sel, sel_impl};
+        if let Ok(ptr) = window.ns_window() {
+            unsafe {
+                let ns_window = ptr as id;
+                let clear_color: id = msg_send![objc::class!(NSColor), clearColor];
+                let _: () = msg_send![ns_window, setBackgroundColor: clear_color];
+                let _: () = msg_send![ns_window, setOpaque: cocoa::base::NO];
+                let _: () = msg_send![ns_window, setHasShadow: cocoa::base::NO];
+                let _: () = msg_send![ns_window, setAcceptsMouseMovedEvents: cocoa::base::YES];
+                let _: () = msg_send![ns_window, setIgnoresMouseEvents: cocoa::base::NO];
+                let _: () = msg_send![ns_window, setHidesOnDeactivate: cocoa::base::NO];
+            }
+        }
+    }
+
+    // 获取当前显示器尺寸，动态放置在屏幕右上角（优先当前窗口所在屏幕，自适应原点偏移）
+    let target_monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten());
+    if let Some(monitor) = target_monitor {
+        let scale_factor: f64 = monitor.scale_factor();
+        let size = monitor.size();
+        let monitor_pos = monitor.position();
+        let width = (430.0 * scale_factor) as i32;
+        let margin_right = (20.0 * scale_factor) as i32;
+        let margin_top = (44.0 * scale_factor) as i32;
+        let x = monitor_pos.x + size.width as i32 - width - margin_right;
+        let y = monitor_pos.y + margin_top;
+        let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
+    }
+
+    // 每次唤起前强制重设最高层级置顶，防止多次隐藏显示后失去焦点层级
+    let _ = window.set_always_on_top(true);
+
+    // 显示悬浮窗
+    let _ = window.show();
+
+    #[cfg(target_os = "macos")]
+    {
+        use cocoa::base::id;
+        use objc::{msg_send, sel, sel_impl};
+        if let Ok(ptr) = window.ns_window() {
+            unsafe {
+                let ns_window = ptr as id;
+                // 后台状态也置于当前窗口层最前方，但不抢占用户正在操作的 App 焦点。
+                let _: () = msg_send![ns_window, orderFrontRegardless];
+            }
+        }
+    }
+
+    // 向浮窗多通道广播通用任务通知数据及部署通知数据（全局广播 + 窗口直发，杜绝 IPC 丢包）
+    let _ = app.emit("desktop-task-event", &payload);
+    let _ = app.emit("deploy-notification-event", &payload);
+    let _ = window.emit("desktop-task-event", &payload);
+    let _ = window.emit("deploy-notification-event", &payload);
+
+    Ok(())
+}
+
+/** 同步浮窗鼠标悬停或键盘焦点状态，供原生隐藏前进行最终校验。 */
+#[tauri::command]
+fn set_floating_notification_interacting(interacting: bool) -> Result<(), String> {
+    FLOATING_NOTIFICATION_INTERACTING.store(interacting, Ordering::Release);
+    Ok(())
+}
+
+/**
+ * 使用桌面全局鼠标坐标同步浮窗悬停状态。
+ * macOS 应用处于后台时 WebView 可能不派发 pointerenter，此命令作为可靠兜底。
+ */
+#[tauri::command]
+fn sync_floating_notification_pointer_interaction(app: tauri::AppHandle) -> bool {
+    let is_hovered = cursor_is_over_floating_notification(&app);
+    if is_hovered {
+        FLOATING_NOTIFICATION_INTERACTING.store(true, Ordering::Release);
+    }
+    is_hovered
+}
+
+/**
+ * 隐藏悬浮通知窗口。
+ * 自动关闭必须确认当前没有交互；手动关闭通过 force 显式跳过保护。
+ */
+#[tauri::command]
+fn hide_floating_notification(app: tauri::AppHandle, force: Option<bool>) -> Result<bool, String> {
+    let force = force.unwrap_or(false);
+    if !force && cursor_is_over_floating_notification(&app) {
+        FLOATING_NOTIFICATION_INTERACTING.store(true, Ordering::Release);
+        return Ok(false);
+    }
+    if !can_hide_floating_notification(force) {
+        return Ok(false);
+    }
+    if let Some(window) = app.get_webview_window("floating-notification") {
+        let _ = window.hide();
+    }
+    FLOATING_NOTIFICATION_INTERACTING.store(false, Ordering::Release);
+    Ok(true)
+}
+
+/** 获取当前最新的桌面悬浮通知数据，供浮窗加载或重新激活时主动拉取。 */
+#[tauri::command]
+fn get_latest_floating_notification() -> Option<serde_json::Value> {
+    LATEST_FLOATING_TASK.lock().ok().and_then(|guard| guard.clone())
+}
+
+/** 唤醒并聚焦雨燕主窗口。 */
+#[tauri::command]
+fn open_main_window_focus(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(main_window) = app.get_webview_window("main") {
+        let _ = main_window.show();
+        let _ = main_window.unminimize();
+        let _ = main_window.set_focus();
+
+        #[cfg(target_os = "macos")]
+        {
+            use cocoa::base::id;
+            use objc::{msg_send, sel, sel_impl};
+            unsafe {
+                let shared_app: id = msg_send![objc::class!(NSApplication), sharedApplication];
+                let _: () = msg_send![shared_app, activateIgnoringOtherApps: true];
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let local_server_manager = LocalServerManager::default();
@@ -1017,6 +1385,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
@@ -1041,6 +1410,14 @@ pub fn run() {
             get_local_server_port,
             get_local_server_status,
             get_agent_runtime,
+            send_desktop_notification,
+            is_desktop_window_focused,
+            show_floating_notification,
+            get_latest_floating_notification,
+            set_floating_notification_interacting,
+            sync_floating_notification_pointer_interaction,
+            hide_floating_notification,
+            open_main_window_focus,
             secure_identity::get_or_create_device_identity,
             secure_identity::sign_device_challenge,
             secure_identity::save_secure_account,
@@ -1052,9 +1429,14 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 #[cfg(any(target_os = "macos", target_os = "windows"))]
                 {
-                    if window.label() == "main" {
-                        // 在 macOS 和 Windows 下，点击叉号不退出，仅隐藏主窗口
+                    if window.label() == "main" || window.label() == "floating-notification" {
+                        // 在 macOS 和 Windows 下，点击叉号不退出，仅隐藏窗口
                         api.prevent_close();
+                        if window.label() == "floating-notification"
+                            && !can_hide_floating_notification(false)
+                        {
+                            return;
+                        }
                         let _ = window.hide();
                     }
                 }
@@ -1085,8 +1467,6 @@ pub fn run() {
 
             #[cfg(target_os = "macos")]
             {
-                use cocoa::base::id;
-                use objc::{msg_send, sel, sel_impl};
                 use tauri::menu::{Menu, MenuItemBuilder};
                 let app_handle = app.handle();
                 if let Ok(menu) = Menu::default(app_handle) {

@@ -22,6 +22,7 @@ const SPLASH_SHOWN_SESSION_KEY = 'yuyan:splash-shown';
  */
 const shouldShowSplash = (): boolean => {
   if (!isTauri()) return false;
+  if (typeof window !== 'undefined' && window.location.hash.includes('floating-notification')) return false;
   if (import.meta.env.DEV) return true;
 
   try {
@@ -41,14 +42,33 @@ const showSplash = ref(shouldShowSplash());
 <style scoped></style>
 
 <style lang="less">
-html,
-body,
-#app {
+html:not(.is-transparent-window) {
   height: 100%;
   margin: 0;
   padding: 0;
   overflow: hidden;
   background-color: var(--bg-color, var(--boot-background-color, #f0f2f5));
+
+  body,
+  #app {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background-color: var(--bg-color, var(--boot-background-color, #f0f2f5));
+  }
+}
+
+html.is-transparent-window,
+html.is-transparent-window body,
+html.is-transparent-window #app,
+html.is-transparent-window .ant-app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: transparent !important;
+  background-color: transparent !important;
 }
 
 /* =====================================================

@@ -13,6 +13,8 @@ use tokio::io::AsyncWriteExt;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const STALL_TIMEOUT: Duration = Duration::from_secs(120);
 const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const PROGRESS_THROTTLE_INTERVAL: Duration = Duration::from_millis(80);
+const PROGRESS_THROTTLE_BYTES: u64 = 256 * 1024;
 const DOWNLOAD_DIRECTORY_NAME: &str = "yuyan-runtime-packages";
 const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
 
@@ -246,6 +248,8 @@ async fn save_response_to_directory(
     let mut loaded_bytes = 0_u64;
     let mut sha256 = Sha256::new();
     let mut last_received_at = Instant::now();
+    let mut last_reported_at = Instant::now();
+    let mut last_reported_bytes = 0_u64;
     send_progress(
         progress,
         "writing",
@@ -270,15 +274,32 @@ async fn save_response_to_directory(
                     sha256.update(&chunk);
                     loaded_bytes = loaded_bytes.saturating_add(chunk.len() as u64);
                     last_received_at = Instant::now();
-                    send_progress(
-                        progress,
-                        "writing",
-                        loaded_bytes,
-                        total_bytes,
-                        Some(final_file_name.clone()),
-                    );
+                    if last_reported_at.elapsed() >= PROGRESS_THROTTLE_INTERVAL
+                        || loaded_bytes.saturating_sub(last_reported_bytes) >= PROGRESS_THROTTLE_BYTES
+                    {
+                        last_reported_at = Instant::now();
+                        last_reported_bytes = loaded_bytes;
+                        send_progress(
+                            progress,
+                            "writing",
+                            loaded_bytes,
+                            total_bytes,
+                            Some(final_file_name.clone()),
+                        );
+                    }
                 }
-                Ok(Ok(None)) => break,
+                Ok(Ok(None)) => {
+                    if loaded_bytes != last_reported_bytes {
+                        send_progress(
+                            progress,
+                            "writing",
+                            loaded_bytes,
+                            total_bytes,
+                            Some(final_file_name.clone()),
+                        );
+                    }
+                    break;
+                }
                 Ok(Err(error)) => return Err(format!("下载传输异常中断：{error}")),
                 Err(_) if last_received_at.elapsed() >= STALL_TIMEOUT => {
                     return Err("下载长时间没有收到数据，已终止".to_string());
@@ -414,11 +435,11 @@ pub async fn start_file_download(
     .await
 }
 
-/** 请求取消当前通用文件下载。 */
+/** 请求取消当前通用文件下载。若无活跃任务直接返回 Ok 保证调用幂等性。 */
 #[tauri::command]
 pub fn cancel_file_download(manager: State<'_, FileDownloadManager>) -> Result<(), String> {
     if !manager.task_active.load(Ordering::Acquire) {
-        return Err("当前没有正在下载的文件".to_string());
+        return Ok(());
     }
     manager.cancel_requested.store(true, Ordering::Release);
     Ok(())

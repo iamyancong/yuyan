@@ -16,8 +16,18 @@
       margin: 0;
       background-color: var(--boot-background-color, #f0f2f5);
     }
+
+    html.is-transparent-window,
+    html.is-transparent-window body,
+    html.is-transparent-window #app {
+      background: transparent !important;
+      background-color: transparent !important;
+    }
   </style>
   <script>
+    if (window.location.hash.includes('floating-notification') || window.location.href.includes('floating-notification')) {
+      document.documentElement.classList.add('is-transparent-window');
+    }
     try {
       /** 页面脚本加载前读取已保存主题，避免生产 App 重载时出现白屏。 */
       const storedTheme = JSON.parse(localStorage.getItem('yuyan-ops-theme') || '{}');

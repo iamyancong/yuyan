@@ -1,17 +1,28 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { BulbOutlined, CheckOutlined, CloseOutlined, EyeInvisibleOutlined } from '@ant-design/icons-vue';
+import { message } from 'ant-design-vue';
+import { BulbOutlined, CheckOutlined, CloseOutlined, EyeInvisibleOutlined, InfoCircleOutlined } from '@ant-design/icons-vue';
 import { YButton } from '@yss-ui/components/lite';
 import { useTheme } from '@/hooks/useTheme';
+import { isTauri } from '@/utils/env';
 import {
   BORDER_RADIUS_RANGE,
   DENSITY_OPTIONS,
+  NOTIFICATION_SETTINGS_DESC,
   PRESET_COLORS,
   SETTINGS_DRAWER_WIDTH,
   SPACING_RANGE,
   THEME_MODE_OPTIONS,
   isActiveThemeColor,
 } from './constant';
+import {
+  checkNotificationPermission,
+  isDeployNotificationEnabled,
+  requestNotificationPermission,
+  sendTestDeployNotification,
+  setDeployNotificationEnabled,
+  type SystemNotificationPermissionState,
+} from '@/utils/deployNotification';
 
 defineOptions({ name: 'SettingsDrawer' });
 
@@ -108,6 +119,74 @@ const handlePickColor = (event: Event) => {
     setPrimaryColor(input.value);
   }
 };
+
+const deployNotificationEnabled = ref(isDeployNotificationEnabled());
+const notificationPermission = ref<SystemNotificationPermissionState>('default');
+
+/**
+ * 刷新当前系统通知权限状态。
+ */
+const updatePermissionState = async () => {
+  notificationPermission.value = await checkNotificationPermission();
+};
+
+/**
+ * 切换部署系统通知开关。
+ * @param checked 是否开启
+ */
+const handleToggleDeployNotification = (checked: boolean) => {
+  deployNotificationEnabled.value = checked;
+  setDeployNotificationEnabled(checked);
+  if (checked && notificationPermission.value === 'default') {
+    void handleRequestPermission();
+  }
+};
+
+/**
+ * 主动请求系统通知权限。
+ */
+const handleRequestPermission = async () => {
+  await requestNotificationPermission();
+  await updatePermissionState();
+};
+
+const isTauriApp = computed(() => isTauri());
+const testingNotification = ref(false);
+
+/**
+ * 触发一条测试系统通知，方便用户即时验收通知效果。
+ */
+const handleTestNotification = async () => {
+  if (testingNotification.value) return;
+  testingNotification.value = true;
+  try {
+    const success = await sendTestDeployNotification();
+    if (success) {
+      if (isTauriApp.value) {
+        message.success('已触发测试系统通知，请查看屏幕右上角通知横幅');
+      } else {
+        message.success('已触发测试系统通知！若未出现横幅，请检查 macOS「系统设置 - 通知 - Google Chrome」及是否开启勿扰模式', 6);
+      }
+    } else {
+      message.warning('通知发送未成功，请检查系统偏好设置中雨燕或浏览器的通知权限');
+    }
+  } catch {
+    message.error('发送通知出现异常');
+  } finally {
+    testingNotification.value = false;
+  }
+};
+
+watch(
+  () => props.open,
+  (open) => {
+    if (open) {
+      deployNotificationEnabled.value = isDeployNotificationEnabled();
+      void updatePermissionState();
+    }
+  },
+  { immediate: true }
+);
 </script>
 
 <template>
@@ -268,6 +347,74 @@ const handlePickColor = (event: Event) => {
               <strong>{{ spacingValue }}px</strong>
             </div>
             <a-slider v-model:value="spacingValue" :min="SPACING_RANGE.min" :max="SPACING_RANGE.max" />
+          </div>
+        </div>
+      </section>
+
+      <section class="setting-panel">
+        <div class="setting-panel__head">
+          <div>
+            <h3>{{ NOTIFICATION_SETTINGS_DESC.title }}</h3>
+            <p>{{ NOTIFICATION_SETTINGS_DESC.subtitle }}</p>
+          </div>
+        </div>
+
+        <div class="notification-setting-card">
+          <div class="notification-setting-card__main">
+            <div class="notification-setting-card__info">
+              <span class="notification-setting-card__title">{{ NOTIFICATION_SETTINGS_DESC.switchLabel }}</span>
+              <span class="notification-setting-card__desc">
+                状态：
+                <span
+                  class="permission-tag"
+                  :class="`permission-tag--${notificationPermission}`"
+                >
+                  {{
+                    notificationPermission === 'granted'
+                      ? NOTIFICATION_SETTINGS_DESC.permissionGranted
+                      : notificationPermission === 'denied'
+                      ? NOTIFICATION_SETTINGS_DESC.permissionDenied
+                      : notificationPermission === 'unsupported'
+                      ? NOTIFICATION_SETTINGS_DESC.permissionUnsupported
+                      : NOTIFICATION_SETTINGS_DESC.permissionDefault
+                  }}
+                </span>
+              </span>
+            </div>
+            <a-switch
+              :checked="deployNotificationEnabled"
+              @update:checked="handleToggleDeployNotification"
+            />
+          </div>
+
+          <div
+            v-if="deployNotificationEnabled"
+            class="notification-setting-card__action"
+          >
+            <YButton
+              v-if="notificationPermission === 'default'"
+              size="small"
+              type="primary"
+              ghost
+              @click="handleRequestPermission"
+            >
+              {{ NOTIFICATION_SETTINGS_DESC.requestButton }}
+            </YButton>
+            <YButton
+              size="small"
+              :loading="testingNotification"
+              @click="handleTestNotification"
+            >
+              {{ NOTIFICATION_SETTINGS_DESC.testButton }}
+            </YButton>
+          </div>
+
+          <div
+            v-if="!isTauriApp && deployNotificationEnabled"
+            class="notification-setting-card__tip"
+          >
+            <InfoCircleOutlined class="notification-setting-card__tip-icon" />
+            <span>Web 端依赖操作系统授予浏览器的通知权限。若已允许但未见横幅，请检查 macOS「系统设置 -> 通知 -> Google Chrome」是否开启“允许通知”与“横幅”，或检查是否开启了“勿扰模式”。</span>
           </div>
         </div>
       </section>

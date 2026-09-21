@@ -52,6 +52,12 @@ export const routes: RouteRecordRaw[] = [
       // },
     ],
   },
+  {
+    path: '/floating-notification',
+    name: 'FloatingNotification',
+    component: () => import('@/views/FloatingNotification/index.vue'),
+    meta: { title: '雨燕部署通知', standalone: true },
+  },
 ];
 
 const router = createRouter({

@@ -1,0 +1,369 @@
+.floating-notification-wrapper {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 10px 14px;
+  box-sizing: border-box;
+  user-select: none;
+  pointer-events: none;
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+.floating-glass-card {
+  position: relative;
+  width: 400px;
+  min-height: 68px;
+  pointer-events: auto;
+  cursor: pointer;
+  border-radius: 18px;
+  padding: 12px 34px 12px 14px;
+  box-sizing: border-box;
+  overflow: hidden;
+
+  /* C4D 3D 黑曜石极光流体玻璃拟态 */
+  background:
+    radial-gradient(130% 130% at 0% 0%, rgba(30, 41, 59, 0.85) 0%, rgba(15, 23, 42, 0.94) 100%);
+  backdrop-filter: blur(28px) saturate(200%);
+  -webkit-backdrop-filter: blur(28px) saturate(200%);
+
+  /* 保留卡片内部高光，不向透明窗口外扩散阴影 */
+  box-shadow:
+    inset 0 1px 1.5px rgba(255, 255, 255, 0.35),
+    inset 0 -1px 2px rgba(0, 0, 0, 0.6);
+
+  /* 双色流光边框 */
+  border: 1.5px solid rgba(255, 255, 255, 0.16);
+  transition: all 0.32s cubic-bezier(0.34, 1.56, 0.64, 1);
+  animation: c4d-card-in 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+
+  &--closing {
+    opacity: 0;
+    transform: translateX(36px) scale(0.92);
+    pointer-events: none;
+    transition: all 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow:
+      inset 0 1px 2px rgba(255, 255, 255, 0.45);
+    border-color: rgba(6, 182, 212, 0.5);
+  }
+
+  &:focus-visible {
+    outline: 2px solid rgba(103, 232, 249, 0.92);
+    outline-offset: 3px;
+  }
+
+  /* 失败状态流光包边 */
+  &.is-error {
+    box-shadow:
+      inset 0 1px 1.5px rgba(255, 255, 255, 0.35);
+
+    &:hover {
+      box-shadow:
+        inset 0 1px 2px rgba(255, 255, 255, 0.45);
+      border-color: rgba(239, 68, 68, 0.5);
+    }
+  }
+
+  /* 顶部环境光反射条纹 */
+  &__shine {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 42%;
+    background: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.14) 0%,
+      rgba(255, 255, 255, 0.02) 75%,
+      transparent 100%
+    );
+    border-radius: 20px 20px 0 0;
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  /* 主内容网格 */
+  &__content {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+  }
+
+  /* 中间信息排版 */
+  &__body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  &__header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  &__title {
+    font-size: 14.5px;
+    font-weight: 750;
+    color: #ffffff;
+    letter-spacing: 0.3px;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+    line-height: 19px;
+  }
+
+  &__tag {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 7px;
+    font-size: 10px;
+    font-weight: 600;
+    color: #67e8f9;
+    background: rgba(6, 182, 212, 0.16);
+    border: 1px solid rgba(6, 182, 212, 0.35);
+    border-radius: 6px;
+    text-shadow: 0 0 6px rgba(6, 182, 212, 0.5);
+    white-space: nowrap;
+
+    &.is-error {
+      color: #fca5a5;
+      background: rgba(239, 68, 68, 0.18);
+      border-color: rgba(239, 68, 68, 0.35);
+      text-shadow: 0 0 6px rgba(239, 68, 68, 0.5);
+    }
+  }
+
+  &__desc {
+    font-size: 12px;
+    line-height: 16px;
+    color: rgba(255, 255, 255, 0.78);
+    word-break: break-all;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    text-overflow: ellipsis;
+  }
+
+  &__meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 1px;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.48);
+  }
+
+  &__time-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  /* 右上角轻量浮空关闭按钮 */
+  &__close-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    color: rgba(255, 255, 255, 0.65);
+    cursor: pointer;
+    font-size: 10px;
+    transition: all 0.2s ease;
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.22);
+      color: #ffffff;
+      transform: rotate(90deg) scale(1.1);
+    }
+
+    &:focus-visible {
+      outline: 2px solid rgba(103, 232, 249, 0.88);
+      outline-offset: 2px;
+    }
+  }
+
+  /* 右侧核心操作交互区 */
+  &__actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    align-self: center;
+    flex-shrink: 0;
+    gap: 6px;
+  }
+
+  &__btn-details {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 26px;
+    min-width: 44px;
+    padding: 0 9px;
+    border: 1px solid rgba(186, 230, 253, 0.24);
+    border-radius: 8px;
+    color: rgba(224, 242, 254, 0.84);
+    background: rgba(255, 255, 255, 0.07);
+    cursor: pointer;
+    font-size: 10.5px;
+    font-weight: 650;
+    transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+
+    &:hover,
+    &:focus-visible {
+      border-color: rgba(125, 211, 252, 0.52);
+      color: #ffffff;
+      background: rgba(125, 211, 252, 0.16);
+    }
+
+    &:focus-visible {
+      outline: 2px solid rgba(103, 232, 249, 0.88);
+      outline-offset: 2px;
+    }
+  }
+
+  /* 3D 触控果冻质感按钮 */
+  &__btn-visit {
+    position: relative;
+    overflow: hidden;
+    height: 28px;
+    padding: 0 12px;
+    font-size: 11.5px;
+    font-weight: 650;
+    color: #ffffff;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    background: linear-gradient(135deg, #06b6d4 0%, #3b82f6 50%, #8b5cf6 100%);
+    box-shadow:
+      0 4px 12px rgba(6, 182, 212, 0.4),
+      inset 0 1px 1px rgba(255, 255, 255, 0.6);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    transition: all 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+
+    &:hover {
+      transform: translateY(-1px) scale(1.04);
+      box-shadow:
+        0 6px 16px rgba(6, 182, 212, 0.55),
+        inset 0 1px 2px rgba(255, 255, 255, 0.8);
+    }
+
+    &:active {
+      transform: translateY(0) scale(0.98);
+    }
+  }
+
+  /* 通用操作按钮（如取消导出、重试） */
+  &__btn-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 26px;
+    min-width: 52px;
+    padding: 0 10px;
+    border: 1px solid rgba(186, 230, 253, 0.24);
+    border-radius: 8px;
+    color: rgba(224, 242, 254, 0.88);
+    background: rgba(255, 255, 255, 0.08);
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 600;
+    transition: all 0.2s ease;
+
+    &:hover,
+    &:focus-visible {
+      border-color: rgba(125, 211, 252, 0.52);
+      color: #ffffff;
+      background: rgba(125, 211, 252, 0.18);
+    }
+
+    &.is-primary {
+      background: linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%);
+      border-color: rgba(255, 255, 255, 0.35);
+      color: #ffffff;
+      box-shadow: 0 3px 10px rgba(6, 182, 212, 0.35);
+    }
+
+    &.is-danger {
+      border-color: rgba(248, 113, 113, 0.4);
+      color: #fca5a5;
+      background: rgba(239, 68, 68, 0.12);
+
+      &:hover {
+        border-color: rgba(248, 113, 113, 0.7);
+        color: #ffffff;
+        background: rgba(239, 68, 68, 0.28);
+      }
+    }
+  }
+
+  /* 底部流光倒计时进度条 */
+  &__progress-track {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: rgba(255, 255, 255, 0.1);
+    overflow: hidden;
+    z-index: 3;
+  }
+
+  &__progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, #06b6d4, #8b5cf6, #ec4899);
+    transition: width 0.05s linear;
+    box-shadow: 0 0 4px rgba(6, 182, 212, 0.5);
+
+    &.is-error {
+      background: linear-gradient(90deg, #ef4444, #f59e0b);
+      box-shadow: 0 0 4px rgba(239, 68, 68, 0.5);
+    }
+  }
+}
+
+@keyframes c4d-card-in {
+  0% {
+    opacity: 0;
+    transform: translateY(-24px) scale(0.92);
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(3px) scale(1.01);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .floating-glass-card,
+  .floating-glass-card__btn-visit,
+  .floating-glass-card__btn-details {
+    animation: none;
+    transition: none;
+  }
+}
