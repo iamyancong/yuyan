@@ -11,6 +11,7 @@ import LoginModal from '@/components/LoginModal.vue';
 import LayoutHeader from './components/LayoutHeader.vue';
 import LayoutSider from './components/LayoutSider/index.vue';
 import AboutModal from '@/components/AboutModal/index.vue';
+import ContactModal from '@/components/ContactModal/index.vue';
 import AgentApprovalHost from '@/components/AgentApprovalHost/index.vue';
 
 defineOptions({ name: 'BasicLayout' });
@@ -29,6 +30,9 @@ const openAiDrawer = ref(false);
 
 /** 关于雨燕弹窗可见性 */
 const showAboutModal = ref(false);
+
+/** 联系我们（技术支持）弹窗可见性 */
+const showContactModal = ref(false);
 
 let unlistenMenuAbout: (() => void) | undefined;
 
@@ -68,6 +72,13 @@ const handleShowAboutModal = () => {
   showAboutModal.value = true;
 };
 
+/**
+ * 显示联系我们（技术支持）弹窗的回调（全局事件驱动）
+ */
+const handleShowContactModal = () => {
+  showContactModal.value = true;
+};
+
 /** 打开独立 AI 控制中心并确保平台设置抽屉关闭。 */
 const handleOpenAiIntegration = () => {
   console.log('[BasicLayout] 打开 AI 控制中心抽屉');
@@ -93,6 +104,7 @@ const handleLoginSuccess = async () => {
 onMounted(() => {
   window.addEventListener('show-login-modal', handleShowLoginModal);
   window.addEventListener('show-about-modal', handleShowAboutModal);
+  window.addEventListener('show-contact-modal', handleShowContactModal);
 
   // 监听 macOS 顶部系统菜单"关于雨燕"点击事件
   if (isTauri()) {
@@ -109,6 +121,7 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('show-login-modal', handleShowLoginModal);
   window.removeEventListener('show-about-modal', handleShowAboutModal);
+  window.removeEventListener('show-contact-modal', handleShowContactModal);
   if (unlistenMenuAbout) {
     unlistenMenuAbout();
   }
@@ -141,6 +154,7 @@ onUnmounted(() => {
         :isTauriClient="isTauriClient" 
         @open-ai-integration="handleOpenAiIntegration"
         @openSettings="openDrawer = true" 
+        @openContact="showContactModal = true"
         @openLogin="showLoginModal = true" 
         @openAbout="showAboutModal = true"
       />
@@ -170,6 +184,9 @@ onUnmounted(() => {
   
   <!-- 关于雨燕弹窗 -->
   <AboutModal v-model:open="showAboutModal" />
+
+  <!-- 联系我们（技术支持）弹窗 -->
+  <ContactModal v-model:open="showContactModal" />
 
   <!-- 外部 Agent 的全局审批门禁 -->
   <AgentApprovalHost />
