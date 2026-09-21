@@ -13,12 +13,13 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tauri = { version = "2", features = ["default", "image-png", "tray-icon"] }
+tauri = { version = "2", features = ["default", "image-png", "tray-icon", "macos-private-api"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-notification = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 tokio = { version = "1", features = ["fs", "io-util", "rt", "time"] }
 sha2 = "0.10"

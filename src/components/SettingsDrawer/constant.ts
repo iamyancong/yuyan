@@ -90,3 +90,18 @@ export const SPACING_RANGE = {
  * @returns 是否激活
  */
 export const isActiveThemeColor = (color: string, currentColor: string) => color.toLowerCase() === currentColor.toLowerCase();
+
+/**
+ * 部署系统通知配置说明。
+ */
+export const NOTIFICATION_SETTINGS_DESC = {
+  title: '系统通知',
+  subtitle: '发布完成后在系统右上角弹出成功或失败通知（切到其他 App 时仍可收到）',
+  switchLabel: '发布完成系统通知',
+  permissionGranted: '已允许通知',
+  permissionDenied: '通知已被禁用（需在操作系统偏好设置中允许）',
+  permissionDefault: '待授权通知',
+  permissionUnsupported: '当前环境不支持系统通知',
+  requestButton: '开启通知权限',
+  testButton: '发送测试通知',
+};

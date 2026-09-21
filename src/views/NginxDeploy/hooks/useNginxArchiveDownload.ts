@@ -18,6 +18,7 @@ import {
   type NginxRuntimeStatus,
 } from '@/api/deploy';
 import { isTauri } from '@/utils/env';
+import { desktopFloatingTask } from '@/utils/desktopFloatingTask';
 import { getErrorMessage } from '../utils';
 
 /** 归档类型文案字典。 */
@@ -189,10 +190,16 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
   /** 请求取消正在进行的原生下载。 */
   const cancelActiveArchiveDownload = async () => {
     try {
-      await invoke('cancel_file_download');
-      message.info('正在取消下载…');
+      if (isTauri()) {
+        await invoke('cancel_file_download');
+      }
+      await desktopFloatingTask.dismiss();
+      notification.close(activeNotificationKey);
     } catch (error: unknown) {
-      message.error(getErrorMessage(error));
+      const err = getErrorMessage(error);
+      if (!err.includes('当前没有正在下载')) {
+        message.error(err);
+      }
     }
   };
 
@@ -206,14 +213,28 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
       ? Math.min(100, Math.floor((progress.loadedBytes / progress.totalBytes) * 100))
       : null;
     const actionLabel = isManaged ? '下载' : '导出';
+    const typeLabel = getArchiveTypeLabel(type, isManaged);
+    const stageText = progress.stage === 'connecting'
+      ? (isManaged ? '正在连接中央归档服务并等待远程打包' : '正在连接中央服务并等待导出配置/站点')
+      : `已写入 ${formatArchiveBytes(progress.loadedBytes)}${progress.totalBytes ? ` / ${formatArchiveBytes(progress.totalBytes)}` : ''}`;
+
+    if (isTauri()) {
+      void desktopFloatingTask.updateProgress({
+        progressPercentage: percent,
+        loadedBytes: progress.loadedBytes,
+        totalBytes: progress.totalBytes,
+        stage: stageText,
+      });
+      return;
+    }
+
+    // 浏览器端兜底展示
     notification.info({
       key: activeNotificationKey,
       class: 'c4d-download-notification',
-      message: `正在${actionLabel}${getArchiveTypeLabel(type, isManaged)}`,
+      message: `正在${actionLabel}${typeLabel}`,
       description: h('div', null, [
-        h('p', { style: 'margin-bottom: 8px;' }, progress.stage === 'connecting'
-          ? (isManaged ? '正在连接中央归档服务并等待远程打包' : '正在连接中央服务并等待导出配置/站点')
-          : `已写入 ${formatArchiveBytes(progress.loadedBytes)}${progress.totalBytes ? ` / ${formatArchiveBytes(progress.totalBytes)}` : ''}`),
+        h('p', { style: 'margin-bottom: 8px;' }, stageText),
         h('div', { class: 'c4d-progress-wrapper' }, [
           h('div', { class: 'c4d-progress-track' }, [
             h('div', {
@@ -224,7 +245,7 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
         ]),
         h('button', {
           class: 'ant-btn ant-btn-sm',
-          style: 'margin-top: 10px;',
+          style: 'margin-top: 10px; position: relative; z-index: 2;',
           onClick: () => void cancelActiveArchiveDownload(),
         }, `取消${actionLabel}`),
       ]),
@@ -235,18 +256,43 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
 
   /** 显示真实落盘后的常驻成功通知。 */
   const showNativeSuccess = async (result: NativeFileDownloadResult, isManaged = true) => {
+    const actionLabel = isManaged ? '下载' : '导出';
     const revealFile = async () => {
       try {
         await invoke('reveal_in_file_manager', { path: result.path });
-        message.success('已在文件管理器中定位文件');
+        message.success('已打开文件所在位置');
       } catch (error: unknown) {
-        message.error(`定位失败：${getErrorMessage(error)}`);
+        message.error(`打开失败：${getErrorMessage(error)}`);
       }
     };
+
+    if (isTauri()) {
+      await desktopFloatingTask.finish({
+        taskId: activeNotificationKey,
+        status: 'success',
+        title: `${actionLabel}已完成`,
+        projectName: result.fileName,
+        targetName: params.runtimeServer.value?.name,
+        envName: '已保存',
+        stage: `文件大小：${formatArchiveBytes(result.fileSize)}`,
+        autoDismiss: false,
+        actions: [
+          { id: 'reveal', text: '打开文件位置', primary: true },
+        ],
+        onAction: async (actionId) => {
+          if (actionId === 'reveal') {
+            await revealFile();
+            await desktopFloatingTask.dismiss();
+          }
+        },
+      });
+      return;
+    }
+
     notification.success({
       key: activeNotificationKey,
       class: 'c4d-download-notification',
-      message: isManaged ? '下载已完成' : '导出已完成',
+      message: `${actionLabel}已完成`,
       description: h('div', null, [
         h('p', { style: 'margin-bottom: 4px; font-weight: 600;' }, result.fileName),
         h('p', { style: 'margin-bottom: 4px;' }, `文件大小：${formatArchiveBytes(result.fileSize)}`),
@@ -259,16 +305,39 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
   };
 
   /** 显示中央服务返回的真实失败原因。 */
-  const showDownloadFailure = (error: unknown, type: NginxArchiveDownloadType, isManaged = true) => {
+  const showDownloadFailure = async (error: unknown, type: NginxArchiveDownloadType, isManaged = true) => {
     const errorMessage = getErrorMessage(error);
+    const actionLabel = isManaged ? '下载' : '导出';
+
+    if (isTauri()) {
+      await desktopFloatingTask.finish({
+        taskId: activeNotificationKey,
+        status: 'error',
+        title: `${actionLabel}失败`,
+        projectName: getArchiveTypeLabel(type, isManaged),
+        errorMessage,
+        autoDismiss: false,
+        actions: [
+          { id: 'retry', text: '重试', primary: true },
+        ],
+        onAction: (actionId) => {
+          if (actionId === 'retry') {
+            void downloadActiveNginxArchive(type);
+          }
+        },
+      });
+      return;
+    }
+
     notification.error({
       key: activeNotificationKey,
       class: 'c4d-download-notification',
-      message: isManaged ? '下载失败' : '导出失败',
+      message: `${actionLabel}失败`,
       description: h('div', null, [
         h('p', { style: 'margin-bottom: 10px; white-space: pre-wrap;' }, errorMessage),
         h('button', {
           class: 'ant-btn ant-btn-primary ant-btn-sm',
+          style: 'position: relative; z-index: 2;',
           onClick: () => {
             notification.close(activeNotificationKey);
             void downloadActiveNginxArchive(type);
@@ -300,15 +369,37 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
       revision: archiveRevision.value,
     };
     const selectedSites = archiveSites.value.filter((site) => selection.siteIds.includes(site.id));
+    const actionLabel = isManaged ? '下载' : '导出';
+    const typeLabel = getArchiveTypeLabel(submit.type, isManaged);
+
     archiveSelectionType.value = submit.type;
     archiveSelectionOpen.value = false;
     runtimeArchiveDownloading.value = true;
     activeNotificationKey = `nginx-archive-${Date.now()}`;
-    showProgressNotification(submit.type, {
-      stage: 'connecting',
-      loadedBytes: 0,
-      totalBytes: null,
-    }, isManaged);
+
+    if (isTauri()) {
+      await desktopFloatingTask.startProgress({
+        taskId: activeNotificationKey,
+        title: `正在${actionLabel}${typeLabel}`,
+        projectName: instance.name || params.runtimeServer.value?.name || 'Nginx 实例',
+        envName: isManaged ? '平台托管' : '已有实例',
+        stage: isManaged ? '正在连接中央归档服务并等待远程打包' : '正在连接中央服务并等待导出配置/站点',
+        actions: [
+          { id: 'cancel', text: `取消${actionLabel}`, danger: true },
+        ],
+        onAction: (actionId) => {
+          if (actionId === 'cancel') {
+            void cancelActiveArchiveDownload();
+          }
+        },
+      });
+    } else {
+      showProgressNotification(submit.type, {
+        stage: 'connecting',
+        loadedBytes: 0,
+        totalBytes: null,
+      }, isManaged);
+    }
 
     try {
       if (!isTauri()) {
@@ -341,11 +432,12 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
       await showNativeSuccess(result, isManaged);
     } catch (error: unknown) {
       if (getErrorMessage(error).includes('下载已取消') || getErrorMessage(error).includes('导出已取消')) {
+        await desktopFloatingTask.dismiss();
         notification.close(activeNotificationKey);
         message.info(`已取消${isManaged ? '下载' : '导出'}${getArchiveTypeLabel(submit.type, isManaged)}`);
         return;
       }
-      showDownloadFailure(error, submit.type, isManaged);
+      await showDownloadFailure(error, submit.type, isManaged);
     } finally {
       runtimeArchiveDownloading.value = false;
     }
