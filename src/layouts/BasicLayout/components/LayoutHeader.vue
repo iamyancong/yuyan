@@ -14,6 +14,7 @@ import {
   SyncOutlined,
   CloudDownloadOutlined,
   InfoCircleOutlined,
+  CustomerServiceOutlined,
 } from '@ant-design/icons-vue';
 import { useDataSync } from '../hooks/useDataSync';
 
@@ -29,6 +30,8 @@ const emit = defineEmits<{
   (e: 'open-ai-integration'): void;
   /** 触发打开平台设置抽屉 */
   (e: 'openSettings'): void;
+  /** 触发打开联系技术支持弹窗 */
+  (e: 'openContact'): void;
   /** 触发打开登录弹窗 */
   (e: 'openLogin'): void;
   /** 触发打开关于雨燕弹窗 */
@@ -79,6 +82,15 @@ const handleLogout = async () => {
         </a-button>
       </a-tooltip>
 
+      <!-- 联系技术支持（无论是否登录均可快捷呼出） -->
+      <a-tooltip title="联系技术支持" overlayClassName="header-tooltip">
+        <a-button type="text" class="header-action-btn btn-contact" @click="$emit('openContact')">
+          <template #icon>
+            <CustomerServiceOutlined class="action-icon" />
+          </template>
+        </a-button>
+      </a-tooltip>
+
       <div class="user-section">
         <template v-if="authLoading">
           <div class="user-loading-skeleton">
@@ -109,6 +121,13 @@ const handleLogout = async () => {
                     <InfoCircleOutlined />
                   </template>
                   关于雨燕
+                </a-menu-item>
+
+                <a-menu-item key="contact" @click="$emit('openContact')">
+                  <template #icon>
+                    <CustomerServiceOutlined />
+                  </template>
+                  联系支持
                 </a-menu-item>
 
                 <a-menu-divider />
