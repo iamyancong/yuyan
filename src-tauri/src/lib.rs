@@ -25,7 +25,8 @@ const LOCAL_SERVER_STOP_TIMEOUT: Duration = Duration::from_secs(3);
 static FLOATING_NOTIFICATION_INTERACTING: AtomicBool = AtomicBool::new(false);
 
 /** 缓存最近一次派发的桌面悬浮通知数据，解决浮窗初次挂载时漏收事件的时序竞争。 */
-static LATEST_FLOATING_TASK: std::sync::Mutex<Option<serde_json::Value>> = std::sync::Mutex::new(None);
+static LATEST_FLOATING_TASK: std::sync::Mutex<Option<serde_json::Value>> =
+    std::sync::Mutex::new(None);
 
 /** 判断本次浮窗隐藏请求是否允许执行。 */
 fn can_hide_floating_notification(force: bool) -> bool {
@@ -1348,7 +1349,10 @@ fn hide_floating_notification(app: tauri::AppHandle, force: Option<bool>) -> Res
 /** 获取当前最新的桌面悬浮通知数据，供浮窗加载或重新激活时主动拉取。 */
 #[tauri::command]
 fn get_latest_floating_notification() -> Option<serde_json::Value> {
-    LATEST_FLOATING_TASK.lock().ok().and_then(|guard| guard.clone())
+    LATEST_FLOATING_TASK
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
 }
 
 /** 唤醒并聚焦雨燕主窗口。 */

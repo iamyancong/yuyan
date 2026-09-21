@@ -275,7 +275,8 @@ async fn save_response_to_directory(
                     loaded_bytes = loaded_bytes.saturating_add(chunk.len() as u64);
                     last_received_at = Instant::now();
                     if last_reported_at.elapsed() >= PROGRESS_THROTTLE_INTERVAL
-                        || loaded_bytes.saturating_sub(last_reported_bytes) >= PROGRESS_THROTTLE_BYTES
+                        || loaded_bytes.saturating_sub(last_reported_bytes)
+                            >= PROGRESS_THROTTLE_BYTES
                     {
                         last_reported_at = Instant::now();
                         last_reported_bytes = loaded_bytes;
