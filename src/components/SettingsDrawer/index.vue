@@ -4,7 +4,7 @@ import { message } from 'ant-design-vue';
 import { BulbOutlined, CheckOutlined, CloseOutlined, EyeInvisibleOutlined, InfoCircleOutlined } from '@ant-design/icons-vue';
 import { YButton } from '@yss-ui/components/lite';
 import { useTheme } from '@/hooks/useTheme';
-import { isTauri } from '@/utils/env';
+import { isLocalService, isTauri } from '@/utils/env';
 import {
   BORDER_RADIUS_RANGE,
   DENSITY_OPTIONS,
@@ -151,6 +151,8 @@ const handleRequestPermission = async () => {
 };
 
 const isTauriApp = computed(() => isTauri());
+/** 是否可展示测试系统通知（仅限本地服务/开发调试环境） */
+const canShowTestNotification = computed(() => isLocalService());
 const testingNotification = ref(false);
 
 /**
@@ -388,7 +390,7 @@ watch(
           </div>
 
           <div
-            v-if="deployNotificationEnabled"
+            v-if="deployNotificationEnabled && (notificationPermission === 'default' || canShowTestNotification)"
             class="notification-setting-card__action"
           >
             <YButton
@@ -401,6 +403,7 @@ watch(
               {{ NOTIFICATION_SETTINGS_DESC.requestButton }}
             </YButton>
             <YButton
+              v-if="canShowTestNotification"
               size="small"
               :loading="testingNotification"
               @click="handleTestNotification"

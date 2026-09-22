@@ -82,15 +82,6 @@ const handleLogout = async () => {
         </a-button>
       </a-tooltip>
 
-      <!-- 联系技术支持（无论是否登录均可快捷呼出） -->
-      <a-tooltip title="联系技术支持" overlayClassName="header-tooltip">
-        <a-button type="text" class="header-action-btn btn-contact" @click="$emit('openContact')">
-          <template #icon>
-            <CustomerServiceOutlined class="action-icon" />
-          </template>
-        </a-button>
-      </a-tooltip>
-
       <div class="user-section">
         <template v-if="authLoading">
           <div class="user-loading-skeleton">
@@ -127,7 +118,7 @@ const handleLogout = async () => {
                   <template #icon>
                     <CustomerServiceOutlined />
                   </template>
-                  联系支持
+                  联系技术支持
                 </a-menu-item>
 
                 <a-menu-divider />

@@ -24,3 +24,48 @@ export function getApiBase(path: string): string {
   return path;
 }
 
+/**
+ * 判断当前是否处于可展示测试功能的本地服务环境。
+ * @description
+ * 1. 支持通过 localStorage 中 'YUYAN_DEBUG_NOTIFICATION' 为 'true' 作为手动调试开关；
+ * 2. 生产打包的 Tauri 桌面端（非 DEV）属于正式发布版本，严格隐藏测试功能；
+ * 3. 本地开发环境（import.meta.env.DEV）属于本地服务；
+ * 4. 浏览器端访问本地回环地址（localhost / 127.0.0.1 / ::1）属于本地服务；
+ * 5. 线上部署环境（域名或非回环 IP）不展示测试功能。
+ * @param options 可选测试覆盖选项
+ * @returns 是否允许展示测试功能
+ */
+export function isLocalService(options?: { isDev?: boolean; customWindow?: any }): boolean {
+  const win = options?.customWindow ?? (typeof window !== 'undefined' ? window : undefined);
+  if (!win) return false;
+
+  try {
+    if (win.localStorage?.getItem('YUYAN_DEBUG_NOTIFICATION') === 'true') {
+      return true;
+    }
+  } catch {
+    // 忽略 localStorage 访问受限异常
+  }
+
+  const isDev = options?.isDev !== undefined
+    ? options.isDev
+    : Boolean(typeof import.meta !== 'undefined' && import.meta.env?.DEV);
+
+  const isTauriEnv = Boolean((win as any).__TAURI_INTERNALS__ !== undefined);
+
+  if (isTauriEnv) {
+    return isDev;
+  }
+
+  if (isDev) {
+    return true;
+  }
+
+  const hostname = String(win.location?.hostname || '').trim().toLowerCase();
+  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
+    return true;
+  }
+
+  return false;
+}
+
