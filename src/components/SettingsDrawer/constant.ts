@@ -95,9 +95,9 @@ export const isActiveThemeColor = (color: string, currentColor: string) => color
  * 部署系统通知配置说明。
  */
 export const NOTIFICATION_SETTINGS_DESC = {
-  title: '系统通知',
-  subtitle: '发布完成后在系统右上角弹出成功或失败通知（切到其他 App 时仍可收到）',
-  switchLabel: '发布完成系统通知',
+  title: '桌面与系统通知',
+  subtitle: '发布完成后在桌面右上角弹出微浮窗提醒（切到其他 App 时仍可收到，异常时自动降级系统通知）',
+  switchLabel: '发布完成桌面提醒',
   permissionGranted: '已允许通知',
   permissionDenied: '通知已被禁用（需在操作系统偏好设置中允许）',
   permissionDefault: '待授权通知',

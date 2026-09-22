@@ -1,11 +1,11 @@
 import { isTauri } from './env.ts';
 
 /** 部署通知状态类型 */
-export type DeployNotificationStatus = 'success' | 'error';
+export type DeployNotificationStatus = 'success' | 'error' | 'stopped';
 
 /** 部署系统通知入参 */
 export interface DeployNotificationOptions {
-  /** 终态状态：成功或失败 */
+  /** 终态状态：成功、失败或已停止 */
   status: DeployNotificationStatus;
   /** 项目名称 */
   projectName: string;
@@ -13,7 +13,7 @@ export interface DeployNotificationOptions {
   targetName?: string;
   /** 部署环境，如 测试环境、生产环境 */
   envName?: string;
-  /** 失败阶段，如 依赖安装、构建打包、上传产物 */
+  /** 失败或中止阶段，如 依赖安装、构建打包、上传产物 */
   stage?: string;
   /** 失败错误原因 */
   errorMessage?: string;
@@ -41,6 +41,18 @@ export type SystemNotificationPermissionState = 'granted' | 'denied' | 'default'
 /** 本地存储中是否启用部署系统通知的键名 */
 export const DEPLOY_NOTIFICATION_STORAGE_KEY = 'yuyan_deploy_notification_enabled';
 
+/**
+ * 登记已发送通知的部署任务编号，避免同一流水线重复弹窗
+ */
+const recordNotifiedDeployId = (deployKey?: string): void => {
+  if (!deployKey) return;
+  notifiedDeployIds.add(deployKey);
+  if (notifiedDeployIds.size > MAX_NOTIFIED_HISTORY) {
+    const first = notifiedDeployIds.values().next().value;
+    if (first) notifiedDeployIds.delete(first);
+  }
+};
+
 /** 最近已发送通知的部署任务编号缓存（防刷屏与重复通知） */
 const notifiedDeployIds = new Set<string>();
 const MAX_NOTIFIED_HISTORY = 50;
@@ -64,11 +76,23 @@ export const formatDeployNotificationContent = (
     };
   }
 
-  const stageLabel = stage?.trim() ? `在「${stage.trim()}」` : '';
+  if (status === 'stopped') {
+    const stageLabel = stage?.trim() ? `（中断于「${stage.trim()}」）` : '';
+    return {
+      title: '部署已停止',
+      body: `${projectLabel} 发布任务已手动停止${stageLabel}`.trim(),
+    };
+  }
+
+  const destination = targetName?.trim() || envName?.trim();
+  const stageName = stage?.trim();
+  const contextLabel = destination && stageName
+    ? `在「${destination}」的「${stageName}」阶段`
+    : (destination ? `在「${destination}」` : (stageName ? `在「${stageName}」` : ''));
   const reason = errorMessage?.trim() || '未知异常';
   return {
     title: '部署失败',
-    body: `${projectLabel} ${stageLabel}执行失败：${reason}`.replace(/\s+/g, ' ').trim(),
+    body: `${projectLabel} ${contextLabel ? `${contextLabel}执行失败` : '执行失败'}：${reason}`.replace(/\s+/g, ' ').trim(),
   };
 };
 
@@ -129,8 +153,9 @@ export const checkNotificationPermission = async (): Promise<SystemNotificationP
       const { isPermissionGranted } = await import('@tauri-apps/plugin-notification');
       const granted = await isPermissionGranted();
       return granted ? 'granted' : 'default';
-    } catch {
-      return 'granted'; // 桌面端原生渠道默认支持
+    } catch (error) {
+      console.warn('[DeployNotification] 读取桌面端通知权限异常，回退至待授权:', error);
+      return 'default';
     }
   }
 
@@ -155,8 +180,9 @@ export const requestNotificationPermission = async (): Promise<boolean> => {
         granted = permission === 'granted';
       }
       return granted;
-    } catch {
-      return true;
+    } catch (error) {
+      console.warn('[DeployNotification] 申请桌面端通知权限异常:', error);
+      return false;
     }
   }
 
@@ -202,16 +228,9 @@ export const notifyDeployResult = async (options: DeployNotificationOptions): Pr
 
   // 3. 校验任务防重幂等
   const deployKey = options.deployId ? String(options.deployId) : undefined;
-  if (deployKey) {
-    if (notifiedDeployIds.has(deployKey)) {
-      console.info('[DeployNotification] 任务已在防重缓存中，跳过重复通知:', deployKey);
-      return false;
-    }
-    notifiedDeployIds.add(deployKey);
-    if (notifiedDeployIds.size > MAX_NOTIFIED_HISTORY) {
-      const first = notifiedDeployIds.values().next().value;
-      if (first) notifiedDeployIds.delete(first);
-    }
+  if (deployKey && notifiedDeployIds.has(deployKey)) {
+    console.info('[DeployNotification] 任务已在防重缓存中，跳过重复通知:', deployKey);
+    return false;
   }
 
   const { title, body } = formatDeployNotificationContent(options);
@@ -220,9 +239,10 @@ export const notifyDeployResult = async (options: DeployNotificationOptions): Pr
   if (isTauri()) {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
+      const floatingStatus = options.status === 'stopped' ? 'warning' : options.status;
       await invoke('show_floating_notification', {
         payload: {
-          status: options.status,
+          status: floatingStatus,
           title,
           projectName: options.projectName,
           targetName: options.targetName,
@@ -234,6 +254,7 @@ export const notifyDeployResult = async (options: DeployNotificationOptions): Pr
           timestamp: Date.now(),
         },
       });
+      recordNotifiedDeployId(deployKey);
       console.info('[DeployNotification] C4D 3D 玻璃拟态跨桌面全局浮窗唤起成功:', { title, body });
       return true;
     } catch (error) {
@@ -241,6 +262,7 @@ export const notifyDeployResult = async (options: DeployNotificationOptions): Pr
       try {
         const { invoke } = await import('@tauri-apps/api/core');
         await invoke('send_desktop_notification', { title, body });
+        recordNotifiedDeployId(deployKey);
         return true;
       } catch (pluginError) {
         console.error('[DeployNotification] 所有桌面通知通道均发送失败:', pluginError);
@@ -263,7 +285,10 @@ const trackWebNotification = (notification: any): void => {
   notification.onclose = cleanup;
   notification.onerror = cleanup;
   if (typeof setTimeout === 'function') {
-    setTimeout(cleanup, 15000);
+    const timer = setTimeout(cleanup, 15000);
+    if (typeof timer === 'object' && timer && 'unref' in timer && typeof (timer as any).unref === 'function') {
+      (timer as any).unref();
+    }
   }
 };
 
@@ -299,6 +324,7 @@ const trackWebNotification = (notification: any): void => {
             // 忽略浏览器标签页激活失败
           }
         };
+        recordNotifiedDeployId(deployKey);
         console.info('[DeployNotification] Web 桌面系统通知已成功派发给浏览器:', { title, body });
         return true;
       }
