@@ -15,13 +15,13 @@ import {
 defineOptions({ name: 'BackendServiceProgressModal' });
 
 const props = defineProps<BackendServiceProgressModalProps>();
-const emit = defineEmits<{ (e: 'update:open', value: boolean): void }>();
+const emit = defineEmits<{ (e: 'update:open', value: boolean): void; (e: 'verify-result'): void }>();
 const logExpanded = ref(true);
 const logContainerRef = ref<HTMLElement | null>(null);
 const hasError = computed(() => props.logs.some((item) => item.type === 'error'));
-const finished = computed(() => !props.running && props.percent >= 100 && !hasError.value);
+const finished = computed(() => !props.running && !props.resultUnconfirmed && props.logs.some((event) => event.type === 'result') && !hasError.value);
 const meta = computed(() => SERVICE_ACTION_META[props.action]);
-const statusText = computed(() => (hasError.value ? `${meta.value.verb}失败` : finished.value ? `${meta.value.verb}完成` : props.running ? `${meta.value.verb}中` : '等待执行'));
+const statusText = computed(() => (props.resultUnconfirmed ? '结果待确认' : hasError.value ? `${meta.value.verb}失败` : finished.value ? `${meta.value.verb}完成` : props.running ? `${meta.value.verb}中` : '等待执行'));
 const modalClassName = computed(() => ({ 'is-running': props.running, 'is-success': finished.value, 'is-error': hasError.value }));
 const activeStageThreshold = computed(() => [...SERVICE_PROGRESS_STAGES].reverse().find((stage) => props.percent >= stage.threshold)?.threshold ?? 0);
 
@@ -104,8 +104,8 @@ watch(() => props.logs.length, async () => {
       </section>
 
       <footer class="service-progress__footer">
-        <span>{{ running ? '关闭弹窗不会中断任务，可从项目运行态再次查看' : finished ? '运行状态已同步，可以安全关闭' : hasError ? '请根据运行日志检查环境或服务配置' : '操作已结束' }}</span>
-        <div><YButton :disabled="!logs.length" @click="copyLogs"><template #icon><CopyOutlined /></template>复制日志</YButton><YButton type="primary" @click="closeModal">{{ running ? '转至后台' : '完成' }}</YButton></div>
+        <span>{{ resultUnconfirmed ? '请核实任务结果，勿重复执行' : running ? '关闭弹窗不会中断任务，可从项目运行态再次查看' : finished ? '运行状态已同步，可以安全关闭' : hasError ? '请根据运行日志检查环境或服务配置' : '操作已结束' }}</span>
+        <div><YButton v-if="resultUnconfirmed && canVerifyResult" :loading="verifyingResult" @click="emit('verify-result')">核实任务结果</YButton><YButton :disabled="!logs.length" @click="copyLogs"><template #icon><CopyOutlined /></template>复制日志</YButton><YButton type="primary" @click="closeModal">{{ running ? '转至后台' : '完成' }}</YButton></div>
       </footer>
     </section>
   </a-modal>

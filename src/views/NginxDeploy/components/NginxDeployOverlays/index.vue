@@ -195,6 +195,11 @@ const updateTargetForm = (values: Partial<DeployTargetPayload>) => {
   <PublishConfirmModal
     v-if="publishConfirmEverOpened"
     v-model:open="progressState.publishConfirmOpen.value"
+    :central-unavailable="lifecycleState?.centralUnavailable.value"
+    :result-unconfirmed="progressState.resultUnconfirmed.value"
+    :can-verify-result="progressState.canVerifyResult.value"
+    :verifying-result="progressState.verifyingResult.value"
+    @verify-result="progressState.verifyResult"
     :target="progressState.activePublishTarget.value"
     :percent="progressState.progressState.percent"
     :title="progressState.progressState.title"
@@ -230,6 +235,10 @@ const updateTargetForm = (values: Partial<DeployTargetPayload>) => {
       v-if="isBackendServiceProgress"
       v-model:open="progressState.rollbackProgressOpen.value"
       :action="progressState.progressMode.value"
+      :result-unconfirmed="progressState.resultUnconfirmed.value"
+      :can-verify-result="progressState.canVerifyResult.value"
+      :verifying-result="progressState.verifyingResult.value"
+      @verify-result="progressState.verifyResult"
       :target="progressState.activePublishTarget.value"
       :percent="progressState.progressState.percent"
       :title="progressState.progressState.title"
@@ -249,6 +258,7 @@ const updateTargetForm = (values: Partial<DeployTargetPayload>) => {
       :maskClosable="!progressState.progressState.running"
     >
       <ProgressPanel
+        :result-unconfirmed="progressState.resultUnconfirmed.value"
         :percent="progressState.progressState.percent"
         :title="progressState.progressState.title"
         :detail="progressState.progressState.detail"
@@ -258,12 +268,13 @@ const updateTargetForm = (values: Partial<DeployTargetPayload>) => {
       <template #footer>
         <div style="display: flex; justify-content: flex-end; gap: 8px">
           <YButton
-            v-if="progressState.progressState.percent === 100 && currentRollbackTargetVisitUrl"
+            v-if="!progressState.resultUnconfirmed.value && progressState.progressState.percent === 100 && currentRollbackTargetVisitUrl"
             type="primary"
             @click="openRollbackSite"
           >
             打开站点
           </YButton>
+          <YButton v-if="progressState.resultUnconfirmed.value && progressState.canVerifyResult.value" :loading="progressState.verifyingResult.value" @click="progressState.verifyResult">核实任务结果</YButton>
           <YButton
             :disabled="progressState.progressState.running"
             @click="progressState.rollbackProgressOpen.value = false"

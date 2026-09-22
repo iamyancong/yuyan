@@ -40,6 +40,7 @@ import {
   updateDeployEnvironment,
   deleteDeployEnvironment,
 } from '../services/deploy-store.mjs';
+import { getDeployTaskReconciliation } from '../services/deploy-task-reconciliation.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import axios from 'axios';
@@ -171,6 +172,7 @@ async function createDeployTask(targetId, action, body = {}) {
  */
 function serializeDeployTask(task) {
   return {
+    taskId: task.persistentId,
     targetId: task.targetId,
     action: task.action,
     operator: task.operator,
@@ -228,6 +230,8 @@ function createProgressEmitter(task) {
   const write = (payload) => {
     const event = {
       timestamp: new Date().toISOString(),
+      taskId: task.persistentId,
+      targetId: task.targetId,
       ...payload,
     };
     if (event.type === 'stage') task.currentStage = event.stage;
@@ -301,6 +305,7 @@ function startDeployTask(task, runner, emit) {
         status,
         percent: 100,
         resultRef: result?.id ? String(result.id) : '',
+        result,
         logPath: result?.logPath || '',
       });
       return result;
@@ -363,6 +368,7 @@ async function sendDeployTaskProgress(req, res, task, streamMode) {
   }
 
   prepareProgressStream(res);
+  writeProgressEvent(res, { type: 'log', level: 'info', stage: 'connection', message: '已连接发布任务', timestamp: task.startedAt, taskId: task.persistentId, targetId: task.targetId });
   task.events.forEach((event) => writeProgressEvent(res, event));
   if (task.completed) {
     if (!res.writableEnded) res.end();
@@ -1211,13 +1217,23 @@ export async function handleDeployTarget(req, res) {
   await sendDeployTaskProgress(req, res, task, streamMode);
 }
 
+/** 查询指定任务的持久化终态，连接丢失后不重新发起部署。 */
+export async function handleGetDeployTaskReconciliation(req, res) {
+  try {
+    const data = await getDeployTaskReconciliation(req.params.id, req.params.taskId);
+    if (!data) { sendError(res, new Error('部署任务不存在'), 404); return; }
+    const live = deployTasksByTargetId.get(data.targetId);
+    res.json({ success: true, data: live?.persistentId === data.taskId ? serializeDeployTask(live) : data });
+  } catch (error) { sendError(res, error); }
+}
+
 /**
  * 读取部署目标运行中的发布进度
  */
 export async function handleGetTargetDeployProgress(req, res) {
   const targetId = Number(req.params.id);
   const task = deployTasksByTargetId.get(targetId);
-  if (!task) {
+  if (!task || (req.query.taskId && String(task.persistentId) !== String(req.query.taskId))) {
     sendError(res, new Error('该部署目标当前没有运行中的发布任务'), 404);
     return;
   }

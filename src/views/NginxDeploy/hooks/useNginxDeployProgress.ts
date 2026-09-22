@@ -22,11 +22,13 @@ import { getErrorMessage, isAbortError, isDeployConflictError, isNotFoundError }
 /** 发布停止前允许中断的阶段 */
 const STOPPABLE_PUBLISH_STAGE_KEYS = new Set(['validate', 'clone', 'install', 'build']);
 
+import { useDeployConnectionState } from './useDeployConnectionState';
 import { useNginxDeployContext } from './useNginxDeployContext';
 
 /** 发布进度 Hook 参数 */
 interface UseNginxDeployProgressParams {
   ensureLoggedIn?: () => boolean;
+  canStartOperation?: () => boolean;
   refreshActiveTab?: (options?: RefreshActiveTabOptions) => Promise<void>;
   authState?: Readonly<Ref<{ token?: string | null; role?: string }>>;
   userName?: Ref<string>;
@@ -90,6 +92,34 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     startedAt: '',
   });
 
+  /** 执行结果先收口，页面刷新独立恢复，避免成功被刷新错误覆盖。 */
+  const scheduleRefreshAfterTask = (options: RefreshActiveTabOptions = {}) => {
+    void refreshActiveTab({ ...options, silent: true }).catch(() => undefined);
+  };
+  const connection = useDeployConnectionState({
+    state: progressState,
+    onResult: (result) => {
+      handleProgressEvent({ type: 'result', data: result, timestamp: new Date().toISOString() });
+      scheduleRefreshAfterTask({ resetRecordsPage: true, reloadRecordTargets: true });
+    },
+    onFailure: (error) => {
+      appendProgressErrorLog(getErrorMessage(error));
+      progressState.title = '任务执行失败或已中断';
+      progressState.detail = getErrorMessage(error);
+      scheduleRefreshAfterTask({ resetRecordsPage: true });
+    },
+  });
+
+  /** 只阻止新操作，已有任务继续观察；确认框打开后也需要再检查。 */
+  const ensureCanStartOperation = () => {
+    if (!ensureLoggedIn()) return false;
+    if (connection.unconfirmed.value || params?.canStartOperation?.() === false) {
+      message.warning(connection.unconfirmed.value ? '请先核实当前任务结果，勿重复发布' : '中央服务暂不可用，恢复后可继续');
+      return false;
+    }
+    return true;
+  };
+
   /** 当前发布阶段 */
   const currentPublishStageKey = computed(() => {
     const stageEvent = [...progressState.logs].reverse().find((item) => item.type === 'stage');
@@ -137,6 +167,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
 
   /** 重置发布进度 */
   const resetPublishProgress = () => {
+    connection.reset();
     Object.assign(progressState, {
       percent: 0,
       title: '',
@@ -264,13 +295,18 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     };
   };
 
+  /** 连接状态同样绑定当前任务，切换账号或任务后忽略旧回调。 */
+  const createScopedConnectionHandler = (sessionId: number) => (recovering: boolean) => {
+    if (sessionId === progressSessionId) connection.onConnection(recovering);
+  };
+
   /**
    * 执行发布。
    * @param target 部署目标
    * @param options 发布启动选项
    */
   const runDeploy = async (target: DeployTarget, options: StartPublishOptions = {}) => {
-    if (!ensureLoggedIn()) return;
+    if (!ensureCanStartOperation()) return;
     progressMode.value = 'deploy';
     const sessionId = ++progressSessionId;
     const abortController = new AbortController();
@@ -297,7 +333,11 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
           operator: userName.value || '',
           forceInstallDependencies: Boolean(options.forceInstallDependencies),
         },
-        { signal: abortController.signal, onEvent: createScopedProgressHandler(sessionId) }
+        {
+          signal: abortController.signal,
+          onEvent: createScopedProgressHandler(sessionId),
+          onConnection: createScopedConnectionHandler(sessionId),
+        }
       );
       if (sessionId !== progressSessionId) return;
       if (result.status === 'stopped' || abortController.signal.aborted) {
@@ -312,7 +352,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
           stage: currentPublishStageKey.value,
           deployId: sessionId,
         });
-        await refreshActiveTab({ resetRecordsPage: true, force: true });
+        scheduleRefreshAfterTask({ resetRecordsPage: true, force: true });
         return;
       }
       message.success('发布完成');
@@ -327,7 +367,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
         deployId: sessionId,
         visitUrl: hasValidVisitUrl ? visitUrl : undefined,
       });
-      await refreshActiveTab({ resetRecordsPage: true, force: true });
+      scheduleRefreshAfterTask({ resetRecordsPage: true, force: true });
     } catch (error: any) {
       if (isAbortError(error) || abortController.signal.aborted) {
         if (sessionId === progressSessionId && publishStopping.value) {
@@ -347,11 +387,12 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
             deployId: sessionId,
           });
           await new Promise((resolve) => window.setTimeout(resolve, 500));
-          await refreshActiveTab({ resetRecordsPage: true, force: true });
+          scheduleRefreshAfterTask({ resetRecordsPage: true, force: true });
         }
         return;
       }
       if (sessionId !== progressSessionId) return;
+      if (connection.handleError(error)) return;
       const errorMessage = getErrorMessage(error);
       if (isDeployConflictError(error)) {
         const conflictSnapshot = (error?.response?.data?.data as DeployProgressSnapshot) || undefined;
@@ -385,8 +426,8 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       if (sessionId === progressSessionId) {
         progressState.running = false;
         publishStopping.value = false;
-        if (deployAbortController === abortController) deployAbortController = null;
-        if (!publishConfirmOpen.value) resetPublishWorkbench();
+        if (deployAbortController === abortController && !connection.unconfirmed.value) deployAbortController = null;
+        if (!publishConfirmOpen.value && !connection.unconfirmed.value) resetPublishWorkbench();
       }
     }
   };
@@ -424,8 +465,11 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
 
     try {
       const result = await subscribeTargetDeployProgress(target.id, target.projectType, {
+        taskId: snapshot.taskId,
+        operationId: snapshot.operationId,
         signal: abortController.signal,
         onEvent: createScopedProgressHandler(sessionId),
+        onConnection: createScopedConnectionHandler(sessionId),
       });
       if (sessionId !== progressSessionId) return;
       if (result.status === 'stopped') {
@@ -443,7 +487,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
             deployId: sessionId,
           });
         }
-        await refreshActiveTab({ resetRecordsPage: true, force: true });
+        scheduleRefreshAfterTask({ resetRecordsPage: true, force: true });
         return;
       }
       shouldClearRuntime = true;
@@ -462,18 +506,19 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
           visitUrl: hasValidVisitUrl ? visitUrl : undefined,
         });
       }
-      await refreshActiveTab({ resetRecordsPage: true, force: true });
+      scheduleRefreshAfterTask({ resetRecordsPage: true, force: true });
     } catch (error: any) {
       if (isAbortError(error) || abortController.signal.aborted || sessionId !== progressSessionId) return;
       if (isNotFoundError(error)) {
         clearTargetRuntimeSnapshot?.(target.id);
         message.info('当前任务已结束，请查看发布历史');
-        await refreshActiveTab({ resetRecordsPage: true, force: true });
+        scheduleRefreshAfterTask({ resetRecordsPage: true, force: true });
         resetPublishWorkbench();
         publishConfirmOpen.value = false;
         rollbackProgressOpen.value = false;
         return;
       }
+      if (connection.handleError(error)) return;
       const errorMessage = getErrorMessage(error);
       shouldClearRuntime = true;
       appendProgressErrorLog(errorMessage, currentPublishStageKey.value || snapshot.currentStage);
@@ -498,9 +543,9 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       if (sessionId === progressSessionId) {
         progressState.running = false;
         publishStopping.value = false;
-        if (deployAbortController === abortController) deployAbortController = null;
+        if (deployAbortController === abortController && !connection.unconfirmed.value) deployAbortController = null;
         if (shouldClearRuntime) clearTargetRuntimeSnapshot?.(target.id);
-        if (!publishConfirmOpen.value && !rollbackProgressOpen.value) resetPublishWorkbench();
+        if (!publishConfirmOpen.value && !rollbackProgressOpen.value && !connection.unconfirmed.value) resetPublishWorkbench();
       }
     }
   };
@@ -511,7 +556,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
    * @param action 服务动作
    */
   const runTargetServiceAction = async (target: DeployTarget, action: 'start' | 'stop' | 'restart') => {
-    if (!ensureLoggedIn()) return;
+    if (!ensureCanStartOperation()) return;
     detachPublishProgressStream();
     progressMode.value = action;
     activePublishTarget.value = target;
@@ -533,12 +578,14 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       await runBackendServiceActionWithProgress(target.id, action, {
         signal: abortController.signal,
         onEvent: createScopedProgressHandler(sessionId),
+        onConnection: createScopedConnectionHandler(sessionId),
       });
       if (sessionId !== progressSessionId || abortController.signal.aborted) return;
       message.success(`服务${getDeployProgressActionLabel(action)}完成`);
-      await refreshActiveTab({ force: true });
+      scheduleRefreshAfterTask({ force: true });
     } catch (error: any) {
       if (isAbortError(error) || abortController.signal.aborted || sessionId !== progressSessionId) return;
+      if (connection.handleError(error)) return;
       const errorMessage = getErrorMessage(error);
       appendProgressErrorLog(errorMessage, currentPublishStageKey.value || action);
       progressState.title = getDeployProgressFailureTitle({
@@ -548,12 +595,12 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       });
       progressState.detail = errorMessage;
       message.error(errorMessage);
-      await refreshActiveTab({ force: true });
+      scheduleRefreshAfterTask({ force: true });
     } finally {
       if (sessionId === progressSessionId) {
         progressState.running = false;
-        clearTargetRuntimeSnapshot?.(target.id);
-        if (deployAbortController === abortController) deployAbortController = null;
+        if (!connection.unconfirmed.value) clearTargetRuntimeSnapshot?.(target.id);
+        if (deployAbortController === abortController && !connection.unconfirmed.value) deployAbortController = null;
       }
     }
   };
@@ -585,7 +632,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
    * @param record 发布记录
    */
   const runRollback = async (record: DeployRecord) => {
-    if (!ensureLoggedIn()) return;
+    if (!ensureCanStartOperation()) return;
     detachPublishProgressStream();
     progressMode.value = 'rollback';
     const sessionId = ++progressSessionId;
@@ -598,12 +645,14 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       await rollbackRecordWithProgress(record.id, record.projectType, { operator: userName.value || '' }, {
         signal: abortController.signal,
         onEvent: createScopedProgressHandler(sessionId),
+        onConnection: createScopedConnectionHandler(sessionId),
       });
       if (sessionId !== progressSessionId || abortController.signal.aborted) return;
       message.success('回滚完成');
-      await refreshActiveTab({ resetRecordsPage: true, force: true });
+      scheduleRefreshAfterTask({ resetRecordsPage: true, force: true });
     } catch (error: any) {
       if (isAbortError(error) || abortController.signal.aborted || sessionId !== progressSessionId) return;
+      if (connection.handleError(error)) return;
       const errorMessage = getErrorMessage(error);
       if (isDeployConflictError(error)) {
         message.warning(errorMessage);
@@ -618,7 +667,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     } finally {
       if (sessionId === progressSessionId) {
         progressState.running = false;
-        if (deployAbortController === abortController) deployAbortController = null;
+        if (deployAbortController === abortController && !connection.unconfirmed.value) deployAbortController = null;
       }
     }
   };
@@ -628,7 +677,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
    * @param record 发布记录
    */
   const runUndoRollback = async (record: DeployRecord) => {
-    if (!ensureLoggedIn()) return;
+    if (!ensureCanStartOperation()) return;
     detachPublishProgressStream();
     progressMode.value = 'undoRollback';
     const sessionId = ++progressSessionId;
@@ -641,12 +690,14 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       await undoRollbackRecordWithProgress(record.id, record.projectType, { operator: userName.value || '' }, {
         signal: abortController.signal,
         onEvent: createScopedProgressHandler(sessionId),
+        onConnection: createScopedConnectionHandler(sessionId),
       });
       if (sessionId !== progressSessionId || abortController.signal.aborted) return;
       message.success('撤销回滚完成');
-      await refreshActiveTab({ resetRecordsPage: true, force: true });
+      scheduleRefreshAfterTask({ resetRecordsPage: true, force: true });
     } catch (error: any) {
       if (isAbortError(error) || abortController.signal.aborted || sessionId !== progressSessionId) return;
+      if (connection.handleError(error)) return;
       const errorMessage = getErrorMessage(error);
       if (isDeployConflictError(error)) {
         message.warning(errorMessage);
@@ -661,7 +712,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     } finally {
       if (sessionId === progressSessionId) {
         progressState.running = false;
-        if (deployAbortController === abortController) deployAbortController = null;
+        if (deployAbortController === abortController && !connection.unconfirmed.value) deployAbortController = null;
       }
     }
   };
@@ -703,16 +754,16 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       if (!runningTask.running) {
         clearTargetRuntimeSnapshot?.(target.id);
         message.info('当前任务已结束，请查看发布历史');
-        await refreshActiveTab({ resetRecordsPage: true, force: true });
+        scheduleRefreshAfterTask({ resetRecordsPage: true, force: true });
         return;
       }
       detachPublishProgressStream();
       void subscribeRunningTargetProgress(target, runningTask);
     } catch (error: any) {
-      clearTargetRuntimeSnapshot?.(target.id);
       if (isNotFoundError(error)) {
+        clearTargetRuntimeSnapshot?.(target.id);
         message.info('当前任务已结束，请查看发布历史');
-        await refreshActiveTab({ resetRecordsPage: true, force: true });
+        scheduleRefreshAfterTask({ resetRecordsPage: true, force: true });
         return;
       }
       message.error(getErrorMessage(error));
@@ -729,6 +780,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       publishConfirmOpen.value = true;
       return;
     }
+    if (!ensureCanStartOperation()) return;
     try {
       const runningTask = await getTargetDeployProgress(target.id, target.projectType);
       if (runningTask && runningTask.running) {
@@ -752,7 +804,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
 
   /** 从确认弹窗开始发布 */
   const startPublishFromConfirm = async (options: StartPublishOptions = {}) => {
-    if (!ensureLoggedIn()) return;
+    if (!ensureCanStartOperation()) return;
     const target = activePublishTarget.value;
     if (!target) {
       message.warning('发布目标不存在，请刷新后重试');
@@ -768,7 +820,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
    * @param options 发布启动选项
    */
   const republishFromConfirm = async (options: StartPublishOptions = {}) => {
-    if (!ensureLoggedIn()) return;
+    if (!ensureCanStartOperation()) return;
     const target = activePublishTarget.value;
     if (!target) {
       message.warning('发布目标不存在，请刷新后重试');
@@ -793,13 +845,18 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
   };
 
   watch(publishConfirmOpen, (open) => {
-    if (!open && !progressState.running) {
+    if (!open && !progressState.running && !connection.unconfirmed.value) {
       resetPublishWorkbench();
     }
   });
 
   return {
     progressMode,
+    resultUnconfirmed: connection.unconfirmed,
+    reconnecting: connection.reconnecting,
+    verifyingResult: connection.verifying,
+    canVerifyResult: computed(() => Boolean(connection.resume.value)),
+    verifyResult: connection.verify,
     rollbackProgressOpen,
     rollbackConfirmOpen,
     pendingRollbackRecord,

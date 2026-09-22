@@ -1,30 +1,20 @@
 <script setup lang="ts">
-import { defineAsyncComponent } from 'vue';
+import { computed } from 'vue';
 import message from 'ant-design-vue/es/message';
 import { YCard } from '@yss-ui/components/lite';
-import type { YTableActionConfig } from '@yss-ui/components/lite';
-import type { DeployProjectContext, TargetFilterForm } from '../../types';
+import type { NginxDeployWorkspaceProps } from './constant';
+import type { TargetFilterForm } from '../../types';
+import CentralDataStatus from '../CentralDataStatus/index.vue';
 import DeployHero from '../DeployHero/index.vue';
 import DeployTargetTab from '../DeployTargetTab/index.vue';
 import DeployServerTab from '../DeployServerTab/index.vue';
 import DeployRecordTab from '../DeployRecordTab/index.vue';
 
 defineOptions({ name: 'NginxDeployWorkspace' });
-
-/** 部署中心主工作区属性 */
-interface NginxDeployWorkspaceProps {
-  project: DeployProjectContext;
-  lifecycleState: Record<string, any>;
-  serverState: Record<string, any>;
-  targetState: Record<string, any>;
-  recordState: Record<string, any>;
-  progressState: Record<string, any>;
-  serverActionConfig: YTableActionConfig;
-  targetActionConfig: YTableActionConfig;
-  recordActionConfig: YTableActionConfig;
-}
-
 const props = defineProps<NginxDeployWorkspaceProps>();
+/** 成功加载且无目标时才展示空态，避免把连接异常展示为空列表。 */
+const showEmptyState = computed(() => !props.lifecycleState.refreshError.value && props.lifecycleState.activeTabKey.value === 'targets'
+  && props.lifecycleState.tabLoadedFlags.value.targets && !props.lifecycleState.loading.value && !props.targetState.allTargets.value.length);
 
 /**
  * 更新部署目标筛选条件。
@@ -69,19 +59,16 @@ const handleOpenNginxRuntime = async () => {
 
     <div class="deploy-tabs-wrapper">
       <YCard class="nginx-deploy-main-card" :padding="0">
-        <a-alert
-          v-if="lifecycleState.refreshError.value"
-          class="central-data-status"
-          type="error"
-          show-icon
-          message="中央部署数据不可用"
-          :description="lifecycleState.refreshError.value"
+        <CentralDataStatus
+          :error="lifecycleState.refreshError.value"
+          :warning="lifecycleState.refreshWarning.value"
+          :info="lifecycleState.refreshInfo.value"
+          :title="lifecycleState.refreshTitle.value"
+          :description="lifecycleState.refreshDescription.value"
+          @retry="lifecycleState.retryActiveTab"
         />
         <a-alert
-          v-else-if="lifecycleState.activeTabKey.value === 'targets'
-            && lifecycleState.tabLoadedFlags.value.targets
-            && !lifecycleState.loading.value
-            && !targetState.allTargets.value.length"
+          v-if="showEmptyState"
           class="central-data-status"
           type="info"
           show-icon

@@ -874,17 +874,17 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
   }
 
   /** 刷新部署目标列表 */
-  const refreshTargetList = async () => {
+  const refreshTargetList = async (signal?: AbortSignal) => {
     const refreshSequence = ++targetListRefreshSequence;
     let queryParams = getTargetQueryParams();
-    const shouldLoadAllTargets = Boolean(Object.keys(queryParams).length) && !allTargets.value.length;
+    /** 有筛选时同步刷新全量元数据，纠正分支选项及目录占用校验缓存；无筛选时复用列表结果。 */
+    const shouldLoadAllTargets = Boolean(Object.keys(queryParams).length);
     const [initialTargetList, completeTargetList] = await Promise.all([
-      listDeployTargets(queryParams),
-      shouldLoadAllTargets ? listDeployTargets() : Promise.resolve<DeployTarget[] | null>(null),
+      listDeployTargets(queryParams, signal),
+      shouldLoadAllTargets ? listDeployTargets(undefined, signal) : Promise.resolve<DeployTarget[] | null>(null),
     ]);
-    if (refreshSequence !== targetListRefreshSequence) return;
+    if (signal?.aborted || refreshSequence !== targetListRefreshSequence) return;
     let targetList = initialTargetList;
-    targets.value = targetList;
     if (completeTargetList) {
       allTargets.value = completeTargetList;
     } else if (!Object.keys(queryParams).length) {
@@ -893,14 +893,16 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     const shouldReloadByDefaultServer = ensureTargetServerFilter() && !queryParams.serverId;
     if (shouldReloadByDefaultServer) {
       queryParams = getTargetQueryParams();
-      targetList = await listDeployTargets(queryParams);
-      if (refreshSequence !== targetListRefreshSequence) return;
-      targets.value = targetList;
+      targetList = await listDeployTargets(queryParams, signal);
+      if (signal?.aborted || refreshSequence !== targetListRefreshSequence) return;
     }
-    await refreshTargetRuntimeSnapshots(targetList);
-    if (refreshSequence !== targetListRefreshSequence) return;
-    await refreshBackendServiceStatuses(targetList);
-    if (refreshSequence !== targetListRefreshSequence) return;
+    targets.value = targetList;
+    /** 运行态独立探测，不占用中央列表恢复预算；徽章稍后更新，失败由运行态轮询退避处理。 */
+    void refreshTargetRuntimeSnapshots(targetList);
+    if (signal?.aborted || refreshSequence !== targetListRefreshSequence) return;
+    /** 后端服务探测同样不阻塞列表，失败在目标上保留 unknown 状态和错误详情。 */
+    void refreshBackendServiceStatuses(targetList);
+    if (signal?.aborted || refreshSequence !== targetListRefreshSequence) return;
     startTargetRuntimePolling();
   };
 

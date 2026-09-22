@@ -89,8 +89,12 @@ export function useNginxDeployServers(params?: UseNginxDeployServersParams) {
   };
 
   /** 刷新服务器管理列表 */
-  const refreshServerList = async () => {
-    servers.value = await listDeployServers();
+  let serverRefreshSequence = 0;
+  const refreshServerList = async (signal?: AbortSignal) => {
+    const sequence = ++serverRefreshSequence;
+    const list = await listDeployServers(signal);
+    if (signal?.aborted || sequence !== serverRefreshSequence) return;
+    servers.value = list;
   };
 
   /**
@@ -204,6 +208,7 @@ export function useNginxDeployServers(params?: UseNginxDeployServersParams) {
 
   /** 清空服务器管理数据和临时态 */
   const clearServerData = () => {
+    serverRefreshSequence += 1;
     servers.value = [];
     activeServerId.value = null;
     serverModalOpen.value = false;

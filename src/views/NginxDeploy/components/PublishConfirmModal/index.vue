@@ -29,6 +29,7 @@ const emit = defineEmits<{
   (e: 'start', value: PublishStartOptions): void;
   (e: 'republish', value: PublishStartOptions): void;
   (e: 'stop'): void;
+  (e: 'verify-result'): void;
   (e: 'view-record', target: DeployTarget): void;
 }>();
 
@@ -236,6 +237,8 @@ watch(
           <span>依赖缓存异常时使用，会清理旧 node_modules 后重新安装。</span>
         </div>
         <div class="publish-workbench__actions">
+          <span v-if="centralUnavailable">中央服务恢复后可继续发布</span>
+          <YButton v-if="resultUnconfirmed && canVerifyResult" :loading="verifyingResult" @click="emit('verify-result')">核实任务结果</YButton>
           <template v-if="isSuccessFinished">
             <YButton @click="visible = false">关闭</YButton>
             <YButton v-if="hasValidVisitUrl" @click="copySiteUrl">
@@ -249,7 +252,7 @@ watch(
               <template #icon><ExportOutlined /></template>
               打开站点
             </YButton>
-            <YButton @click="handleRepublish">
+            <YButton :disabled="centralUnavailable || resultUnconfirmed" @click="handleRepublish">
               <template #icon><SyncOutlined /></template>
               重新发布
             </YButton>
@@ -268,11 +271,11 @@ watch(
                 {{ stopButtonText }}
               </YButton>
             </a-tooltip>
-            <YButton v-if="!started" type="primary" :disabled="!target" @click="handleStart">
+            <YButton v-if="!started" type="primary" :disabled="!target || centralUnavailable || resultUnconfirmed" @click="handleStart">
               <template #icon><RocketOutlined /></template>
               开始发布
             </YButton>
-            <YButton v-if="started && !running" type="primary" :disabled="!target" @click="handleRepublish">
+            <YButton v-if="started && !running" type="primary" :disabled="!target || centralUnavailable || resultUnconfirmed" @click="handleRepublish">
               <template #icon><SyncOutlined /></template>
               重新发布
             </YButton>

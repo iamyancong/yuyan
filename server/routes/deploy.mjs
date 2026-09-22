@@ -26,6 +26,7 @@ import {
   handleSaveNginxInstanceArchive,
   handleGetNextNginxInstancePort,
   handleGetTargetDeployProgress,
+  handleGetDeployTaskReconciliation,
   handleGetRecord,
   handleGetNextNginxRuntimePort,
   handleGetNginxInstanceStatus,
@@ -174,6 +175,7 @@ router.get('/targets/:id/nginx-conf', handleReadNginxConfig);
 router.put('/targets/:id/nginx-conf', handleSaveNginxConfig);
 router.post('/targets/:id/nginx-test', handleTestNginx);
 router.get('/targets/:id/deploy-progress', handleGetTargetDeployProgress);
+router.get('/targets/:id/deploy-tasks/:taskId', handleGetDeployTaskReconciliation);
 router.post('/targets/:id/deploy', handleDeployTarget);
 router.post('/targets/:id/deploy/stop', handleStopDeployTarget);
 router.post('/targets/:id/inspect', handleInspectBackendTarget);

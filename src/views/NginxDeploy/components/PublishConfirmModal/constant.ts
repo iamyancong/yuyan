@@ -3,6 +3,14 @@ import { formatDeployDateTime, type PublishStage, type PublishStageStatus } from
 
 /** 组件属性接口 */
 export interface PublishConfirmModalProps {
+  /** 中央故障期间阻止新发布。 */
+  centralUnavailable?: boolean;
+  /** 执行结果尚未核实，不能显示成功或再次发布。 */
+  resultUnconfirmed?: boolean;
+  /** 是否可以按已有任务标识核实结果。 */
+  canVerifyResult?: boolean;
+  /** 是否正在核实。 */
+  verifyingResult?: boolean;
   /** 是否打开 */
   open: boolean;
   /** 部署目标 */

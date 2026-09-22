@@ -65,6 +65,10 @@ export interface RecordServerOption {
 
 /** 当前激活 Tab 刷新选项 */
 export interface RefreshActiveTabOptions {
+  /** 列表刷新专属取消信号，不关联发布任务。 */
+  signal?: AbortSignal;
+  /** 全局刷新入口需要等待最终结果并展示统一反馈。 */
+  propagateError?: boolean;
   resetRecordsPage?: boolean;
   /** 强制展示 loading 并刷新，忽略 Tab 缓存 */
   force?: boolean;

@@ -63,7 +63,7 @@ export function usePublishConfirm(props: PublishConfirmModalProps) {
   const branchText = computed(() => props.target?.defaultBranch || 'dev');
 
   /** 是否已进入结束态 */
-  const finished = computed(() => props.started && !props.running && props.logs.length > 0 && !props.stopped);
+  const finished = computed(() => props.started && !props.running && !props.resultUnconfirmed && props.logs.some((item) => item.type === 'result') && !props.stopped);
 
   /** 是否发布失败 */
   const hasError = computed(() => props.logs.some((item) => item.type === 'error' || (item.type === 'log' && item.level === 'error')));
@@ -95,6 +95,7 @@ export function usePublishConfirm(props: PublishConfirmModalProps) {
 
   /** 顶部右侧状态文案 */
   const statusText = computed(() => {
+    if (props.resultUnconfirmed) return '结果待确认';
     if (props.stopped) return '已停止';
     if (hasError.value) return failureTitle.value;
     if (finished.value) return '发布完成';
@@ -103,6 +104,7 @@ export function usePublishConfirm(props: PublishConfirmModalProps) {
 
   /** 顶部状态说明 */
   const headerDescription = computed(() => {
+    if (props.resultUnconfirmed) return props.detail;
     if (!props.started) return '请核对目标信息，点击开始发布后将拉取代码、构建产物、备份目录并重载 Nginx。';
     if (props.stopped) return '发布任务已停止，未进入上传产物阶段。';
     if (hasError.value) {

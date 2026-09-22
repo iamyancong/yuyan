@@ -5,6 +5,9 @@ export type BackendServiceAction = 'start' | 'stop' | 'restart';
 
 /** 后端服务进度弹窗属性 */
 export interface BackendServiceProgressModalProps {
+  resultUnconfirmed?: boolean;
+  canVerifyResult?: boolean;
+  verifyingResult?: boolean;
   open: boolean;
   action: BackendServiceAction;
   target: DeployTarget | null;

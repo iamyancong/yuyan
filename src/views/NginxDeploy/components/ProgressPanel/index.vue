@@ -11,12 +11,13 @@ defineProps<{
   detail: string;
   logs: DeployProgressEvent[];
   running: boolean;
+  resultUnconfirmed?: boolean;
 }>();
 </script>
 
 <template>
   <div class="deploy-progress-panel">
-    <a-progress :percent="percent" :status="running ? 'active' : percent >= 100 ? 'success' : 'normal'" />
+    <a-progress :percent="percent" :status="resultUnconfirmed ? 'normal' : running ? 'active' : percent >= 100 ? 'success' : 'normal'" />
     <div class="deploy-progress-title">{{ title || '等待执行' }}</div>
     <div class="deploy-progress-detail">{{ detail }}</div>
     <div class="deploy-progress-logs">
