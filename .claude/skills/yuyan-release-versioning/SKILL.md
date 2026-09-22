@@ -19,6 +19,7 @@ description: 管理雨燕桌面端版本号、GitHub Actions 自动递增、Taur
 - **手动客户端发版**：
   - 在 GitHub Actions 中手动触发 `.github/workflows/release-tauri.yml`（`workflow_dispatch`）。
   - 支持参数：`bump` (`patch` | `minor` | `major`)、`dry_run`（预览模式）、`prerelease`、`custom_notes`。
+  - **联系人配置门禁**：仓库 Actions Secrets 必须配置 `VITE_CONTACT_NAME`、`VITE_CONTACT_WORK_NO`、`VITE_CONTACT_COMPANY`、`VITE_CONTACT_ROLE`、`VITE_CONTACT_EMAIL`、`VITE_CONTACT_CARD_URL`。`scripts/verify-release-contact.mjs` 在版本准备（含 dry-run）及各平台构建前校验全部字段非空、姓名/工号/邮箱非开源占位值、邮箱和 HTTP(S) 名片地址有效。构建 job 的 `env` 直接注入全部字段，保留 URL 中的特殊字符。联系人是 Vite 编译期配置，修改 Secrets 后须重新打包；本地继续使用 `.env.local`，二维码仍为静态资源。
   - **前置质量门禁**：发版前通过 `scripts/verify-ci-status.mjs` 校验当前 Commit 的 CI 必须已经成功（`success`），若 CI 正在运行自动轮询等待，若失败立即阻断发版。
   - **版本推算与日志**：`scripts/bump-version.js` 根据选定 `bump` 类型计算下一版本，自动提取自上一 Release Tag 至今的 Git Commit 记录作为 Release Notes。
   - **版本回写**：发版成功后，CI 通过 `scripts/apply-version.js` 统一更新四处版本，并推回 `chore(release): bump version to x.y.z [skip ci]`。
