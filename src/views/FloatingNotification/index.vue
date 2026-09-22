@@ -23,11 +23,14 @@ const {
 } = useFloatingNotification();
 
 const isSuccess = computed(() => notificationData.value.status === 'success');
+const isWarning = computed(() => notificationData.value.status === 'warning');
 const destinationText = computed(() => notificationData.value.targetName || notificationData.value.envName || '目标主机');
 const tagLabel = computed(() => {
   if (notificationData.value.envName) return notificationData.value.envName;
   if (isProgressMode.value) return '处理中';
-  return isSuccess.value ? '已就绪' : '异常';
+  if (isSuccess.value) return '已就绪';
+  if (isWarning.value) return '已停止';
+  return '异常';
 });
 const displayDescription = computed(() => {
   const d = notificationData.value;
@@ -36,6 +39,9 @@ const displayDescription = computed(() => {
   if (isSuccess.value) {
     if (d.stage && !d.visitUrl) return `${d.projectName || ''} ${d.stage}`.trim();
     return `${d.projectName} 已成功发布到「${destinationText.value}」`;
+  }
+  if (isWarning.value) {
+    return `${d.projectName || ''} 发布任务已手动停止${d.stage ? `（中断于「${d.stage}」）` : ''}`.trim();
   }
   return `${d.projectName || ''} ${d.stage ? `在「${d.stage}」` : ''}失败：${d.errorMessage || '未知异常'}`;
 });

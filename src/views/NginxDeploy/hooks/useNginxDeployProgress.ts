@@ -304,6 +304,14 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
         progressState.stopped = true;
         progressState.title = '已停止';
         progressState.detail = '发布任务已停止，未进入上传产物阶段。';
+        void notifyDeployResult({
+          status: 'stopped',
+          projectName: target.projectName,
+          targetName: target.serverName || target.envName,
+          envName: target.envName,
+          stage: currentPublishStageKey.value,
+          deployId: sessionId,
+        });
         await refreshActiveTab({ resetRecordsPage: true, force: true });
         return;
       }
@@ -330,6 +338,14 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
             stopped: true,
           });
           message.warning('发布任务已停止');
+          void notifyDeployResult({
+            status: 'stopped',
+            projectName: target.projectName,
+            targetName: target.serverName || target.envName,
+            envName: target.envName,
+            stage: currentPublishStageKey.value,
+            deployId: sessionId,
+          });
           await new Promise((resolve) => window.setTimeout(resolve, 500));
           await refreshActiveTab({ resetRecordsPage: true, force: true });
         }
@@ -359,6 +375,8 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       void notifyDeployResult({
         status: 'error',
         projectName: target.projectName,
+        targetName: target.serverName || target.envName,
+        envName: target.envName,
         stage: currentPublishStageKey.value,
         errorMessage,
         deployId: sessionId,
@@ -415,6 +433,16 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
         progressState.stopped = true;
         progressState.title = '已停止';
         progressState.detail = '发布任务已停止，未进入上传产物阶段。';
+        if (snapshot.action === 'deploy') {
+          void notifyDeployResult({
+            status: 'stopped',
+            projectName: target.projectName,
+            targetName: target.serverName || target.envName,
+            envName: target.envName,
+            stage: currentPublishStageKey.value || snapshot.currentStage,
+            deployId: sessionId,
+          });
+        }
         await refreshActiveTab({ resetRecordsPage: true, force: true });
         return;
       }
@@ -459,6 +487,8 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
         void notifyDeployResult({
           status: 'error',
           projectName: target.projectName,
+          targetName: target.serverName || target.envName,
+          envName: target.envName,
           stage: currentPublishStageKey.value || snapshot.currentStage,
           errorMessage,
           deployId: sessionId,

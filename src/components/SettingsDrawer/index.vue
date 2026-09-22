@@ -165,7 +165,7 @@ const handleTestNotification = async () => {
     const success = await sendTestDeployNotification();
     if (success) {
       if (isTauriApp.value) {
-        message.success('已触发测试系统通知，请查看屏幕右上角通知横幅');
+        message.success('已触发测试提醒，请查看桌面微浮窗（若未出现，可能已降级为系统通知）');
       } else {
         message.success('已触发测试系统通知！若未出现横幅，请检查 macOS「系统设置 - 通知 - Google Chrome」及是否开启勿扰模式', 6);
       }
