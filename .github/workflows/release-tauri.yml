@@ -91,6 +91,16 @@ jobs:
             exit 1
           fi
 
+      - name: Validate release contact configuration
+        env:
+          VITE_CONTACT_NAME: ${{ secrets.VITE_CONTACT_NAME }}
+          VITE_CONTACT_WORK_NO: ${{ secrets.VITE_CONTACT_WORK_NO }}
+          VITE_CONTACT_COMPANY: ${{ secrets.VITE_CONTACT_COMPANY }}
+          VITE_CONTACT_ROLE: ${{ secrets.VITE_CONTACT_ROLE }}
+          VITE_CONTACT_EMAIL: ${{ secrets.VITE_CONTACT_EMAIL }}
+          VITE_CONTACT_CARD_URL: ${{ secrets.VITE_CONTACT_CARD_URL }}
+        run: node scripts/verify-release-contact.mjs
+
       - name: Test packaging and release scripts
         run: node --test scripts/*.test.js
 
@@ -126,6 +136,14 @@ jobs:
             expected_arch: x86_64
 
     runs-on: ${{ matrix.platform }}
+    # Vite 在编译时读取；直接传给构建进程，保留 URL 中的 #、&、$ 等字符。
+    env:
+      VITE_CONTACT_NAME: ${{ secrets.VITE_CONTACT_NAME }}
+      VITE_CONTACT_WORK_NO: ${{ secrets.VITE_CONTACT_WORK_NO }}
+      VITE_CONTACT_COMPANY: ${{ secrets.VITE_CONTACT_COMPANY }}
+      VITE_CONTACT_ROLE: ${{ secrets.VITE_CONTACT_ROLE }}
+      VITE_CONTACT_EMAIL: ${{ secrets.VITE_CONTACT_EMAIL }}
+      VITE_CONTACT_CARD_URL: ${{ secrets.VITE_CONTACT_CARD_URL }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -154,6 +172,7 @@ jobs:
           CENTRAL_URL: ${{ secrets.VITE_APP_SERVER_URL }}
           GITLAB_HOST: ${{ secrets.VITE_GITLAB_HOST }}
         run: |
+          node scripts/verify-release-contact.mjs
           node --experimental-strip-types --input-type=module -e "import { assertAllowedCentralUrl } from './src/utils/centralUrlPolicy.ts'; assertAllowedCentralUrl(process.env.CENTRAL_URL || '')"
           printf 'VITE_APP_SERVER_URL=%s\n' "$CENTRAL_URL" > .env
           printf 'VITE_GITLAB_HOST=%s\n' "$GITLAB_HOST" >> .env

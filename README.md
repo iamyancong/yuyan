@@ -224,13 +224,15 @@ pnpm build
 - **手动客户端发版（`.github/workflows/release-tauri.yml`）**：
   当完成阶段迭代需要对外发布桌面端时，在 GitHub 仓库页面进入 **Actions → Release Tauri App → Run workflow**：
   - **`bump`**：选择版本升级类型（`patch` / `minor` / `major`，默认 `patch`）；
-  - **`dry_run`**：可选预览模式（仅检查前置 CI 状态并推算下一版本号，不打包和发布）；
+  - **`dry_run`**：可选预览模式（检查前置 CI 状态、联系人配置并推算下一版本号，不打包和发布）；
   - **`prerelease`**：可选标记是否为预发布版本；
   - **`custom_notes`**：可选输入自定义更新说明（留空则自动抓取自上一 Tag 以来的 commit 列表）。
 - **智能守门机制（`scripts/verify-ci-status.mjs`）**：
   发版流水线启动时会自动检查目标 Commit 上的 CI 门禁状态，CI 正在运行则自动轮询等待（最长 15 分钟），CI 成功秒级放行，CI 失败立即拦截终止，杜绝发布缺陷版本。
 - **构建与签名**：
   正式构建在 Windows、macOS ARM 与 macOS Intel 三端并发运行，使用 `TAURI_SIGNING_PRIVATE_KEY` 生成 Updater 签名并反向校验，发布 DMG/EXE、签名 Updater 资源和 `latest.json`，并将新版本号以 `chore(release): bump version to x.y.z [skip ci]` 自动推回分支。
+- **技术支持联系人**：
+  仓库 Actions Secrets 必须配置 `VITE_CONTACT_NAME`、`VITE_CONTACT_WORK_NO`、`VITE_CONTACT_COMPANY`、`VITE_CONTACT_ROLE`、`VITE_CONTACT_EMAIL`、`VITE_CONTACT_CARD_URL`。流水线通过构建任务的 `env` 直接注入全部字段；版本准备（含 dry-run）及各平台构建前会拦截空值、姓名/工号/邮箱占位值和无效邮箱、HTTP(S) 名片地址。公司和职责可沿用示例文案。联系人在 **Vite 编译时写入安装包**，修改 Secrets 后必须重新打包，已安装版本不会自动变更；本地开发继续读取 `.env.local`。企微二维码仍使用静态图片。
 
 更新能力发布时必须先把服务端签名清单与缓存逻辑部署到 `yuyan-3.0`，再发布包含新客户端逻辑的桌面版本。首次从旧客户端迁移到该版本可能仍需按旧流程安装一次；此后版本即可在应用内完成覆盖并自动重启。
 
