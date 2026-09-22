@@ -1433,6 +1433,9 @@ function applyBackendSchemaMigration(db) {
     CREATE INDEX IF NOT EXISTS idx_deploy_tasks_target_started ON deploy_tasks(target_id, started_at DESC, id DESC);
   `);
 
+  const taskColumns = getTableColumns(db, 'deploy_tasks');
+  if (!taskColumns.includes('result_json')) db.exec('ALTER TABLE deploy_tasks ADD COLUMN result_json TEXT');
+
   const jdkColumns = getTableColumns(db, 'build_jdks');
   if (!jdkColumns.includes('java_version')) db.exec('ALTER TABLE build_jdks ADD COLUMN java_version TEXT');
   if (!jdkColumns.includes('major_version')) db.exec('ALTER TABLE build_jdks ADD COLUMN major_version INTEGER');
@@ -4207,6 +4210,7 @@ export async function getPersistentDeployTask(id) {
     operator: row.operator || '',
     logPath: row.log_path || '',
     resultRef: row.result_ref || '',
+    result: row.result_json ? JSON.parse(row.result_json) : null,
     error: row.error || '',
     startedAt: row.started_at,
     heartbeatAt: row.heartbeat_at,
@@ -4228,7 +4232,7 @@ export async function updatePersistentDeployTask(id, patch) {
   const finishedAt = patch.finishedAt ?? (['success', 'failed', 'stopped', 'interrupted'].includes(status) ? now() : current.finishedAt);
   db.prepare(
     `UPDATE deploy_tasks
-     SET status = ?, stage = ?, percent = ?, log_path = ?, result_ref = ?, error = ?, heartbeat_at = ?, finished_at = ?
+     SET status = ?, stage = ?, percent = ?, log_path = ?, result_ref = ?, result_json = ?, error = ?, heartbeat_at = ?, finished_at = ?
      WHERE id = ?`
   ).run(
     status,
@@ -4236,6 +4240,7 @@ export async function updatePersistentDeployTask(id, patch) {
     Number(patch.percent ?? current.percent),
     patch.logPath ?? current.logPath,
     patch.resultRef ?? current.resultRef,
+    JSON.stringify(patch.result ?? current.result ?? null),
     patch.error ?? current.error,
     now(),
     finishedAt || '',

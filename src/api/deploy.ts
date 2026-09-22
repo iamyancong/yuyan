@@ -1,3 +1,5 @@
+import { DeployResultUnconfirmed, reconcileDeployTask } from './deployTaskRecovery';
+import { isReadCancelled, isRecoverableReadError, recoverCentralRead } from '@/utils/centralReadRecovery';
 import axios from 'axios';
 import {
   deployBackendTargetFromDesktop,
@@ -513,14 +515,20 @@ export interface DeployTargetQuery {
 /** 流式发布事件 */
 export type DeployTaskResult = DeployRecord | OpenApiArtifact | BackendServiceRuntimeStatus;
 
-export type DeployProgressEvent =
+export type DeployProgressEvent = (
   | { type: 'stage'; stage: string; percent: number; message: string; detail?: string; timestamp: string }
   | { type: 'log'; level: DeployLogItem['level']; stage?: string; message: string; timestamp: string }
   | { type: 'result'; data: DeployTaskResult; timestamp: string }
-  | { type: 'error'; stage?: string; message: string; timestamp: string };
+  | { type: 'error'; stage?: string; message: string; timestamp: string }) & { taskId?: number; targetId?: number };
 
 /** 流式发布配置 */
 export interface DeployProgressOptions {
+  /** 已知任务标识用于恢复观察，避免将同目标的新任务误认成原任务。 */
+  taskId?: number;
+  targetId?: number;
+  operationId?: string;
+  /** 连接恢复状态不代表执行失败。 */
+  onConnection?: (recovering: boolean) => void;
   signal?: AbortSignal;
   onEvent?: (event: DeployProgressEvent) => void;
 }
@@ -533,6 +541,7 @@ export interface NginxRuntimeProgressOptions {
 
 /** 运行中的发布任务快照 */
 export interface DeployProgressSnapshot {
+  taskId?: number;
   operationId?: string;
   targetId: number;
   action: 'deploy' | 'rollback' | 'undoRollback' | 'openapi' | 'start' | 'stop' | 'restart';
@@ -845,7 +854,7 @@ client.interceptors.request.use(async (config) => {
 const unwrap = <T>(response: { data: { data: T } }) => response.data.data;
 
 /** 获取服务器列表 */
-export const listDeployServers = () => client.get('/servers').then(unwrap<DeployServer[]>);
+export const listDeployServers = (signal?: AbortSignal) => client.get('/servers', { signal, timeout: 5000 }).then(unwrap<DeployServer[]>);
 
 /**
  * 保存部署服务器顺序。
@@ -1110,7 +1119,7 @@ export const getNextNginxInstancePort = (instanceId: number, excludeTargetId = 0
   client.get(`/nginx-instances/${instanceId}/next-port`, { params: excludeTargetId ? { excludeTargetId } : undefined }).then(unwrap<{ port: number }>);
 
 /** 获取部署目标列表 */
-export const listDeployTargets = (params?: DeployTargetQuery) => client.get('/targets', { params }).then(unwrap<DeployTarget[]>);
+export const listDeployTargets = (params?: DeployTargetQuery, signal?: AbortSignal) => client.get('/targets', { params, signal, timeout: 5000 }).then(unwrap<DeployTarget[]>);
 
 /** 创建部署目标 */
 export const createDeployTarget = (payload: DeployTargetPayload) => client.post('/targets', payload).then(unwrap<DeployTarget>);
@@ -1122,9 +1131,9 @@ export const updateDeployTarget = (id: number, payload: DeployTargetPayload) => 
 export const deleteDeployTarget = (id: number, expectedName: string) => client.delete(`/targets/${id}`, { params: { expectedName } });
 
 /** 获取中央 API 的发布记录列表。 */
-export const listDeployRecords = (params?: DeployRecordQuery, gitlabToken = '', gitlabHost = '') =>
+export const listDeployRecords = (params?: DeployRecordQuery, gitlabToken = '', gitlabHost = '', signal?: AbortSignal) =>
   client
-    .get('/records', { params, headers: gitlabToken ? { 'X-GitLab-Token': gitlabToken, 'X-GitLab-Host': gitlabHost } : undefined })
+    .get('/records', { params, signal, timeout: 5000, headers: gitlabToken ? { 'X-GitLab-Token': gitlabToken, 'X-GitLab-Host': gitlabHost } : undefined })
     .then(unwrap<DeployRecordPage>);
 
 /** 获取中央 API 的发布记录详情。 */
@@ -1240,7 +1249,7 @@ export async function runBackendServiceActionWithProgress(
   action: 'start' | 'stop' | 'restart',
   options: DeployProgressOptions = {}
 ): Promise<BackendServiceRuntimeStatus> {
-  const response = await fetch(await getActiveDeployApiUrl(`/targets/${targetId}/service-actions/${action}?stream=1`), {
+  const response = await fetchDeployProgress(await getActiveDeployApiUrl(`/targets/${targetId}/service-actions/${action}?stream=1`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson', ...getDeployApiAuthHeaders() },
     body: JSON.stringify({}),
@@ -1301,7 +1310,7 @@ function decodeResponseHeader(value: string | null) {
 }
 
 /** 消费 NDJSON 流 */
-async function consumeProgressStream<T extends DeployTaskResult = DeployRecord>(response: Response, options: DeployProgressOptions): Promise<T> {
+async function consumeProgressStreamOnce<T extends DeployTaskResult = DeployRecord>(response: Response, options: DeployProgressOptions): Promise<T> {
   if (!response.ok) {
     const data = await parseJsonOrText(response);
     const error = new Error(typeof data === 'string' ? data : data?.error || data?.message || '请求失败') as Error & {
@@ -1329,7 +1338,7 @@ async function consumeProgressStream<T extends DeployTaskResult = DeployRecord>(
     const event = JSON.parse(line) as DeployProgressEvent;
     options.onEvent?.(event);
     if (event.type === 'result') result = event.data as T;
-    if (event.type === 'error') throw new Error(event.message || '操作失败');
+    if (event.type === 'error') throw Object.assign(new Error(event.message || '操作失败'), { code: 'DEPLOY_EXECUTION_FAILED' });
   };
 
   while (true) {
@@ -1346,8 +1355,62 @@ async function consumeProgressStream<T extends DeployTaskResult = DeployRecord>(
   }
   buffer += decoder.decode();
   if (buffer.trim()) consumeLine(buffer);
-  if (!result) throw new Error('操作未返回结果');
+  if (!result) throw Object.assign(new Error('进度连接已结束，尚未收到执行结果'), { code: 'PROGRESS_DISCONNECTED' });
   return result;
+}
+
+/** 消费任务流，断线后只读取同一持久化任务，不重放执行请求。 */
+async function consumeProgressStream<T extends DeployTaskResult = DeployRecord>(response: Response, options: DeployProgressOptions): Promise<T> {
+  let taskId = options.taskId;
+  let targetId = options.targetId;
+  let confirmedResult: T | undefined;
+  try {
+    return await consumeProgressStreamOnce<T>(response, {
+      ...options,
+      onEvent(event) {
+        taskId = event.taskId ?? taskId;
+        targetId = event.targetId ?? targetId;
+        if (event.type === 'result') confirmedResult = event.data as T;
+        options.onEvent?.(event);
+      },
+    });
+  } catch (error) {
+    if (options.signal?.aborted || isReadCancelled(error)) throw error;
+    if (confirmedResult) return confirmedResult;
+    if (!isRecoverableReadError(error) && (error as { code?: string }).code !== 'PROGRESS_DISCONNECTED') throw error;
+    options.onConnection?.(true);
+    if (!taskId || !targetId) throw new DeployResultUnconfirmed();
+    return recoverKnownDeployTask<T>(taskId, targetId, options);
+  }
+}
+
+/** 使用已经确认的任务标识恢复观察，终态事件只发送一次。 */
+async function recoverKnownDeployTask<T extends DeployTaskResult>(taskId: number, targetId: number, options: DeployProgressOptions): Promise<T> {
+  let emittedResult = false;
+  const result = await reconcileDeployTask<T>(async (signal) => {
+    return client.get(`/targets/${targetId}/deploy-tasks/${taskId}`, { signal, timeout: 5000 }).then(unwrap<DeployProgressSnapshot>) as Promise<DeployProgressSnapshot & { result: T | null }>;
+  }, {
+    signal: options.signal,
+    onConnection: options.onConnection,
+    onSnapshot(snapshot) {
+      for (const event of (snapshot as DeployProgressSnapshot).events || []) {
+        if (event.type === 'result') emittedResult = true;
+        options.onEvent?.(event);
+      }
+    },
+  });
+  if (!emittedResult) options.onEvent?.({ type: 'result', data: result, timestamp: new Date().toISOString() });
+  return result;
+}
+
+/** 执行流式请求只发送一次；未收到任务标识前断线，结果必须待确认。 */
+async function fetchDeployProgress(url: string, init: RequestInit): Promise<Response> {
+  try { return await fetch(url, init); }
+  catch (error) {
+    if (init.signal?.aborted || isReadCancelled(error)) throw error;
+    if (isRecoverableReadError(error)) throw new DeployResultUnconfirmed();
+    throw error;
+  }
 }
 
 /** 生成 OpenAPI 并订阅进度 */
@@ -1392,6 +1455,7 @@ export async function deployTargetWithProgress(
     let emittedLogCount = 0;
     const operation = await deployBackendTargetFromDesktop(targetId, payload.branch, {
       signal: options.signal,
+      onConnection: options.onConnection,
       onOperation(current) {
         if (current.progress) {
           options.onEvent?.({
@@ -1411,10 +1475,21 @@ export async function deployTargetWithProgress(
         emittedLogCount = current.logs.length;
       },
     });
+    if (operation.error?.code === 'central_result_unconfirmed' && operation.result?.centralOperationId) {
+      options.onConnection?.(true);
+      const confirmed = await reconcileDeployTask<DeployTaskResult>(async (signal) => {
+        const central = await client.get(`/operations/${operation.result?.centralOperationId}`, { signal, timeout: 5000 }).then(unwrap<CentralDeployOperation>);
+        return mapCentralDeployOperation(central, targetId);
+      }, { signal: options.signal, onConnection: options.onConnection });
+      options.onEvent?.({ type: 'result', data: confirmed, timestamp: new Date().toISOString() });
+      return confirmed;
+    }
     const result = operation.result as { record?: DeployRecord } | undefined;
-    return (result?.record || operation.result) as DeployRecord;
+    const record = (result?.record || operation.result) as DeployRecord;
+    options.onEvent?.({ type: 'result', data: record, timestamp: new Date().toISOString() });
+    return record;
   }
-  const response = await fetch(await getTargetExecutionApiUrl(`/targets/${targetId}/deploy?stream=1`, projectType), {
+  const response = await fetchDeployProgress(await getTargetExecutionApiUrl(`/targets/${targetId}/deploy?stream=1`, projectType), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson', ...getDeployApiAuthHeaders() },
     body: JSON.stringify(payload),
@@ -1436,31 +1511,40 @@ export async function subscribeTargetDeployProgress(
   options: DeployProgressOptions = {}
 ) {
   if (projectType === 'backend') {
-    let snapshot = await getTargetDeployProgress(targetId, projectType);
+    const initial = options.operationId ? { operationId: options.operationId }
+      : await recoverCentralRead((signal) => getTargetDeployProgress(targetId, projectType, signal), { signal: options.signal });
     let lastStageKey = '';
-    while (snapshot.running) {
-      if (options.signal?.aborted) throw new DOMException('订阅已取消', 'AbortError');
-      const stageEvent = snapshot.events.find((event) => event.type === 'stage');
-      const stageKey = stageEvent ? `${stageEvent.stage}:${stageEvent.percent}:${stageEvent.message}` : '';
-      if (stageEvent && stageKey !== lastStageKey) {
-        options.onEvent?.(stageEvent);
-        lastStageKey = stageKey;
-      }
-      await new Promise((resolve) => window.setTimeout(resolve, 1_000));
-      const operation = await client.get(`/operations/${snapshot.operationId}`).then(unwrap<CentralDeployOperation>);
-      snapshot = mapCentralDeployOperation(operation, targetId);
-    }
-    if (snapshot.error) throw new Error(snapshot.error);
-    if (!snapshot.result) throw new Error('中央部署已结束但未返回发布记录');
-    options.onEvent?.({ type: 'result', data: snapshot.result, timestamp: new Date().toISOString() });
-    return snapshot.result;
+    const result = await reconcileDeployTask<DeployTaskResult>(async (signal) => {
+      const operation = await client.get(`/operations/${initial.operationId}`, { signal, timeout: 5000 }).then(unwrap<CentralDeployOperation>);
+      return mapCentralDeployOperation(operation, targetId);
+    }, {
+      signal: options.signal,
+      onConnection: options.onConnection,
+      onSnapshot(snapshot) {
+        for (const event of (snapshot as DeployProgressSnapshot).events) {
+          const key = event.type === 'stage' ? `${event.stage}:${event.percent}:${event.message}` : JSON.stringify(event);
+          if (key !== lastStageKey) options.onEvent?.(event);
+          lastStageKey = key;
+        }
+      },
+    });
+    options.onEvent?.({ type: 'result', data: result, timestamp: new Date().toISOString() });
+    return result;
   }
-  const response = await fetch(await getTargetExecutionApiUrl(`/targets/${targetId}/deploy-progress?stream=1`, projectType), {
-    method: 'GET',
-    headers: { Accept: 'application/x-ndjson', ...getDeployApiAuthHeaders() },
-    signal: options.signal,
-  });
-  return consumeProgressStream(response, options);
+
+  try {
+    const response = await fetchDeployProgress(await getTargetExecutionApiUrl(`/targets/${targetId}/deploy-progress?stream=1${options.taskId ? `&taskId=${options.taskId}` : ''}`, projectType), {
+      method: 'GET',
+      headers: { Accept: 'application/x-ndjson', ...getDeployApiAuthHeaders() },
+      signal: options.signal,
+    });
+    return await consumeProgressStream(response, { ...options, targetId });
+  } catch (error) {
+    if (options.taskId && ((error instanceof DeployResultUnconfirmed && !error.resume) || (error as { status?: number }).status === 404)) {
+      return recoverKnownDeployTask(options.taskId, targetId, options);
+    }
+    throw error;
+  }
 }
 
 /**
@@ -1477,7 +1561,7 @@ export async function rollbackRecordWithProgress(
   payload: { operator?: string },
   options: DeployProgressOptions = {}
 ) {
-  const response = await fetch(await getTargetExecutionApiUrl(`/records/${recordId}/rollback?stream=1`, projectType), {
+  const response = await fetchDeployProgress(await getTargetExecutionApiUrl(`/records/${recordId}/rollback?stream=1`, projectType), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson', ...getDeployApiAuthHeaders() },
     body: JSON.stringify(payload),
@@ -1500,7 +1584,7 @@ export async function undoRollbackRecordWithProgress(
   payload: { operator?: string },
   options: DeployProgressOptions = {}
 ) {
-  const response = await fetch(await getTargetExecutionApiUrl(`/records/${recordId}/undo-rollback?stream=1`, projectType), {
+  const response = await fetchDeployProgress(await getTargetExecutionApiUrl(`/records/${recordId}/undo-rollback?stream=1`, projectType), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson', ...getDeployApiAuthHeaders() },
     body: JSON.stringify(payload),

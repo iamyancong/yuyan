@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, ref } from 'vue';
 import '@yss-ui/components/dist/style.css';
 import { useYssVxeUI } from '@/composables/useYssVxeUI';
 import NginxDeployWorkspace from './components/NginxDeployWorkspace/index.vue';
@@ -99,6 +99,7 @@ const recordState = useNginxDeployRecords({
   projectType,
 });
 const progressState = useNginxDeployProgress({
+  canStartOperation: () => !lifecycleState.centralUnavailable.value,
   ensureLoggedIn,
   refreshActiveTab,
   authState,
@@ -108,6 +109,16 @@ const progressState = useNginxDeployProgress({
   clearTargetRuntimeSnapshot: targetState.clearTargetRuntimeSnapshot,
 });
 const lifecycleState = useNginxDeployLifecycle({
+  getRefreshKey: () => JSON.stringify({
+    projectType: projectType.value,
+    targets: targetState.targetFilterForm,
+    server: recordState.recordServerFilter.value,
+    project: recordState.recordProjectFilter.value,
+    branch: recordState.recordBranchFilter.value,
+    operator: recordState.recordOperatorFilter.value,
+    page: recordState.recordPagination.current,
+    pageSize: recordState.recordPagination.pageSize,
+  }),
   authState,
   isLoggedIn,
   isAuthReady,
@@ -131,6 +142,7 @@ const lifecycleState = useNginxDeployLifecycle({
 refreshActiveTabDelegate = lifecycleState.refreshActiveTab;
 
 const { serverActionConfig, targetActionConfig, recordActionConfig } = useNginxDeployActions({
+  centralUnavailable: computed(() => lifecycleState.centralUnavailable.value || progressState.resultUnconfirmed.value),
   targetFormLoading: targetState.targetFormLoading,
   activeTargetId: targetState.activeTargetId,
   testServer: serverState.testServer,

@@ -8,6 +8,7 @@ import axios from 'axios';
 
 /** 部署中心表格操作 Hook 参数 */
 interface UseNginxDeployActionsParams {
+  centralUnavailable?: Ref<boolean>;
   targetFormLoading?: Ref<boolean>;
   activeTargetId?: Ref<number | null>;
   testServer?: (server: DeployServer) => Promise<void>;
@@ -201,6 +202,7 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
       },
       {
         key: 'deploy',
+        disabledFn: () => Boolean(params?.centralUnavailable?.value),
         text: '发布',
         type: 'link',
         hideFn: ({ row }) => isTargetRunning(row),
@@ -265,6 +267,7 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
       },
       {
         key: 'startService',
+        disabledFn: () => Boolean(params?.centralUnavailable?.value),
         text: '启动',
         type: 'link',
         hideFn: ({ row }) => row.projectType !== 'backend' || row.serviceStatus === 'online' || isTargetRunning(row),
@@ -285,6 +288,7 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
       },
       {
         key: 'stopService',
+        disabledFn: () => Boolean(params?.centralUnavailable?.value),
         text: '停止',
         type: 'link',
         hideFn: ({ row }) => row.projectType !== 'backend' || row.serviceStatus !== 'online' || isTargetRunning(row),
@@ -300,6 +304,7 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
       },
       {
         key: 'restartService',
+        disabledFn: () => Boolean(params?.centralUnavailable?.value),
         text: '重启',
         type: 'link',
         hideFn: ({ row }) => row.projectType !== 'backend' || row.serviceStatus !== 'online' || isTargetRunning(row),
@@ -341,6 +346,7 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
       { key: 'logs', text: '日志', type: 'link', clickFn: ({ row }) => openRecordLogs?.(row) },
       {
         key: 'rollback',
+        disabledFn: () => Boolean(params?.centralUnavailable?.value),
         text: '回滚',
         type: 'link',
         hideFn: ({ row }) => !row.canRollback,
@@ -354,6 +360,7 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
       },
       {
         key: 'undoRollback',
+        disabledFn: () => Boolean(params?.centralUnavailable?.value),
         text: '撤销回滚',
         type: 'link',
         hideFn: ({ row }) => !row.canUndoRollback,

@@ -181,10 +181,11 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
   };
 
   /** 刷新发布历史项目选项 */
-  const refreshRecordProjectOptions = async (options: RefreshActiveTabOptions = {}) => {
+  const refreshRecordProjectOptions = async (options: RefreshActiveTabOptions = {}, sequence = recordRefreshSequence) => {
     const shouldReloadTargets = Boolean(options.reloadRecordTargets) || !recordTargets.value.length;
     if (shouldReloadTargets) {
-      const targetList = await listDeployTargets();
+      const targetList = await listDeployTargets(undefined, options.signal);
+      if (options.signal?.aborted || sequence !== recordRefreshSequence) return;
       recordTargets.value = targetList;
     }
     ensureRecordServerFilter(filteredTargets.value);
@@ -196,8 +197,8 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
   /** 刷新发布历史列表 */
   const refreshRecordList = async (options: RefreshActiveTabOptions = {}) => {
     const refreshSequence = ++recordRefreshSequence;
-    await refreshRecordProjectOptions(options);
-    if (refreshSequence !== recordRefreshSequence) return;
+    await refreshRecordProjectOptions(options, refreshSequence);
+    if (options.signal?.aborted || refreshSequence !== recordRefreshSequence) return;
     const recordProjectQuery = getRecordProjectQuery();
     const recordList = await listDeployRecords(
       {
@@ -206,9 +207,10 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
         pageSize: recordPagination.pageSize,
       },
       authState.value.token || '',
-      authState.value.host || ''
+      authState.value.host || '',
+      options.signal
     );
-    if (refreshSequence !== recordRefreshSequence) return;
+    if (options.signal?.aborted || refreshSequence !== recordRefreshSequence) return;
     const targetMap = new Map<number, DeployTarget>();
     recordTargets.value.forEach((target) => targetMap.set(target.id, target));
     records.value = recordList.items.map((item) => {
@@ -318,7 +320,6 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
     recordTargetFilter.value = undefined;
     recordBranchFilter.value = undefined;
     recordOperatorFilter.value = undefined;
-    records.value = [];
     recordPagination.current = 1;
     recordPagination.total = 0;
   });

@@ -1,3 +1,5 @@
+import { recoverCentralRead } from '@/utils/centralReadRecovery';
+import { DeployResultUnconfirmed } from './deployTaskRecovery';
 import { invoke } from '@tauri-apps/api/core';
 import { getGitLabHost, getGitLabToken } from '@/api/gitlab';
 import { getCachedSecureAccount } from '@/services/secureAuth';
@@ -310,7 +312,7 @@ export const updateAgentOperationRetentionPolicy = (retentionDays: AgentOperatio
 });
 
 /** 查询单个 Agent 任务。 */
-export const getAgentOperation = (id: string) => requestAgentApi<AgentOperation>(`/operations/${id}`);
+export const getAgentOperation = (id: string, signal?: AbortSignal) => requestAgentApi<AgentOperation>(`/operations/${id}`, { signal });
 
 /**
  * 从雨燕桌面部署页启动后端设备构建，并轮询到中央部署终态。
@@ -321,7 +323,7 @@ export const getAgentOperation = (id: string) => requestAgentApi<AgentOperation>
 export async function deployBackendTargetFromDesktop(
   targetId: number,
   branch: string,
-  options: { signal?: AbortSignal; onOperation?: (operation: AgentOperation) => void } = {},
+  options: { signal?: AbortSignal; onConnection?: (recovering: boolean) => void; onOperation?: (operation: AgentOperation) => void } = {},
 ): Promise<AgentOperation> {
   await syncAgentRuntimeSettings();
   let operation = await requestAgentApi<AgentOperation>('/desktop/backend-deploy', {
@@ -335,9 +337,18 @@ export async function deployBackendTargetFromDesktop(
       throw new DOMException('发布任务已取消', 'AbortError');
     }
     await new Promise((resolve) => window.setTimeout(resolve, 500));
-    operation = await getAgentOperation(operation.id);
+    try {
+      operation = await recoverCentralRead((signal) => getAgentOperation(operation.id, signal), {
+        signal: options.signal, onRetry: () => options.onConnection?.(true),
+      });
+      options.onConnection?.(false);
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      throw new DeployResultUnconfirmed();
+    }
     options.onOperation?.(operation);
   }
+  if (operation.error?.code === 'central_result_unconfirmed') return operation;
   if (operation.status !== 'succeeded') throw new Error(operation.error?.message || `后端发布状态：${operation.status}`);
   return operation;
 }

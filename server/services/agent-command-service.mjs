@@ -1,3 +1,4 @@
+import { recoverCentralOperationRead } from '../utils/central-read-recovery.mjs';
 /**
  * Agent 工具命令与异步执行服务。
  * @description MCP、HTTP 页面与雨燕 UI 共享同一受控命令入口。
@@ -128,6 +129,7 @@ async function callYuyanApi(route, options = {}) {
     const code = response.status === 401 ? 'central_session_required' : response.status === 403 ? 'forbidden_role' : 'yuyan_api_error';
     throw new AgentError(code, redactAgentText(message), {
       retryable: response.status >= 500,
+      details: { status: response.status },
     });
   }
   return { data: body?.data ?? body, executionScope: context.executionScope };
@@ -241,7 +243,8 @@ async function deployBackendViaCentral(operation, payload, target, settings, sig
     if (Date.now() >= deadline) throw new AgentError('central_operation_timeout', '中央部署超过 45 分钟，可稍后通过任务 ID 查询', { retryable: true });
     updateOperationProgress(operation.id, centralOperation.result?.progress?.stage || 'central_deploy', Math.max(78, Math.min(98, Number(centralOperation.result?.progress?.percent || 0))), centralOperation.result?.progress?.message || '中央正在部署并执行健康检查');
     await waitWithSignal(1_000, signal);
-    centralOperation = (await callYuyanApi(`/deploy-api/operations/${centralOperation.id}`, { scope: 'server', signal })).data;
+    centralOperation = await recoverCentralOperationRead(async (readSignal) =>
+      (await callYuyanApi(`/deploy-api/operations/${centralOperation.id}`, { scope: 'server', signal: readSignal })).data, { signal });
   }
   if (centralOperation.status !== 'succeeded') {
     throw new AgentError(centralOperation.error?.code || 'central_deploy_failed', centralOperation.error?.message || `中央部署状态：${centralOperation.status}`, { retryable: Boolean(centralOperation.error?.retryable) });
