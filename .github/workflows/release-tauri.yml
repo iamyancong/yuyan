@@ -1,31 +1,79 @@
-name: Build Tauri App
+name: Release Tauri App
 
 on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Semver bump 类型 (patch, minor, major)'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      dry_run:
+        description: 'Dry-run 预览模式（检查门禁并计算版本，但不打包与发布）'
+        required: false
+        default: false
+        type: boolean
+      prerelease:
+        description: '是否标记为预发布版本 (Prerelease)'
+        required: false
+        default: false
+        type: boolean
+      custom_notes:
+        description: '自定义 Release 说明（可选，留空将自动抓取 commit 日志）'
+        required: false
+        type: string
   push:
-    branches:
-      - feat/github-actions-build
     tags:
       - 'v*'
-  workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
   packages: read
 
 jobs:
+  verify-ci:
+    name: Verify CI Gate Status
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Wait & Verify CI Quality Pipeline
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_SHA: ${{ github.sha }}
+        run: node scripts/verify-ci-status.mjs
+
   prep-version:
+    name: Prepare Version & Release Plan
+    needs: [verify-ci]
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.calc.outputs.version }}
       tag: ${{ steps.calc.outputs.tag }}
       prerelease: ${{ steps.calc.outputs.prerelease }}
+      dry_run: ${{ steps.calc.outputs.dry_run }}
+      release_notes: ${{ steps.calc.outputs.release_notes }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -33,6 +81,7 @@ jobs:
           node-version: 22
 
       - name: Validate updater signing secret
+        if: ${{ inputs.dry_run != true }}
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -42,79 +91,24 @@ jobs:
             exit 1
           fi
 
-      - name: Test packaging scripts
-        run: >-
-          node --test
-          scripts/generate-update-manifest.test.js
-          scripts/server-production-dependencies.test.js
-          scripts/mcp-production-dependencies.test.js
+      - name: Test packaging and release scripts
+        run: node --test scripts/*.test.js
 
-      - name: Calculate Version
+      - name: Calculate Version & Release Notes
         id: calc
-        run: node scripts/bump-version.js
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  quality:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 22
-
-      - name: Install Pnpm
-        run: npm install -g pnpm@9
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-
-      - name: Install Tauri Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            build-essential \
-            curl \
-            wget \
-            file \
-            libxdo-dev \
-            libssl-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev
-
-      - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
-        env:
-          GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
-
-      - name: Verify frontend, server and MCP
-        run: |
-          pnpm typecheck
-          pnpm test:central-url
-          pnpm test:server
-          pnpm test:mcp
-          pnpm frontend:build:ci
-
-      - name: Prepare Tauri resource directory
-        run: |
-          mkdir -p src-tauri/resources/bin
-          touch src-tauri/resources/bin/placeholder.txt
-
-      - name: Verify Rust
-        working-directory: src-tauri
-        run: |
-          cargo fmt --check
-          cargo check
-          cargo test
+          CUSTOM_NOTES: ${{ inputs.custom_notes }}
+        run: >-
+          node scripts/bump-version.js
+          --bump="${{ inputs.bump || 'patch' }}"
+          --dry-run="${{ inputs.dry_run == true }}"
+          --prerelease="${{ inputs.prerelease == true }}"
 
   build:
-    needs: [prep-version, quality]
+    name: Build Tauri Binary (${{ matrix.platform }})
+    needs: [verify-ci, prep-version]
+    if: needs.prep-version.outputs.dry_run != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -259,7 +253,9 @@ jobs:
           path: update-artifact
 
   release:
+    name: Publish Release & Manifest
     needs: [prep-version, build]
+    if: needs.prep-version.outputs.dry_run != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -290,7 +286,7 @@ jobs:
 
       - name: Generate signed updater manifest
         env:
-          RELEASE_NOTES: ${{ github.event.head_commit.message }}
+          RELEASE_NOTES: ${{ needs.prep-version.outputs.release_notes }}
         run: >-
           node scripts/generate-update-manifest.js
           "${{ needs.prep-version.outputs.version }}"
@@ -324,21 +320,21 @@ jobs:
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_NOTES: ${{ needs.prep-version.outputs.release_notes }}
         with:
           tag_name: ${{ needs.prep-version.outputs.tag }}
           name: yuyan ${{ needs.prep-version.outputs.tag }}
           draft: false
           prerelease: ${{ needs.prep-version.outputs.prerelease == 'true' }}
-          body: |
-            ${{ github.event.head_commit.message }}
+          body: ${{ env.RELEASE_NOTES }}
           files: |
             ./dist-release/latest.json
             ./dist-release/**/*.dmg
             ./dist-release/**/*.exe
             ./dist-release/**/*.app.tar.gz
             ./dist-release/**/*.sig
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Commit and Push version bump
         run: |
@@ -349,8 +345,12 @@ jobs:
           if git diff --cached --quiet; then
             echo "No version changes to commit."
           else
+            TARGET_BRANCH="${{ github.ref_name }}"
+            if [[ "$TARGET_BRANCH" == v* ]]; then
+              TARGET_BRANCH="feat/github-actions-build"
+            fi
             git commit -m "chore(release): bump version to ${{ needs.prep-version.outputs.version }} [skip ci]"
-            git push origin HEAD:feat/github-actions-build
+            git push origin "HEAD:${TARGET_BRANCH}"
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

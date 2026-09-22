@@ -1,0 +1,82 @@
+name: CI / CD Pipeline
+
+on:
+  push:
+    branches:
+      - feat/github-actions-build
+      - main
+  pull_request:
+    branches:
+      - feat/github-actions-build
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Code Quality & Build Verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Install Pnpm
+        run: npm install -g pnpm@9
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Test packaging and release scripts
+        run: node --test scripts/*.test.js
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+        env:
+          GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+
+      - name: Verify frontend, server and MCP
+        run: |
+          pnpm typecheck
+          pnpm test:central-url
+          pnpm test:server
+          pnpm test:mcp
+          pnpm frontend:build:ci
+
+      - name: Prepare Tauri resource directory
+        run: |
+          mkdir -p src-tauri/resources/bin
+          touch src-tauri/resources/bin/placeholder.txt
+
+      - name: Verify Rust
+        working-directory: src-tauri
+        run: |
+          cargo fmt --check
+          cargo check
+          cargo test

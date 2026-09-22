@@ -11,13 +11,18 @@ description: 管理雨燕桌面端版本号、GitHub Actions 自动递增、Taur
 - 批量修改使用 `node scripts/apply-version.js <version>`；提交前检查四处一致。
 - Tauri 运行时版本以 `tauri.conf.json` 为准，不要只修改一个文件做正式发布。
 
-## 自动递增
+## 持续集成与发版流水线（对标 yss-ui）
 
-- `feat/github-actions-build` Push 触发 `.github/workflows/build-tauri.yml`。
-- `scripts/bump-version.js` 读取 GitHub Releases 中最新的干净语义版本。
-- 当源码版本不高于线上最新版本时自动递增 patch。例如线上为 `v1.0.2`、源码为 `1.0.2`，本次 CI 发布 `v1.0.3`。
-- CI 通过 `scripts/apply-version.js` 把计算版本写入构建工作区；不要尝试覆盖已有 Release。
-- Tag 触发时使用 Tag 自身版本；重跑历史分支流水线前先确认不会产生意外的新版本。
+- **日常提交与 CI 门禁**：
+  - `feat/github-actions-build` 或 `main` 的 Push / PR 仅触发 `.github/workflows/ci.yml`。
+  - 仅运行代码质量、类型检查、测试与前端/Rust 构建验证；**不修改版本号、不打包、不创建 GitHub Release**。
+- **手动客户端发版**：
+  - 在 GitHub Actions 中手动触发 `.github/workflows/release-tauri.yml`（`workflow_dispatch`）。
+  - 支持参数：`bump` (`patch` | `minor` | `major`)、`dry_run`（预览模式）、`prerelease`、`custom_notes`。
+  - **前置质量门禁**：发版前通过 `scripts/verify-ci-status.mjs` 校验当前 Commit 的 CI 必须已经成功（`success`），若 CI 正在运行自动轮询等待，若失败立即阻断发版。
+  - **版本推算与日志**：`scripts/bump-version.js` 根据选定 `bump` 类型计算下一版本，自动提取自上一 Release Tag 至今的 Git Commit 记录作为 Release Notes。
+  - **版本回写**：发版成功后，CI 通过 `scripts/apply-version.js` 统一更新四处版本，并推回 `chore(release): bump version to x.y.z [skip ci]`。
+- **Tag 逃生舱**：直接推送 `v*` Tag 触发发版时，流水线直接使用 Tag 自身版本，不进行二次 bump。
 
 ## Release 要求
 

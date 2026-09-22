@@ -215,9 +215,22 @@ pnpm build
 
 ---
 
-## 🤖 持续集成
+## 🤖 持续集成与发布
 
-`.github/workflows/build-tauri.yml` 在指定分支推送或手动触发时，于 Windows、macOS ARM 与 macOS Intel runner 完成 Rust / Node 环境准备、依赖安装与 `pnpm run build`，发布 DMG/EXE、签名 Updater 资源和 `latest.json`。CI 通过 `PERSONAL_ACCESS_TOKEN` 拉取私有包；正式构建必须配置与客户端内置公钥匹配的 `TAURI_SIGNING_PRIVATE_KEY`（可选密码使用 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`）。该密钥只用于免费的 Tauri Updater 产物验签，不需要 Apple Developer 或 Windows 商业代码签名证书。流水线会用生成的产物反向验证公私钥匹配，错误密钥会阻止 Release。
+雨燕桌面端采用对标 `yss-ui` 的「日常提交 CI 门禁 + 手动触发客户端发版」解耦架构：
+
+- **日常门禁（`.github/workflows/ci.yml`）**：
+  在 `feat/github-actions-build` 或 `main` 推送及提 PR 时自动运行。仅执行 Node/Vue 类型检查、单测校验与 Vite/Rust 编译检查。**不会**打包多平台二进制，也**不会**自动递增版本号或创建 GitHub Release，保证快速反馈。
+- **手动客户端发版（`.github/workflows/release-tauri.yml`）**：
+  当完成阶段迭代需要对外发布桌面端时，在 GitHub 仓库页面进入 **Actions → Release Tauri App → Run workflow**：
+  - **`bump`**：选择版本升级类型（`patch` / `minor` / `major`，默认 `patch`）；
+  - **`dry_run`**：可选预览模式（仅检查前置 CI 状态并推算下一版本号，不打包和发布）；
+  - **`prerelease`**：可选标记是否为预发布版本；
+  - **`custom_notes`**：可选输入自定义更新说明（留空则自动抓取自上一 Tag 以来的 commit 列表）。
+- **智能守门机制（`scripts/verify-ci-status.mjs`）**：
+  发版流水线启动时会自动检查目标 Commit 上的 CI 门禁状态，CI 正在运行则自动轮询等待（最长 15 分钟），CI 成功秒级放行，CI 失败立即拦截终止，杜绝发布缺陷版本。
+- **构建与签名**：
+  正式构建在 Windows、macOS ARM 与 macOS Intel 三端并发运行，使用 `TAURI_SIGNING_PRIVATE_KEY` 生成 Updater 签名并反向校验，发布 DMG/EXE、签名 Updater 资源和 `latest.json`，并将新版本号以 `chore(release): bump version to x.y.z [skip ci]` 自动推回分支。
 
 更新能力发布时必须先把服务端签名清单与缓存逻辑部署到 `yuyan-3.0`，再发布包含新客户端逻辑的桌面版本。首次从旧客户端迁移到该版本可能仍需按旧流程安装一次；此后版本即可在应用内完成覆盖并自动重启。
 
