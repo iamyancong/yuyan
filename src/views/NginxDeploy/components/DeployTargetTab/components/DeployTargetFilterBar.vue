@@ -74,6 +74,7 @@ const serverId = computed({
               class="target-filter-bar__project"
               placeholder="搜索项目名称、路径或备注"
               allow-clear
+              @pressEnter="emit('search')"
             />
           </a-form-item>
         </a-col>
@@ -116,7 +117,7 @@ const serverId = computed({
         </a-col>
         <a-col :xs="24" :sm="12" :md="12" :xl="8" class="target-filter-bar__actions">
           <a-space class="action-space">
-            <YButton type="primary" html-type="submit" :loading="loading">
+            <YButton type="primary" html-type="submit" :loading="loading" @click="emit('search')">
               <template #icon><SearchOutlined /></template>
               查询
             </YButton>

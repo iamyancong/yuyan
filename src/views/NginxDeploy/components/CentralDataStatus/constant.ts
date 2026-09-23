@@ -2,7 +2,6 @@
 export interface CentralDataStatusProps {
   error: string;
   warning: boolean;
-  info?: boolean;
   title: string;
   description: string;
 }

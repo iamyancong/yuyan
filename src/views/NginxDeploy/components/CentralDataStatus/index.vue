@@ -8,14 +8,14 @@ const emit = defineEmits<{ retry: [] }>();
 
 <template>
   <a-alert
-    v-if="error || info"
+    v-if="error"
     class="central-data-status"
-    :type="info ? 'info' : warning ? 'warning' : 'error'"
+    :type="warning ? 'warning' : 'error'"
     show-icon
     :message="title"
     :description="description"
   >
-    <template v-if="error" #action>
+    <template #action>
       <YButton size="small" @click="emit('retry')">立即重试</YButton>
     </template>
   </a-alert>

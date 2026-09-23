@@ -78,31 +78,17 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
   const snapshotKeys = ref<Partial<Record<NginxDeployTabKey, string>>>({});
   const queryKey = () => `${activeTabKey.value}:${params?.getRefreshKey?.() || ''}`;
   const hasSnapshot = computed(() => snapshotKeys.value[activeTabKey.value] !== undefined);
-  const loading = computed(() => recovery.status.value === 'loading' && showLoading.value && !hasSnapshot.value && !refreshError.value);
-  const refreshInfo = computed(
-    () =>
-      recovery.status.value === 'loading' &&
-      showLoading.value &&
-      hasSnapshot.value &&
-      snapshotKeys.value[activeTabKey.value] !== queryKey() &&
-      !refreshError.value
-  );
+  const loading = computed(() => recovery.status.value === 'loading' && showLoading.value && !refreshError.value);
   const refreshWarning = computed(() => hasSnapshot.value && recovery.retrying.value);
   const refreshTitle = computed(() =>
     recovery.retrying.value
       ? hasSnapshot.value
         ? '中央连接暂时异常，正在重试'
         : '暂时无法加载中央部署数据，正在重试'
-      : refreshInfo.value
-        ? '正在更新筛选结果'
-        : '中央数据刷新失败，请重试'
+      : '中央数据刷新失败，请重试'
   );
   const refreshDescription = computed(() => {
-    const stale = hasSnapshot.value
-      ? snapshotKeys.value[activeTabKey.value] === queryKey()
-        ? '当前显示上次加载的数据。'
-        : '当前显示上次加载的数据，与当前筛选条件可能不一致。'
-      : '';
+    const stale = hasSnapshot.value && recovery.retrying.value ? '当前显示上次加载的数据。' : '';
     const exhausted = recovery.status.value === 'failed' ? '自动重试已停止。' : '';
     return `${stale}${exhausted}${refreshError.value}`;
   });
@@ -131,6 +117,7 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
   const refreshActiveTab = async (options: RefreshActiveTabOptions = {}) => {
     if (!ensureLoggedIn()) return;
     if (options.resetRecordsPage) resetRecordPage();
+    if (options.force) recovery.cancel();
     const tabKey = activeTabKey.value;
     const key = queryKey();
     showLoading.value = !options.silent;
@@ -273,7 +260,6 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
     loading,
     refreshError,
     refreshWarning,
-    refreshInfo,
     refreshTitle,
     refreshDescription,
     centralUnavailable: recovery.unavailable,
