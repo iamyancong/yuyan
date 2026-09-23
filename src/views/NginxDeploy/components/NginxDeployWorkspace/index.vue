@@ -62,7 +62,6 @@ const handleOpenNginxRuntime = async () => {
         <CentralDataStatus
           :error="lifecycleState.refreshError.value"
           :warning="lifecycleState.refreshWarning.value"
-          :info="lifecycleState.refreshInfo.value"
           :title="lifecycleState.refreshTitle.value"
           :description="lifecycleState.refreshDescription.value"
           @retry="lifecycleState.retryActiveTab"
