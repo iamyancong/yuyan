@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { isBuiltin } from 'node:module';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -27,7 +28,7 @@ function getPackageName(specifier) {
 }
 
 /** 提取静态 import、export from 与动态 import 中的外部包。 */
-function collectExternalImports(source) {
+export function collectExternalImports(source) {
   const imports = new Set();
   const patterns = [
     /(?:import|export)\s+(?:[^'";]+?\s+from\s+)?['"]([^'"]+)['"]/g,
@@ -36,12 +37,32 @@ function collectExternalImports(source) {
   for (const pattern of patterns) {
     for (const match of source.matchAll(pattern)) {
       const specifier = match[1];
-      if (specifier.startsWith('.') || specifier.startsWith('/') || specifier.startsWith('node:')) continue;
+      if (
+        specifier.startsWith('.') ||
+        specifier.startsWith('/') ||
+        specifier.startsWith('node:') ||
+        isBuiltin(specifier)
+      ) {
+        continue;
+      }
       imports.add(getPackageName(specifier));
     }
   }
   return imports;
 }
+
+test('collectExternalImports 忽略 Node 原生内置模块及相对路径', () => {
+  const sample = `
+    import fs from 'fs';
+    import { Readable } from 'node:stream';
+    import axios from 'axios';
+    import { sub } from './local.mjs';
+    /** @param {import('stream').Writable} s */
+    const dynamic = await import('express');
+  `;
+  const imports = collectExternalImports(sample);
+  assert.deepEqual([...imports].sort(), ['axios', 'express']);
+});
 
 test('内嵌服务声明全部生产依赖', () => {
   const importedPackages = new Set();
