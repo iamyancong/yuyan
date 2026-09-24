@@ -1,57 +1,87 @@
 <script setup lang="ts">
-import { CodeOutlined } from '@ant-design/icons-vue';
+import { computed } from 'vue';
+import { CheckOutlined, CodeOutlined, FolderFilled, FolderOpenOutlined } from '@ant-design/icons-vue';
 import { YButton } from '@yss-ui/components/lite';
 import type { RemoteFsEntry } from '@/api/deploy';
 
 defineOptions({ name: 'RemoteFsFooter' });
 
 interface RemoteFsFooterProps {
+  currentPath: string;
   selectedEntry: RemoteFsEntry | null;
-  totalCount: number;
   execPanelVisible: boolean;
+  loading: boolean;
 }
 
-defineProps<RemoteFsFooterProps>();
+const props = defineProps<RemoteFsFooterProps>();
 const emit = defineEmits<{
   (e: 'toggleExec'): void;
   (e: 'close'): void;
+  (e: 'usePath'): void;
 }>();
+
+/** 计算最终将使用的目录与按钮文案 */
+const targetChoice = computed(() => {
+  if (props.selectedEntry && props.selectedEntry.type === 'directory') {
+    return {
+      isSubDir: true,
+      name: props.selectedEntry.name,
+      path: props.selectedEntry.path,
+      label: `使用选中目录: ${props.selectedEntry.name}`,
+    };
+  }
+  return {
+    isSubDir: false,
+    name: '当前目录',
+    path: props.currentPath,
+    label: '使用当前目录',
+  };
+});
 </script>
 
 <template>
   <div class="remote-fs-footer">
-    <div class="footer-status">
-      <span v-if="selectedEntry">已选中: {{ selectedEntry.name }}</span>
-      <span v-else>共 {{ totalCount }} 项条目（单击选中，双击进入或返回）</span>
+    <!-- 左侧：选中路径感知 -->
+    <div class="footer-selection-badge">
+      <span class="selection-prefix">当前选定:</span>
+      <div class="badge-content" :title="targetChoice.path">
+        <FolderFilled v-if="targetChoice.isSubDir" class="badge-icon is-sub" />
+        <FolderOpenOutlined v-else class="badge-icon" />
+        <span class="badge-name">{{ targetChoice.name }}</span>
+        <code class="badge-path">({{ targetChoice.path || '加载中...' }})</code>
+      </div>
     </div>
-    <div class="footer-actions">
-      <YButton size="small" @click="emit('toggleExec')">
+
+    <!-- 右侧：操作按钮组（运维终端 + 取消 + 核心确认） -->
+    <div class="footer-actions-group">
+      <YButton
+        class="terminal-toggle-btn"
+        :type="execPanelVisible ? 'primary' : 'default'"
+        size="small"
+        @click="emit('toggleExec')"
+      >
         <template #icon><CodeOutlined /></template>
-        {{ execPanelVisible ? '收起命令面板' : '运行命令...' }}
+        {{ execPanelVisible ? '收起终端' : '运维终端' }}
       </YButton>
-      <YButton size="small" @click="emit('close')">关闭</YButton>
+
+      <YButton size="small" @click="emit('close')">
+        取消
+      </YButton>
+
+      <YButton
+        type="primary"
+        size="small"
+        class="confirm-use-btn"
+        :disabled="loading || !targetChoice.path"
+        @click="emit('usePath')"
+      >
+        <template #icon><CheckOutlined /></template>
+        {{ targetChoice.label }}
+      </YButton>
     </div>
   </div>
 </template>
 
 <style scoped lang="less">
-.remote-fs-footer {
-  padding: 10px 16px;
-  background: #ffffff;
-  border-top: 1px solid #edf0f5;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-
-  .footer-status {
-    font-size: 12px;
-    color: #8c8c8c;
-  }
-
-  .footer-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-}
+@import './style.less';
 </style>

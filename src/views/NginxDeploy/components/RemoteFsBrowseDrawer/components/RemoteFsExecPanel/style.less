@@ -1,0 +1,217 @@
+.remote-exec-panel {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 24px 14px;
+  border-top: 1px solid #232733;
+  color: #e4e8f0;
+  background: #141720;
+}
+
+.exec-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.terminal-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+
+  strong {
+    color: #f2f4fa;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .terminal-mark {
+    width: 22px;
+    height: 22px;
+    display: grid;
+    place-items: center;
+    border: 1px solid color-mix(in srgb, var(--primary-color) 35%, #3c4050);
+    border-radius: 6px;
+    color: var(--primary-color);
+    background: color-mix(in srgb, var(--primary-color) 15%, #252936);
+    font-size: 11px;
+  }
+
+  .terminal-pwd-badge {
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: #212532;
+    color: #9aa1b2;
+    font-family: 'SFMono-Regular', Consolas, monospace;
+    font-size: 10px;
+    max-width: min(380px, 35vw);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.terminal-ctrl-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  .ctrl-icon-btn {
+    border: none;
+    background: transparent;
+    color: #8c93a4;
+    font-size: 11px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px;
+    border-radius: 4px;
+
+    &:hover {
+      color: #ffffff;
+      background: #232838;
+    }
+  }
+}
+
+.exec-bar {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 4px 3px 10px;
+  border: 1px solid #2f3444;
+  border-radius: 8px;
+  background: #1c202c;
+  transition: all 0.16s ease;
+
+  &:focus-within {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary-color) 20%, transparent);
+  }
+
+  .command-prompt {
+    color: var(--primary-color);
+    font-family: 'SFMono-Regular', Consolas, monospace;
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .exec-input-native {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: #f1f3f9;
+    font-family: 'SFMono-Regular', Consolas, monospace;
+    font-size: 12px;
+
+    &::placeholder {
+      color: #656c7d;
+    }
+  }
+}
+
+.exec-presets {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+
+  .preset-label {
+    color: #7b8394;
+    font-size: 10px;
+    white-space: nowrap;
+  }
+
+  .preset-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 7px;
+    border: 1px solid #2d3242;
+    border-radius: 5px;
+    color: #b5bcc9;
+    background: #1f2330;
+    font-size: 10px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+
+    code {
+      color: var(--primary-color);
+      font-family: 'SFMono-Regular', Consolas, monospace;
+      font-size: 10px;
+    }
+
+    &:hover:not(:disabled) {
+      border-color: var(--primary-color);
+      color: #ffffff;
+      background: color-mix(in srgb, var(--primary-color) 15%, #232736);
+    }
+  }
+}
+
+.exec-output {
+  overflow: hidden;
+  border: 1px solid #2b3040;
+  border-radius: 7px;
+  background: #0d0f15;
+
+  .output-meta {
+    min-height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 4px 10px;
+    border-bottom: 1px solid #202432;
+    color: #9ba2b3;
+    font-size: 10px;
+  }
+
+  .result-command {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--primary-color);
+
+    code {
+      color: #cbd0dc;
+      font-family: 'SFMono-Regular', Consolas, monospace;
+    }
+  }
+
+  .result-status {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    color: #52c41a;
+
+    .result-divider {
+      color: #4b5263;
+    }
+  }
+
+  &.has-error {
+    .result-status {
+      color: #ff4d4f;
+    }
+  }
+
+  .output-pre {
+    max-height: 180px;
+    overflow-y: auto;
+    margin: 0;
+    padding: 8px 10px;
+    color: #e2e6f0;
+    font-family: 'SFMono-Regular', Consolas, monospace;
+    font-size: 11px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+}

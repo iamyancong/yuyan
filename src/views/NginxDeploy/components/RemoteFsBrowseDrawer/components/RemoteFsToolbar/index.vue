@@ -1,232 +1,167 @@
 <script setup lang="ts">
 import {
+  ArrowRightOutlined,
   ArrowUpOutlined,
   CheckOutlined,
+  CloseCircleFilled,
+  CloseOutlined,
+  CopyOutlined,
+  EditOutlined,
+  EyeInvisibleOutlined,
+  EyeOutlined,
   FolderOutlined,
   ReloadOutlined,
+  SearchOutlined,
 } from '@ant-design/icons-vue';
-import { YButton } from '@yss-ui/components/lite';
-import type { RemoteFsRoot } from '@/api/deploy';
-import type { BreadcrumbSegment } from '../../constant';
+import type { RemoteFsToolbarEmits, RemoteFsToolbarProps } from './constant';
+import { useCopyFeedback } from './hooks/useCopyFeedback';
+import { usePathEdit } from './hooks/usePathEdit';
 
 defineOptions({ name: 'RemoteFsToolbar' });
 
-interface RemoteFsToolbarProps {
-  currentPath: string;
-  isAtRoot: boolean;
-  loading: boolean;
-  showHidden?: boolean;
-  breadcrumbs: BreadcrumbSegment[];
-  roots: RemoteFsRoot[];
-  activeRoot: RemoteFsRoot | null;
-}
+const props = defineProps<RemoteFsToolbarProps>();
+const emit = defineEmits<RemoteFsToolbarEmits>();
 
-defineProps<RemoteFsToolbarProps>();
-const emit = defineEmits<{
-  (e: 'update:currentPath', val: string): void;
-  (e: 'update:showHidden', val: boolean): void;
-  (e: 'navigateUp'): void;
-  (e: 'refresh'): void;
-  (e: 'usePath'): void;
-  (e: 'jumpBreadcrumb', path: string): void;
-  (e: 'switchRoot', root: RemoteFsRoot): void;
-}>();
+const { isEditingPath, inputRef, enterEditMode, cancelEditMode, submitPathEdit } = usePathEdit(
+  () => props.currentPath,
+  (val) => emit('update:pathInput', val),
+  () => emit('navigateToPath')
+);
+
+const { isCopied, triggerCopy } = useCopyFeedback(() => emit('copyPath', props.currentPath));
 </script>
 
 <template>
   <div class="remote-fs-toolbar">
-    <div class="remote-fs-path-bar">
-      <div class="nav-buttons">
-        <YButton size="small" :disabled="isAtRoot || loading" @click="emit('navigateUp')">
-          <template #icon><ArrowUpOutlined /></template>
-          上级
-        </YButton>
-        <YButton size="small" :loading="loading" @click="emit('refresh')">
-          <template #icon><ReloadOutlined /></template>
-          刷新
-        </YButton>
-      </div>
-      <div class="path-input-wrap">
-        <a-input
-          :value="currentPath"
-          size="small"
-          placeholder="输入路径后按回车进入"
-          @update:value="(v: string) => emit('update:currentPath', v)"
-          @pressEnter="emit('refresh')"
-        />
-      </div>
-      <div class="action-buttons">
-        <a-checkbox
-          :checked="showHidden"
-          class="toolbar-show-hidden"
-          @update:checked="(val: boolean) => emit('update:showHidden', val)"
+    <div class="toolbar-main-bar">
+      <!-- 1. 紧凑型导航控制组 -->
+      <div class="nav-control-group">
+        <button
+          type="button"
+          class="nav-action-btn"
+          :disabled="isAtRoot || loading"
+          title="返回上一级 (Alt+↑)"
+          @click="emit('navigateUp')"
         >
-          显示隐藏项
-        </a-checkbox>
-        <YButton type="primary" size="small" @click="emit('usePath')">
-          <template #icon><CheckOutlined /></template>
-          使用此路径
-        </YButton>
-      </div>
-    </div>
-
-    <div v-if="breadcrumbs.length > 0" class="remote-fs-breadcrumbs">
-      <span
-        v-for="(crumb, idx) in breadcrumbs"
-        :key="crumb.path"
-        class="crumb-item"
-        :class="{ 'is-active': crumb.isLast, 'is-disabled': crumb.disabled }"
-        :title="crumb.disabled ? crumb.disabledReason : `跳转到 ${crumb.path}`"
-        @click="!crumb.disabled && !crumb.isLast && emit('jumpBreadcrumb', crumb.path)"
-      >
-        {{ crumb.name }}
-        <span v-if="idx < breadcrumbs.length - 1" class="crumb-separator">/</span>
-      </span>
-    </div>
-
-    <div v-if="roots.length > 1" class="remote-fs-roots-bar">
-      <span class="roots-label">快捷根：</span>
-      <div class="roots-chips">
-        <span
-          v-for="root in roots"
-          :key="root.id"
-          class="root-chip"
-          :class="{ 'is-selected': activeRoot?.id === root.id }"
-          @click="emit('switchRoot', root)"
+          <ArrowUpOutlined />
+        </button>
+        <div class="nav-divider" />
+        <button
+          type="button"
+          class="nav-action-btn"
+          :disabled="loading"
+          :class="{ 'is-loading': loading }"
+          title="刷新目录"
+          @click="emit('refresh')"
         >
-          <FolderOutlined />
-          {{ root.label }}
-        </span>
+          <ReloadOutlined :spin="loading" />
+        </button>
+      </div>
+
+      <!-- 2. 一体化智能地址栏 (Omnibar) -->
+      <div class="omnibar-wrap" :class="{ 'is-editing': isEditingPath }">
+        <!-- 浏览态：面包屑与行内快速动作 -->
+        <div v-if="!isEditingPath" class="omnibar-breadcrumbs" @click.self="enterEditMode">
+          <FolderOutlined class="omnibar-folder-icon" />
+          <span class="crumb-root">/</span>
+          <template v-for="crumb in breadcrumbs" :key="crumb.path">
+            <button
+              type="button"
+              class="crumb-chip"
+              :class="{ 'is-active': crumb.isLast, 'is-disabled': crumb.disabled }"
+              :disabled="crumb.disabled || crumb.isLast"
+              :title="crumb.disabled ? crumb.disabledReason : `跳转至 ${crumb.path}`"
+              @click.stop="emit('jumpBreadcrumb', crumb.path)"
+            >
+              {{ crumb.name }}
+            </button>
+            <span v-if="!crumb.isLast" class="crumb-sep">/</span>
+          </template>
+
+          <div class="omnibar-inline-actions">
+            <button
+              type="button"
+              class="omnibar-action-icon-btn"
+              :class="{ 'is-copied': isCopied }"
+              :title="isCopied ? '已复制完整路径' : '复制当前路径'"
+              @click.stop="triggerCopy"
+            >
+              <CheckOutlined v-if="isCopied" class="success-icon" />
+              <CopyOutlined v-else />
+            </button>
+            <button
+              type="button"
+              class="omnibar-action-icon-btn"
+              title="自由编辑完整路径"
+              @click.stop="enterEditMode"
+            >
+              <EditOutlined />
+            </button>
+          </div>
+        </div>
+
+        <!-- 编辑态：全行自由输入 -->
+        <div v-else class="omnibar-edit-form">
+          <FolderOutlined class="edit-prefix-icon" />
+          <input
+            ref="inputRef"
+            class="edit-input-field"
+            :value="pathInput"
+            placeholder="输入远程绝对路径后按回车跳转"
+            @input="(e: any) => emit('update:pathInput', e.target.value)"
+            @keydown.enter="submitPathEdit"
+            @keydown.esc="cancelEditMode"
+          />
+          <div class="edit-action-group">
+            <button type="button" class="edit-tool-btn submit" title="确认跳转 (Enter)" @click="submitPathEdit">
+              <ArrowRightOutlined />
+            </button>
+            <button type="button" class="edit-tool-btn cancel" title="取消 (Esc)" @click="cancelEditMode">
+              <CloseOutlined />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. 右侧视图与检索控制组 -->
+      <div class="toolbar-tools-group">
+        <!-- 紧凑搜索过滤胶囊 -->
+        <div class="filter-search-capsule" :class="{ 'has-value': Boolean(filterKeyword) }">
+          <SearchOutlined class="search-lead-icon" />
+          <input
+            class="search-input-field"
+            :value="filterKeyword"
+            placeholder="过滤当前目录..."
+            @input="(e: any) => emit('update:filterKeyword', e.target.value)"
+          />
+          <button
+            v-if="filterKeyword"
+            type="button"
+            class="clear-filter-btn"
+            title="清空过滤"
+            @click="emit('update:filterKeyword', '')"
+          >
+            <CloseCircleFilled />
+          </button>
+        </div>
+
+        <!-- 现代化隐藏项切换胶囊 (取代原有原生 Checkbox) -->
+        <button
+          type="button"
+          class="view-toggle-pill"
+          :class="{ 'is-active': showHidden }"
+          :title="showHidden ? '隐藏以点开头的项' : '显示以点开头的隐藏项'"
+          @click="emit('update:showHidden', !showHidden)"
+        >
+          <EyeOutlined v-if="showHidden" class="toggle-icon" />
+          <EyeInvisibleOutlined v-else class="toggle-icon" />
+          <span class="toggle-label">隐藏项</span>
+        </button>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped lang="less">
-.remote-fs-toolbar {
-  padding: 10px 16px;
-  background: #ffffff;
-  border-bottom: 1px solid #edf0f5;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.remote-fs-path-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-
-  .nav-buttons {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-  }
-
-  .path-input-wrap {
-    flex: 1;
-  }
-
-  .action-buttons {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-
-    .toolbar-show-hidden {
-      font-size: 12px;
-      color: #595959;
-      user-select: none;
-      white-space: nowrap;
-    }
-  }
-}
-
-.remote-fs-breadcrumbs {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 13px;
-  color: #595959;
-  overflow-x: auto;
-  white-space: nowrap;
-  padding: 2px 0;
-
-  .crumb-item {
-    cursor: pointer;
-    padding: 2px 6px;
-    border-radius: 4px;
-    transition: all 0.2s;
-
-    &:hover {
-      background: #f0f0f0;
-      color: #722ed1;
-    }
-
-    &.is-active {
-      color: #1f1f1f;
-      font-weight: 600;
-      cursor: default;
-      background: transparent;
-    }
-
-    &.is-disabled {
-      color: #bfbfbf;
-      cursor: not-allowed;
-      background: transparent;
-
-      &:hover {
-        background: transparent;
-        color: #bfbfbf;
-      }
-    }
-  }
-
-  .crumb-separator {
-    color: #bfbfbf;
-  }
-}
-
-.remote-fs-roots-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-
-  .roots-label {
-    color: #8c8c8c;
-    flex-shrink: 0;
-  }
-
-  .roots-chips {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
-  }
-
-  .root-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 2px 10px;
-    border-radius: 12px;
-    background: #f5f5f5;
-    border: 1px solid #d9d9d9;
-    color: #595959;
-    cursor: pointer;
-    transition: all 0.2s;
-
-    &:hover {
-      border-color: #9254de;
-      color: #722ed1;
-      background: #f9f0ff;
-    }
-
-    &.is-selected {
-      border-color: #722ed1;
-      background: #722ed1;
-      color: #ffffff;
-    }
-  }
-}
+@import './style.less';
 </style>
