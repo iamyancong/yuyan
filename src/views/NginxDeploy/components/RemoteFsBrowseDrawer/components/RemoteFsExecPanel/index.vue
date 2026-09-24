@@ -1,5 +1,13 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import {
+  CheckCircleOutlined,
+  ClearOutlined,
+  CodeOutlined,
+  DownOutlined,
+  ExclamationCircleOutlined,
+  RightOutlined,
+} from '@ant-design/icons-vue';
 import { YButton } from '@yss-ui/components/lite';
 import type { RemoteExecResult } from '@/api/deploy';
 import { PRESET_COMMAND_CHIPS } from '../../constant';
@@ -8,6 +16,7 @@ defineOptions({ name: 'RemoteFsExecPanel' });
 
 interface RemoteFsExecPanelProps {
   commandText: string;
+  workingDirectory: string;
   executing: boolean;
   execResult: RemoteExecResult | null;
 }
@@ -16,6 +25,7 @@ const props = defineProps<RemoteFsExecPanelProps>();
 const emit = defineEmits<{
   (e: 'update:commandText', val: string): void;
   (e: 'run'): void;
+  (e: 'close'): void;
 }>();
 
 const cmd = computed({
@@ -25,100 +35,82 @@ const cmd = computed({
 </script>
 
 <template>
-  <div class="remote-exec-panel">
-    <div class="exec-bar">
-      <a-input
-        v-model:value="cmd"
-        size="small"
-        placeholder="输入单次非交互式命令（如 ls -lh, df -h 等）"
-        class="exec-input"
-        @pressEnter="emit('run')"
-      />
-      <YButton type="primary" size="small" :loading="executing" @click="emit('run')">执行</YButton>
+  <section class="remote-exec-panel" aria-label="远程运维诊断终端">
+    <!-- 终端顶部状态条 -->
+    <div class="exec-panel-heading">
+      <div class="terminal-title">
+        <span class="terminal-mark"><CodeOutlined /></span>
+        <strong>远程诊断终端</strong>
+        <span class="terminal-pwd-badge" :title="`当前工作路径: ${workingDirectory}`">
+          pwd: {{ workingDirectory || '/' }}
+        </span>
+      </div>
+      <div class="terminal-ctrl-group">
+        <button
+          v-if="execResult"
+          type="button"
+          class="ctrl-icon-btn"
+          title="清空输出"
+          @click="emit('update:commandText', '')"
+        >
+          <ClearOutlined /> 清屏
+        </button>
+        <button type="button" class="ctrl-icon-btn" title="收起终端" @click="emit('close')">
+          <DownOutlined />
+        </button>
+      </div>
     </div>
-    <div class="exec-presets">
-      <span
+
+    <!-- 终端输入条 -->
+    <div class="exec-bar">
+      <span class="command-prompt" aria-hidden="true">$</span>
+      <input
+        v-model="cmd"
+        placeholder="输入诊断命令，例如 ls -lh、df -h、du -sh *"
+        class="exec-input-native"
+        :disabled="executing"
+        aria-label="远程命令"
+        @keydown.enter="emit('run')"
+      />
+      <YButton type="primary" size="small" :loading="executing" @click="emit('run')">
+        <template #icon><RightOutlined /></template>
+        执行
+      </YButton>
+    </div>
+
+    <!-- 常用预设命令芯片 -->
+    <div class="exec-presets" aria-label="快捷预设命令">
+      <span class="preset-label">快捷预设:</span>
+      <button
         v-for="chip in PRESET_COMMAND_CHIPS"
         :key="chip.command"
+        type="button"
         class="preset-chip"
         :title="chip.description"
+        :disabled="executing"
         @click="emit('update:commandText', chip.command)"
       >
-        {{ chip.label }} ({{ chip.command }})
-      </span>
+        {{ chip.label }}<code>{{ chip.command }}</code>
+      </button>
     </div>
+
+    <!-- 结果回显区 -->
     <div v-if="execResult" class="exec-output" :class="{ 'has-error': execResult.code !== 0 }">
-      <div class="output-meta">$ {{ execResult.command }} (code: {{ execResult.code }}, {{ execResult.durationMs }}ms)</div>
-      <div>{{ execResult.stdout || execResult.stderr || '(无输出)' }}</div>
+      <div class="output-meta">
+        <div class="result-command"><span>$</span><code>{{ execResult.command }}</code></div>
+        <div class="result-status">
+          <ExclamationCircleOutlined v-if="execResult.code !== 0" />
+          <CheckCircleOutlined v-else />
+          <span>退出码 {{ execResult.code }}</span>
+          <span class="result-divider">·</span>
+          <span>{{ execResult.durationMs }} ms</span>
+        </div>
+      </div>
+      <pre class="output-pre">{{ execResult.stdout || execResult.stderr || '(无控制台输出)' }}</pre>
     </div>
-  </div>
+  </section>
 </template>
 
 <style scoped lang="less">
-.remote-exec-panel {
-  border-top: 1px solid #d9d9d9;
-  background: #1e1e1e;
-  color: #d4d4d4;
-  padding: 12px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-
-  .exec-bar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-
-    .exec-input {
-      background: #2b2b2b;
-      color: #ffffff;
-      border-color: #444444;
-    }
-  }
-
-  .exec-presets {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
-
-    .preset-chip {
-      font-size: 11px;
-      background: #2d2d2d;
-      border: 1px solid #434343;
-      color: #b7eb8f;
-      padding: 1px 8px;
-      border-radius: 4px;
-      cursor: pointer;
-
-      &:hover {
-        background: #383838;
-        border-color: #52c41a;
-      }
-    }
-  }
-
-  .exec-output {
-    max-height: 160px;
-    overflow-y: auto;
-    font-family: Menlo, Monaco, 'Courier New', monospace;
-    font-size: 12px;
-    line-height: 1.5;
-    background: #141414;
-    padding: 8px 12px;
-    border-radius: 4px;
-    border: 1px solid #303030;
-    white-space: pre-wrap;
-    word-break: break-all;
-
-    .output-meta {
-      color: #8c8c8c;
-      margin-bottom: 4px;
-    }
-
-    &.has-error {
-      color: #ff7875;
-    }
-  }
-}
+@import './style.less';
 </style>

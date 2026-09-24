@@ -1,17 +1,8 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onMounted, ref, unref, watch } from 'vue';
+import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue';
+import { hasAnyVisibleOverlay, type NginxDeployOverlayHostProps } from './constant';
 
 defineOptions({ name: 'NginxDeployOverlayHost' });
-
-/** 部署中心弹层宿主属性 */
-interface NginxDeployOverlayHostProps {
-  lifecycleState?: Record<string, any>;
-  serverState: Record<string, any>;
-  targetState: Record<string, any>;
-  recordState: Record<string, any>;
-  progressState: Record<string, any>;
-  openApiState: Record<string, any>;
-}
 
 const props = defineProps<NginxDeployOverlayHostProps>();
 
@@ -19,22 +10,7 @@ const props = defineProps<NginxDeployOverlayHostProps>();
 const NginxDeployOverlays = defineAsyncComponent(() => import('../NginxDeployOverlays/index.vue'));
 
 /** 当前是否存在需要渲染的部署弹层 */
-const hasVisibleOverlay = computed(() =>
-  Boolean(
-    unref(props.serverState?.serverModalOpen) ||
-      unref(props.serverState?.runtimeDrawerOpen) ||
-      unref(props.targetState?.targetModalOpen) ||
-      unref(props.targetState?.nginxTargetId) ||
-      unref(props.targetState?.serviceLogOpen) ||
-      unref(props.targetState?.javaManagerOpen) ||
-      unref(props.targetState?.environmentManagerOpen) ||
-      unref(props.recordState?.recordLogOpen) ||
-      unref(props.progressState?.publishConfirmOpen) ||
-      unref(props.progressState?.rollbackProgressOpen) ||
-      unref(props.progressState?.rollbackConfirmOpen) ||
-      unref(props.openApiState?.drawerOpen)
-  )
-);
+const hasVisibleOverlay = computed(() => hasAnyVisibleOverlay(props));
 
 /** 首次有任意弹层打开后保持保活，避免全部关闭后整树卸载销毁导致二次打开重新渲染与保活失效 */
 const hasEverOpened = ref(false);
@@ -58,6 +34,7 @@ onMounted(() => {
     void import('../ServerConfigDrawer/index.vue');
     void import('../NginxRuntimeDrawer/index.vue');
     void import('../DeployTargetConfigModal/index.vue');
+    void import('../RemoteFsBrowseDrawer/index.vue');
   });
 });
 </script>

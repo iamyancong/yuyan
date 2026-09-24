@@ -60,6 +60,63 @@ export function formatDateTime(timeMs: number | null): string {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 }
 
+/** 文件视觉感知类型 */
+export type FileCategory =
+  | 'directory'
+  | 'parent_dir'
+  | 'code'
+  | 'page'
+  | 'config'
+  | 'archive'
+  | 'image'
+  | 'log'
+  | 'default';
+
+export interface FileVisualBadge {
+  category: FileCategory;
+  tag: string;
+}
+
+/**
+ * 根据文件名与类型推断视觉分类与文字标签
+ * @param name 文件名
+ * @param type 条目类型 ('directory' | 'file' | 'parent_dir')
+ * @returns 视觉分类与徽章标识
+ */
+export function getFileVisualBadge(name: string, type: string): FileVisualBadge {
+  if (type === 'parent_dir') {
+    return { category: 'parent_dir', tag: '..' };
+  }
+  if (type === 'directory') {
+    return { category: 'directory', tag: 'DIR' };
+  }
+  const parts = name.split('.');
+  const ext = (parts.length > 1 ? parts.pop() || '' : '').toLowerCase();
+
+  if (['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs'].includes(ext)) {
+    return { category: 'code', tag: 'JS' };
+  }
+  if (['html', 'htm', 'vue'].includes(ext)) {
+    return { category: 'page', tag: '</>' };
+  }
+  if (['json', 'yaml', 'yml', 'toml', 'xml'].includes(ext)) {
+    return { category: 'config', tag: '{}' };
+  }
+  if (['conf', 'nginx', 'env', 'ini', 'sh'].includes(ext)) {
+    return { category: 'config', tag: 'CFG' };
+  }
+  if (['gz', 'br', 'zip', 'tar', 'tgz', 'rar', '7z'].includes(ext)) {
+    return { category: 'archive', tag: 'ZIP' };
+  }
+  if (['png', 'jpg', 'jpeg', 'svg', 'webp', 'ico', 'gif'].includes(ext)) {
+    return { category: 'image', tag: 'IMG' };
+  }
+  if (['log', 'txt', 'md', 'out'].includes(ext)) {
+    return { category: 'log', tag: 'LOG' };
+  }
+  return { category: 'default', tag: 'FILE' };
+}
+
 /** 预设安全命令芯片 */
 export interface PresetCommandChip {
   label: string;
@@ -80,36 +137,43 @@ export const fsTableColumns: YTableColumn[] = [
   {
     field: 'name',
     title: '名称',
-    minWidth: 260,
+    minWidth: 280,
     showOverflow: false,
-    slots: { default: 'name' },
+    headerAlign: 'left',
+    slots: { default: 'name', header: 'name-header' },
   },
   {
     field: 'size',
     title: '大小',
-    width: 100,
+    width: 120,
     align: 'right',
+    headerAlign: 'right',
+    slots: { header: 'size-header' },
     formatter: ({ cellValue }) => formatFileSize(cellValue as number | null),
   },
   {
     field: 'permissions',
     title: '权限',
-    width: 105,
+    width: 110,
     align: 'center',
+    headerAlign: 'center',
     formatter: ({ cellValue }) => String(cellValue || '-'),
   },
   {
     field: 'mtime',
     title: '修改时间',
-    width: 160,
+    width: 180,
     align: 'center',
+    headerAlign: 'center',
+    slots: { header: 'mtime-header' },
     formatter: ({ cellValue }) => formatDateTime(cellValue as number | null),
   },
   {
     field: 'action',
-    title: '操作',
-    width: 90,
+    title: '快捷操作',
+    width: 130,
     align: 'center',
+    headerAlign: 'center',
     fixed: 'right',
     slots: { default: 'action' },
   },

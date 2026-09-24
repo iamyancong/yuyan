@@ -1,0 +1,340 @@
+.remote-fs-table-wrap {
+  min-height: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  margin: 0;
+  border: none;
+  background: var(--bg-color-container);
+}
+
+.remote-fs-table-area {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  padding: 0 20px;
+
+  /* 彻底消除纵向列竖线，告别粗糙 Excel 切片分割 */
+  :deep(.vxe-body--column),
+  :deep(.vxe-header--column) {
+    border-right: none !important;
+    border-left: none !important;
+  }
+
+  :deep(.vxe-table--border-line),
+  :deep(.vxe-table--header-border-line),
+  :deep(.vxe-cell--resizable::after),
+  :deep(.vxe-cell--resizable::before),
+  :deep(.vxe-header--column::after),
+  :deep(.vxe-header--column::before) {
+    display: none !important;
+  }
+
+  /* 表头：一体化柔和质感、无竖线打扰、视觉通透 */
+  :deep(.vxe-header--row) {
+    background-color: color-mix(in srgb, var(--text-color) 2.5%, var(--bg-color-container)) !important;
+    color: var(--text-color) !important;
+    font-size: 12px !important;
+    font-weight: 600 !important;
+  }
+
+  :deep(.vxe-header--column) {
+    padding: 6px 0 !important;
+    border-bottom: 1px solid var(--border-color-split) !important;
+  }
+
+  /* 表格行高与字号，具备呼吸通透感 */
+  :deep(.vxe-body--column) {
+    padding: 8px 0 !important;
+    color: var(--text-color) !important;
+    font-size: 12.5px !important;
+    border-bottom: 1px solid var(--border-color-split) !important;
+  }
+
+  /* 鼠标悬停行：柔和浅紫微光 */
+  :deep(.vxe-body--row:hover) {
+    background-color: color-mix(in srgb, var(--primary-color) 6%, var(--bg-color-container)) !important;
+
+    .hover-copy-trigger {
+      opacity: 1;
+    }
+  }
+
+  /* 选中行：干净纯粹的高亮，彻底无单元格竖线 */
+  :deep(.vxe-body--row.row--current) {
+    background-color: color-mix(in srgb, var(--primary-color) 12%, var(--bg-color-container)) !important;
+  }
+
+  :deep(.vxe-body--row.row--current .vxe-body--column) {
+    background-color: transparent !important;
+    border-top: 1px solid color-mix(in srgb, var(--primary-color) 25%, transparent) !important;
+    border-bottom: 1px solid color-mix(in srgb, var(--primary-color) 25%, transparent) !important;
+  }
+
+  /* 仅在整行首列左侧呈现高亮光柱 */
+  :deep(.vxe-body--row.row--current .vxe-body--column:first-child) {
+    box-shadow: inset 4px 0 0 0 var(--primary-color) !important;
+  }
+}
+
+/* 交互式表头：点击排序、微光 Hover、统计胶囊一体化 */
+.interactive-th {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  padding: 3px 6px;
+  margin: 0 -4px;
+  border-radius: 6px;
+  transition: all 0.16s ease;
+
+  &:hover {
+    background: color-mix(in srgb, var(--primary-color) 8%, transparent);
+
+    .th-title-label {
+      color: var(--primary-color);
+    }
+
+    .th-sort-hint {
+      opacity: 0.65;
+    }
+  }
+
+  &.is-left {
+    justify-content: flex-start;
+  }
+
+  &.is-right {
+    justify-content: flex-end;
+    margin-right: -2px;
+  }
+
+  &.is-center {
+    justify-content: center;
+  }
+
+  .th-title-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-color);
+    transition: color 0.16s ease;
+
+    &.is-sorted {
+      color: var(--primary-color);
+      font-weight: 700;
+    }
+  }
+
+  .th-sort-icon {
+    display: inline-flex;
+    align-items: center;
+    font-size: 11px;
+    color: var(--text-color-secondary);
+    transition: all 0.16s ease;
+
+    &.is-active {
+      color: var(--primary-color);
+      font-weight: 700;
+    }
+
+    .th-sort-hint {
+      opacity: 0;
+      font-size: 10px;
+      color: var(--text-color-secondary);
+      transition: opacity 0.16s ease;
+    }
+  }
+
+  .th-stats-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: 6px;
+    padding: 1.5px 8px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--text-color) 5%, transparent);
+    border: 1px solid color-mix(in srgb, var(--text-color) 8%, transparent);
+    cursor: default;
+    user-select: none;
+    line-height: 1.3;
+
+    .pill-total {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-color);
+    }
+
+    .pill-detail {
+      font-size: 10.5px;
+      font-weight: 500;
+      color: var(--text-color-secondary);
+    }
+  }
+
+  .th-truncated-tag {
+    margin-left: 4px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--warning-color) 15%, transparent);
+    color: var(--warning-color);
+    font-weight: 600;
+    font-size: 10.5px;
+    line-height: 1.3;
+  }
+}
+
+.file-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  user-select: none;
+  cursor: pointer;
+
+  .file-icon-badge {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    flex: 0 0 auto;
+
+    &.directory {
+      color: #d97706;
+      background: rgba(217, 119, 6, 0.16);
+      font-size: 14px;
+    }
+
+    &.parent_dir {
+      color: var(--primary-color);
+      background: var(--primary-color-lighter);
+    }
+
+    &.code {
+      color: #b45309;
+      background: rgba(245, 158, 11, 0.2);
+      font-weight: 750;
+      font-family: 'SFMono-Regular', Consolas, monospace;
+      font-size: 10px;
+    }
+
+    &.page {
+      color: #c2410c;
+      background: rgba(234, 88, 12, 0.2);
+      font-weight: 750;
+      font-family: 'SFMono-Regular', Consolas, monospace;
+      font-size: 10px;
+    }
+
+    &.config {
+      color: #0e7490;
+      background: rgba(6, 182, 212, 0.2);
+      font-weight: 750;
+      font-family: 'SFMono-Regular', Consolas, monospace;
+      font-size: 10px;
+    }
+
+    &.archive {
+      color: #7e22ce;
+      background: rgba(168, 85, 247, 0.2);
+      font-weight: 750;
+      font-family: 'SFMono-Regular', Consolas, monospace;
+      font-size: 9px;
+    }
+
+    &.image {
+      color: #be185d;
+      background: rgba(236, 72, 153, 0.2);
+      font-weight: 750;
+      font-family: 'SFMono-Regular', Consolas, monospace;
+      font-size: 10px;
+    }
+
+    &.log,
+    &.default {
+      color: var(--text-color);
+      background: color-mix(in srgb, var(--text-color) 12%, transparent);
+      font-weight: 750;
+      font-family: 'SFMono-Regular', Consolas, monospace;
+      font-size: 9.5px;
+    }
+  }
+
+  .file-title-text {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-color);
+    font-size: 13px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    letter-spacing: -0.1px;
+  }
+
+  .dir-badge {
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: rgba(217, 119, 6, 0.16);
+    color: #b45309;
+    font-weight: 650;
+    line-height: 1.3;
+  }
+}
+
+.row-actions-group {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+
+  .action-capsule-btn {
+    height: 24px;
+    padding: 0 10px;
+    border-radius: 4px;
+    font-size: 11.5px;
+    font-weight: 600;
+    border: 1px solid var(--border-color);
+    background: var(--bg-color-container);
+    color: var(--text-color);
+    transition: all 0.16s ease;
+
+    &:hover {
+      color: var(--primary-color);
+      border-color: var(--primary-color);
+      background: var(--primary-color-lighter);
+    }
+
+    &.primary {
+      color: var(--primary-color);
+      background: var(--primary-color-lighter);
+      border-color: color-mix(in srgb, var(--primary-color) 25%, transparent);
+
+      &:hover {
+        background: var(--primary-color);
+        color: #ffffff;
+      }
+    }
+  }
+
+  .hover-copy-trigger {
+    border: none;
+    background: transparent;
+    color: var(--text-color-secondary);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 2px 4px;
+    border-radius: 4px;
+    opacity: 0;
+    transition: all 0.15s ease;
+
+    &:hover {
+      color: var(--primary-color);
+      background: var(--primary-color-lighter);
+    }
+  }
+}
