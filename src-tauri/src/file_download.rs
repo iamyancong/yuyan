@@ -103,16 +103,50 @@ fn sanitize_file_name(value: &str, fallback: &str) -> String {
     }
 }
 
-/** 从 Content-Disposition 中提取 ASCII 文件名。 */
-fn parse_content_disposition_file_name(value: &str) -> Option<String> {
-    value.split(';').find_map(|part| {
-        let (name, raw_value) = part.trim().split_once('=')?;
-        if !name.trim().eq_ignore_ascii_case("filename") {
-            return None;
+/** 对 URL 百分号编码进行安全解码。 */
+fn percent_decode(input: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(input.len());
+    let mut chars = input.bytes();
+    while let Some(b) = chars.next() {
+        if b == b'%' {
+            let h1 = chars.next()?;
+            let h2 = chars.next()?;
+            let hex = [h1, h2];
+            let s = std::str::from_utf8(&hex).ok()?;
+            let val = u8::from_str_radix(s, 16).ok()?;
+            bytes.push(val);
+        } else {
+            bytes.push(b);
         }
-        let candidate = raw_value.trim().trim_matches('"');
-        (!candidate.is_empty()).then(|| candidate.to_string())
-    })
+    }
+    String::from_utf8(bytes).ok()
+}
+
+/** 从 Content-Disposition 中提取文件名，优先遵循 RFC 5987 / RFC 6266 解析 filename*=UTF-8''...，回退解析普通 filename="..."。 */
+fn parse_content_disposition_file_name(value: &str) -> Option<String> {
+    let mut plain_name = None;
+    for part in value.split(';') {
+        let (name, raw_value) = match part.trim().split_once('=') {
+            Some(pair) => pair,
+            None => continue,
+        };
+        let key = name.trim();
+        let val = raw_value.trim().trim_matches('"');
+        if key.eq_ignore_ascii_case("filename*") {
+            let stripped = val
+                .strip_prefix("UTF-8''")
+                .or_else(|| val.strip_prefix("utf-8''"))
+                .unwrap_or(val);
+            if let Some(decoded) = percent_decode(stripped) {
+                if !decoded.is_empty() {
+                    return Some(decoded);
+                }
+            }
+        } else if key.eq_ignore_ascii_case("filename") && plain_name.is_none() && !val.is_empty() {
+            plain_name = Some(val.to_string());
+        }
+    }
+    plain_name
 }
 
 /** 为同名文件生成不覆盖已有文件的保存路径。 */
@@ -494,6 +528,16 @@ mod tests {
             Some("server-32089.tar.gz".to_string())
         );
         assert_eq!(parse_content_disposition_file_name("attachment"), None);
+    }
+
+    #[test]
+    fn content_disposition_优先解析_utf8_filename() {
+        assert_eq!(
+            parse_content_disposition_file_name(
+                "attachment; filename=\"________-192.168.165.13-dmDataService-20260924151700.tar.gz\"; filename*=UTF-8''%E5%9B%BD%E5%AF%BF%E6%B5%B7%E5%A4%96%E6%98%9F%E6%B2%B3%E7%B3%BB%E7%BB%9F-192.168.165.13-dmDataService-20260924151700.tar.gz"
+            ),
+            Some("国寿海外星河系统-192.168.165.13-dmDataService-20260924151700.tar.gz".to_string())
+        );
     }
 
     #[test]

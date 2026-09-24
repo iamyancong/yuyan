@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { withHiddenWindow } from '../utils/child-process.mjs';
+import { buildSafeContentDisposition } from '../utils/http-header-utils.mjs';
 
 const downloadRegistry = new Map();
 const SCAFFOLD_DOWNLOAD_ROOT = path.join(os.tmpdir(), 'scaffold-downloads');
@@ -100,7 +101,7 @@ export async function handleDownload(req, res) {
 
     // 设置响应头为 zip 文件下载
     res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="${zipFileName}"`);
+    res.setHeader('Content-Disposition', buildSafeContentDisposition(zipFileName, 'project.zip'));
 
     // 使用系统 zip 命令直接输出到响应流
     const zipProcess = spawn('zip', ['-r', '-', appName], withHiddenWindow({

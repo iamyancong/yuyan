@@ -209,3 +209,24 @@ export function buildFsSuggestedFileName(
   return entry.name;
 }
 
+/**
+ * 解析下载响应文件名，优先遵循 RFC 5987 / RFC 6266 解析 filename*=UTF-8''...，回退解析普通 filename="..."。
+ * @param disposition Content-Disposition 响应头
+ * @param fallback 兜底文件名
+ * @returns 解码后的真实文件名
+ */
+export function parseDownloadFileName(disposition: string | null | undefined, fallback: string): string {
+  const value = disposition || '';
+  const utf8Match = value.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]) || fallback;
+    } catch {
+      return utf8Match[1] || fallback;
+    }
+  }
+  const plainMatch = value.match(/filename="?([^";]+)"?/i);
+  return plainMatch?.[1] || fallback;
+}
+
+
