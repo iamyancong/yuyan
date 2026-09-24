@@ -108,6 +108,7 @@ import {
   listRemoteFsDirectory,
   readRemoteFsFile,
   execRemoteFsCommand,
+  streamRemoteFsEntry,
 } from '../services/remote-fs-service.mjs';
 
 /** GitHub 托管仓库名（主库或 Fork 库） */
@@ -2239,4 +2240,53 @@ export async function handleExecServerCommand(req, res) {
     sendError(res, error, 400);
   }
 }
+
+/**
+ * 流式下载服务器指定远程路径（目录打包为 tar.gz，单文件直接下载）
+ */
+export async function handleDownloadServerFsEntry(req, res) {
+  let isAborted = false;
+  req.on('aborted', () => {
+    isAborted = true;
+  });
+  res.on('close', () => {
+    if (!res.writableEnded) isAborted = true;
+  });
+
+  try {
+    const serverId = Number(req.params.id);
+    if (!serverId) throw new Error('无效的服务器 ID');
+    const targetPath = String(req.query.path || '').trim();
+    if (!targetPath) throw new Error('缺少目标路径');
+
+    await streamRemoteFsEntry(
+      serverId,
+      targetPath,
+      res,
+      ({ fileName, mimeType }) => {
+        res.status(200);
+        res.setHeader('Content-Type', mimeType || 'application/octet-stream');
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="${fileName}"; filename*=UTF-8''${encodeURIComponent(fileName)}`
+        );
+        res.setHeader('Content-Encoding', 'identity');
+        res.setHeader('Cache-Control', 'no-cache, no-transform');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('X-Accel-Buffering', 'no');
+        res.flushHeaders?.();
+      },
+      { isAborted: () => isAborted }
+    );
+
+    if (!res.writableEnded) res.end();
+  } catch (error) {
+    if (res.headersSent) {
+      res.destroy(error);
+      return;
+    }
+    sendError(res, error, Number(error?.status || 400));
+  }
+}
+
 

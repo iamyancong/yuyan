@@ -13,7 +13,7 @@
   min-height: 0;
   flex: 1 1 auto;
   overflow: hidden;
-  padding: 0 20px;
+  padding: 0;
 
   /* 彻底消除纵向列竖线，告别粗糙 Excel 切片分割 */
   :deep(.vxe-body--column),
@@ -55,10 +55,6 @@
   /* 鼠标悬停行：柔和浅紫微光 */
   :deep(.vxe-body--row:hover) {
     background-color: color-mix(in srgb, var(--primary-color) 6%, var(--bg-color-container)) !important;
-
-    .hover-copy-trigger {
-      opacity: 1;
-    }
   }
 
   /* 选中行：干净纯粹的高亮，彻底无单元格竖线 */
@@ -318,23 +314,6 @@
         background: var(--primary-color);
         color: #ffffff;
       }
-    }
-  }
-
-  .hover-copy-trigger {
-    border: none;
-    background: transparent;
-    color: var(--text-color-secondary);
-    cursor: pointer;
-    font-size: 12px;
-    padding: 2px 4px;
-    border-radius: 4px;
-    opacity: 0;
-    transition: all 0.15s ease;
-
-    &:hover {
-      color: var(--primary-color);
-      background: var(--primary-color-lighter);
     }
   }
 }

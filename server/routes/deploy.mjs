@@ -38,6 +38,7 @@ import {
   handleGetServerFsRoots,
   handleListServerFsEntries,
   handleReadServerFsContent,
+  handleDownloadServerFsEntry,
   handleExecServerCommand,
   handleListRecords,
   handleListServers,
@@ -147,6 +148,7 @@ router.get('/servers/:id/deploy-root-options', handleListDeployRootOptions);
 router.get('/servers/:id/fs/roots', handleGetServerFsRoots);
 router.get('/servers/:id/fs/list', handleListServerFsEntries);
 router.get('/servers/:id/fs/read', handleReadServerFsContent);
+router.get('/servers/:id/fs/download', handleDownloadServerFsEntry);
 router.post('/servers/:id/exec', handleExecServerCommand);
 router.get('/servers/:id/nginx-discovery', handleDiscoverServerNginx);
 router.get('/servers/:id/nginx-instances', handleListNginxInstances);

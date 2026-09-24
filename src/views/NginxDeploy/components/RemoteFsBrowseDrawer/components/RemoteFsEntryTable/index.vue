@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { ref } from 'vue';
-import { ArrowUpOutlined, CopyOutlined, FolderFilled, SortAscendingOutlined, SortDescendingOutlined } from '@ant-design/icons-vue';
+import {
+  ArrowUpOutlined,
+  FolderFilled,
+  SortAscendingOutlined,
+  SortDescendingOutlined,
+} from '@ant-design/icons-vue';
 import { YButton, YTable } from '@yss-ui/components/lite';
 import { useTableHeight } from '@yss-ui/hooks';
 import type { RemoteFsEntry } from '@/api/deploy';
@@ -19,14 +24,14 @@ interface RemoteFsEntryTableProps {
   sortAsc: boolean;
 }
 
-defineProps<RemoteFsEntryTableProps>();
+const props = defineProps<RemoteFsEntryTableProps>();
 const emit = defineEmits<{
   (e: 'rowClick', entry: RemoteFsEntry): void;
   (e: 'rowDblclick', entry: RemoteFsEntry): void;
+  (e: 'rowContextMenu', entry: RemoteFsEntry, event: MouseEvent): void;
   (e: 'navigateUp'): void;
   (e: 'drillDown', name: string): void;
   (e: 'preview', entry: RemoteFsEntry): void;
-  (e: 'copyPath', path: string): void;
   (e: 'toggleSort', field: FsSortField): void;
 }>();
 
@@ -35,12 +40,38 @@ const { tableHeight, isReady } = useTableHeight(tableAreaRef, {
   minHeight: 240,
   defaultHeight: 460,
 });
+
+/** 表格区域原生上下文菜单拦截：智能定位点击行并触发右键事件。 */
+const handleAreaContextMenu = (event: MouseEvent) => {
+  event?.preventDefault?.();
+  const target = event.target as HTMLElement | null;
+  if (!target) return;
+  const rowEl = target.closest('.vxe-body--row');
+  if (!rowEl) return;
+
+  // 1. 优先通过 rowid 属性精准定位
+  const rowId = rowEl.getAttribute('rowid');
+  let matched = props.entries.find((e: RemoteFsEntry) => String(e.name) === rowId);
+
+  // 2. 兜底：通过在 tbody 中的行索引定位
+  if (!matched && rowEl.parentElement) {
+    const trList = Array.from(rowEl.parentElement.querySelectorAll('.vxe-body--row'));
+    const index = trList.indexOf(rowEl);
+    if (index >= 0 && index < props.entries.length) {
+      matched = props.entries[index];
+    }
+  }
+
+  if (matched) {
+    emit('rowContextMenu', matched, event);
+  }
+};
 </script>
 
 <template>
   <div class="remote-fs-table-wrap">
     <!-- 表格区域 -->
-    <div ref="tableAreaRef" class="remote-fs-table-area">
+    <div ref="tableAreaRef" class="remote-fs-table-area" @contextmenu.prevent="handleAreaContextMenu">
       <YTable
         v-if="isReady"
         :data="entries"
@@ -95,7 +126,7 @@ const { tableHeight, isReady } = useTableHeight(tableAreaRef, {
         </template>
 
         <template #name="{ row }">
-          <div class="file-name-cell group">
+          <div class="file-name-cell group" @contextmenu.prevent="emit('rowContextMenu', row, $event)">
             <div class="file-icon-badge" :class="getFileVisualBadge(row.name, row.type).category">
               <ArrowUpOutlined v-if="row.type === 'parent_dir'" />
               <FolderFilled v-else-if="row.type === 'directory'" />
@@ -110,15 +141,6 @@ const { tableHeight, isReady } = useTableHeight(tableAreaRef, {
             <YButton v-if="row.type === 'directory'" size="small" class="action-capsule-btn primary" @click.stop="emit('drillDown', row.name)">进入</YButton>
             <YButton v-else-if="row.type === 'parent_dir'" size="small" class="action-capsule-btn" @click.stop="emit('navigateUp')">返回</YButton>
             <YButton v-else size="small" class="action-capsule-btn" @click.stop="emit('preview', row)">预览</YButton>
-            <button
-              v-if="row.path"
-              type="button"
-              class="hover-copy-trigger"
-              title="复制绝对路径"
-              @click.stop="emit('copyPath', row.path)"
-            >
-              <CopyOutlined />
-            </button>
           </div>
         </template>
       </YTable>

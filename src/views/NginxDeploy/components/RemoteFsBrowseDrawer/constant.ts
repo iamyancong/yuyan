@@ -178,3 +178,34 @@ export const fsTableColumns: YTableColumn[] = [
     slots: { default: 'action' },
   },
 ];
+
+/**
+ * 构建不含非法路径字符的下载建议文件名。
+ * @param server 当前服务器
+ * @param entry 当前文件或目录项
+ * @returns 格式化后的文件名
+ */
+export function buildFsSuggestedFileName(
+  server: { name?: string; host?: string } | null | undefined,
+  entry: { name: string; type: string }
+): string {
+  const sanitize = (value: string, fallback: string) =>
+    value
+      .trim()
+      .replace(/\s+/g, '-')
+      .replace(/[\\/:*?"<>|]/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-+|-+$/g, '') || fallback;
+
+  const pad = (value: number) => String(value).padStart(2, '0');
+  const now = new Date();
+  const timestamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  const serverPrefix = sanitize(server?.name || server?.host || '', 'server');
+  const namePart = sanitize(entry.name, entry.type === 'directory' ? 'folder' : 'file');
+
+  if (entry.type === 'directory') {
+    return `${serverPrefix}-${namePart}-${timestamp}.tar.gz`;
+  }
+  return entry.name;
+}
+
