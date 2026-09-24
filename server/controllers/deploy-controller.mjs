@@ -46,6 +46,7 @@ import path from 'node:path';
 import axios from 'axios';
 import { DEPLOY_DB_PATH } from '../config/constants.mjs';
 import { endArchiveSseWithError } from '../services/archive-sse.mjs';
+import { buildSafeContentDisposition } from '../utils/http-header-utils.mjs';
 
 import {
   deployTarget,
@@ -772,7 +773,7 @@ export async function handleDownloadNginxInstanceArchive(req, res) {
       res.status(200);
       const contentType = type === 'conf' ? 'text/plain; charset=utf-8' : 'application/octet-stream';
       res.setHeader('Content-Type', contentType);
-      res.setHeader('Content-Disposition', `attachment; filename="${fileName}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+      res.setHeader('Content-Disposition', buildSafeContentDisposition(fileName, `nginx-${req.params.id}.tar.gz`));
       res.setHeader('Content-Encoding', 'identity');
       res.setHeader('Cache-Control', 'no-cache, no-transform');
       res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -2266,10 +2267,7 @@ export async function handleDownloadServerFsEntry(req, res) {
       ({ fileName, mimeType }) => {
         res.status(200);
         res.setHeader('Content-Type', mimeType || 'application/octet-stream');
-        res.setHeader(
-          'Content-Disposition',
-          `attachment; filename="${fileName}"; filename*=UTF-8''${encodeURIComponent(fileName)}`
-        );
+        res.setHeader('Content-Disposition', buildSafeContentDisposition(fileName, 'remote-fs-entry.tar.gz'));
         res.setHeader('Content-Encoding', 'identity');
         res.setHeader('Cache-Control', 'no-cache, no-transform');
         res.setHeader('X-Content-Type-Options', 'nosniff');
