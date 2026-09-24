@@ -7,9 +7,13 @@ import RemoteFsEntryTable from './components/RemoteFsEntryTable/index.vue';
 import RemoteFsExecPanel from './components/RemoteFsExecPanel/index.vue';
 import RemoteFsFooter from './components/RemoteFsFooter/index.vue';
 import RemoteFsPreviewModal from './components/RemoteFsPreviewModal/index.vue';
+import RemoteFsContextMenu from './components/RemoteFsContextMenu/index.vue';
+import type { RemoteFsContextAction } from './components/RemoteFsContextMenu/constant';
 import { useFilePreview } from './hooks/useFilePreview';
 import { useRemoteExec } from './hooks/useRemoteExec';
 import { useRemoteFsBrowse } from './hooks/useRemoteFsBrowse';
+import { useContextMenu } from './hooks/useContextMenu';
+import { useRemoteFsDownload } from './hooks/useRemoteFsDownload';
 
 defineOptions({ name: 'RemoteFsBrowseDrawer' });
 
@@ -24,33 +28,23 @@ const emit = defineEmits<{ (e: 'update:open', val: boolean): void; (e: 'selectPa
 const visible = computed({ get: () => props.open, set: (val: boolean) => emit('update:open', val) });
 
 const {
-  loading,
-  showHidden,
-  filterKeyword,
-  sortField,
-  sortAsc,
-  roots,
-  currentPath,
-  pathInput,
-  isAtRoot,
-  truncated,
-  tableEntries,
-  selectedEntry,
-  dirCount,
-  fileCount,
-  breadcrumbs,
-  toggleSort,
-  fetchDirectory,
-  navigateUp,
-  drillDown,
-  handleRowClick,
-  handleRowDblClick,
-  copyPath,
-  useCurrentPath,
+  loading, showHidden, filterKeyword, sortField, sortAsc, roots,
+  currentPath, pathInput, isAtRoot, truncated, tableEntries, selectedEntry,
+  dirCount, fileCount, breadcrumbs, toggleSort, fetchDirectory, navigateUp,
+  drillDown, handleRowClick, handleRowDblClick, copyPath, useCurrentPath,
 } = useRemoteFsBrowse(props, emit);
 
 const { previewVisible, previewLoading, previewFileName, previewContent, openPreview } = useFilePreview(props);
 const { execPanelVisible, commandText, executing, execResult, toggleExecPanel, runCommand } = useRemoteExec(props);
+const { downloadRemoteFsEntry } = useRemoteFsDownload();
+const { contextMenuVisible, contextMenuPosition, contextMenuTarget, openContextMenu, handleContextMenuAction } =
+  useContextMenu({
+    onDownload: (entry) => void downloadRemoteFsEntry(props.server, entry),
+    onDrillDown: (name) => drillDown(name),
+    onPreview: (entry) => void openPreview(entry),
+    onCopyPath: (p) => copyPath(p),
+    onNavigateUp: navigateUp,
+  });
 </script>
 
 <template>
@@ -97,10 +91,10 @@ const { execPanelVisible, commandText, executing, execResult, toggleExecPanel, r
         :sort-asc="sortAsc"
         @row-click="handleRowClick"
         @row-dblclick="(entry: RemoteFsEntry) => handleRowDblClick(entry, openPreview)"
+        @row-context-menu="openContextMenu"
         @navigate-up="navigateUp"
         @drill-down="drillDown"
         @preview="openPreview"
-        @copy-path="copyPath"
         @toggle-sort="toggleSort"
       />
 
@@ -131,6 +125,14 @@ const { execPanelVisible, commandText, executing, execResult, toggleExecPanel, r
     :loading="previewLoading"
     :file-name="previewFileName"
     :content="previewContent"
+  />
+
+  <RemoteFsContextMenu
+    v-model:visible="contextMenuVisible"
+    :x="contextMenuPosition.x"
+    :y="contextMenuPosition.y"
+    :entry="contextMenuTarget"
+    @action="handleContextMenuAction"
   />
 </template>
 

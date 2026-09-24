@@ -2035,3 +2035,78 @@ export const execServerCommand = (
 ): Promise<RemoteExecResult> =>
   client.post(`/servers/${serverId}/exec`, { command, cwd, ...options }).then(unwrap<RemoteExecResult>);
 
+/**
+ * 构建服务器远程文件系统下载 URL。
+ * @param serverId 服务器 ID
+ * @param path 目标远程绝对路径
+ * @returns 完整下载 URL
+ */
+export const getServerFsDownloadUrl = async (serverId: number, path: string): Promise<string> => {
+  const query = new URLSearchParams({ path });
+  return getActiveDeployApiUrl(`/servers/${serverId}/fs/download?${query.toString()}`);
+};
+
+/**
+ * 在 Web 浏览器端通过 fetch 流式下载服务器远程文件或打包目录。
+ * @param serverId 服务器 ID
+ * @param path 目标远程绝对路径
+ * @param onProgress 进度回调函数（已下载字节数）
+ * @param signal AbortSignal
+ * @returns Blob 与文件名
+ */
+export async function downloadServerFsEntry(
+  serverId: number,
+  path: string,
+  onProgress?: (loaded: number) => void,
+  signal?: AbortSignal
+): Promise<{ blob: Blob; fileName: string }> {
+  const url = await getServerFsDownloadUrl(serverId, path);
+  const response = await fetch(url, {
+    signal,
+    headers: getDeployApiAuthHeaders(),
+  });
+
+  if (!response.ok) {
+    const data = await parseJsonOrText(response);
+    const errorMessage = typeof data === 'string'
+      ? data
+      : typeof data?.error === 'string'
+        ? data.error
+        : data?.error?.message || data?.message || '下载远程文件失败';
+    throw new Error(errorMessage);
+  }
+
+  const reader = response.body?.getReader();
+  let blob: Blob;
+
+  if (reader) {
+    const chunks: Uint8Array[] = [];
+    let loaded = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        chunks.push(value);
+        loaded += value.length;
+        onProgress?.(loaded);
+      }
+    }
+    blob = new Blob(chunks, { type: response.headers.get('Content-Type') || 'application/octet-stream' });
+  } else {
+    blob = await response.blob();
+  }
+
+  if (blob.size <= 0) {
+    throw new Error('服务器返回了空数据，下载未保存');
+  }
+
+  const fallbackName = path.split('/').filter(Boolean).pop() || `server-${serverId}-file`;
+  const fileName = parseDownloadFileName(
+    response.headers.get('Content-Disposition'),
+    fallbackName.endsWith('.tar.gz') ? fallbackName : `${fallbackName}.tar.gz`
+  );
+
+  return { blob, fileName };
+}
+
+

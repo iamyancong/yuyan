@@ -3,7 +3,6 @@ import { computed } from 'vue';
 import {
   CheckCircleOutlined,
   ClearOutlined,
-  CodeOutlined,
   DownOutlined,
   ExclamationCircleOutlined,
   RightOutlined,
@@ -39,10 +38,14 @@ const cmd = computed({
     <!-- 终端顶部状态条 -->
     <div class="exec-panel-heading">
       <div class="terminal-title">
-        <span class="terminal-mark"><CodeOutlined /></span>
-        <strong>远程诊断终端</strong>
+        <div class="terminal-traffic-lights" aria-hidden="true">
+          <span class="light red" />
+          <span class="light yellow" />
+          <span class="light green" />
+        </div>
+        <strong>诊断终端</strong>
         <span class="terminal-pwd-badge" :title="`当前工作路径: ${workingDirectory}`">
-          pwd: {{ workingDirectory || '/' }}
+          {{ workingDirectory || '/' }}
         </span>
       </div>
       <div class="terminal-ctrl-group">
@@ -90,20 +93,24 @@ const cmd = computed({
         :disabled="executing"
         @click="emit('update:commandText', chip.command)"
       >
-        {{ chip.label }}<code>{{ chip.command }}</code>
+        <span>{{ chip.label }}</span>
+        <code>{{ chip.command }}</code>
       </button>
     </div>
 
     <!-- 结果回显区 -->
     <div v-if="execResult" class="exec-output" :class="{ 'has-error': execResult.code !== 0 }">
       <div class="output-meta">
-        <div class="result-command"><span>$</span><code>{{ execResult.command }}</code></div>
+        <div class="result-command">
+          <span class="prompt-symbol">$</span>
+          <code>{{ execResult.command }}</code>
+        </div>
         <div class="result-status">
           <ExclamationCircleOutlined v-if="execResult.code !== 0" />
           <CheckCircleOutlined v-else />
-          <span>退出码 {{ execResult.code }}</span>
+          <span class="status-code">退出码 {{ execResult.code }}</span>
           <span class="result-divider">·</span>
-          <span>{{ execResult.durationMs }} ms</span>
+          <span class="status-duration">{{ execResult.durationMs }} ms</span>
         </div>
       </div>
       <pre class="output-pre">{{ execResult.stdout || execResult.stderr || '(无控制台输出)' }}</pre>

@@ -60,14 +60,8 @@ onUnmounted(() => {
           </template>
           <template #serverAuthSection>
             <div class="server-form-section">
-              <strong>认证凭据</strong>
-              <span>配置密码或 SSH Key 认证信息</span>
-            </div>
-          </template>
-          <template #serverNginxSection>
-            <div class="server-form-section">
-              <strong>Nginx 配置</strong>
-              <span>已有 Nginx 的服务器可配置默认路径和发布后执行命令</span>
+              <strong>认证与权限</strong>
+              <span>配置密码或 SSH Key 认证信息及 Sudo 提权权限</span>
             </div>
           </template>
         </YssFormily>

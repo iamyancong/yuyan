@@ -5,7 +5,7 @@
 
 import path from 'node:path';
 import { getServerWithCredential, listTargets } from './deploy-store.mjs';
-import { execSsh, getSftp, shellQuote, withSsh } from './ssh-service.mjs';
+import { execSsh, getSftp, shellQuote, streamSshCommand, withSsh } from './ssh-service.mjs';
 
 /** 单目录最多返回条目数。 */
 export const MAX_FS_DIRECTORY_ENTRIES = 500;
@@ -495,3 +495,141 @@ export async function execRemoteFsCommand(serverId, command, cwd, options = {}) 
     };
   });
 }
+
+/**
+ * 格式化下载时间戳 (YYYYMMDDHHmmss)。
+ * @param {Date} [date=new Date()] - 日期对象
+ * @returns {string} 紧凑时间戳字符串
+ */
+export function formatFsDownloadTimestamp(date = new Date()) {
+  const pad = (n) => String(n).padStart(2, '0');
+  const y = date.getFullYear();
+  const m = pad(date.getMonth() + 1);
+  const d = pad(date.getDate());
+  const h = pad(date.getHours());
+  const min = pad(date.getMinutes());
+  const s = pad(date.getSeconds());
+  return `${y}${m}${d}${h}${min}${s}`;
+}
+
+/**
+ * 清理文件名，去除非法字符。
+ * @param {string} value - 原始文件名部分
+ * @param {string} fallback - 兜底默认值
+ * @returns {string} 安全的文件名部分
+ */
+export function sanitizeFsFileNamePart(value, fallback) {
+  const sanitized = String(value || '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/[\\/:*?"<>|]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return sanitized || fallback;
+}
+
+/**
+ * 流式下载服务器指定远程路径（目录打包为 tar.gz，单文件直接流式传输）。
+ * @param {number} serverId - 服务器 ID
+ * @param {string} requestedPath - 请求的远程绝对路径
+ * @param {import('stream').Writable} outputStream - 输出流
+ * @param {Function} [onReady] - 就绪回调，提供文件名、MIME 类型等响应元信息
+ * @param {Object} [options] - 选项
+ * @param {Function} [options.isAborted] - 外部判断中断函数
+ * @returns {Promise<{fileName: string, isDirectory: boolean}>} 下载完成元数据
+ */
+export async function streamRemoteFsEntry(serverId, requestedPath, outputStream, onReady, options = {}) {
+  const server = await getServerWithCredential(Number(serverId));
+  if (!server) throw new Error(`服务器 ID ${serverId} 不存在`);
+
+  const trimmedPath = String(requestedPath || '').trim();
+  if (!trimmedPath) {
+    throw new Error('下载目标路径不能为空');
+  }
+
+  const targets = await listTargets();
+  const allowedRoots = resolveServerAllowedRoots(server, targets);
+  const normalizedRequested = normalizePosixPath(trimmedPath);
+
+  // 1. 词法级别校验作用域白名单
+  assertPathWithinRoots(normalizedRequested, allowedRoots);
+
+  return withSsh(server, async (conn) => {
+    const sftp = await getSftp(conn);
+
+    // 2. 利用 SFTP realpath 防软链接逃逸
+    const safeRealPath = await assertSafeRealpath(sftp, normalizedRequested, allowedRoots);
+
+    // 3. 读取条目属性获取类型
+    const stats = await new Promise((resolve, reject) => {
+      sftp.stat(safeRealPath, (error, resStats) => {
+        if (error) {
+          reject(new Error(`无法读取目标路径属性: ${error.message}`));
+          return;
+        }
+        resolve(resStats);
+      });
+    });
+
+    const isDirectory = stats.isDirectory();
+    const sudo = server.useSudo ? 'sudo -n ' : '';
+    const baseName = path.posix.basename(safeRealPath);
+    const serverPart = sanitizeFsFileNamePart(server.name || server.host, 'server');
+    const targetPart = sanitizeFsFileNamePart(baseName, isDirectory ? 'dir' : 'file');
+
+    if (isDirectory) {
+      // 目录：预检读权限与目录存在性
+      await execSsh(conn, `${sudo}test -d ${shellQuote(safeRealPath)} && ${sudo}test -r ${shellQuote(safeRealPath)}`, {
+        label: `预检下载目录 [${baseName}]`,
+      });
+
+      const parentDir = path.posix.dirname(safeRealPath);
+      const timestamp = formatFsDownloadTimestamp();
+      const fileName = `${serverPart}-${targetPart}-${timestamp}.tar.gz`;
+
+      const meta = {
+        fileName,
+        isDirectory: true,
+        mimeType: 'application/gzip',
+        path: safeRealPath,
+      };
+
+      onReady?.(meta);
+
+      const tarCommand = `${sudo}tar -czf - -C ${shellQuote(parentDir)} ${shellQuote(baseName)}`;
+      await streamSshCommand(conn, tarCommand, outputStream, {
+        label: `流式打包目录 [${baseName}]`,
+        isAborted: options.isAborted,
+        idleTimeoutMs: 120_000,
+      });
+
+      return meta;
+    }
+
+    // 单文件：预检读权限与文件存在性
+    await execSsh(conn, `${sudo}test -f ${shellQuote(safeRealPath)} && ${sudo}test -r ${shellQuote(safeRealPath)}`, {
+      label: `预检下载文件 [${baseName}]`,
+    });
+
+    const fileName = baseName;
+    const meta = {
+      fileName,
+      isDirectory: false,
+      mimeType: 'application/octet-stream',
+      fileSize: stats.size,
+      path: safeRealPath,
+    };
+
+    onReady?.(meta);
+
+    const catCommand = `${sudo}cat ${shellQuote(safeRealPath)}`;
+    await streamSshCommand(conn, catCommand, outputStream, {
+      label: `流式读取文件 [${baseName}]`,
+      isAborted: options.isAborted,
+      idleTimeoutMs: 120_000,
+    });
+
+    return meta;
+  });
+}
+
