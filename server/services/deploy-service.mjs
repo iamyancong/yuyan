@@ -1269,7 +1269,7 @@ function resolveEditableNginxConfPath(target, nginxInstance) {
  * @param {'test'|'reload'} type - 命令类型
  * @returns {string} 可直接执行的远程命令
  */
-function buildNginxCommand(server, nginxInstance, type) {
+export function buildNginxCommand(server, nginxInstance, type) {
   if (nginxInstance?.instanceType === 'managed') {
     const sudo = nginxInstance.useSudo ? 'sudo -n ' : '';
     const scriptPath = nginxInstance.scriptPath || '/opt/yuyan/nginx/yuyan-nginx.sh';
@@ -1277,10 +1277,10 @@ function buildNginxCommand(server, nginxInstance, type) {
   }
   const command =
     type === 'reload'
-      ? nginxInstance?.nginxReloadCommand || server.nginxReloadCommand || 'nginx -s reload'
-      : nginxInstance?.nginxTestCommand || server.nginxTestCommand || 'nginx -t';
+      ? (nginxInstance ? nginxInstance.nginxReloadCommand || 'nginx -s reload' : server.nginxReloadCommand || 'nginx -s reload')
+      : (nginxInstance ? nginxInstance.nginxTestCommand || 'nginx -t' : server.nginxTestCommand || 'nginx -t');
   const sudo = (nginxInstance ? nginxInstance.useSudo : server.useSudo) ? 'sudo -n ' : '';
-  const workDir = String(nginxInstance?.nginxWorkDir || server.nginxWorkDir || '').trim();
+  const workDir = String(nginxInstance ? (nginxInstance.nginxWorkDir || '') : (server.nginxWorkDir || '')).trim();
   const cdPrefix = workDir ? `cd ${shellQuote(workDir)} && ` : '';
   return `${cdPrefix}${sudo}${command}`;
 }
@@ -1292,16 +1292,16 @@ function buildNginxCommand(server, nginxInstance, type) {
  * @param {'test'|'reload'} type - 命令类型
  * @returns {string} 命令展示文本
  */
-function getNginxCommandLabel(server, nginxInstance, type) {
+export function getNginxCommandLabel(server, nginxInstance, type) {
   if (nginxInstance?.instanceType === 'managed') {
     const scriptPath = nginxInstance.scriptPath || '/opt/yuyan/nginx/yuyan-nginx.sh';
     return `${scriptPath} ${type}`;
   }
   const command =
     type === 'reload'
-      ? nginxInstance?.nginxReloadCommand || server.nginxReloadCommand || 'nginx -s reload'
-      : nginxInstance?.nginxTestCommand || server.nginxTestCommand || 'nginx -t';
-  const workDir = String(nginxInstance?.nginxWorkDir || server.nginxWorkDir || '').trim();
+      ? (nginxInstance ? nginxInstance.nginxReloadCommand || 'nginx -s reload' : server.nginxReloadCommand || 'nginx -s reload')
+      : (nginxInstance ? nginxInstance.nginxTestCommand || 'nginx -t' : server.nginxTestCommand || 'nginx -t');
+  const workDir = String(nginxInstance ? (nginxInstance.nginxWorkDir || '') : (server.nginxWorkDir || '')).trim();
   return workDir ? `cd ${workDir} && ${command}` : command;
 }
 
