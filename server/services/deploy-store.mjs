@@ -2377,6 +2377,14 @@ export async function updateServer(id, payload) {
         passphrase: payload.passphrase || '',
       })
     : current.encrypted_secret;
+  const nextDeployRoot = payload.defaultDeployRoot !== undefined ? String(payload.defaultDeployRoot || '').trim() : (current.default_deploy_root || '');
+  const nextBackendRoot = payload.defaultBackendRoot !== undefined ? String(payload.defaultBackendRoot || '').trim() : (current.default_backend_root || '');
+  const nextNginxConfPath = payload.defaultNginxConfPath !== undefined ? String(payload.defaultNginxConfPath || '').trim() : (current.default_nginx_conf_path || '');
+  const nextWorkDir = payload.nginxWorkDir !== undefined ? String(payload.nginxWorkDir || '').trim() : (current.nginx_work_dir || '');
+  const nextTestCommand = payload.nginxTestCommand !== undefined ? (String(payload.nginxTestCommand || '').trim() || 'nginx -t') : (current.nginx_test_command || 'nginx -t');
+  const nextReloadCommand = payload.nginxReloadCommand !== undefined ? (String(payload.nginxReloadCommand || '').trim() || 'nginx -s reload') : (current.nginx_reload_command || 'nginx -s reload');
+  const nextRemark = payload.remark !== undefined ? String(payload.remark || '').trim() : (current.remark || '');
+
   db.prepare(
     `UPDATE deploy_servers
      SET name = ?, host = ?, port = ?, username = ?, auth_type = ?, encrypted_secret = ?, use_sudo = ?,
@@ -2384,20 +2392,20 @@ export async function updateServer(id, payload) {
          nginx_reload_command = ?, remark = ?, updated_at = ?
      WHERE id = ? AND team_id = ?`
   ).run(
-    payload.name,
-    payload.host,
-    Number(payload.port || 22),
-    payload.username,
+    payload.name ?? current.name,
+    payload.host ?? current.host,
+    Number(payload.port ?? current.port ?? 22),
+    payload.username ?? current.username,
     payload.authType || current.auth_type,
     credential,
-    payload.useSudo ? 1 : 0,
-    payload.defaultDeployRoot || current.default_deploy_root || '',
-    payload.defaultBackendRoot || current.default_backend_root || '',
-    payload.defaultNginxConfPath || current.default_nginx_conf_path || '',
-    payload.nginxWorkDir || current.nginx_work_dir || '',
-    payload.nginxTestCommand || current.nginx_test_command || 'nginx -t',
-    payload.nginxReloadCommand || current.nginx_reload_command || 'nginx -s reload',
-    payload.remark || '',
+    payload.useSudo !== undefined ? (payload.useSudo ? 1 : 0) : current.use_sudo,
+    nextDeployRoot,
+    nextBackendRoot,
+    nextNginxConfPath,
+    nextWorkDir,
+    nextTestCommand,
+    nextReloadCommand,
+    nextRemark,
     now(),
     Number(id),
     teamId
@@ -2413,9 +2421,9 @@ export async function updateServer(id, payload) {
            nginx_reload_command = ?, use_sudo = ?, updated_at = ?
        WHERE id = ?`
     ).run(
-      updated.default_deploy_root || '',
-      updated.default_nginx_conf_path || '',
-      updated.nginx_work_dir || '',
+      updated.default_deploy_root ?? '',
+      updated.default_nginx_conf_path ?? '',
+      updated.nginx_work_dir ?? '',
       updated.nginx_test_command || 'nginx -t',
       updated.nginx_reload_command || 'nginx -s reload',
       updated.use_sudo ? 1 : 0,
