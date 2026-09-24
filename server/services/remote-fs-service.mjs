@@ -532,7 +532,7 @@ export function sanitizeFsFileNamePart(value, fallback) {
  * 流式下载服务器指定远程路径（目录打包为 tar.gz，单文件直接流式传输）。
  * @param {number} serverId - 服务器 ID
  * @param {string} requestedPath - 请求的远程绝对路径
- * @param {import('stream').Writable} outputStream - 输出流
+ * @param {import('node:stream').Writable} outputStream - 输出流
  * @param {Function} [onReady] - 就绪回调，提供文件名、MIME 类型等响应元信息
  * @param {Object} [options] - 选项
  * @param {Function} [options.isAborted] - 外部判断中断函数
