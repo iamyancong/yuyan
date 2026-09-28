@@ -63,6 +63,7 @@ export async function fetchGithubAppReleases() {
       per_page: 100,
       cacheBust: Date.now(),
     },
+    timeout: 10_000,
   }).then((response) => Array.isArray(response.data) ? response.data : [])
     .finally(() => {
       activeReleaseRequest = null;

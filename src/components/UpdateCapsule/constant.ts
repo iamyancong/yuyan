@@ -112,3 +112,6 @@ export const NATIVE_TASK_RELEASE_INTERVAL_MS = 100;
 
 /** 等待旧原生下载任务释放的最大次数 */
 export const NATIVE_TASK_RELEASE_MAX_ATTEMPTS = 100;
+
+/** 检查更新接口看门狗超时时间（毫秒） */
+export const UPDATE_CHECK_TIMEOUT_MS = 15_000;

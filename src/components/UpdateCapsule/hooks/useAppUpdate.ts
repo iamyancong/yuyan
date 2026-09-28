@@ -17,6 +17,7 @@ import {
   NATIVE_TASK_RELEASE_INTERVAL_MS,
   NATIVE_TASK_RELEASE_MAX_ATTEMPTS,
   PROGRESS_POLL_INTERVAL_MS,
+  UPDATE_CHECK_TIMEOUT_MS,
 } from '../constant';
 import {
   useNativeAppUpdate,
@@ -72,6 +73,8 @@ let cachePollingStartedAt = 0;
 let cachePollingErrorCount = 0;
 let cachePollingManual = false;
 let notifyDownloadFailure = false;
+let activeCheckPromise: Promise<AppUpdateCheckResult> | null = null;
+let hasManualWaiter = false;
 
 /** 等待指定时长。 */
 const delay = (milliseconds: number) => new Promise<void>((resolve) => {
@@ -479,23 +482,66 @@ async function revalidateReadyUpdate(): Promise<boolean> {
   return false;
 }
 
-/** 执行更新检测，并区分自动静默与手动反馈。 */
-const checkAppUpdate = async (manual = false) => {
-  if (checkingUpdate.value) {
-    if (manual) message.info('正在检查更新，请稍候');
-    return;
-  }
-  checkingUpdate.value = true;
-  const hideLoading = manual ? message.loading('正在检查更新...', 0) : null;
+/**
+ * 执行底层更新检测请求，带看门狗超时保护。
+ * @returns 检查结果
+ */
+const runUpdateCheckTask = async (): Promise<AppUpdateCheckResult> => {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error('检查更新超时，请检查网络或稍后重试'));
+    }, UPDATE_CHECK_TIMEOUT_MS);
+  });
 
-  try {
+  const checkPromise = (async () => {
     await initLocalVersion();
     const target = await nativeAppUpdate.getTarget();
-    const result = await checkAppUpdateFromServer(
+    return await checkAppUpdateFromServer(
       currentAppVersion.value,
       target.platform,
       target.arch
     );
+  })();
+
+  try {
+    return await Promise.race([checkPromise, timeoutPromise]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+};
+
+/**
+ * 执行更新检测，并区分自动静默与手动反馈。
+ * 支持并发调用复用同一个检查 Promise，并确保手动调用能够等待结果并获得完整反馈。
+ * @param manual 是否是手动点击触发
+ */
+const checkAppUpdate = async (manual = false) => {
+  if (manual) {
+    hasManualWaiter = true;
+    message.loading({
+      content: '正在检查更新...',
+      duration: 0,
+      key: 'app-update-checking',
+    });
+  }
+
+  if (activeCheckPromise) {
+    // 已经有检查任务正在进行中，复用该 Promise 并等待其结果
+    try {
+      await activeCheckPromise;
+    } catch {
+      // 错误已由任务主执行者统一处理并向手动等待者反馈
+    }
+    return;
+  }
+
+  checkingUpdate.value = true;
+  const currentCheckTask = runUpdateCheckTask();
+  activeCheckPromise = currentCheckTask;
+
+  try {
+    const result = await currentCheckTask;
 
     if (result?.hasUpdate && result.downloadUrl) {
       if (!result.signature) {
@@ -503,7 +549,10 @@ const checkAppUpdate = async (manual = false) => {
       }
       clearCacheStatusPolling();
       applyUpdateResult(result);
-      await reconcileUpdate(result, manual);
+      const isManual = hasManualWaiter;
+      hasManualWaiter = false;
+      message.destroy('app-update-checking');
+      await reconcileUpdate(result, isManual);
       return;
     }
 
@@ -514,17 +563,31 @@ const checkAppUpdate = async (manual = false) => {
     const nativeStatus = await nativeAppUpdate.getStatus();
     if (hasNativeAssetMetadata(nativeStatus)) await discardNativeUpdate();
     updateState.value = createIdleUpdateState();
-    if (manual) message.success(result?.message || '当前已是最新版本！');
+
+    if (hasManualWaiter) {
+      hasManualWaiter = false;
+      message.success({
+        content: result?.message || '当前已是最新版本！',
+        key: 'app-update-checking',
+      });
+    }
   } catch (error: any) {
     console.warn('[Update] 更新检测或静默准备失败:', error);
     hasUpdate.value = false;
-    if (manual) {
+    if (hasManualWaiter) {
+      hasManualWaiter = false;
       const errorMessage = error.response?.data?.error || error.message || '连接内网服务器异常';
-      message.error(`检查更新失败：${errorMessage}`);
+      message.error({
+        content: `检查更新失败：${errorMessage}`,
+        key: 'app-update-checking',
+      });
     }
   } finally {
-    hideLoading?.();
+    if (activeCheckPromise === currentCheckTask) {
+      activeCheckPromise = null;
+    }
     checkingUpdate.value = false;
+    hasManualWaiter = false;
   }
 };
 
