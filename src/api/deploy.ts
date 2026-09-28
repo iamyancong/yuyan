@@ -1798,6 +1798,7 @@ export const checkAppUpdateFromServer = (
   return axios.get(getApiBase('/deploy-api/app-update/check'), {
     params: { currentVersion, platform, arch, channel, cacheAware: 1, updaterCapable: 1 },
     headers: getDeployApiAuthHeaders(),
+    timeout: 10_000,
   }).then((res) => {
     const data = res.data as AppUpdateCheckResult;
     if (data && data.downloadUrl && !data.downloadUrl.startsWith('http')) {
@@ -1822,6 +1823,7 @@ export const getAppUpdateCacheStatus = (statusUrl: string): Promise<AppUpdateCac
   const url = statusUrl.startsWith('http') ? statusUrl : getApiBase(statusUrl);
   return axios.get(url, {
     headers: getDeployApiAuthHeaders(),
+    timeout: 10_000,
   }).then((res) => {
     const data = res.data as AppUpdateCacheStatus;
     if (data.downloadUrl && !data.downloadUrl.startsWith('http')) {
@@ -1857,6 +1859,7 @@ export const fetchDesktopInstallerInfo = (
       updaterCapable: 0,
     },
     headers: getDeployApiAuthHeaders(),
+    timeout: 10_000,
   }).then((res) => {
     const data = res.data as AppUpdateCheckResult;
     if (data && data.downloadUrl && !data.downloadUrl.startsWith('http')) {
