@@ -95,8 +95,13 @@ export function useNginxDiff(
     updateLineChangesFromEditor();
   };
 
+  /** 上一次绑定的组件/编辑器引用，防止Vue在更新渲染时重复触发template ref函数 */
+  let lastBoundInstance: any = null;
+
   /** 绑定 Monaco DiffEditor 实例（支持异步实例化短轮询） */
   const bindDiffEditor = (instance: any) => {
+    if (instance === lastBoundInstance) return;
+    lastBoundInstance = instance;
     clearPollTimer();
 
     if (!instance) {
@@ -153,6 +158,76 @@ export function useNginxDiff(
     }
   };
 
+  /** 还原当前定位的变更块（将左侧基线内容覆盖回右侧） */
+  const handleRevertCurrentDiff = () => {
+    if (!diffEditorInstance.value) return;
+    try {
+      if (typeof diffEditorInstance.value.revertFocusedRangeMappings === 'function') {
+        diffEditorInstance.value.revertFocusedRangeMappings();
+      }
+
+      const lineChanges = diffEditorInstance.value.getLineChanges?.();
+      if (!Array.isArray(lineChanges) || lineChanges.length === 0) return;
+
+      const targetIdx = Math.max(0, currentChangeIndex.value - 1);
+      const change = lineChanges[targetIdx] || lineChanges[0];
+      if (!change) return;
+
+      const origEditor = diffEditorInstance.value.getOriginalEditor?.();
+      const modEditor = diffEditorInstance.value.getModifiedEditor?.();
+      if (!origEditor || !modEditor) return;
+
+      const origModel = origEditor.getModel?.();
+      const modModel = modEditor.getModel?.();
+      if (!origModel || !modModel) return;
+
+      let origText = '';
+      if (change.originalEndLineNumber > 0 && change.originalEndLineNumber >= change.originalStartLineNumber) {
+        origText = origModel.getValueInRange({
+          startLineNumber: change.originalStartLineNumber,
+          startColumn: 1,
+          endLineNumber: change.originalEndLineNumber,
+          endColumn: origModel.getLineMaxColumn(change.originalEndLineNumber),
+        });
+      }
+
+      if (change.modifiedEndLineNumber > 0 && change.modifiedEndLineNumber >= change.modifiedStartLineNumber) {
+        let range;
+        let replaceText = origText;
+        if (change.originalEndLineNumber === 0) {
+          const hasNextLine = change.modifiedEndLineNumber < modModel.getLineCount();
+          if (hasNextLine) {
+            range = {
+              startLineNumber: change.modifiedStartLineNumber,
+              startColumn: 1,
+              endLineNumber: change.modifiedEndLineNumber + 1,
+              endColumn: 1,
+            };
+          } else {
+            const hasPrevLine = change.modifiedStartLineNumber > 1;
+            range = {
+              startLineNumber: hasPrevLine ? change.modifiedStartLineNumber - 1 : 1,
+              startColumn: hasPrevLine ? modModel.getLineMaxColumn(change.modifiedStartLineNumber - 1) : 1,
+              endLineNumber: change.modifiedEndLineNumber,
+              endColumn: modModel.getLineMaxColumn(change.modifiedEndLineNumber),
+            };
+          }
+          replaceText = '';
+        } else {
+          range = {
+            startLineNumber: change.modifiedStartLineNumber,
+            startColumn: 1,
+            endLineNumber: change.modifiedEndLineNumber,
+            endColumn: modModel.getLineMaxColumn(change.modifiedEndLineNumber),
+          };
+        }
+        modEditor.executeEdits('diffEditor', [{ range, text: replaceText }]);
+      }
+    } catch {
+      // 容错处理
+    }
+  };
+
   /** 重置 Diff 状态 */
   const resetDiffState = () => {
     clearPollTimer();
@@ -161,6 +236,7 @@ export function useNginxDiff(
     currentChangeIndex.value = 0;
     diffSummary.value = { changeCount: 0, addedLines: 0, removedLines: 0 };
     diffEditorInstance.value = null;
+    lastBoundInstance = null;
   };
 
   /** 监听内容与基线变化，实时更新差异摘要 */
@@ -175,13 +251,6 @@ export function useNginxDiff(
     { immediate: true }
   );
 
-  /** 当变回 clean 态时，自动关闭 Diff 模式 */
-  watch(isRawDirty, (dirty) => {
-    if (!dirty) {
-      resetDiffState();
-    }
-  });
-
   onScopeDispose(() => {
     clearPollTimer();
     clearEditorListener();
@@ -189,6 +258,13 @@ export function useNginxDiff(
 
   /** 底部操作提示文案 */
   const actionTip = computed(() => {
+    if (diffMode.value) {
+      if (!isRawDirty.value || diffSummary.value.changeCount === 0) {
+        return `${NGINX_ACTION_TIPS.DIFF_ACTIVE} · 所有变更已还原`;
+      }
+      const summaryText = formatDiffSummary(diffSummary.value);
+      return summaryText ? `${NGINX_ACTION_TIPS.DIFF_ACTIVE} · ${summaryText}` : NGINX_ACTION_TIPS.DIFF_ACTIVE;
+    }
     if (!isRawDirty.value) {
       return NGINX_ACTION_TIPS.CLEAN;
     }
@@ -196,9 +272,6 @@ export function useNginxDiff(
       return NGINX_ACTION_TIPS.NO_SEMANTIC_CHANGE;
     }
     const summaryText = formatDiffSummary(diffSummary.value);
-    if (diffMode.value) {
-      return summaryText ? `${NGINX_ACTION_TIPS.DIFF_ACTIVE} · ${summaryText}` : NGINX_ACTION_TIPS.DIFF_ACTIVE;
-    }
     return summaryText ? `配置已修改 · ${summaryText}` : NGINX_ACTION_TIPS.DIRTY_EDIT;
   });
 
@@ -212,6 +285,7 @@ export function useNginxDiff(
     toggleDiffMode,
     handleNextDiff,
     handlePrevDiff,
+    handleRevertCurrentDiff,
     resetDiffState,
   };
 }

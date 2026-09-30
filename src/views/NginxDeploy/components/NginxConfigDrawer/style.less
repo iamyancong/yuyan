@@ -1,7 +1,44 @@
-:global(.nginx-config-drawer-root) {
-  .ant-drawer-body {
-    padding: 16px !important;
-  }
+:global(.nginx-config-drawer-root .ant-drawer-body) {
+  padding: 16px !important;
+}
+
+:global(.nginx-config-drawer-root .monaco-diff-editor .revertButton) {
+  cursor: pointer;
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-left: 2px;
+  border-radius: 4px;
+  color: #fff !important;
+  background: #1890ff !important;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+  opacity: 0.85;
+  transition: all 0.2s ease;
+  z-index: 100;
+}
+
+:global(.nginx-config-drawer-root .monaco-diff-editor .revertButton:hover) {
+  opacity: 1;
+  transform: scale(1.15);
+  background: #40a9ff !important;
+}
+
+:global(.nginx-config-drawer-root .monaco-diff-editor .revertButton .codicon) {
+  font-size: 13px !important;
+  line-height: 1;
+}
+
+:global(.nginx-config-drawer-root .monaco-diff-editor .revertButton .codicon::before) {
+  content: '→' !important;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+  font-weight: bold;
+}
+
+// 全屏态下隐藏可能脱节残留在 body 上的 tooltip 气泡
+:global(body:has(.yss-monaco-fullscreen) .ant-tooltip) {
+  display: none !important;
 }
 
 .nginx-config-drawer-body {
