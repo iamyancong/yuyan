@@ -1,0 +1,148 @@
+.nginx-diff-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 38px;
+  padding: 0 12px;
+  background-color: #252526;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  user-select: none;
+  transition: background-color 0.2s ease;
+
+  &.is-diff-active {
+    background-color: #1e1e1e;
+    border-bottom-color: rgba(24, 144, 255, 0.25);
+  }
+
+  .toolbar-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+
+    .lang-tag {
+      font-size: 12px;
+      font-family: var(--font-family-code, monospace);
+      color: rgba(255, 255, 255, 0.55);
+      background: rgba(255, 255, 255, 0.06);
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+
+    .diff-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      color: #1890ff;
+      background: rgba(24, 144, 255, 0.12);
+      border: 1px solid rgba(24, 144, 255, 0.3);
+      padding: 2px 8px;
+      border-radius: 4px;
+
+      .badge-icon {
+        font-size: 13px;
+      }
+    }
+
+    .diff-nav-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+
+      .nav-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        height: 24px;
+        padding: 0 8px;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 4px;
+        color: rgba(255, 255, 255, 0.85);
+        font-size: 12px;
+        cursor: pointer;
+        transition: all 0.2s;
+
+        &:hover {
+          background: rgba(24, 144, 255, 0.2);
+          border-color: #1890ff;
+          color: #fff;
+        }
+
+        &:active {
+          transform: translateY(1px);
+        }
+      }
+
+      .nav-counter {
+        font-size: 12px;
+        font-family: var(--font-family-code, monospace);
+        color: rgba(255, 255, 255, 0.65);
+        margin-left: 2px;
+      }
+    }
+  }
+
+  .toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+
+    .diff-toggle-control {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 2px 10px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 14px;
+      transition: all 0.3s;
+
+      .toggle-text {
+        font-size: 12px;
+        color: rgba(255, 255, 255, 0.85);
+      }
+
+      &.is-active {
+        background: rgba(24, 144, 255, 0.15);
+        border-color: #1890ff;
+
+        .toggle-text {
+          color: #40a9ff;
+          font-weight: 500;
+        }
+      }
+
+      &:hover {
+        border-color: #40a9ff;
+      }
+    }
+
+    .action-icon-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      padding: 0;
+      background: transparent;
+      border: none;
+      border-radius: 4px;
+      color: rgba(255, 255, 255, 0.65);
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.2s;
+
+      &:hover {
+        background: rgba(255, 255, 255, 0.1);
+        color: #fff;
+      }
+
+      &.is-copied,
+      .is-success {
+        color: #52c41a;
+      }
+    }
+  }
+}

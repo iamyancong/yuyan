@@ -1,10 +1,10 @@
 import { computed, onScopeDispose, ref, watch } from 'vue';
 import message from 'ant-design-vue/es/message';
 import { readNginxConf } from '@/api/deploy';
-import { getErrorMessage } from '../constant';
+import { getErrorMessage, normalizeNginxContent } from '../constant';
 
 /**
- * Nginx 配置文件管理逻辑 Hook
+ * Nginx 配置文件读取与保存逻辑 Hook
  * @param props 组件属性
  * @param emit 组件事件
  */
@@ -22,16 +22,19 @@ export function useNginxConfig(
   const originalContent = ref('');
   let loadGeneration = 0;
 
-  /** 配置内容是否有修改 */
-  const isDirty = computed(() => content.value !== originalContent.value);
+  /** 配置原始文本是否有变动（用于开关展示与关闭拦截） */
+  const isRawDirty = computed(() => content.value !== originalContent.value);
 
-  /** 底部操作提示文案 */
-  const actionTip = computed(() => {
-    if (!isDirty.value) return '当前配置未修改';
-    return '配置已修改，保存并重载时将自动执行远程 Nginx 语法校验';
+  /** 语义级实质变动（消除换行与行尾空白后的实质差异） */
+  const isSemanticDirty = computed(() => {
+    if (!isRawDirty.value) return false;
+    return normalizeNginxContent(content.value) !== normalizeNginxContent(originalContent.value);
   });
 
-  /** 加载 Nginx 配置文件 */
+  /** 是否允许保存（必须存在实质变更且非保存中） */
+  const canSave = computed(() => isRawDirty.value && isSemanticDirty.value && !saving.value);
+
+  /** 加载远端 Nginx 配置文件 */
   const loadConfig = async () => {
     const targetId = props.targetId;
     if (!targetId) return;
@@ -60,9 +63,14 @@ export function useNginxConfig(
     originalContent.value = '';
   };
 
-  /** 保存配置 */
+  /** 放弃未保存的修改，恢复到基线内容 */
+  const discardChanges = () => {
+    content.value = originalContent.value;
+  };
+
+  /** 保存并重载配置 */
   const handleSave = async () => {
-    if (!props.targetId || !isDirty.value) return;
+    if (!props.targetId || !canSave.value) return;
     saving.value = true;
     try {
       await new Promise<void>((resolve, reject) => {
@@ -97,9 +105,13 @@ export function useNginxConfig(
     saving,
     configPath,
     content,
-    isDirty,
-    actionTip,
+    originalContent,
+    isRawDirty,
+    isSemanticDirty,
+    canSave,
     loadConfig,
+    resetConfig,
+    discardChanges,
     handleSave,
   };
 }
