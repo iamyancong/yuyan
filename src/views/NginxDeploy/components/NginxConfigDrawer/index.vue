@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, onBeforeUnmount } from 'vue';
 import { YMonaco, YMonacoDiff } from 'virtual:yss-heavy-components';
 import type { DeployTarget } from '@/api/deploy';
 import NginxConfigHeaderBar from './components/NginxConfigHeaderBar/index.vue';
@@ -11,13 +11,8 @@ import { useDrawerGuard } from './hooks/useDrawerGuard';
 
 defineOptions({ name: 'NginxConfigDrawer' });
 
-/** 属性定义 */
-const props = defineProps<{
-  targetId: number | null;
-  target?: DeployTarget | null;
-}>();
-
-/** 事件定义 */
+/** 属性与事件定义 */
+const props = defineProps<{ targetId: number | null; target?: DeployTarget | null }>();
 const emit = defineEmits<{
   (e: 'update:targetId', value: number | null): void;
   (e: 'save', targetId: number, content: string, done: (error?: unknown) => void): void;
@@ -48,6 +43,7 @@ const {
   toggleDiffMode,
   handleNextDiff,
   handlePrevDiff,
+  handleRevertCurrentDiff,
   resetDiffState,
 } = useNginxDiff(content, originalContent, isRawDirty, isSemanticDirty);
 
@@ -57,26 +53,28 @@ const handleDiscardAndReset = () => {
   resetDiffState();
 };
 
-/** 执行抽屉关闭 */
-const handleCloseDrawer = () => {
-  emit('update:targetId', null);
+/** 清理可能残留脱节在 body 上的全屏 DOM 节点 */
+const cleanupFullscreenDom = () => {
+  if (typeof document !== 'undefined') {
+    document.querySelectorAll('.yss-monaco-wrapper.yss-monaco-fullscreen').forEach((el) => el.remove());
+  }
 };
+onBeforeUnmount(cleanupFullscreenDom);
+
+/** 执行抽屉关闭 */
+const handleCloseDrawer = () => { cleanupFullscreenDom(); emit('update:targetId', null); };
 
 // 抽屉关闭拦截守卫 Hook
 const { requestClose } = useDrawerGuard(isRawDirty, handleDiscardAndReset, handleCloseDrawer);
 
 /** 抽屉打开受控状态 */
-const open = computed({
-  get: () => Boolean(props.targetId),
-  set: (value) => {
-    if (!value) requestClose();
-  },
-});
+const open = computed(() => Boolean(props.targetId));
 </script>
 
 <template>
   <a-drawer
-    v-model:open="open"
+    :open="open"
+    @close="requestClose"
     width="75%"
     placement="right"
     title="Nginx 配置文件管理"
@@ -99,6 +97,7 @@ const open = computed({
             @toggle-diff="toggleDiffMode"
             @next-diff="handleNextDiff"
             @prev-diff="handlePrevDiff"
+            @revert-diff="handleRevertCurrentDiff"
           />
           <div class="nginx-config-editor-content">
             <!-- 对比模式：side-by-side 差异编辑器（左侧只读基线，右侧可编辑/还原块） -->
@@ -111,6 +110,8 @@ const open = computed({
               theme="vs-dark"
               height="calc(100vh - 238px)"
               :format-on-mount="false"
+              :toolbar-tooltip="false"
+              :toolbar-options="{ copy: false, fullscreen: true }"
               :options="DIFF_MONACO_OPTIONS"
             />
             <!-- 默认态：普通单栏可编辑 Monaco -->
@@ -121,6 +122,8 @@ const open = computed({
               theme="vs-dark"
               height="calc(100vh - 238px)"
               :format-on-mount="false"
+              :toolbar-tooltip="false"
+              :toolbar-options="{ copy: false, fullscreen: true }"
               :options="DEFAULT_MONACO_OPTIONS"
             />
           </div>

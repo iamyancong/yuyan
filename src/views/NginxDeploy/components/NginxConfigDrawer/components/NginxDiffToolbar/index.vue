@@ -3,9 +3,11 @@ import { ref } from 'vue';
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,
+  CheckCircleOutlined,
   CheckOutlined,
   CopyOutlined,
   DiffOutlined,
+  UndoOutlined,
 } from '@ant-design/icons-vue';
 import message from 'ant-design-vue/es/message';
 import { copyToClipboard } from '@yss-ui/utils';
@@ -35,6 +37,7 @@ const emit = defineEmits<{
   (e: 'toggleDiff', value: boolean): void;
   (e: 'nextDiff'): void;
   (e: 'prevDiff'): void;
+  (e: 'revertDiff'): void;
 }>();
 
 /** 复制状态 */
@@ -49,16 +52,14 @@ const handleCopyContent = async () => {
     message.success('当前配置已复制到剪贴板');
     copied.value = true;
     if (copyTimer) clearTimeout(copyTimer);
-    copyTimer = setTimeout(() => {
-      copied.value = false;
-    }, 1600);
+    copyTimer = setTimeout(() => { copied.value = false; }, 1600);
   }
 };
 </script>
 
 <template>
   <div class="nginx-diff-toolbar" :class="{ 'is-diff-active': diffMode }">
-    <!-- 左侧：模式指示与大文件上一处/下一处差异导航 -->
+    <!-- 左侧：模式指示与大文件上一处/下一处差异导航及块还原 -->
     <div class="toolbar-left">
       <template v-if="diffMode">
         <span class="diff-badge">
@@ -89,8 +90,23 @@ const handleCopyContent = async () => {
             <span>下一处</span>
           </button>
 
+          <button
+            type="button"
+            class="nav-btn nav-btn--revert"
+            title="还原当前这处变更块（恢复为基线内容）"
+            aria-label="还原当前变更块"
+            @click="emit('revertDiff')"
+          >
+            <UndoOutlined />
+            <span>还原此块</span>
+          </button>
+
           <span class="nav-counter">{{ currentChangeIndex }}/{{ totalChanges }}</span>
         </div>
+        <span v-else class="diff-clean-tag">
+          <CheckCircleOutlined />
+          <span>所有变更已还原</span>
+        </span>
       </template>
 
       <template v-else>
@@ -100,8 +116,8 @@ const handleCopyContent = async () => {
 
     <!-- 右侧：dirty 对比开关与复制操作 -->
     <div class="toolbar-right">
-      <!-- 仅在 dirty 时显著展现「对比变更」开关（默认处于关闭态） -->
-      <div v-if="isDirty" class="diff-toggle-control" :class="{ 'is-active': diffMode }">
+      <!-- 在 dirty 或已在对比模式中时保持展示「对比变更」开关 -->
+      <div v-if="isDirty || diffMode" class="diff-toggle-control" :class="{ 'is-active': diffMode }">
         <span class="toggle-text">对比变更</span>
         <a-switch
           :checked="diffMode"

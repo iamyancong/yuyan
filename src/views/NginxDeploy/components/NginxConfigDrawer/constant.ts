@@ -36,7 +36,8 @@ export const DIFF_MONACO_OPTIONS = {
   renderSideBySide: true,
   renderIndicators: true,
   renderMarginRevertIcon: true,
-  renderGutterMenu: true,
+  renderGutterMenu: false,
+  glyphMargin: true,
   diffAlgorithm: 'advanced',
   fontSize: 13,
 } as const;
