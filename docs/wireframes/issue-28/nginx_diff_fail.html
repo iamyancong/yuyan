@@ -1,0 +1,31 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>#28 · Diff + 校验失败面板</title><link rel="stylesheet" href="file:///workspace/yuyan-wireframes/_base.css">
+<style>body{padding:20px}.shot-title{margin-bottom:8px;font-size:12px;color:#555}</style></head>
+<body>
+<div class="shot-title"><strong>#28 · Diff + 校验失败面板</strong> · 低保真线框（非视觉稿）</div>
+
+<div class="overlay"><div class="mask" style="padding:24px">
+  <div class="drawer" style="width:640px">
+    <div class="hd">
+      <div style="font-weight:600">查看变更 · 校验失败</div>
+      <div class="tiny">芯片：<span class="badge err">语法失败</span></div>
+    </div>
+    <div class="bd">
+      <div class="diff">
+        <div class="del">- root /var/www/marketing/old;</div>
+        <div class="add">+ root /var/www/marketing/current;</div>
+        <div class="add">+ add_header Cache-Control "no-store";</div>
+      </div>
+      <div class="banner err" style="margin-top:10px">
+        <strong>校验失败</strong>
+        <div class="mono" style="margin-top:6px">nginx: [emerg] unexpected "}" in …:42<br>nginx: configuration file test failed<br>（未写入 · 未重载）</div>
+      </div>
+    </div>
+    <div class="ft">
+      <button class="btn">关闭</button>
+      <button class="btn">仅校验</button>
+      <button class="btn disabled">保存并重载</button><span class="cta-note">校验失败禁用</span>
+    </div>
+  </div>
+</div></div>
+
+</body></html>
