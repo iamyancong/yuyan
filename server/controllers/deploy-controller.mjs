@@ -1175,8 +1175,19 @@ export async function handleTestNginx(req, res) {
  */
 export async function handleSyncTargetNginxSite(req, res) {
   try {
-    res.json({ success: true, data: await syncTargetNginxSite(Number(req.params.id)) });
+    const force = Boolean(req.body?.force);
+    const expectedSha256 = req.body?.expectedSha256 ? String(req.body.expectedSha256) : null;
+    res.json({ success: true, data: await syncTargetNginxSite(Number(req.params.id), { force, expectedSha256 }) });
   } catch (error) {
+    if (error.statusCode === 409 || error.code === 'NGINX_SITE_CONFLICT') {
+      res.status(409).json({
+        success: false,
+        code: 'NGINX_SITE_CONFLICT',
+        message: error.message,
+        data: error.details || {},
+      });
+      return;
+    }
     sendError(res, error, 400);
   }
 }

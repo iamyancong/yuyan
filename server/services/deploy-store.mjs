@@ -2021,9 +2021,47 @@ export async function getDeployDb() {
   await backupDeployDbBeforeMultiTenantMigration(dbInstance);
   applyMultiTenantSchemaMigration(dbInstance);
   normalizeServerSortOrder(dbInstance);
+  migrateExternalNginxSiteManagedTargets(dbInstance);
   await reconcileInterruptedDeployExecutions(dbInstance);
   initializeDefaultJdks(dbInstance);
   return dbInstance;
+}
+
+/**
+ * 迁移历史数据：已有 Nginx 实例上的部署目标关闭托管开关，保留访问链接。
+ * @param {import('better-sqlite3').Database} dbInstance - 数据库实例
+ */
+function migrateExternalNginxSiteManagedTargets(dbInstance) {
+  try {
+    const invalidTargets = dbInstance
+      .prepare(
+        `SELECT t.id, t.project_name, t.visit_url, i.name as instance_name
+         FROM deploy_targets t
+         INNER JOIN nginx_instances i ON t.nginx_instance_id = i.id
+         WHERE i.instance_type = 'external' AND t.nginx_site_managed = 1`
+      )
+      .all();
+    if (invalidTargets.length > 0) {
+      dbInstance
+        .prepare(
+          `UPDATE deploy_targets
+           SET nginx_site_managed = 0
+           WHERE id IN (
+             SELECT t.id
+             FROM deploy_targets t
+             INNER JOIN nginx_instances i ON t.nginx_instance_id = i.id
+             WHERE i.instance_type = 'external' AND t.nginx_site_managed = 1
+           )`
+        )
+        .run();
+      console.log(`[Migration] 成功清洗已有 Nginx 实例上的错误托管配置，共 ${invalidTargets.length} 个目标：`);
+      for (const target of invalidTargets) {
+        console.log(`  - Target #${target.id} (${target.project_name}): 已关闭托管开关，保留 visit_url="${target.visit_url || ''}" (实例: ${target.instance_name})`);
+      }
+    }
+  } catch (error) {
+    console.warn('[Migration] 清洗已有 Nginx 实例托管配置警告:', error?.message);
+  }
 }
 
 /**
@@ -3223,25 +3261,32 @@ export async function createTarget(payload) {
   if (!isBackend && !hasNginxInstanceForServer(db, payload.serverId, payload.nginxInstanceId)) {
     throw new Error('Nginx 实例不存在，请重新选择部署服务器和 Nginx 实例');
   }
-  const duplicateTarget = getDuplicateTarget(db, payload);
+  const instanceRow = (!isBackend && payload.nginxInstanceId)
+    ? db.prepare('SELECT id, instance_type, sites_dir FROM nginx_instances WHERE id = ?').get(Number(payload.nginxInstanceId))
+    : null;
+  const isManagedInstance = instanceRow?.instance_type === 'managed';
+  const effectiveNginxSiteManaged = (!isBackend && isManagedInstance) ? Boolean(payload.nginxSiteManaged) : false;
+  const safePayload = { ...payload, nginxSiteManaged: effectiveNginxSiteManaged };
+
+  const duplicateTarget = getDuplicateTarget(db, safePayload);
   if (duplicateTarget) {
     const error = new Error('该项目在当前服务器和部署根目录下已存在部署目标，请编辑已有目标或更换部署根目录');
     error.code = 'deploy_target_exists';
     error.status = 409;
     error.details = {
       targetId: Number(duplicateTarget.id),
-      projectName: duplicateTarget.project_name || payload.projectName || '',
+      projectName: duplicateTarget.project_name || safePayload.projectName || '',
     };
     throw error;
   }
-  if (!isBackend && getDuplicateListenPortTarget(db, payload)) {
-    throw new Error(`当前服务器已存在监听端口 ${payload.listenPort} 的托管站点，请更换端口`);
+  if (!isBackend && getDuplicateListenPortTarget(db, safePayload)) {
+    throw new Error(`当前服务器已存在监听端口 ${safePayload.listenPort} 的托管站点，请更换端口`);
   }
-  if (!isBackend && isRuntimeDefaultListenPort(db, payload)) {
-    throw new Error(`端口 ${payload.listenPort} 已被托管 Nginx 默认 server 占用，请更换端口`);
+  if (!isBackend && isRuntimeDefaultListenPort(db, safePayload)) {
+    throw new Error(`端口 ${safePayload.listenPort} 已被托管 Nginx 默认 server 占用，请更换端口`);
   }
-  const duplicateBackendPort = getDuplicateBackendPort(db, payload);
-  if (duplicateBackendPort) throw new Error(`端口 ${payload.serverPort} 已被后端项目 ${duplicateBackendPort.project_name} 占用`);
+  const duplicateBackendPort = getDuplicateBackendPort(db, safePayload);
+  if (duplicateBackendPort) throw new Error(`端口 ${safePayload.serverPort} 已被后端项目 ${duplicateBackendPort.project_name} 占用`);
   const ts = now();
   const result = db
     .prepare(
@@ -3253,23 +3298,23 @@ export async function createTarget(payload) {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
-      Number(payload.projectId),
-      payload.projectSource === 'gitlab' ? 'gitlab' : 'ops',
-      payload.projectName,
-      payload.projectDescription || '',
-      payload.projectPath,
-      payload.repositoryUrl,
-      payload.defaultBranch || 'dev',
-      payload.envName,
-      Number(payload.serverId),
-      payload.deployRoot,
-      payload.nginxInstanceId ? Number(payload.nginxInstanceId) : null,
-      payload.nginxConfPath || '',
-      payload.nginxSiteManaged ? 1 : 0,
-      payload.listenPort ? Number(payload.listenPort) : null,
-      payload.serverName || '',
-      payload.enableNginxTest ? 1 : 0,
-      payload.enableNginxReload ? 1 : 0,
+      Number(safePayload.projectId),
+      safePayload.projectSource === 'gitlab' ? 'gitlab' : 'ops',
+      safePayload.projectName,
+      safePayload.projectDescription || '',
+      safePayload.projectPath,
+      safePayload.repositoryUrl,
+      safePayload.defaultBranch || 'dev',
+      safePayload.envName,
+      Number(safePayload.serverId),
+      safePayload.deployRoot,
+      safePayload.nginxInstanceId ? Number(safePayload.nginxInstanceId) : null,
+      safePayload.nginxConfPath || '',
+      effectiveNginxSiteManaged ? 1 : 0,
+      safePayload.listenPort ? Number(safePayload.listenPort) : null,
+      safePayload.serverName || '',
+      safePayload.enableNginxTest ? 1 : 0,
+      safePayload.enableNginxReload ? 1 : 0,
       payload.installCommand || '',
       payload.buildCommand || '',
       payload.artifactDir || '',
@@ -3309,17 +3354,24 @@ export async function updateTarget(id, payload) {
   if (!isBackend && !hasNginxInstanceForServer(db, payload.serverId, payload.nginxInstanceId)) {
     throw new Error('Nginx 实例不存在，请重新选择部署服务器和 Nginx 实例');
   }
-  if (getDuplicateTarget(db, payload, Number(id))) {
+  const instanceRow = (!isBackend && payload.nginxInstanceId)
+    ? db.prepare('SELECT id, instance_type, sites_dir FROM nginx_instances WHERE id = ?').get(Number(payload.nginxInstanceId))
+    : null;
+  const isManagedInstance = instanceRow?.instance_type === 'managed';
+  const effectiveNginxSiteManaged = (!isBackend && isManagedInstance) ? Boolean(payload.nginxSiteManaged) : false;
+  const safePayload = { ...payload, nginxSiteManaged: effectiveNginxSiteManaged };
+
+  if (getDuplicateTarget(db, safePayload, Number(id))) {
     throw new Error('该项目在当前服务器和部署根目录下已存在部署目标，请编辑已有目标或更换部署根目录');
   }
-  if (!isBackend && getDuplicateListenPortTarget(db, payload, Number(id))) {
-    throw new Error(`当前服务器已存在监听端口 ${payload.listenPort} 的托管站点，请更换端口`);
+  if (!isBackend && getDuplicateListenPortTarget(db, safePayload, Number(id))) {
+    throw new Error(`当前服务器已存在监听端口 ${safePayload.listenPort} 的托管站点，请更换端口`);
   }
-  if (!isBackend && isRuntimeDefaultListenPort(db, payload)) {
-    throw new Error(`端口 ${payload.listenPort} 已被托管 Nginx 默认 server 占用，请更换端口`);
+  if (!isBackend && isRuntimeDefaultListenPort(db, safePayload)) {
+    throw new Error(`端口 ${safePayload.listenPort} 已被托管 Nginx 默认 server 占用，请更换端口`);
   }
-  const duplicateBackendPort = getDuplicateBackendPort(db, payload, Number(id));
-  if (duplicateBackendPort) throw new Error(`端口 ${payload.serverPort} 已被后端项目 ${duplicateBackendPort.project_name} 占用`);
+  const duplicateBackendPort = getDuplicateBackendPort(db, safePayload, Number(id));
+  if (duplicateBackendPort) throw new Error(`端口 ${safePayload.serverPort} 已被后端项目 ${duplicateBackendPort.project_name} 占用`);
   db.prepare(
     `UPDATE deploy_targets
      SET project_id = ?, project_source = ?, project_name = ?, project_description = ?, project_path = ?, repository_url = ?, default_branch = ?, env_name = ?,
@@ -3329,30 +3381,30 @@ export async function updateTarget(id, payload) {
          project_type = ?, jdk_id = ?, stop_command = ?, start_command = ?, health_check_url = ?
      WHERE id = ? AND team_id = ?`
   ).run(
-    Number(payload.projectId),
-    payload.projectSource === 'gitlab' ? 'gitlab' : 'ops',
-    payload.projectName,
-    payload.projectDescription || '',
-    payload.projectPath,
-    payload.repositoryUrl,
-    payload.defaultBranch || 'dev',
-    payload.envName,
-    Number(payload.serverId),
-    payload.nginxInstanceId ? Number(payload.nginxInstanceId) : null,
-    payload.deployRoot,
-    payload.nginxConfPath || '',
-    payload.nginxSiteManaged ? 1 : 0,
-    payload.listenPort ? Number(payload.listenPort) : null,
-    payload.serverName || '',
-    payload.enableNginxTest ? 1 : 0,
-    payload.enableNginxReload ? 1 : 0,
-    payload.installCommand || '',
-    payload.buildCommand || '',
-    payload.artifactDir || '',
-    payload.preserveSubDirs || '',
-    payload.uploadStrategy || 'overlayKeepAssets',
-    payload.visitUrl || '',
-    payload.remark || '',
+    Number(safePayload.projectId),
+    safePayload.projectSource === 'gitlab' ? 'gitlab' : 'ops',
+    safePayload.projectName,
+    safePayload.projectDescription || '',
+    safePayload.projectPath,
+    safePayload.repositoryUrl,
+    safePayload.defaultBranch || 'dev',
+    safePayload.envName,
+    Number(safePayload.serverId),
+    safePayload.nginxInstanceId ? Number(safePayload.nginxInstanceId) : null,
+    safePayload.deployRoot,
+    safePayload.nginxConfPath || '',
+    effectiveNginxSiteManaged ? 1 : 0,
+    safePayload.listenPort ? Number(safePayload.listenPort) : null,
+    safePayload.serverName || '',
+    safePayload.enableNginxTest ? 1 : 0,
+    safePayload.enableNginxReload ? 1 : 0,
+    safePayload.installCommand || '',
+    safePayload.buildCommand || '',
+    safePayload.artifactDir || '',
+    safePayload.preserveSubDirs || '',
+    safePayload.uploadStrategy || 'overlayKeepAssets',
+    safePayload.visitUrl || '',
+    safePayload.remark || '',
     now(),
     payload.projectType || 'frontend',
     payload.jdkId ? Number(payload.jdkId) : null,

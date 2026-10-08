@@ -1,10 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  attachManagedHeader,
   buildArchiveTarCommand,
   buildExternalArchivePrecheckCommand,
   buildExternalArchiveTarCommand,
   buildSelectedArchiveTarCommand,
+  checkNginxOverwriteSafety,
+  computeConfigBodySha256,
+  inspectNginxConfigManagedState,
+  parseManagedHeader,
+  renderSiteConfig,
   resolveArchiveRuntimeConfig,
 } from '../nginx-runtime-service.mjs';
 import {
@@ -215,4 +221,67 @@ test('resolveArchiveRuntimeConfig 正确分流托管与已有实例', () => {
   assert.equal(external.scriptPath, '');
   assert.equal(external.webRoot, '/var/www/html');
 });
+
+test('Nginx 站点配置按文件归属防线（首行 managed-by 标记与哈希防篡改）', () => {
+  const target = {
+    id: 101,
+    listenPort: 7777,
+    nginxServerName: '192.168.164.11',
+    deployRoot: '/var/www/site7777',
+  };
+  const generated = renderSiteConfig(target);
+
+  // 1. 生成的配置第一行必须包含 managed-by 标记、target ID 和正确的 SHA-256
+  const parsed = parseManagedHeader(generated);
+  assert.equal(parsed.isManaged, true);
+  assert.equal(parsed.targetId, 101);
+  assert.equal(typeof parsed.expectedSha256, 'string');
+  assert.equal(parsed.expectedSha256.length, 64);
+  assert.equal(computeConfigBodySha256(parsed.body), parsed.expectedSha256);
+
+  // 2. 空配置允许生成写入
+  const notFoundCheck = inspectNginxConfigManagedState('', target, parsed.body);
+  assert.equal(notFoundCheck.canAutoOverwrite, true);
+  assert.equal(notFoundCheck.status, 'not_found');
+
+  // 3. 干净的托管配置允许更新
+  const cleanCheck = inspectNginxConfigManagedState(generated, target, parsed.body);
+  assert.equal(cleanCheck.canAutoOverwrite, true);
+  assert.equal(cleanCheck.status, 'clean_managed');
+
+  // 4. 配置被手工篡改（例如手工加了一行 proxy_pass 或自定义注释）拦截拒绝
+  const tamperedContent = generated + '\n# 手工加了一行业务代理\n';
+  const tamperedCheck = inspectNginxConfigManagedState(tamperedContent, target, parsed.body);
+  assert.equal(tamperedCheck.canAutoOverwrite, false);
+  assert.equal(tamperedCheck.status, 'drifted_managed');
+  assert.match(tamperedCheck.reason, /已被手工修改过/);
+
+  // 5. 属于其他部署目标（例如 target 202）的配置文件拦截拒绝
+  const otherTargetConf = attachManagedHeader(parsed.body, 202);
+  const otherCheck = inspectNginxConfigManagedState(otherTargetConf, target, parsed.body);
+  assert.equal(otherCheck.canAutoOverwrite, false);
+  assert.equal(otherCheck.status, 'drifted_managed');
+  assert.match(otherCheck.reason, /属于其他部署目标/);
+
+  // 6. 外部/手工维护的无标记配置文件拦截拒绝
+  const manualConf = `
+server {
+  listen 7777;
+  server_name 192.168.164.11;
+  location / {
+    proxy_pass http://127.0.0.1:8080;
+  }
+}
+  `;
+  const manualCheck = inspectNginxConfigManagedState(manualConf, target, parsed.body);
+  assert.equal(manualCheck.canAutoOverwrite, false);
+  assert.equal(manualCheck.status, 'unmanaged_external');
+  assert.match(manualCheck.reason, /手工维护或已有实例文件/);
+
+  // 7. 托管实例老文件平滑迁移：无标记但正文与平台模板完全一致，允许接管
+  const legacyMatchCheck = inspectNginxConfigManagedState(parsed.body, target, parsed.body);
+  assert.equal(legacyMatchCheck.canAutoOverwrite, true);
+  assert.equal(legacyMatchCheck.status, 'legacy_clean_match');
+});
+
 

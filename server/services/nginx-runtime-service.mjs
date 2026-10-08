@@ -29,6 +29,7 @@ import {
 } from './deploy-store.mjs';
 import {
   execSsh,
+  readRemoteText,
   shellQuote,
   streamSshCommand,
   uploadFile,
@@ -768,7 +769,28 @@ function normalizeNginxConfigValue(value, label) {
  * @param {Object} target - 部署目标
  * @returns {string} 站点配置
  */
-export function renderSiteConfig(target) {
+export const MANAGED_HEADER_PREFIX = '# managed-by: yuyan';
+export const MANAGED_HEADER_REGEX = /^#\s*managed-by:\s*yuyan\s+target=(\d+)\s+sha256=([a-f0-9]{64})(?:\r?\n|$)/i;
+
+/**
+ * 规范化并计算配置主体内容的 SHA-256 哈希值
+ * @param {string} body - 配置主体内容
+ * @returns {string} sha256 16进制字符串
+ */
+export function computeConfigBodySha256(body) {
+  const normalized = String(body || '')
+    .replace(MANAGED_HEADER_REGEX, '')
+    .replace(/\r\n/g, '\n')
+    .trim();
+  return crypto.createHash('sha256').update(normalized).digest('hex');
+}
+
+/**
+ * 渲染项目托管站点配置正文（不含托管 Header）。
+ * @param {Object} target - 部署目标
+ * @returns {string} 站点配置正文
+ */
+export function renderSiteConfigBody(target) {
   const listenPort = Number(target.listenPort || 0);
   if (!Number.isInteger(listenPort) || listenPort < 1 || listenPort > 65535) {
     throw new Error('托管站点监听端口必须在 1-65535 之间');
@@ -808,8 +830,111 @@ export function renderSiteConfig(target) {
     '        try_files $uri $uri/ /index.html;',
     '    }',
     '}',
-    '',
   ].join('\n');
+}
+
+/**
+ * 为配置正文追加平台托管标记头
+ * @param {string} body - 配置正文
+ * @param {number} targetId - 部署目标 ID
+ * @returns {string} 包含标记头的完整配置文本
+ */
+export function attachManagedHeader(body, targetId) {
+  const cleanBody = String(body || '').replace(MANAGED_HEADER_REGEX, '').trim();
+  const hash = computeConfigBodySha256(cleanBody);
+  const header = `# managed-by: yuyan target=${targetId} sha256=${hash}`;
+  return `${header}\n\n${cleanBody}\n`;
+}
+
+/**
+ * 解析配置文件的平台托管标记头
+ * @param {string} content - 配置文件内容
+ * @returns {{ isManaged: boolean, targetId: number | null, expectedSha256: string | null, body: string }}
+ */
+export function parseManagedHeader(content) {
+  const text = String(content || '');
+  const match = text.match(MANAGED_HEADER_REGEX);
+  if (!match) {
+    return {
+      isManaged: false,
+      targetId: null,
+      expectedSha256: null,
+      body: text.trim(),
+    };
+  }
+  const firstLineEnd = text.indexOf('\n');
+  const body = firstLineEnd >= 0 ? text.slice(firstLineEnd + 1).trim() : '';
+  return {
+    isManaged: true,
+    targetId: Number(match[1]),
+    expectedSha256: match[2].toLowerCase(),
+    body,
+  };
+}
+
+/**
+ * 渲染项目托管站点配置（含托管 Header 标记）。
+ * @param {Object} target - 部署目标
+ * @returns {string} 站点完整配置
+ */
+export function renderSiteConfig(target) {
+  const body = renderSiteConfigBody(target);
+  return attachManagedHeader(body, target.id);
+}
+
+/**
+ * 检查现有配置的托管归属与覆写安全性。
+ * @param {string} existingContent - 远程服务器已有配置
+ * @param {Object} target - 部署目标
+ * @param {string} generatedBody - 平台生成的主体配置
+ * @returns {{ canAutoOverwrite: boolean, status: string, reason?: string }}
+ */
+export function inspectNginxConfigManagedState(existingContent, target, generatedBody) {
+  const trimmed = String(existingContent || '').trim();
+  if (!trimmed) {
+    return { canAutoOverwrite: true, status: 'not_found', currentSha256: '' };
+  }
+
+  const parsed = parseManagedHeader(existingContent);
+  if (parsed.isManaged) {
+    const actualHash = computeConfigBodySha256(parsed.body);
+    if (parsed.targetId === Number(target.id) && actualHash === parsed.expectedSha256) {
+      return { canAutoOverwrite: true, status: 'clean_managed', currentSha256: actualHash };
+    }
+    const reason = parsed.targetId === Number(target.id)
+      ? '配置文件曾由平台生成，但已被手工修改过（内容哈希不匹配）'
+      : `配置文件属于其他部署目标（#${parsed.targetId}）`;
+    return { canAutoOverwrite: false, status: 'drifted_managed', reason, currentSha256: actualHash };
+  }
+
+  // 没有 header 标记的老文件：若内容和平台模板生成的完全一致，视为平台名下的历史文件，允许更新并补上标记
+  const legacyHash = computeConfigBodySha256(trimmed);
+  const targetHash = computeConfigBodySha256(generatedBody);
+  if (legacyHash === targetHash) {
+    return { canAutoOverwrite: true, status: 'legacy_clean_match', currentSha256: legacyHash };
+  }
+
+  return {
+    canAutoOverwrite: false,
+    status: 'unmanaged_external',
+    reason: '配置文件为手工维护或已有实例文件，未包含当前目标的平台托管标记',
+    currentSha256: legacyHash,
+  };
+}
+
+/**
+ * 兼容旧版的配置覆写安全校验函数。
+ * @param {string} existingContent - 现有内容
+ * @param {string} newContent - 新内容
+ * @param {Object=} target - 部署目标
+ * @returns {{ safe: boolean, reason?: string }}
+ */
+export function checkNginxOverwriteSafety(existingContent, newContent, target = { id: 0 }) {
+  const inspection = inspectNginxConfigManagedState(existingContent, target, newContent);
+  return {
+    safe: inspection.canAutoOverwrite,
+    reason: inspection.reason,
+  };
 }
 
 /**
@@ -1507,13 +1632,19 @@ export async function getNextNginxInstancePort(instanceId, excludeTargetId = 0) 
  * @param {number} targetId - 部署目标 ID
  * @returns {Promise<Object>} 同步结果
  */
-export async function syncTargetNginxSite(targetId) {
+export async function syncTargetNginxSite(targetId, options = {}) {
+  const force = Boolean(options.force);
+  const expectedSha256 = options.expectedSha256 ? String(options.expectedSha256).toLowerCase() : null;
   const target = await getTarget(targetId);
   if (!target) throw new Error('部署目标不存在');
   if (!target.nginxSiteManaged) throw new Error('当前部署目标未启用托管 Nginx 站点');
   const server = await getServerWithCredential(target.serverId);
   if (!server) throw new Error('部署服务器不存在');
   const { instance } = await getNginxInstanceContext(target.nginxInstanceId);
+  if (!instance) throw new Error('未关联有效的 Nginx 实例');
+  if (instance.instanceType !== 'managed') {
+    throw new Error('只有托管 Nginx 实例支持同步站点配置；已有实例请直接通过“Nginx 配置”在线编辑');
+  }
 
   const effectiveUseSudo = Boolean(instance?.useSudo || server?.useSudo);
   const effectiveInstance = { ...instance, useSudo: effectiveUseSudo };
@@ -1522,6 +1653,15 @@ export async function syncTargetNginxSite(targetId) {
 
   const config = resolveRuntimeConfig(instance);
   const sitePath = resolveTargetSitePath(target, config);
+
+  if (!isManagedMainConfPath(sitePath, config)) {
+    const normalizedSiteDir = path.posix.normalize(path.posix.dirname(sitePath));
+    const normalizedSitesDir = path.posix.normalize(config.sitesDir || '');
+    if (!normalizedSitesDir || (normalizedSiteDir !== normalizedSitesDir && !normalizedSiteDir.startsWith(`${normalizedSitesDir}/`))) {
+      throw new Error(`安全拦截：托管站点配置文件路径（${sitePath}）超出托管实例 sitesDir（${config.sitesDir}）目录范围`);
+    }
+  }
+
   return withSsh(effectiveServer, async (conn) => {
     if (isManagedMainConfPath(sitePath, config)) {
       await execSsh(conn, `${sudo}mkdir -p ${shellQuote(target.deployRoot)}`, {
@@ -1531,17 +1671,53 @@ export async function syncTargetNginxSite(targetId) {
       const reloadResult = instance.instanceType === 'managed' ? await execRuntimeScript(conn, effectiveInstance, 'reload') : await execExternalInstanceAction(conn, effectiveInstance, 'reload');
       return {
         success: true,
+        requireDiffConfirm: false,
         path: sitePath,
         backupPath: '',
         testOutput: `${testResult.stdout || ''}${testResult.stderr || ''}`.trim(),
         reloadOutput: `${reloadResult.stdout || ''}${reloadResult.stderr || ''}`.trim(),
       };
     }
-    const siteConfig = renderSiteConfig(target);
+    const generatedBody = renderSiteConfigBody(target);
+    const siteConfig = attachManagedHeader(generatedBody, target.id);
     const existingResult = await execSsh(conn, `[ -f ${shellQuote(sitePath)} ]`, {
       label: '检查站点配置是否存在',
       allowFailure: true,
     });
+    let existingContent = '';
+    if (existingResult.code === 0) {
+      existingContent = await readRemoteText(conn, effectiveServer, sitePath).catch(() => '');
+      const inspection = inspectNginxConfigManagedState(existingContent, target, generatedBody);
+      if (!inspection.canAutoOverwrite && !force) {
+        const conflictError = new Error(inspection.reason || '配置文件存在手工修改或未被平台接管，需确认覆盖接管');
+        conflictError.statusCode = 409;
+        conflictError.code = 'NGINX_SITE_CONFLICT';
+        conflictError.details = {
+          path: sitePath,
+          currentContent: existingContent,
+          generatedContent: siteConfig,
+          currentSha256: inspection.currentSha256 || computeConfigBodySha256(existingContent),
+          reason: inspection.reason,
+        };
+        throw conflictError;
+      }
+      if (force && expectedSha256) {
+        const actualSha = computeConfigBodySha256(existingContent);
+        if (actualSha !== expectedSha256) {
+          const raceError = new Error('远程配置文件在预览后已被修改，请重新对比差异后再接管覆盖');
+          raceError.statusCode = 409;
+          raceError.code = 'NGINX_SITE_CONFLICT';
+          raceError.details = {
+            path: sitePath,
+            currentContent: existingContent,
+            generatedContent: siteConfig,
+            currentSha256: actualSha,
+            reason: '远程配置文件已发生并发改动',
+          };
+          throw raceError;
+        }
+      }
+    }
     await execSsh(conn, `${sudo}mkdir -p ${shellQuote(path.posix.dirname(sitePath))} ${shellQuote(target.deployRoot)}`, {
       label: '创建站点目录',
     });
@@ -1551,6 +1727,7 @@ export async function syncTargetNginxSite(targetId) {
       const reloadResult = instance.instanceType === 'managed' ? await execRuntimeScript(conn, effectiveInstance, 'reload') : await execExternalInstanceAction(conn, effectiveInstance, 'reload');
       return {
         success: true,
+        requireDiffConfirm: false,
         path: sitePath,
         backupPath: existingResult.code === 0 ? backupPath : '',
         testOutput: `${testResult.stdout || ''}${testResult.stderr || ''}`.trim(),

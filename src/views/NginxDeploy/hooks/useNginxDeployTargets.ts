@@ -1,5 +1,7 @@
-import { computed, nextTick, reactive, ref, watch, type Ref } from 'vue';
+import { computed, createVNode, nextTick, reactive, ref, watch, type Ref } from 'vue';
 import message from 'ant-design-vue/es/message';
+import Modal from 'ant-design-vue/es/modal';
+import { ExclamationCircleOutlined } from '@ant-design/icons-vue';
 import {
   createDeployTarget,
   deleteDeployTarget,
@@ -470,15 +472,27 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
 
   /** 同步托管站点相关的字段显隐状态 */
   const syncTargetNginxSiteManagedState = () => {
-    const isManaged = Boolean(targetForm.nginxSiteManaged);
-    targetFormRef.value?.setFieldState?.('visitUrl', (state: any) => {
-      state.display = isManaged ? 'visible' : 'none';
+    const isFrontend = targetForm.projectType !== 'backend';
+    const server = servers.value.find((item) => item.id === Number(targetForm.serverId));
+    const instance = getSelectedNginxInstance(server);
+    const isManagedInstance = Boolean(instance?.instanceType === 'managed');
+    const isManagedSite = Boolean(isFrontend && isManagedInstance);
+
+    // 只有托管实例才显示「平台管理站点」开关，已有实例一律隐藏
+    targetFormRef.value?.setFieldState?.('nginxSiteManaged', (state: any) => {
+      state.display = isManagedSite ? 'visible' : 'none';
     });
+    // 访问地址对所有前端目标通用可见
+    targetFormRef.value?.setFieldState?.('visitUrl', (state: any) => {
+      state.display = isFrontend ? 'visible' : 'none';
+    });
+    // 监听端口和 server_name 仅在托管实例且开启托管时显示作为配置参数
+    const showNginxConfigFields = Boolean(isManagedSite && targetForm.nginxSiteManaged);
     targetFormRef.value?.setFieldState?.('listenPort', (state: any) => {
-      state.display = isManaged ? 'visible' : 'none';
+      state.display = showNginxConfigFields ? 'visible' : 'none';
     });
     targetFormRef.value?.setFieldState?.('serverName', (state: any) => {
-      state.display = isManaged ? 'visible' : 'none';
+      state.display = showNginxConfigFields ? 'visible' : 'none';
     });
   };
 
@@ -1021,6 +1035,12 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
         const selectedServer = servers.value.find((server) => server.id === Number(targetForm.serverId));
         targetForm.nginxInstanceId = getDefaultNginxInstance(selectedServer)?.id || 0;
       }
+      const selectedServer = servers.value.find((server) => server.id === Number(targetForm.serverId));
+      const currentInstance = getSelectedNginxInstance(selectedServer);
+      const isManagedInstance = currentInstance?.instanceType === 'managed';
+      if (!isManagedInstance) {
+        targetForm.nginxSiteManaged = false;
+      }
       await loadBranches(Number(target.projectId));
       await nextTick();
       syncTargetProjectSourceFieldState();
@@ -1165,6 +1185,12 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
         message.warning('Nginx 配置文件路径必须使用服务器绝对路径');
         return;
       }
+      const targetServer = servers.value.find((item) => item.id === Number(payload.serverId));
+      const targetInstance = getSelectedNginxInstance(targetServer);
+      const isManagedInstance = Boolean(targetInstance?.instanceType === 'managed');
+      if (!isManagedInstance) {
+        payload.nginxSiteManaged = false;
+      }
       if (!isBackend && payload.nginxSiteManaged && (!Number.isInteger(Number(payload.listenPort)) || Number(payload.listenPort) < 1 || Number(payload.listenPort) > 65535)) {
         message.warning('托管站点监听端口必须在 1-65535 之间');
         return;
@@ -1244,14 +1270,6 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
         : await createDeployTarget(payload);
       activeTargetId.value = savedTarget.id;
       targetModalOpen.value = false;
-      let nginxSyncError: unknown;
-      if (savedTarget.nginxSiteManaged) {
-        try {
-          await syncNginxSite(savedTarget.id);
-        } catch (error) {
-          nginxSyncError = error;
-        }
-      }
       let refreshError: unknown;
       try {
         await refreshActiveTab({ force: true });
@@ -1259,12 +1277,10 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
         refreshError = error;
       }
       const persistedLabel = editing ? '部署目标已更新' : '部署目标已新增';
-      if (nginxSyncError) {
-        message.warning(`${persistedLabel}，但 Nginx 站点同步失败：${getErrorMessage(nginxSyncError)}。目标已保留，可在列表中点击“同步站点”重试`);
-      } else if (refreshError) {
+      if (refreshError) {
         message.warning(`${persistedLabel}，但列表刷新失败：${getErrorMessage(refreshError)}。请手动刷新查看最新配置`);
       } else {
-        message.success(savedTarget.nginxSiteManaged ? `${persistedLabel}，Nginx 站点已同步` : persistedLabel);
+        message.success(persistedLabel);
       }
     } catch (error: any) {
       if (!activeTargetId.value && isDuplicateDeployTargetError(error)) {
@@ -1313,10 +1329,40 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
    */
   const syncTargetSite = async (target: DeployTarget) => {
     if (!ensureLoggedIn()) return;
-    if (!(await ensureTargetIdle(target, '同步站点'))) return;
-    await syncNginxSite(target.id);
-    message.success('同步托管 Nginx 站点配置成功');
-    await refreshActiveTab({ force: true });
+    if (!(await ensureTargetIdle(target, '更新站点配置'))) return;
+    try {
+      await syncNginxSite(target.id);
+      message.success('更新托管 Nginx 站点配置成功');
+      await refreshActiveTab({ force: true });
+    } catch (error: any) {
+      const responseData = error?.response?.data;
+      if (error?.status === 409 || error?.response?.status === 409 || responseData?.code === 'NGINX_SITE_CONFLICT') {
+        const conflictData = responseData?.data || {};
+        Modal.confirm({
+          title: '配置文件存在冲突或手工修改',
+          icon: createVNode(ExclamationCircleOutlined),
+          width: 520,
+          content: `${responseData?.message || '目标配置文件已存在且被手工修改过或属于其他来源'}。平台不会静默覆盖。如需采用平台模板覆盖接管，请确认。平台将在写入前自动创建时间戳备份。`,
+          okText: '覆盖并接管',
+          okType: 'danger',
+          cancelText: '取消',
+          onOk: async () => {
+            try {
+              await syncNginxSite(target.id, {
+                force: true,
+                expectedSha256: conflictData.currentSha256,
+              });
+              message.success('已安全备份并成功覆盖接管站点配置');
+              await refreshActiveTab({ force: true });
+            } catch (err: any) {
+              message.error(getErrorMessage(err));
+            }
+          },
+        });
+        return;
+      }
+      message.error(getErrorMessage(error));
+    }
   };
 
   /**

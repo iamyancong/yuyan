@@ -150,6 +150,23 @@ test('getSiteReadinessStatus: 前端部署目标就绪度四态判定', () => {
   assert.equal(getSiteReadinessStatus(microTarget).showSiteConfig, false);
   assert.equal(getSiteReadinessStatus({ ...microTarget, visitUrl: 'https://legacy.example.com' }).showSiteConfig, false);
   assert.equal(getSiteReadinessStatus(microTarget).showDeploymentPath, true);
+
+  // 5. 非托管但有访问地址的前端站点（即使未设置端口和域名）同样判定为可访问
+  const unmanagedAccessibleTarget = {
+    id: 6,
+    projectType: 'frontend',
+    nginxInstanceId: 10,
+    nginxInstanceName: 'external-1',
+    nginxSiteManaged: false,
+    nginxServerName: '',
+    listenPort: 0,
+    deployRoot: '/home/guest/work_sever/data_front/7777/html',
+    visitUrl: 'http://192.168.164.11:7777/',
+  } as unknown as DeployTarget;
+  const unmanagedMeta = getSiteReadinessStatus(unmanagedAccessibleTarget);
+  assert.equal(unmanagedMeta.status, 'accessible');
+  assert.equal(unmanagedMeta.isAccessible, true);
+  assert.equal(unmanagedMeta.visitUrl, 'http://192.168.164.11:7777/');
 });
 
 test('calcStep2Diagnostic: Hero Checklist 流程状态机诊断', () => {
