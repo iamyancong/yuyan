@@ -86,6 +86,11 @@ test('选择站点后映射现有接入表单字段并保留 sudo 设置', () =>
     portStart: 32088,
     useSudo: true,
   });
+
+  // 当 runtime 未开启 sudo，但服务器已开启 sudo 时，表单补丁应自动继承为 true
+  const runtimeWithoutSudo = { ...runtime, useSudo: false };
+  const inheritedSelection = createExistingNginxSelection(runtimeWithoutSudo, site, root, true);
+  assert.equal(inheritedSelection.formPatch.useSudo, true, '应当继承服务器已开启的 sudo 配置');
 });
 
 test('仅一个满足全部强条件的候选会被标记为推荐', () => {

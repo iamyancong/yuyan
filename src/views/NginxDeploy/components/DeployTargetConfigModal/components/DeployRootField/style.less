@@ -47,6 +47,11 @@
   }
 }
 
+:global(.deploy-root-dropdown) {
+  min-width: 560px !important;
+  max-width: 720px !important;
+}
+
 .deploy-root-option {
   min-width: 0;
   padding-block: 2px;
@@ -60,16 +65,21 @@
   display: flex;
   min-width: 0;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
 }
 
 .deploy-root-option__path {
   overflow: hidden;
   flex: 1;
-  color: var(--text-color);
+  min-width: 0;
   font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+
+  :deep(.middle-ellipsis-text) {
+    font-size: 13px;
+    line-height: 20px;
+    font-weight: 600;
+  }
 }
 
 .deploy-root-option__section {

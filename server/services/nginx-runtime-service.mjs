@@ -1173,10 +1173,12 @@ export async function runNginxRuntimeAction(serverId, action) {
  */
 export async function runNginxInstanceAction(instanceId, action) {
   const { instance, server } = await getNginxInstanceContext(instanceId);
+  const effectiveUseSudo = Boolean(instance.useSudo || server.useSudo);
+  const effectiveInstance = { ...instance, useSudo: effectiveUseSudo };
   return withSsh(server, async (conn) => {
     const result = instance.instanceType === 'managed'
-      ? await execRuntimeScript(conn, instance, action)
-      : await execExternalInstanceAction(conn, instance, action);
+      ? await execRuntimeScript(conn, effectiveInstance, action)
+      : await execExternalInstanceAction(conn, effectiveInstance, action);
     const status =
       action === 'stop' && result.code === 0
         ? 'stopped'
@@ -1513,15 +1515,20 @@ export async function syncTargetNginxSite(targetId) {
   if (!server) throw new Error('部署服务器不存在');
   const { instance } = await getNginxInstanceContext(target.nginxInstanceId);
 
+  const effectiveUseSudo = Boolean(instance?.useSudo || server?.useSudo);
+  const effectiveInstance = { ...instance, useSudo: effectiveUseSudo };
+  const effectiveServer = { ...server, useSudo: effectiveUseSudo };
+  const sudo = effectiveUseSudo ? 'sudo -n ' : '';
+
   const config = resolveRuntimeConfig(instance);
   const sitePath = resolveTargetSitePath(target, config);
-  return withSsh(server, async (conn) => {
+  return withSsh(effectiveServer, async (conn) => {
     if (isManagedMainConfPath(sitePath, config)) {
-      await execSsh(conn, `${instance.useSudo ? 'sudo -n ' : ''}mkdir -p ${shellQuote(target.deployRoot)}`, {
+      await execSsh(conn, `${sudo}mkdir -p ${shellQuote(target.deployRoot)}`, {
         label: '创建主应用部署目录',
       });
-      const testResult = instance.instanceType === 'managed' ? await execRuntimeScript(conn, instance, 'test') : await execExternalInstanceAction(conn, instance, 'test');
-      const reloadResult = instance.instanceType === 'managed' ? await execRuntimeScript(conn, instance, 'reload') : await execExternalInstanceAction(conn, instance, 'reload');
+      const testResult = instance.instanceType === 'managed' ? await execRuntimeScript(conn, effectiveInstance, 'test') : await execExternalInstanceAction(conn, effectiveInstance, 'test');
+      const reloadResult = instance.instanceType === 'managed' ? await execRuntimeScript(conn, effectiveInstance, 'reload') : await execExternalInstanceAction(conn, effectiveInstance, 'reload');
       return {
         success: true,
         path: sitePath,
@@ -1535,13 +1542,13 @@ export async function syncTargetNginxSite(targetId) {
       label: '检查站点配置是否存在',
       allowFailure: true,
     });
-    await execSsh(conn, `${instance.useSudo ? 'sudo -n ' : ''}mkdir -p ${shellQuote(path.posix.dirname(sitePath))} ${shellQuote(target.deployRoot)}`, {
+    await execSsh(conn, `${sudo}mkdir -p ${shellQuote(path.posix.dirname(sitePath))} ${shellQuote(target.deployRoot)}`, {
       label: '创建站点目录',
     });
-    const { backupPath } = await writeRemoteTextWithBackup(conn, { ...server, useSudo: instance.useSudo }, sitePath, siteConfig);
+    const { backupPath } = await writeRemoteTextWithBackup(conn, effectiveServer, sitePath, siteConfig);
     try {
-      const testResult = instance.instanceType === 'managed' ? await execRuntimeScript(conn, instance, 'test') : await execExternalInstanceAction(conn, instance, 'test');
-      const reloadResult = instance.instanceType === 'managed' ? await execRuntimeScript(conn, instance, 'reload') : await execExternalInstanceAction(conn, instance, 'reload');
+      const testResult = instance.instanceType === 'managed' ? await execRuntimeScript(conn, effectiveInstance, 'test') : await execExternalInstanceAction(conn, effectiveInstance, 'test');
+      const reloadResult = instance.instanceType === 'managed' ? await execRuntimeScript(conn, effectiveInstance, 'reload') : await execExternalInstanceAction(conn, effectiveInstance, 'reload');
       return {
         success: true,
         path: sitePath,
@@ -1550,7 +1557,6 @@ export async function syncTargetNginxSite(targetId) {
         reloadOutput: `${reloadResult.stdout || ''}${reloadResult.stderr || ''}`.trim(),
       };
     } catch (error) {
-      const sudo = instance.useSudo ? 'sudo -n ' : '';
       if (existingResult.code === 0) {
         await execSsh(conn, `${sudo}cp ${shellQuote(backupPath)} ${shellQuote(sitePath)}`, {
           label: '恢复站点配置备份',

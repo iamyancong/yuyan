@@ -1312,7 +1312,7 @@ export function getNginxCommandLabel(server, nginxInstance, type) {
  * @returns {boolean} 是否使用 sudo
  */
 function resolveEffectiveDeploySudo(server, nginxInstance) {
-  return Boolean(nginxInstance ? nginxInstance.useSudo : server.useSudo);
+  return Boolean(nginxInstance?.useSudo || server?.useSudo);
 }
 
 /**
@@ -1655,13 +1655,14 @@ export async function saveNginxConfig(targetId, payload) {
   const { target, server, nginxInstance } = await getTargetContext(targetId);
   const confPath = resolveEditableNginxConfPath(target, nginxInstance);
   return withSsh(server, async (conn) => {
-    const effectiveServer = { ...server, useSudo: nginxInstance.useSudo };
+    const effectiveUseSudo = Boolean(nginxInstance?.useSudo || server?.useSudo);
+    const effectiveServer = { ...server, useSudo: effectiveUseSudo };
     const { backupPath } = await writeRemoteTextWithBackup(conn, effectiveServer, confPath, payload.content || '');
     let testResult;
     try {
       testResult = await runNginxTest(conn, server, nginxInstance);
     } catch (error) {
-      const sudo = nginxInstance.useSudo ? 'sudo -n ' : '';
+      const sudo = effectiveUseSudo ? 'sudo -n ' : '';
       await execSsh(conn, `${sudo}cp ${shellQuote(backupPath)} ${shellQuote(confPath)}`, {
         allowFailure: true,
         label: '恢复 Nginx 配置文件备份',

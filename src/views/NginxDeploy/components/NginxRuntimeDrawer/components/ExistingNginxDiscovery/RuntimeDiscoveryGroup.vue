@@ -17,6 +17,7 @@ interface RuntimeDiscoveryGroupProps {
   selectedKey: string;
   recommendedKey: string;
   disabled: boolean;
+  serverUseSudo?: boolean;
 }
 
 const props = defineProps<RuntimeDiscoveryGroupProps>();
@@ -34,7 +35,7 @@ const formatListen = (candidate: (typeof candidates.value)[number]) => candidate
 /** 采用候选并交由父级回填表单。 */
 const selectCandidate = (candidate: (typeof candidates.value)[number]) => {
   if (props.disabled) return;
-  emit('select', createExistingNginxSelection(candidate.runtime, candidate.site, candidate.root));
+  emit('select', createExistingNginxSelection(candidate.runtime, candidate.site, candidate.root, props.serverUseSudo));
 };
 </script>
 
