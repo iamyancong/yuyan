@@ -246,14 +246,15 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
       },
       {
         key: 'syncSite',
-        text: '同步站点',
+        text: '更新站点配置',
         type: 'link',
-        hideFn: ({ row }) => row.projectType === 'backend' || !row.nginxSiteManaged,
+        hideFn: ({ row }) => row.projectType === 'backend' || row.nginxInstanceType !== 'managed' || !row.nginxSiteManaged,
         disabledFn: ({ row }) => isTargetRunning(row),
         isConfirm: true,
         confirmProps: {
-          title: '确认同步托管 Nginx 站点配置？',
-          okText: '同步',
+          title: '确认更新托管 Nginx 站点配置？',
+          content: '平台将检查文件归属并执行配置更新，如检测到手工修改将提示确认接管，写入前自动创建时间戳备份。',
+          okText: '更新',
           cancelText: '取消',
           needLoading: true,
         },
@@ -265,6 +266,7 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
           }
         },
       },
+
       {
         key: 'startService',
         disabledFn: () => Boolean(params?.centralUnavailable?.value),

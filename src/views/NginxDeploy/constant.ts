@@ -856,14 +856,10 @@ export const targetFormSchema = {
               title: '平台管理站点',
               'x-decorator': 'FormItem',
               'x-decorator-props': {
-                tooltip: '开启后，保存目标会同步 Nginx 站点配置并执行校验、重载。服务器已手工配置好 Nginx 时请关闭，平台仍会正常发布前端产物。',
+                tooltip: '仅用于平台托管 Nginx 实例自动生成与更新站点配置。服务器已有手工 Nginx 配置时请勿开启，平台绝不覆盖已有配置文件。',
               },
               'x-component': 'Switch',
               'x-component-props': { checkedChildren: '开', unCheckedChildren: '关' },
-              'x-reactions': {
-                dependencies: ['projectType'],
-                fulfill: { state: { visible: '{{$deps[0] !== "backend"}}' } },
-              },
             },
             visitUrl: {
               type: 'string',
@@ -871,8 +867,8 @@ export const targetFormSchema = {
               'x-decorator': 'FormItem',
               'x-component': 'Input',
               'x-reactions': {
-                dependencies: ['projectType', '.nginxSiteManaged'],
-                fulfill: { state: { visible: '{{$deps[0] !== "backend" && $deps[1]}}' } },
+                dependencies: ['projectType'],
+                fulfill: { state: { visible: '{{$deps[0] !== "backend"}}' } },
               },
             },
             listenPort: {
@@ -881,10 +877,6 @@ export const targetFormSchema = {
               'x-decorator': 'FormItem',
               'x-component': 'InputNumber',
               'x-component-props': { min: 1, max: 65535, placeholder: '自动分配' },
-              'x-reactions': {
-                dependencies: ['projectType', '.nginxSiteManaged'],
-                fulfill: { state: { visible: '{{$deps[0] !== "backend" && $deps[1]}}' } },
-              },
             },
             serverName: {
               type: 'string',
@@ -892,10 +884,6 @@ export const targetFormSchema = {
               'x-decorator': 'FormItem',
               'x-component': 'Input',
               'x-component-props': { placeholder: '_' },
-              'x-reactions': {
-                dependencies: ['projectType', '.nginxSiteManaged'],
-                fulfill: { state: { visible: '{{$deps[0] !== "backend" && $deps[1]}}' } },
-              },
             },
           },
         },

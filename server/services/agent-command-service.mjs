@@ -454,6 +454,9 @@ async function buildProjectConfigPlan(workspace, args) {
   const projectName = String(args.projectName || workspace.projectName);
   const isBackend = projectType === 'backend';
   const defaultInstance = server?.nginxInstances?.find((item) => item.isDefault) || server?.nginxInstances?.[0];
+  const targetInstanceId = Number(args.nginxInstanceId || existing?.nginxInstanceId || defaultInstance?.id || 0);
+  const selectedInstance = server?.nginxInstances?.find((item) => Number(item.id) === targetInstanceId) || defaultInstance;
+  const isManagedInstance = selectedInstance?.instanceType === 'managed' || selectedInstance?.type === 'managed';
   const proposed = {
     projectSource: existing?.projectSource || 'gitlab',
     projectId: Number(args.projectId || existing?.projectId || 0),
@@ -464,10 +467,10 @@ async function buildProjectConfigPlan(workspace, args) {
     defaultBranch: String(args.branch || workspace.branch || existing?.defaultBranch || 'dev'),
     envName: String(args.envName || existing?.envName || '测试'),
     serverId,
-    nginxInstanceId: isBackend ? 0 : Number(args.nginxInstanceId || existing?.nginxInstanceId || defaultInstance?.id || 0),
+    nginxInstanceId: isBackend ? 0 : targetInstanceId,
     deployRoot: String(targetOverrides.deployRoot || existing?.deployRoot || `${isBackend ? server?.defaultBackendRoot : server?.defaultDeployRoot || ''}/${projectName}`.replace(/\/+/g, '/')),
     nginxConfPath: isBackend ? '' : String(targetOverrides.nginxConfPath || existing?.nginxConfPath || server?.defaultNginxConfPath || ''),
-    nginxSiteManaged: isBackend ? false : Boolean(targetOverrides.nginxSiteManaged ?? existing?.nginxSiteManaged ?? true),
+    nginxSiteManaged: (isBackend || !isManagedInstance) ? false : Boolean(targetOverrides.nginxSiteManaged ?? existing?.nginxSiteManaged ?? false),
     listenPort: isBackend ? 0 : Number(targetOverrides.listenPort || existing?.listenPort || 0),
     serverName: isBackend ? '' : String(targetOverrides.serverName || existing?.nginxServerName || '_'),
     enableNginxTest: isBackend ? false : Boolean(targetOverrides.enableNginxTest ?? existing?.enableNginxTest ?? false),

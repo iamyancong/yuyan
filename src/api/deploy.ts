@@ -1153,7 +1153,8 @@ export const saveNginxConf = (targetId: number, content: string, reload = true) 
 export const testNginxConf = (targetId: number) => client.post(`/targets/${targetId}/nginx-test`).then(unwrap<{ output: string }>);
 
 /** 同步托管 Nginx 站点配置 */
-export const syncNginxSite = (targetId: number) => client.post(`/targets/${targetId}/nginx-site/sync`).then(unwrap<NginxSiteSyncResult>);
+export const syncNginxSite = (targetId: number, options: { force?: boolean; expectedSha256?: string | null } = {}) =>
+  client.post(`/targets/${targetId}/nginx-site/sync`, options).then(unwrap<NginxSiteSyncResult>);
 
 /**
  * 获取部署目标运行中的发布进度快照。

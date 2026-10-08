@@ -70,6 +70,7 @@ export function getSiteReadinessStatus(target?: DeployTarget | null): TargetSite
 
   const hasDomain = Boolean(String(target.nginxServerName || '').trim() && target.nginxServerName !== '_');
   const hasPort = Boolean(target.listenPort);
+  const isAccessible = Boolean(target.visitUrl && target.visitUrl.trim());
   // 仅门户站点配置或明确填写域名时展示域名/就绪状态，避免微应用的历史访问地址触发虚假提示。
   const showSiteConfig = Boolean(target.nginxSiteManaged || hasDomain);
   const showDeploymentPath = Boolean(target.deployRoot?.trim());
@@ -78,7 +79,24 @@ export function getSiteReadinessStatus(target?: DeployTarget | null): TargetSite
   const destinationText = `${target.deployRoot || '未设路径'}${portSuffix}`;
   const instanceTypeLabel = target.nginxInstanceType === 'managed' ? '托管' : target.nginxInstanceType === 'external' ? '已有' : '';
 
-  // 2. 配置未完整（缺少域名或端口）
+  // 2. 可访问优先判定：只看 visitUrl 是否有效，彻底解耦端口和域名要求
+  if (isAccessible) {
+    return {
+      status: 'accessible',
+      statusLabel: '可访问',
+      statusColor: 'success',
+      domainText,
+      destinationText,
+      instanceName: target.nginxInstanceName || `实例 #${target.nginxInstanceId}`,
+      instanceTypeLabel,
+      isAccessible: true,
+      visitUrl: String(target.visitUrl).trim(),
+      showSiteConfig,
+      showDeploymentPath,
+    };
+  }
+
+  // 3. 配置未完整：未配置访问地址且缺少域名或端口
   if (!hasDomain || !hasPort) {
     return {
       status: 'incomplete',
@@ -90,23 +108,6 @@ export function getSiteReadinessStatus(target?: DeployTarget | null): TargetSite
       instanceTypeLabel,
       isAccessible: false,
       visitUrl: '',
-      showSiteConfig,
-      showDeploymentPath,
-    };
-  }
-
-  // 3. 可访问（存在有效 visitUrl 且配置完整）
-  if (target.visitUrl && target.visitUrl.trim()) {
-    return {
-      status: 'accessible',
-      statusLabel: '可访问',
-      statusColor: 'success',
-      domainText,
-      destinationText,
-      instanceName: target.nginxInstanceName || `实例 #${target.nginxInstanceId}`,
-      instanceTypeLabel,
-      isAccessible: true,
-      visitUrl: target.visitUrl.trim(),
       showSiteConfig,
       showDeploymentPath,
     };
