@@ -231,6 +231,9 @@ export const nginxInstanceFormSchema = {
               type: 'boolean',
               title: '使用 sudo',
               'x-decorator': 'FormItem',
+              'x-decorator-props': {
+                tooltip: '控制此 Nginx 实例的校验、重载及站点发布是否使用 sudo；创建时默认继承服务器的 sudo 授权。',
+              },
               'x-component': 'Switch',
               'x-component-props': { checkedChildren: '开', unCheckedChildren: '关' },
             },

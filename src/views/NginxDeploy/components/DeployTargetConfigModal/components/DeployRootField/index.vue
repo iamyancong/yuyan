@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue';
 import { BulbOutlined, FolderOpenFilled, FolderOpenOutlined, LoadingOutlined } from '@ant-design/icons-vue';
+import MiddleEllipsisText from '@/components/MiddleEllipsisText.vue';
 import { useDeployRootRecommendation, type DeployRootSelectOption } from '../../../../hooks/useDeployRootRecommendation';
 import { useNginxDeployContext } from '../../../../hooks/useNginxDeployContext';
 import { extractOccupiedMap, type DeployRootFieldProps } from './constant';
@@ -75,6 +76,11 @@ const getPopupContainer = (triggerNode: HTMLElement) =>
       :options="options"
       :filter-option="filterOption"
       :get-popup-container="getPopupContainer"
+      :popup-match-select-width="false"
+      :dropdown-match-select-width="false"
+      :dropdown-style="{ minWidth: '560px', maxWidth: '720px' }"
+      popup-class-name="deploy-root-dropdown"
+      dropdown-class-name="deploy-root-dropdown"
       allow-clear
       placeholder="请选择服务器应用目录或输入绝对路径"
       @focus="handleFocus"
@@ -87,7 +93,9 @@ const getPopupContainer = (triggerNode: HTMLElement) =>
       <template #option="option">
         <div class="deploy-root-option" :class="{ 'is-disabled': option.disabled }">
           <div class="deploy-root-option__main">
-            <span class="deploy-root-option__path">{{ option.value }}</span>
+            <div class="deploy-root-option__path">
+              <MiddleEllipsisText :text="option.value" />
+            </div>
             <span class="deploy-root-option__section">{{ option.section }}</span>
           </div>
           <span class="deploy-root-option__description">{{ option.description }}</span>

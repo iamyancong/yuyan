@@ -506,6 +506,9 @@ export const serverFormSchema = {
               type: 'boolean',
               title: '使用 sudo',
               'x-decorator': 'FormItem',
+              'x-decorator-props': {
+                tooltip: '开启后允许使用免密 sudo -n 提权；保存将级联同步更新该服务器下关联的所有 Nginx 实例与部署流程。',
+              },
               'x-component': 'Switch',
               'x-component-props': { checkedChildren: '开', unCheckedChildren: '关' },
             },

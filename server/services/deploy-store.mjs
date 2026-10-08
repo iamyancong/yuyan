@@ -2431,6 +2431,13 @@ export async function updateServer(id, payload) {
       systemInstance.id
     );
   }
+  if (payload.useSudo !== undefined) {
+    db.prepare(
+      `UPDATE nginx_instances
+       SET use_sudo = ?, updated_at = ?
+       WHERE server_id = ?`
+    ).run(updated.use_sudo ? 1 : 0, now(), Number(id));
+  }
   return hydrateServer(db, updated);
 }
 

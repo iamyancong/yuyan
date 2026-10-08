@@ -47,12 +47,14 @@ export function createDiscoveredInstanceName(site: NginxDiscoverySite): string {
  * @param runtime 物理 Nginx 运行实例
  * @param site server 站点
  * @param root 选中的前端根目录
+ * @param serverUseSudo 可选的服务器 sudo 状态
  * @returns 选择状态与表单补丁
  */
 export function createExistingNginxSelection(
   runtime: NginxDiscoveryRuntime,
   site: NginxDiscoverySite,
   root: NginxDiscoveryRoot,
+  serverUseSudo?: boolean,
 ): ExistingNginxSelection {
   const port = site.listenPorts[0] ?? 80;
   return {
@@ -71,7 +73,7 @@ export function createExistingNginxSelection(
       nginxReloadCommand: runtime.nginxReloadCommand,
       baseRoot: '',
       portStart: port,
-      useSudo: runtime.useSudo,
+      useSudo: runtime.useSudo || Boolean(serverUseSudo),
     },
   };
 }

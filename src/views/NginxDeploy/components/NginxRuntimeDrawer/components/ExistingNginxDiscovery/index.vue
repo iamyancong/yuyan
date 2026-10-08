@@ -102,6 +102,7 @@ const applySelection = (selection: ExistingNginxSelection) => {
           :selected-key="selectedKey"
           :recommended-key="groups.recommendedKey"
           :disabled="staleResult"
+          :server-use-sudo="Boolean(props.server?.useSudo || props.useSudo)"
           @select="applySelection"
         />
       </div>
