@@ -365,6 +365,15 @@ html[data-theme='dark'] {
   }
 }
 
+/* 🔮 全局反馈与通知层级提升，确保高于抽屉(1200)和预览弹窗(1300)等所有浮层，避免被遮挡 */
+.ant-notification {
+  z-index: 2000 !important;
+}
+
+.ant-message {
+  z-index: 2000 !important;
+}
+
 /* 🔮 雨燕全局右上角通知避让顶部导航栏（防止紧贴顶部或被截断） */
 .ant-notification.ant-notification-topRight {
   top: 76px !important;
