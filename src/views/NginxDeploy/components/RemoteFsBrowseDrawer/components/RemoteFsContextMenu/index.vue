@@ -19,6 +19,7 @@ interface RemoteFsContextMenuProps {
   y: number;
   entry: RemoteFsEntry | null;
   selectedEntries?: RemoteFsEntry[];
+  formattedSize?: string;
 }
 
 const props = defineProps<RemoteFsContextMenuProps>();
@@ -45,8 +46,8 @@ const isBatchMode = computed(() => (props.selectedEntries?.length || 0) > 1);
 /** 当前条目的有效操作项（单选或批量）。 */
 const menuItems = computed(() =>
   isBatchMode.value
-    ? getBatchContextMenuItems(props.selectedEntries || [])
-    : getContextMenuItems(props.entry)
+    ? getBatchContextMenuItems(props.selectedEntries || [], props.formattedSize)
+    : getContextMenuItems(props.entry, props.formattedSize)
 );
 
 /**
@@ -137,7 +138,13 @@ onUnmounted(() => {
           <span class="item-icon">
             <component :is="iconComponents[item.iconName]" />
           </span>
-          <span class="item-text">{{ item.label }}</span>
+          <div class="item-content">
+            <div class="item-main-row">
+              <span class="item-text">{{ item.label }}</span>
+              <span v-if="item.subLabel" class="item-sub-label">{{ item.subLabel }}</span>
+            </div>
+            <div v-if="item.hint" class="item-hint-text">{{ item.hint }}</div>
+          </div>
         </li>
       </ul>
     </div>

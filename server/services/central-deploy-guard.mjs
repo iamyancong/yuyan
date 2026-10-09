@@ -59,8 +59,8 @@ function resolveResourceLookup(pathname) {
 /** 计算当前路由最低角色。 */
 export function getRequiredRoles(method, pathname) {
   if (['GET', 'HEAD'].includes(method)) return ['viewer', 'operator', 'admin'];
-  // 关键：远程文件下载票据换取接口虽为 POST（用于规避 URL 超长并安全传输路径列表），但其业务语义为只读文件流下载，全角色开放
-  if (method === 'POST' && /^\/servers\/\d+\/fs\/download-ticket$/.test(pathname)) {
+  // 关键：远程文件下载票据换取与预计大小查询接口虽为 POST（用于规避 URL 超长并安全传输路径列表），但其业务语义为只读，全角色开放
+  if (method === 'POST' && /^\/servers\/\d+\/fs\/(?:download-ticket|size)$/.test(pathname)) {
     return ['viewer', 'operator', 'admin'];
   }
   if (method === 'DELETE') return ['admin'];

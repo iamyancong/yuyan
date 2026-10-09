@@ -597,7 +597,8 @@ export async function streamRemoteFsEntry(serverId, requestedPath, outputStream,
 
       onReady?.(meta);
 
-      const tarCommand = `${sudo}tar -czf - -C ${shellQuote(parentDir)} -- ${shellQuote(baseName)}`;
+      const excludeArgs = buildHiddenExcludeArgs();
+      const tarCommand = `${sudo}tar -czf - ${excludeArgs} -C ${shellQuote(parentDir)} -- ${shellQuote(baseName)}`;
       await streamSshCommand(conn, tarCommand, outputStream, {
         label: `流式打包目录 [${baseName}]`,
         isAborted: options.isAborted,
@@ -783,6 +784,21 @@ export function parseDownloadPaths(params = {}) {
 }
 
 /**
+ * 构建排除隐藏文件的参数（GNU tar 与 GNU du 共用）。
+ *
+ * 规则：
+ * 1. 递归排除所有子层级以 `.` 开头的文件和目录（如 .yuyan-backups, .git, .DS_Store）。
+ * 2. 配合在条目父目录下以相对 basename 执行，确保直接选中的隐藏项自身（如 .yuyan-backups）不会被排除。
+ *
+ * 注：目标机器环境均为 GNU tar / GNU coreutils du。
+ *
+ * @returns {string} 排除参数，格式为排除子路径以点号开头的参数
+ */
+export function buildHiddenExcludeArgs() {
+  return "--exclude='*/.*'";
+}
+
+/**
  * 拼装批量归档 tar 命令（防注入，带有 -- 参数终止符，无静默跳过参数）。
  * @param {Object} params
  * @param {string[]} params.safeRealPaths - 已安全校验的绝对路径列表
@@ -794,6 +810,7 @@ export function buildBatchTarCommand({ safeRealPaths, sudo = '' }) {
     throw new Error('归档路径列表不能为空');
   }
 
+  const excludeArgs = buildHiddenExcludeArgs();
   const firstParent = path.posix.dirname(safeRealPaths[0]);
   const allSameParent = safeRealPaths.every((p) => path.posix.dirname(p) === firstParent);
 
@@ -801,12 +818,13 @@ export function buildBatchTarCommand({ safeRealPaths, sudo = '' }) {
     const entryNames = safeRealPaths.map((p) => path.posix.basename(p));
     const quotedEntries = entryNames.map((n) => shellQuote(n)).join(' ');
     // 关键点：在条目列表前显式加上 -- 终止参数解析，严防以 - 开头的文件名触发 tar 选项注入
-    return `${sudo}tar -czf - -C ${shellQuote(firstParent)} -- ${quotedEntries}`;
+    // --exclude 必须位于 -- 参数终止符之前
+    return `${sudo}tar -czf - ${excludeArgs} -C ${shellQuote(firstParent)} -- ${quotedEntries}`;
   }
 
   // 跨目录场景：在根目录以相对路径打包，同样加上 --
   const relPaths = safeRealPaths.map((p) => shellQuote(p.replace(/^\//, '')));
-  return `${sudo}tar -czf - -C / -- ${relPaths.join(' ')}`;
+  return `${sudo}tar -czf - ${excludeArgs} -C / -- ${relPaths.join(' ')}`;
 }
 
 /**
@@ -890,4 +908,143 @@ export async function streamRemoteFsBatch(serverId, requestedPaths, outputStream
     return meta;
   });
 }
+
+/** 远程文件系统大小查询超时时间 (10 秒)。 */
+export const FS_SIZE_TIMEOUT_MS = 10_000;
+
+/**
+ * 查询远程文件系统指定路径的磁盘占用预估大小（排除隐藏文件，与 tar 打包排除规则完全一致）。
+ *
+ * @param {number} serverId - 服务器 ID
+ * @param {string|string[]} requestedPaths - 请求查询的远程路径列表
+ * @returns {Promise<{ totalBytes: number, items: Array<{ path: string, bytes: number }>, truncated: boolean }>}
+ */
+export async function calculateRemoteFsSize(serverId, requestedPaths) {
+  // 1. 前置参数校验（不碰数据库，避免无效请求查库或测试环境失败）
+  const rawList = Array.isArray(requestedPaths) ? requestedPaths : [requestedPaths];
+  const paths = Array.from(
+    new Set(
+      rawList
+        .map((p) => String(p || '').trim())
+        .filter(Boolean)
+        .map((p) => normalizePosixPath(p))
+    )
+  );
+
+  if (paths.length === 0) {
+    throw new Error('目标路径列表不能为空');
+  }
+
+  if (paths.length > MAX_FS_DIRECTORY_ENTRIES) {
+    throw new Error(`单次大小查询条目数不能超过 ${MAX_FS_DIRECTORY_ENTRIES} 项`);
+  }
+
+  const numericServerId = Number(serverId);
+  if (!numericServerId) {
+    throw new Error('无效的服务器 ID');
+  }
+
+  const server = await getServerWithCredential(numericServerId);
+  if (!server) throw new Error(`服务器 ID ${serverId} 不存在`);
+
+  const targets = await listTargets();
+  const allowedRoots = resolveServerAllowedRoots(server, targets);
+
+  // 2. 词法级别校验所有路径的作用域白名单
+  for (const itemPath of paths) {
+    assertPathWithinRoots(itemPath, allowedRoots);
+  }
+
+  return withSsh(server, async (conn) => {
+    const sftp = await getSftp(conn);
+
+    // 3. 利用 SFTP realpath 防软链接逃逸并再次去重
+    const safeRealPaths = [];
+    const seenSafe = new Set();
+    for (const itemPath of paths) {
+      const safe = await assertSafeRealpath(sftp, itemPath, allowedRoots);
+      if (!seenSafe.has(safe)) {
+        seenSafe.add(safe);
+        safeRealPaths.push(safe);
+      }
+    }
+
+    const sudo = server.useSudo ? 'sudo -n ' : '';
+    const excludeArgs = buildHiddenExcludeArgs();
+    // 关键：在远端命令中加入 timeout，防止 SSH 通道中断后远端 du 进程继续常驻后台扫盘
+    const timeoutSec = Math.ceil(FS_SIZE_TIMEOUT_MS / 1000);
+    const timeoutCmd = `timeout ${timeoutSec} `;
+
+    // 注：当前远程文件浏览器多选均在同一目录下操作（allSameParent 恒为 true）；
+    // 跨目录 (-C /) 模式下，若选中的相对路径自身带有隐藏目录（如 opt/.hid），会被 */.* 排除。
+    const firstParent = path.posix.dirname(safeRealPaths[0]);
+    const allSameParent = safeRealPaths.every((p) => path.posix.dirname(p) === firstParent);
+
+    let duCommand = '';
+    if (allSameParent) {
+      const entryNames = safeRealPaths.map((p) => path.posix.basename(p));
+      const quotedEntries = entryNames.map((n) => shellQuote(n)).join(' ');
+      duCommand = `cd ${shellQuote(firstParent)} && ${sudo}${timeoutCmd}du -sb ${excludeArgs} -- ${quotedEntries}`;
+    } else {
+      const quotedPaths = safeRealPaths.map((p) => shellQuote(p)).join(' ');
+      duCommand = `${sudo}${timeoutCmd}du -sb ${excludeArgs} -- ${quotedPaths}`;
+    }
+
+    let truncated = false;
+    let stdout = '';
+    let warning = '';
+    let isTimeout = false;
+
+    try {
+      const result = await execSsh(conn, duCommand, {
+        label: `查询路径大小 [${safeRealPaths.length}项]`,
+        timeoutMs: FS_SIZE_TIMEOUT_MS + 2_000,
+        allowFailure: true,
+      });
+
+      stdout = result.stdout || '';
+      // GNU timeout 超时退出码为 124（或 137）
+      if (result.code === 124 || result.code === 137) {
+        isTimeout = true;
+        truncated = true;
+        warning = '查询超时，大小未知';
+      } else if (result.code !== 0) {
+        // 目录中有无权限读取的文件，du 退出码非 0 但依然输出了已统计大小
+        warning = '部分文件无法读取，大小可能偏小';
+      }
+    } catch {
+      // SSH 通道层超时或严重网络异常
+      truncated = true;
+      isTimeout = true;
+      warning = '查询超时，大小未知';
+    }
+
+    const items = [];
+    let totalBytes = 0;
+
+    if (!isTimeout && stdout) {
+      const lines = stdout.split('\n');
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        const match = trimmed.match(/^(\d+)\s+(.+)$/);
+        if (match) {
+          const bytes = Number(match[1]);
+          const rawName = match[2].trim();
+          const fullPath = allSameParent ? path.posix.join(firstParent, rawName) : rawName;
+          items.push({ path: fullPath, bytes });
+          totalBytes += bytes;
+        }
+      }
+    }
+
+    if (!isTimeout && items.length === 0 && warning) {
+      // 完全未能获取任何条目且有错误
+      truncated = true;
+    }
+
+    return { totalBytes, items, truncated, warning };
+  });
+}
+
 

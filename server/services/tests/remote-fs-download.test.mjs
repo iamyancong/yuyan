@@ -6,6 +6,9 @@ import {
   sanitizeFsFileNamePart,
   parseDownloadPaths,
   buildBatchTarCommand,
+  buildHiddenExcludeArgs,
+  calculateRemoteFsSize,
+  FS_SIZE_TIMEOUT_MS,
   createDownloadTicket,
   consumeDownloadTicket,
   isTicketedFsDownloadRequest,
@@ -86,36 +89,49 @@ test('parseDownloadPaths: 对重复路径执行严格去重并过滤空值', () 
   assert.deepEqual(result, ['/var/www/html/index.html', '/var/www/html/style.css']);
 });
 
-test('buildBatchTarCommand: 同一父目录下拼接且包含 -- 参数终止符，抵御选项注入', () => {
-  // 测试以 - 开头的文件名（防止 tar 选项注入漏洞）
+test('buildHiddenExcludeArgs: 导出 GNU tar/du 排除内部隐藏条目的通用参数', () => {
+  const args = buildHiddenExcludeArgs();
+  assert.equal(args, "--exclude='*/.*'");
+});
+
+test('buildBatchTarCommand: 同一父目录下拼接且包含 --exclude 与 -- 参数终止符，抵御选项注入', () => {
+  // 测试以 - 开头的文件名（防止 tar 选项注入漏洞）与隐藏文件
   const maliciousPaths = [
     '/var/www/html/--checkpoint=1',
     '/var/www/html/--checkpoint-action=exec=sh x.sh',
     '/var/www/html/normal.txt',
+    '/var/www/html/.yuyan-backups',
   ];
 
   const cmd = buildBatchTarCommand({ safeRealPaths: maliciousPaths, sudo: 'sudo -n ' });
 
   // 验证带有 sudo 前缀
-  assert.ok(cmd.startsWith('sudo -n tar -czf - -C'));
-  // 验证包含 -- 参数终止符
-  assert.ok(cmd.includes(' -C \'/var/www/html\' -- '));
+  assert.ok(cmd.startsWith('sudo -n tar -czf - '));
+  // 验证包含 --exclude 且在 -- 终止符之前
+  const excludeIdx = cmd.indexOf("--exclude='*/.*'");
+  const dashDashIdx = cmd.indexOf(' -- ');
+  assert.ok(excludeIdx !== -1, '必须包含 --exclude 参数');
+  assert.ok(dashDashIdx !== -1, '必须包含 -- 参数终止符');
+  assert.ok(excludeIdx < dashDashIdx, '--exclude 必须位于 -- 终止符之前');
+  // 验证工作目录正确切换
+  assert.ok(cmd.includes(" -C '/var/www/html' -- "));
   // 验证不包含 --ignore-failed-read
   assert.ok(!cmd.includes('--ignore-failed-read'));
-  // 验证文件名均已安全包裹
+  // 验证文件名均已安全包裹且直接选中的隐藏项保留在参数中
   assert.ok(cmd.includes("'--checkpoint=1'"));
   assert.ok(cmd.includes("'--checkpoint-action=exec=sh x.sh'"));
   assert.ok(cmd.includes("'normal.txt'"));
+  assert.ok(cmd.includes("'.yuyan-backups'"));
 });
 
-test('buildBatchTarCommand: 跨父目录文件时切换为根路径相对打包并保持 -- 防护', () => {
+test('buildBatchTarCommand: 跨父目录文件时切换为根路径相对打包并保持 --exclude 与 -- 防护', () => {
   const crossPaths = [
     '/etc/nginx/nginx.conf',
     '/var/log/nginx/error.log',
   ];
 
   const cmd = buildBatchTarCommand({ safeRealPaths: crossPaths });
-  assert.ok(cmd.startsWith('tar -czf - -C / -- '));
+  assert.ok(cmd.startsWith("tar -czf - --exclude='*/.*' -C / -- "));
   assert.ok(cmd.includes("'etc/nginx/nginx.conf'"));
   assert.ok(cmd.includes("'var/log/nginx/error.log'"));
   assert.ok(!cmd.includes('--ignore-failed-read'));
@@ -209,4 +225,41 @@ test('isTicketedFsDownloadRequest: 严格限制仅对 GET /servers/:id/fs/downlo
     }),
     false
   );
+});
+
+test('calculateRemoteFsSize: 具有 10 秒超时配置并优先执行前置参数校验（不碰数据库）', async () => {
+  assert.equal(FS_SIZE_TIMEOUT_MS, 10_000);
+
+  // 1. 空路径拦截：传入非真实 serverId 也必须先被拦截，绝不碰数据库
+  await assert.rejects(
+    () => calculateRemoteFsSize(9999999, []),
+    /目标路径列表不能为空/
+  );
+
+  // 2. 超过 500 项限制拦截：同样前置拦截，不查库
+  const overflowPaths = Array.from({ length: 501 }, (_, i) => `/var/www/file_${i}.txt`);
+  await assert.rejects(
+    () => calculateRemoteFsSize(9999999, overflowPaths),
+    /单次大小查询条目数不能超过 500 项/
+  );
+
+  // 3. 非法 serverId 校验拦截
+  await assert.rejects(
+    () => calculateRemoteFsSize(NaN, ['/var/www/index.html']),
+    /无效的服务器 ID/
+  );
+});
+
+test('buildBatchTarCommand: 验证跨目录与同目录对直接选中隐藏项的排除特征', () => {
+  // 1. 同一父目录下：-C 切换父目录，传入 basename（无斜杠），*/.* 天然保留直接选中的顶层隐藏项
+  const sameParentWithHidden = ['/var/www/html/.yuyan-backups', '/var/www/html/app'];
+  const cmdSame = buildBatchTarCommand({ safeRealPaths: sameParentWithHidden });
+  assert.ok(cmdSame.includes("-C '/var/www/html' -- "));
+  assert.ok(cmdSame.includes("'.yuyan-backups'"));
+
+  // 2. 跨目录场景下：-C / 模式下相对路径带斜杠（如 var/www/.yuyan-backups），会被 */.* 排除；
+  // 生产环境 RemoteFs 仅允许在单目录内多选（allSameParent 恒为 true）
+  const crossParentWithHidden = ['/var/www/.yuyan-backups', '/etc/nginx/nginx.conf'];
+  const cmdCross = buildBatchTarCommand({ safeRealPaths: crossParentWithHidden });
+  assert.ok(cmdCross.startsWith("tar -czf - --exclude='*/.*' -C / -- "));
 });

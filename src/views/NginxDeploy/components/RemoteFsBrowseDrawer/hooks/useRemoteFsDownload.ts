@@ -131,7 +131,11 @@ export function useRemoteFsDownload() {
   };
 
   /** 显示真实落盘后的常驻成功通知。 */
-  const showNativeSuccess = async (result: NativeFileDownloadResult, serverName?: string) => {
+  const showNativeSuccess = async (
+    result: NativeFileDownloadResult,
+    serverName?: string,
+    isArchiveDownload = false
+  ) => {
     const revealFile = async () => {
       try {
         await invoke('reveal_in_file_manager', { path: result.path });
@@ -149,7 +153,9 @@ export function useRemoteFsDownload() {
         projectName: result.fileName,
         targetName: serverName,
         envName: '已保存',
-        stage: `文件大小：${formatArchiveBytes(result.fileSize)}`,
+        stage: isArchiveDownload
+          ? `文件大小：${formatArchiveBytes(result.fileSize)}（已跳过隐藏文件）`
+          : `文件大小：${formatArchiveBytes(result.fileSize)}`,
         autoDismiss: false,
         actions: [
           { id: 'reveal', text: '打开文件位置', primary: true },
@@ -171,6 +177,9 @@ export function useRemoteFsDownload() {
       description: h('div', null, [
         h('p', { style: 'margin-bottom: 4px; font-weight: 600;' }, result.fileName),
         h('p', { style: 'margin-bottom: 4px;' }, `文件大小：${formatArchiveBytes(result.fileSize)}`),
+        isArchiveDownload
+          ? h('p', { style: 'margin-bottom: 4px; font-size: 11px; opacity: 0.8;' }, '已跳过隐藏文件（如 .yuyan-backups）')
+          : null,
         h('p', { style: 'margin-bottom: 10px; word-break: break-all;' }, `保存位置：${result.path}`),
         h('a', { href: 'javascript:;', class: 'c4d-locate-btn', onClick: revealFile }, '打开文件位置'),
       ]),
@@ -301,7 +310,9 @@ export function useRemoteFsDownload() {
             key: activeNotificationKey,
             class: 'c4d-download-notification',
             message: '下载已完成',
-            description: `已成功保存到本地：${streamResult.fileName}`,
+            description: (isBatch || isDirectory)
+              ? `已成功保存到本地：${streamResult.fileName}（已跳过隐藏文件如 .yuyan-backups）`
+              : `已成功保存到本地：${streamResult.fileName}`,
             duration: 4.5,
             closeIcon: createDownloadNotificationCloseIcon(),
           });
@@ -322,7 +333,9 @@ export function useRemoteFsDownload() {
           key: activeNotificationKey,
           class: 'c4d-download-notification',
           message: '已提交给浏览器下载管理器',
-          description: `${displayName}（${suggestedFileName}）`,
+          description: (isBatch || isDirectory)
+            ? `${displayName}（${suggestedFileName}）· 已跳过隐藏文件`
+            : `${displayName}（${suggestedFileName}）`,
           duration: 3.5,
           closeIcon: createDownloadNotificationCloseIcon(),
         });
@@ -348,7 +361,7 @@ export function useRemoteFsDownload() {
       if (isDownloadCancelled) {
         return;
       }
-      await showNativeSuccess(result, server.name);
+      await showNativeSuccess(result, server.name, isBatch || isDirectory);
     } catch (error: unknown) {
       if (localWritable) {
         try {

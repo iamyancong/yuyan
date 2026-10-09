@@ -119,6 +119,7 @@ import {
   resolveServerAllowedRoots,
   assertPathWithinRoots,
   DOWNLOAD_TICKET_TTL_MS,
+  calculateRemoteFsSize,
 } from '../services/remote-fs-service.mjs';
 
 /** GitHub 托管仓库名（主库或 Fork 库） */
@@ -2351,6 +2352,37 @@ export async function handleCreateServerFsDownloadTicket(req, res) {
     res.json({
       success: true,
       data: { ticket, expiresIn: DOWNLOAD_TICKET_TTL_MS / 1000, count: targetPaths.length },
+    });
+  } catch (error) {
+    sendError(res, error, Number(error?.status || 400));
+  }
+}
+
+/**
+ * 查询远程文件系统指定路径的磁盘占用预估大小（排除隐藏文件后的解压/压缩前体积）。
+ * POST /servers/:id/fs/size
+ * Body: { paths: string[] }
+ */
+export async function handleGetServerFsSize(req, res) {
+  try {
+    const serverId = Number(req.params.id);
+    if (!serverId) {
+      throw Object.assign(new Error('无效的服务器 ID'), { status: 400 });
+    }
+
+    const targetPaths = parseDownloadPaths({
+      paths: req.body?.paths,
+      path: req.body?.path,
+    });
+
+    if (targetPaths.length === 0) {
+      throw Object.assign(new Error('缺少查询大小的目标路径'), { status: 400 });
+    }
+
+    const data = await calculateRemoteFsSize(serverId, targetPaths);
+    res.json({
+      success: true,
+      data,
     });
   } catch (error) {
     sendError(res, error, Number(error?.status || 400));

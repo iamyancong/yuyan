@@ -208,6 +208,34 @@
         opacity: 0.85;
       }
 
+      .pill-size {
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--primary-color);
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+
+        &--loading {
+          color: var(--primary-color);
+          opacity: 0.85;
+
+          .size-spin-icon {
+            font-size: 10px;
+          }
+        }
+
+        &--warn {
+          color: #faad14;
+        }
+
+        &--unknown {
+          color: var(--text-color-secondary);
+          opacity: 0.85;
+          cursor: help;
+        }
+      }
+
       &:hover {
         background: color-mix(in srgb, var(--primary-color) 22%, transparent);
         border-color: var(--primary-color);
