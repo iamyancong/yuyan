@@ -5,6 +5,7 @@ import {
   buildArchiveTarCommand,
   buildExternalArchivePrecheckCommand,
   buildExternalArchiveTarCommand,
+  buildNginxDumpConfigCommand,
   buildSelectedArchiveTarCommand,
   checkNginxOverwriteSafety,
   computeConfigBodySha256,
@@ -37,12 +38,19 @@ test('完整运行包排除部署备份、发布清单和 Nginx 运行态目录'
 });
 
 test('仅前端静态产物也排除部署备份和发布清单', () => {
+  // 1. 默认排除隐藏文件且开启 sudo 时，脚本使用 sudo -n sh -c 封装并包含排除清单生成与精准锚定
   const command = buildArchiveTarCommand(createConfig({ useSudo: true }), 'opt/yuyan/html', 'html');
-
-  assert.match(command, /^sudo -n tar -czf - -C \//);
-  assert.equal(command.includes("--exclude='*/.yuyan-backups'"), true);
-  assert.equal(command.includes("--exclude='*/.yuyan-manifests'"), true);
+  assert.match(command, /^sudo -n sh -c /);
+  assert.match(command, /tar -czf - -C \/ --anchored -X "\$YUYAN_EXCLUDE" --no-anchored/);
+  assert.equal(command.includes('opt/yuyan/html'), true);
   assert.equal(command.includes('nginx/logs'), false);
+
+  // 2. 显式开启 includeHidden 后回退为直接 sudo -n tar，行为与旧版保持一致
+  const legacyCommand = buildArchiveTarCommand(createConfig({ useSudo: true }), 'opt/yuyan/html', 'html', { includeHidden: true });
+  assert.match(legacyCommand, /^sudo -n tar -czf - -C \//);
+  assert.equal(legacyCommand.includes("--exclude='*/.yuyan-backups'"), true);
+  assert.equal(legacyCommand.includes("--exclude='*/.yuyan-manifests'"), true);
+  assert.equal(legacyCommand.includes('nginx/logs'), false);
 });
 
 /** 两个 server 的主配置测试样本。 */
@@ -283,6 +291,63 @@ server {
   assert.equal(legacyMatchCheck.canAutoOverwrite, true);
   assert.equal(legacyMatchCheck.status, 'legacy_clean_match');
 });
+
+test('buildNginxDumpConfigCommand 正确组装托管实例与已有外部实例的 nginx -T 命令', () => {
+  // 1. 托管实例，使用 sudo
+  const managedWithSudo = buildNginxDumpConfigCommand(
+    { instanceType: 'managed' },
+    {
+      useSudo: true,
+      nginxPath: '/opt/yuyan/nginx/sbin/nginx',
+      installRoot: '/opt/yuyan/nginx',
+      mainConfPath: '/opt/yuyan/nginx/conf/nginx.conf',
+    }
+  );
+  assert.equal(
+    managedWithSudo,
+    "sudo -n '/opt/yuyan/nginx/sbin/nginx' -p '/opt/yuyan/nginx/' -c '/opt/yuyan/nginx/conf/nginx.conf' -T"
+  );
+
+  // 2. 托管实例，无 sudo
+  const managedWithoutSudo = buildNginxDumpConfigCommand(
+    { instanceType: 'managed' },
+    {
+      useSudo: false,
+      nginxPath: '/opt/yuyan/nginx/sbin/nginx',
+      installRoot: '/opt/yuyan/nginx',
+      mainConfPath: '/opt/yuyan/nginx/conf/nginx.conf',
+    }
+  );
+  assert.equal(
+    managedWithoutSudo,
+    "'/opt/yuyan/nginx/sbin/nginx' -p '/opt/yuyan/nginx/' -c '/opt/yuyan/nginx/conf/nginx.conf' -T"
+  );
+
+  // 3. 已有外部实例，自定义 test 命令带 -t
+  const externalWithTest = buildNginxDumpConfigCommand(
+    {
+      instanceType: 'external',
+      nginxTestCommand: 'openresty -t',
+      nginxWorkDir: '/etc/nginx',
+    },
+    {
+      useSudo: true,
+      mainConfPath: '/etc/nginx/nginx.conf',
+    }
+  );
+  assert.equal(externalWithTest, "cd '/etc/nginx' && sudo -n openresty -T -c '/etc/nginx/nginx.conf'");
+
+  // 4. 已有外部实例，未设置 test 命令，默认 nginx -T -c
+  const externalDefault = buildNginxDumpConfigCommand(
+    { instanceType: 'external' },
+    {
+      useSudo: false,
+      mainConfPath: '/etc/nginx/nginx.conf',
+    }
+  );
+  assert.equal(externalDefault, "nginx -T -c '/etc/nginx/nginx.conf'");
+});
+
 
 
 

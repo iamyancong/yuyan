@@ -781,7 +781,8 @@ export async function handleDownloadNginxInstanceArchive(req, res) {
     const type = req.query.type || 'all';
     const siteIds = String(req.query.siteIds || '').split(',').map((value) => value.trim()).filter(Boolean);
     const revision = String(req.query.revision || '').trim();
-    await streamNginxInstanceArchive(Number(req.params.id), type, res, ({ fileName, baseRoot, scriptPath }) => {
+    const includeHidden = req.query.includeHidden === 'true';
+    await streamNginxInstanceArchive(Number(req.params.id), type, res, ({ fileName, baseRoot, scriptPath, whitelistCount }) => {
       res.status(200);
       const contentType = type === 'conf' ? 'text/plain; charset=utf-8' : 'application/octet-stream';
       res.setHeader('Content-Type', contentType);
@@ -792,8 +793,11 @@ export async function handleDownloadNginxInstanceArchive(req, res) {
       res.setHeader('X-Accel-Buffering', 'no');
       res.setHeader('X-Nginx-Base-Root', encodeURIComponent(baseRoot || ''));
       res.setHeader('X-Nginx-Script-Path', encodeURIComponent(scriptPath || ''));
+      if (typeof whitelistCount === 'number') {
+        res.setHeader('X-Nginx-Archive-Whitelist-Count', String(whitelistCount));
+      }
       res.flushHeaders?.();
-    }, { siteIds, revision });
+    }, { siteIds, revision, includeHidden });
     if (!res.writableEnded) res.end();
   } catch (error) {
     if (res.headersSent) {
@@ -819,7 +823,7 @@ export async function handleListNginxInstanceArchiveSites(req, res) {
  * 另存为直写：导出托管 Nginx 实例运行包并保存到指定绝对物理路径，实时输出 SSE 进度。
  */
 export async function handleSaveNginxInstanceArchive(req, res) {
-  const { filePath, type } = req.body;
+  const { filePath, type, includeHidden } = req.body;
   if (!filePath) {
     return sendError(res, new Error('缺少保存文件路径'), 400);
   }
@@ -856,7 +860,9 @@ export async function handleSaveNginxInstanceArchive(req, res) {
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     writeArchiveEvent({ stage: 'preparing', message: '正在创建本地保存目录' });
 
-    const meta = await saveNginxInstanceArchiveToPath(Number(req.params.id), type || 'all', filePath, writeArchiveEvent, () => isAborted);
+    const meta = await saveNginxInstanceArchiveToPath(Number(req.params.id), type || 'all', filePath, writeArchiveEvent, () => isAborted, {
+      includeHidden: Boolean(includeHidden),
+    });
     
     if (!isAborted) {
       writeArchiveEvent({

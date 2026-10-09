@@ -41,6 +41,7 @@ import {
   minimizeArchiveRoots,
   parseNginxArchiveSites,
   resolveNginxArchiveSelection,
+  resolveNginxArchiveWhitelist,
 } from './nginx-archive-selection.mjs';
 
 /** 托管运行时支持的系统 */
@@ -230,21 +231,125 @@ function buildArchiveExcludeArgs(patterns) {
 }
 
 /**
+ * 构建带点文件排除机制与白名单放行的归档脚本。
+ *
+ * @param {Object} params
+ * @param {Object} params.config - 运行时配置
+ * @param {string[]} params.roots - 需要执行 find 扫描的绝对根目录列表
+ * @param {string[]} params.archivePaths - 传递给 tar 的相对路径列表
+ * @param {string[]} params.excludePatterns - 现有的静态排除模式列表
+ * @param {string[]} [params.whitelist] - 白名单绝对路径列表
+ * @param {boolean} [params.includeHidden] - 是否包含隐藏文件（默认 false）
+ * @param {Object} [params.tempConf] - 临时配置文件信息
+ * @returns {string} 远程可执行命令字符串
+ */
+export function buildArchiveExcludeTarScript({
+  config,
+  roots = [],
+  archivePaths = [],
+  excludePatterns = [],
+  whitelist = [],
+  includeHidden = false,
+  tempConf = null,
+}) {
+  const sudo = config?.useSudo ? 'sudo -n ' : '';
+  const tarPaths = archivePaths.map(shellQuote).join(' ');
+  const excludeArgs = buildArchiveExcludeArgs(excludePatterns);
+  const transformArg = tempConf ? ` --transform=${shellQuote(tempConf.transform)}` : '';
+  const extraTargets = tempConf ? ` ${shellQuote(tempConf.tempArchivePath)}` : '';
+
+  // 1. 如果显式开启包含隐藏文件，回到原有行为，仅排除部署元数据
+  if (includeHidden) {
+    if (tempConf) {
+      return [
+        `YUYAN_SELECTED_CONF=${shellQuote(tempConf.tempFilePath)}`,
+        'trap \'rm -f "$YUYAN_SELECTED_CONF"\' EXIT',
+        `printf %s ${shellQuote(tempConf.encodedConfig)} | base64 -d > "$YUYAN_SELECTED_CONF"`,
+        `${sudo}tar -czf - -C / ${excludeArgs}${transformArg} ${tarPaths}${extraTargets}`,
+      ].join(' && ');
+    }
+    return `${sudo}tar -czf - -C / ${excludeArgs} ${tarPaths}`;
+  }
+
+  // 2. 默认模式：按根目录查找点文件，剔除白名单与 .well-known，并通过 tar -X 精准排除
+  const searchRoots = minimizeArchiveRoots(roots);
+  const quotedRoots = searchRoots.map(shellQuote).join(' ');
+
+  const cleanWhitelist = [...new Set((whitelist || []).map((p) => String(p || '').trim()).filter(Boolean))];
+  const encodedKeep = Buffer.from(cleanWhitelist.join('\n'), 'utf8').toString('base64');
+
+  const cleanupTargets = ['"$YUYAN_KEEP"', '"$YUYAN_EXCLUDE"'];
+  if (tempConf) {
+    cleanupTargets.push('"$YUYAN_SELECTED_CONF"');
+  }
+
+  const scriptParts = [
+    'YUYAN_KEEP=$(mktemp)',
+    'YUYAN_EXCLUDE=$(mktemp)',
+    `trap 'rm -f ${cleanupTargets.join(' ')}' EXIT`,
+  ];
+
+  if (tempConf) {
+    scriptParts.push(
+      `YUYAN_SELECTED_CONF=${shellQuote(tempConf.tempFilePath)}`,
+      `printf %s ${shellQuote(tempConf.encodedConfig)} | base64 -d > "$YUYAN_SELECTED_CONF"`
+    );
+  }
+
+  if (cleanWhitelist.length > 0) {
+    scriptParts.push(`printf %s ${shellQuote(encodedKeep)} | base64 -d > "$YUYAN_KEEP"`);
+  } else {
+    scriptParts.push(': > "$YUYAN_KEEP"');
+  }
+
+  if (quotedRoots) {
+    scriptParts.push(
+      `find ${quotedRoots} -mindepth 1 -name '.*' ! -name '.well-known' -prune -print \\` +
+      '\n  | { grep -Fvx -f "$YUYAN_KEEP" || true; } \\' +
+      '\n  | sed -e "s#^/##" -e "s#[\\*?\\[]#\\\\&#g" > "$YUYAN_EXCLUDE"'
+    );
+  } else {
+    scriptParts.push(': > "$YUYAN_EXCLUDE"');
+  }
+
+  scriptParts.push(
+    `tar -czf - -C / --anchored -X "$YUYAN_EXCLUDE" --no-anchored ${excludeArgs}${transformArg} ${tarPaths}${extraTargets}`
+  );
+
+  const innerScript = scriptParts.join(' && \\\n');
+  if (config?.useSudo) {
+    return `sudo -n sh -c ${shellQuote(innerScript)}`;
+  }
+  return innerScript;
+}
+
+/**
  * 构建运行包 tar 流式导出命令。
  * @param {Object} config - 运行时配置
  * @param {string} archiveRoot - tar 内相对根路径
  * @param {string} type - 下载类型 ('all' | 'html')
+ * @param {Object} [options] - 排除与白名单选项
  * @returns {string} tar 命令
  */
-export function buildArchiveTarCommand(config, archiveRoot, type = 'all') {
-  const sudo = config.useSudo ? 'sudo -n ' : '';
+export function buildArchiveTarCommand(config, archiveRoot, type = 'all', options = {}) {
   const excludePatterns = [...ARCHIVE_EXCLUDE_PATTERNS];
   if (type === 'all') {
     excludePatterns.push(
       ...ARCHIVE_EXCLUDE_DIRS.flatMap((dir) => [`${archiveRoot}/nginx/${dir}`, `${archiveRoot}/nginx/${dir}/*`])
     );
   }
-  return `${sudo}tar -czf - -C / ${buildArchiveExcludeArgs(excludePatterns)} ${shellQuote(archiveRoot)}`;
+  const rootDir = type === 'html'
+    ? (config.webRoot || path.posix.join('/', archiveRoot))
+    : (config.baseRoot || config.installRoot || path.posix.join('/', archiveRoot));
+
+  return buildArchiveExcludeTarScript({
+    config,
+    roots: [rootDir],
+    archivePaths: [archiveRoot],
+    excludePatterns,
+    whitelist: options.whitelist || [],
+    includeHidden: Boolean(options.includeHidden),
+  });
 }
 
 /**
@@ -284,10 +389,10 @@ function buildSelectedArchivePrecheckCommand(config, type, roots) {
  * @param {string[]} roots - 所选站点根目录
  * @param {'all'|'html'} type - 下载类型
  * @param {string} filteredConfig - 裁剪后的 nginx.conf
+ * @param {Object} [options] - 排除与白名单选项
  * @returns {string} tar 流命令
  */
-export function buildSelectedArchiveTarCommand(config, roots, type, filteredConfig = '') {
-  const sudo = config.useSudo ? 'sudo -n ' : '';
+export function buildSelectedArchiveTarCommand(config, roots, type, filteredConfig = '', options = {}) {
   const selectedRoots = minimizeArchiveRoots(roots);
   const archiveRoots = type === 'all'
     ? minimizeArchiveRoots([config.installRoot, ...selectedRoots])
@@ -301,9 +406,16 @@ export function buildSelectedArchiveTarCommand(config, roots, type, filteredConf
       resolveArchiveRoot(config.mainConfPath)
     );
   }
-  const tarPaths = archivePaths.map(shellQuote).join(' ');
+
   if (type === 'html') {
-    return `${sudo}tar -czf - -C / ${buildArchiveExcludeArgs(excludePatterns)} ${tarPaths}`;
+    return buildArchiveExcludeTarScript({
+      config,
+      roots: selectedRoots,
+      archivePaths,
+      excludePatterns,
+      whitelist: options.whitelist || [],
+      includeHidden: Boolean(options.includeHidden),
+    });
   }
 
   const configHash = crypto.createHash('sha256').update(filteredConfig).digest('hex').slice(0, 12);
@@ -313,12 +425,16 @@ export function buildSelectedArchiveTarCommand(config, roots, type, filteredConf
   const destinationArchivePath = resolveArchiveRoot(config.mainConfPath);
   const encodedConfig = Buffer.from(filteredConfig, 'utf8').toString('base64');
   const transform = `s|^${tempArchivePath}$|${destinationArchivePath}|`;
-  return [
-    `YUYAN_SELECTED_CONF=${shellQuote(tempFilePath)}`,
-    'trap \'rm -f "$YUYAN_SELECTED_CONF"\' EXIT',
-    `printf %s ${shellQuote(encodedConfig)} | base64 -d > "$YUYAN_SELECTED_CONF"`,
-    `${sudo}tar -czf - -C / ${buildArchiveExcludeArgs(excludePatterns)} --transform=${shellQuote(transform)} ${tarPaths} ${shellQuote(tempArchivePath)}`,
-  ].join(' && ');
+
+  return buildArchiveExcludeTarScript({
+    config,
+    roots: archiveRoots,
+    archivePaths,
+    excludePatterns,
+    whitelist: options.whitelist || [],
+    includeHidden: Boolean(options.includeHidden),
+    tempConf: { tempFilePath, tempArchivePath, encodedConfig, transform },
+  });
 }
 
 /**
@@ -359,10 +475,10 @@ export function buildExternalArchivePrecheckCommand(config, type = 'all', roots 
  * @param {string[]} roots - 所选站点根目录
  * @param {'all'|'html'} type - 下载类型
  * @param {string} filteredConfig - 裁剪后的 nginx 配置
+ * @param {Object} [options] - 排除与白名单选项
  * @returns {string} tar 命令
  */
-export function buildExternalArchiveTarCommand(config, roots = [], type = 'all', filteredConfig = '') {
-  const sudo = config.useSudo ? 'sudo -n ' : '';
+export function buildExternalArchiveTarCommand(config, roots = [], type = 'all', filteredConfig = '', options = {}) {
   const selectedRoots = minimizeArchiveRoots(roots);
   const excludePatterns = [...ARCHIVE_EXCLUDE_PATTERNS];
 
@@ -371,8 +487,14 @@ export function buildExternalArchiveTarCommand(config, roots = [], type = 'all',
       throw new Error('所选 server 未配置 root，无法导出静态产物');
     }
     const archivePaths = selectedRoots.map(resolveArchiveRoot);
-    const tarPaths = archivePaths.map(shellQuote).join(' ');
-    return `${sudo}tar -czf - -C / ${buildArchiveExcludeArgs(excludePatterns)} ${tarPaths}`;
+    return buildArchiveExcludeTarScript({
+      config,
+      roots: selectedRoots,
+      archivePaths,
+      excludePatterns,
+      whitelist: options.whitelist || [],
+      includeHidden: Boolean(options.includeHidden),
+    });
   }
 
   // type === 'all'
@@ -386,18 +508,27 @@ export function buildExternalArchiveTarCommand(config, roots = [], type = 'all',
     const destinationArchivePath = resolveArchiveRoot(config.mainConfPath);
     const encodedConfig = Buffer.from(filteredConfig, 'utf8').toString('base64');
     const transform = `s|^${tempArchivePath}$|${destinationArchivePath}|`;
-    const tarTargets = [...archiveRoots.map(shellQuote), shellQuote(tempArchivePath)].join(' ');
-    return [
-      `YUYAN_SELECTED_CONF=${shellQuote(tempFilePath)}`,
-      'trap \'rm -f "$YUYAN_SELECTED_CONF"\' EXIT',
-      `printf %s ${shellQuote(encodedConfig)} | base64 -d > "$YUYAN_SELECTED_CONF"`,
-      `${sudo}tar -czf - -C / ${buildArchiveExcludeArgs(excludePatterns)} --transform=${shellQuote(transform)} ${tarTargets}`,
-    ].join(' && ');
+
+    return buildArchiveExcludeTarScript({
+      config,
+      roots: selectedRoots,
+      archivePaths: archiveRoots,
+      excludePatterns,
+      whitelist: options.whitelist || [],
+      includeHidden: Boolean(options.includeHidden),
+      tempConf: { tempFilePath, tempArchivePath, encodedConfig, transform },
+    });
   }
 
   const allPaths = [resolveArchiveRoot(config.mainConfPath), ...archiveRoots];
-  const tarPaths = allPaths.map(shellQuote).join(' ');
-  return `${sudo}tar -czf - -C / ${buildArchiveExcludeArgs(excludePatterns)} ${tarPaths}`;
+  return buildArchiveExcludeTarScript({
+    config,
+    roots: selectedRoots,
+    archivePaths: allPaths,
+    excludePatterns,
+    whitelist: options.whitelist || [],
+    includeHidden: Boolean(options.includeHidden),
+  });
 }
 
 /**
@@ -1528,6 +1659,67 @@ async function readManagedMainConfig(conn, config) {
 }
 
 /**
+ * 构建用于展开全部 include 配置的 nginx -T 远程命令。
+ * @param {Object} instance - Nginx 实例
+ * @param {Object} config - 运行时配置
+ * @returns {string} 远程命令
+ */
+export function buildNginxDumpConfigCommand(instance, config) {
+  const sudo = config.useSudo ? 'sudo -n ' : '';
+  if (instance?.instanceType === 'managed') {
+    const nginxBin = config.nginxPath || (config.installRoot ? `${config.installRoot}/sbin/nginx` : 'nginx');
+    const prefixArg = config.installRoot ? `-p ${shellQuote(config.installRoot.replace(/\/+$/, '') + '/')} ` : '';
+    return `${sudo}${shellQuote(nginxBin)} ${prefixArg}-c ${shellQuote(config.mainConfPath)} -T`;
+  }
+
+  // 已有外部 Nginx 实例
+  const workDir = String(instance?.nginxWorkDir || '').trim();
+  const cdPrefix = workDir ? `cd ${shellQuote(workDir)} && ` : '';
+  const baseTestCmd = String(instance?.nginxTestCommand || '').trim();
+  let dumpCmd = '';
+  if (baseTestCmd) {
+    dumpCmd = /(^|\s)-t(\s|$)/.test(baseTestCmd)
+      ? baseTestCmd.replace(/(^|\s)-t(\s|$)/, '$1-T$2')
+      : `${baseTestCmd} -T`;
+    if (!/(^|\s)-c(\s|$)/.test(dumpCmd) && config.mainConfPath) {
+      dumpCmd = `${dumpCmd} -c ${shellQuote(config.mainConfPath)}`;
+    }
+  } else {
+    dumpCmd = `nginx -T -c ${shellQuote(config.mainConfPath)}`;
+  }
+  return `${cdPrefix}${sudo}${dumpCmd}`;
+}
+
+/**
+ * 读取完整的 Nginx 配置（优先使用 nginx -T 展开 include，失败时降级读取主配置）。
+ * @param {Object} conn - SSH 连接
+ * @param {Object} instance - Nginx 实例
+ * @param {Object} config - 运行时配置
+ * @param {(msg: string) => void} [onWarning] - 降级警告回调
+ * @returns {Promise<{ content: string, expanded: boolean }>} 配置内容与是否成功展开
+ */
+export async function readEffectiveNginxConfig(conn, instance, config, onWarning) {
+  const dumpCmd = buildNginxDumpConfigCommand(instance, config);
+  try {
+    const result = await execSsh(conn, dumpCmd, {
+      label: '展开 Nginx 完整配置(nginx -T)',
+      allowFailure: true,
+    });
+    if (result.code === 0 && result.stdout && result.stdout.trim()) {
+      return { content: result.stdout, expanded: true };
+    }
+  } catch {
+    // 忽略异常，降级处理
+  }
+
+  const fallbackWarning = 'include 未展开，点文件白名单可能不全';
+  onWarning?.(fallbackWarning);
+  console.warn(`[nginx-archive] ${fallbackWarning}`);
+  const fallbackContent = await readManagedMainConfig(conn, config).catch(() => '');
+  return { content: fallbackContent, expanded: false };
+}
+
+/**
  * 获取 Nginx 实例可选的 server 块（支持托管与已有实例）。
  * @param {number} instanceId - Nginx 实例 ID
  * @returns {Promise<Object>} 配置版本与站点列表
@@ -1614,11 +1806,37 @@ export async function streamNginxInstanceArchive(instanceId, type = 'all', outpu
       }
     }
 
+    let whitelist = [];
+    const includeHidden = Boolean(selection.includeHidden);
+    if (type !== 'conf' && !includeHidden) {
+      const { content: effectiveContent, expanded } = await readEffectiveNginxConfig(
+        conn,
+        instance,
+        config,
+        (warning) => {
+          selection.onEvent?.({ stage: 'packing', message: warning });
+        }
+      );
+      const confToParse = expanded ? effectiveContent : (selected?.filteredConfig || effectiveContent);
+      if (confToParse) {
+        whitelist = resolveNginxArchiveWhitelist(confToParse, {
+          prefix: config.installRoot || path.dirname(config.mainConfPath),
+          confDir: path.dirname(config.mainConfPath),
+        });
+      }
+      const whitelistMsg = whitelist.length > 0
+        ? `已放行 ${whitelist.length} 个点文件与配置引用`
+        : '已排除隐藏文件（无点文件引用）';
+      selection.onEvent?.({ stage: 'packing', message: whitelistMsg });
+      console.log(`[nginx-archive] 导出白名单 (${whitelist.length} 项): ${whitelist.join(', ') || '(无点文件引用)'}`);
+    }
+
     const currentMeta = {
       fileName: buildArchiveFileName(server, instance, type, selected?.sites || []),
       baseRoot: config.baseRoot,
       scriptPath: config.scriptPath,
       revision: selected?.revision || '',
+      whitelistCount: whitelist.length,
     };
     onReady?.(currentMeta);
 
@@ -1634,14 +1852,16 @@ export async function streamNginxInstanceArchive(instanceId, type = 'all', outpu
         label: '导出 Nginx 配置文件',
       });
     } else {
+      const archiveOptions = { whitelist, includeHidden };
+
       let command = '';
       if (isManaged) {
         command = selected
-          ? buildSelectedArchiveTarCommand(config, selected.roots, type, selected.filteredConfig)
-          : buildArchiveTarCommand(config, archiveRoot, type);
+          ? buildSelectedArchiveTarCommand(config, selected.roots, type, selected.filteredConfig, archiveOptions)
+          : buildArchiveTarCommand(config, archiveRoot, type, archiveOptions);
       } else {
         const roots = selected ? selected.roots : (config.webRoot ? [config.webRoot] : []);
-        command = buildExternalArchiveTarCommand(config, roots, type, selected?.filteredConfig || '');
+        command = buildExternalArchiveTarCommand(config, roots, type, selected?.filteredConfig || '', archiveOptions);
       }
       await streamSshCommand(conn, command, archiveStream, {
         label: isManaged ? `导出托管 Nginx 运行包(${type})` : `导出已有 Nginx 配置/站点(${type})`,
@@ -1666,7 +1886,7 @@ export async function streamNginxInstanceArchive(instanceId, type = 'all', outpu
  * @param {() => boolean} isAbortedFn - 外部传递的是否 Abort 判断函数
  * @returns {Promise<Object>} 导出元信息
  */
-export async function saveNginxInstanceArchiveToPath(instanceId, type = 'all', filePath, onEvent, isAbortedFn) {
+export async function saveNginxInstanceArchiveToPath(instanceId, type = 'all', filePath, onEvent, isAbortedFn, options = {}) {
   const emit = (event) => {
     if (!isAbortedFn?.()) onEvent?.(event);
   };
@@ -1762,9 +1982,33 @@ export async function saveNginxInstanceArchiveToPath(instanceId, type = 'all', f
         await runArchiveStream(`${sudo}cat ${shellQuote(config.mainConfPath)}`, '导出 Nginx 配置文件', '正在等待远程配置文件输出');
       } else {
         emit({ stage: 'packing', message: '正在远程打包运行目录并开始传输' });
+        let whitelist = [];
+        const includeHidden = Boolean(options.includeHidden);
+        if (!includeHidden) {
+          emit({ stage: 'packing', message: '正在分析 Nginx 引用文件并构建白名单' });
+          const { content: effectiveContent } = await readEffectiveNginxConfig(
+            conn,
+            instance,
+            config,
+            (warning) => emit({ stage: 'packing', message: warning })
+          );
+          if (effectiveContent) {
+            whitelist = resolveNginxArchiveWhitelist(effectiveContent, {
+              prefix: config.installRoot || path.dirname(config.mainConfPath),
+              confDir: path.dirname(config.mainConfPath),
+            });
+          }
+          const whitelistMsg = whitelist.length > 0
+            ? `已放行 ${whitelist.length} 个点文件与配置引用`
+            : '已排除隐藏文件（无点文件引用）';
+          emit({ stage: 'packing', message: whitelistMsg });
+          console.log(`[nginx-archive] 直存本地白名单 (${whitelist.length} 项): ${whitelist.join(', ') || '(无点文件引用)'}`);
+        }
+        const archiveOptions = { whitelist, includeHidden };
+
         const command = isManaged
-          ? buildArchiveTarCommand(config, archiveRoot, type)
-          : buildExternalArchiveTarCommand(config, config.webRoot ? [config.webRoot] : [], type, '');
+          ? buildArchiveTarCommand(config, archiveRoot, type, archiveOptions)
+          : buildExternalArchiveTarCommand(config, config.webRoot ? [config.webRoot] : [], type, '', archiveOptions);
         await runArchiveStream(
           command,
           isManaged ? `导出托管 Nginx 运行包(${type})` : `导出已有 Nginx 配置/站点(${type})`,

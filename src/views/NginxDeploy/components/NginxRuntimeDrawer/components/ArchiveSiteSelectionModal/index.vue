@@ -1,9 +1,5 @@
 <script setup lang="ts">
-import {
-  DownloadOutlined,
-  FileTextOutlined,
-  ReloadOutlined,
-} from '@ant-design/icons-vue';
+import { DownloadOutlined, FileTextOutlined, ReloadOutlined } from '@ant-design/icons-vue';
 import { YButton } from '@yss-ui/components/lite';
 import ArchiveSiteList from './components/ArchiveSiteList/index.vue';
 import ArchiveTypeSelector from './components/ArchiveTypeSelector/index.vue';
@@ -16,19 +12,13 @@ const props = defineProps<ArchiveSiteSelectionModalProps>();
 const emit = defineEmits<{
   (e: 'update:open', value: boolean): void;
   (e: 'refresh'): void;
-  (e: 'confirm', value: { type: 'all' | 'html' | 'conf'; siteIds: string[] }): void;
+  (e: 'confirm', value: { type: 'all' | 'html' | 'conf'; siteIds: string[]; includeHidden?: boolean }): void;
 }>();
 
 const {
-  canConfirm,
-  clearAll,
-  confirmSelection,
-  selectableSites,
-  selectedArchiveOption,
-  selectedSiteIds,
-  selectedType,
-  selectAll,
-  updateSelectedSiteIds,
+  canConfirm, clearAll, confirmSelection, includeHidden,
+  selectableSites, selectedArchiveOption, selectedSiteIds,
+  selectedType, selectAll, updateSelectedSiteIds,
 } = useArchiveSelection(props, emit);
 </script>
 
@@ -126,10 +116,21 @@ const {
       <div class="archive-selection-footer">
         <div class="archive-selection-summary">
           <span class="archive-selection-summary__text">
-            已选择 <strong>{{ selectedSiteIds.length }}</strong> 个 server · {{ selectedArchiveOption.label }}
+            已选择 <strong>{{ selectedSiteIds.length }}</strong> 个 server · {{ selectedArchiveOption.label }} ·
+            <a-tooltip :title="includeHidden ? '已包含所有隐藏文件与开发构建缓存' : '已排除隐藏文件（保留 .well-known 与配置引用的文件）'">
+              <span class="archive-selection-summary__tag" :class="{ 'is-included': includeHidden }">
+                {{ includeHidden ? '包含隐藏文件' : '已排除隐藏文件' }}
+              </span>
+            </a-tooltip>
           </span>
         </div>
         <div class="archive-selection-footer__actions">
+          <div class="archive-hidden-toggle">
+            <span class="archive-hidden-toggle__label">包含隐藏文件</span>
+            <a-tooltip title="默认排除 .git、.vite、.DS_Store 等文件，保留 .well-known 与配置引用的点文件。特殊场景可开启。">
+              <a-switch v-model:checked="includeHidden" size="small" :disabled="downloading" />
+            </a-tooltip>
+          </div>
           <YButton :disabled="downloading" @click="emit('update:open', false)">取消</YButton>
           <YButton type="primary" :loading="downloading" :disabled="!canConfirm" @click="confirmSelection">
             <template #icon><DownloadOutlined /></template>

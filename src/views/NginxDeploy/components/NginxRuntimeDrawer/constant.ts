@@ -62,7 +62,7 @@ export type NginxRuntimeDrawerEmits = {
   (e: 'downloadArchive', type: 'all' | 'html' | 'conf'): void;
   (e: 'update:archiveSelectionOpen', value: boolean): void;
   (e: 'refreshArchiveSites'): void;
-  (e: 'confirmArchiveDownload', value: { type: NginxArchiveDownloadType; siteIds: string[] }): void;
+  (e: 'confirmArchiveDownload', value: { type: NginxArchiveDownloadType; siteIds: string[]; includeHidden?: boolean }): void;
   (e: 'refresh'): void;
 };
 

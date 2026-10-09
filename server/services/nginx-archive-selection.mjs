@@ -325,3 +325,147 @@ export function resolveNginxArchiveSelection(content, selection = {}) {
     filteredConfig: filterNginxConfigBySiteIds(content, parsed.blocks, ids),
   };
 }
+
+/** 需要提取文件路径参数的 Nginx 指令集合。 */
+const DIRECTIVE_FILE_ARGS = new Set([
+  'auth_basic_user_file',
+  'ssl_certificate',
+  'ssl_certificate_key',
+  'ssl_trusted_certificate',
+  'ssl_client_certificate',
+  'ssl_dhparam',
+  'ssl_password_file',
+  'include',
+  'root',
+  'alias',
+]);
+
+/**
+ * 收集路径中所有以点开头段对应的累计绝对路径。
+ * 例如：'/data/.certs/keys/.auth/pass' ->
+ * ['/data/.certs', '/data/.certs/keys', '/data/.certs/keys/.auth', '/data/.certs/keys/.auth/pass']
+ *
+ * @param {string} absPath - 规范化的绝对路径
+ * @returns {string[]} 涉及的白名单路径列表
+ */
+export function collectDotPathWhitelists(absPath) {
+  if (!absPath || !absPath.startsWith('/')) return [];
+  const parts = absPath.split('/').filter(Boolean);
+  const firstDotIndex = parts.findIndex((p) => p.startsWith('.') && p !== '.well-known');
+  if (firstDotIndex === -1) return [];
+
+  const results = [];
+  let current = '';
+  for (let i = 0; i < parts.length; i += 1) {
+    current += `/${parts[i]}`;
+    if (i >= firstDotIndex) {
+      results.push(current);
+    }
+  }
+  return results;
+}
+
+/**
+ * 解析 Nginx 配置内容中引用的关键路径，并提取包含隐藏段（以 . 开头）的文件或目录白名单。
+ *
+ * @param {string} content - Nginx 配置内容
+ * @param {Object} [options] - 路径解析上下文
+ * @param {string} [options.prefix] - Nginx 安装根目录或工作前缀
+ * @param {string} [options.confDir] - 配置文件所在目录
+ * @returns {string[]} 需要放行的绝对路径白名单列表
+ */
+export function resolveNginxArchiveWhitelist(content, options = {}) {
+  const source = String(content || '').trim();
+  if (!source) return [];
+
+  const prefix = options.prefix ? path.posix.normalize(String(options.prefix).trim().replace(/\\/g, '/')).replace(/\/+$/, '') : '';
+  const confDir = options.confDir ? path.posix.normalize(String(options.confDir).trim().replace(/\\/g, '/')).replace(/\/+$/, '') : '';
+
+  // 从 nginx -T 输出中提取所有包含的子配置文件路径与其所在目录
+  const includeConfDirs = new Set();
+  const fileHeaderRegex = /^#\s*configuration file\s+([^:]+):/gm;
+  let fileMatch;
+  while ((fileMatch = fileHeaderRegex.exec(source)) !== null) {
+    const includedFile = fileMatch[1].trim();
+    if (includedFile) {
+      includeConfDirs.add(path.posix.dirname(path.posix.normalize(includedFile.replace(/\\/g, '/'))));
+    }
+  }
+
+  const tokens = tokenizeNginxConfig(source);
+  const rawPaths = [];
+  let statement = [];
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token.type === 'brace-open' || token.type === 'brace-close') {
+      statement = [];
+      continue;
+    }
+    if (token.type !== 'semicolon') {
+      if (token.type === 'word') statement.push(token.value);
+      continue;
+    }
+
+    const directive = String(statement[0] || '').toLowerCase();
+    const args = statement.slice(1);
+    statement = [];
+
+    if (!directive || args.length === 0) continue;
+
+    if (DIRECTIVE_FILE_ARGS.has(directive)) {
+      const candidate = String(args[0] || '').trim();
+      if (candidate) rawPaths.push(candidate);
+    } else if (directive === 'error_page') {
+      // 格式：error_page 404 /404.html; 或 error_page 500 = /err.html;
+      const candidate = String(args[args.length - 1] || '').trim();
+      if (candidate && !/^\d+$/.test(candidate) && !candidate.startsWith('=')) {
+        rawPaths.push(candidate);
+      }
+    } else if (directive === 'try_files') {
+      // 格式：try_files $uri $uri/ /index.html =404;
+      for (const arg of args) {
+        const candidate = String(arg || '').trim();
+        if (candidate.startsWith('/') && !candidate.startsWith('=')) {
+          rawPaths.push(candidate);
+        }
+      }
+    }
+  }
+
+  const whitelist = new Set();
+
+  for (const raw of rawPaths) {
+    // 忽略变量插值与网络协议地址
+    if (!raw || raw.startsWith('$') || /^https?:\/\//i.test(raw)) continue;
+
+    // 清洗首尾引号
+    const cleaned = raw.replace(/^['"]|['"]$/g, '');
+
+    // 解析绝对路径
+    const candidates = [];
+    if (cleaned.startsWith('/')) {
+      candidates.push(cleaned);
+    } else {
+      if (confDir) candidates.push(path.posix.resolve(confDir, cleaned));
+      if (prefix && prefix !== confDir) candidates.push(path.posix.resolve(prefix, cleaned));
+      for (const incDir of includeConfDirs) {
+        if (incDir !== confDir && incDir !== prefix) {
+          candidates.push(path.posix.resolve(incDir, cleaned));
+        }
+      }
+      if (!confDir && !prefix && includeConfDirs.size === 0) candidates.push(path.posix.resolve('/', cleaned));
+    }
+
+    for (const cand of candidates) {
+      const normalized = path.posix.normalize(cand).replace(/\/+$/, '') || '/';
+      const dotPaths = collectDotPathWhitelists(normalized);
+      for (const item of dotPaths) {
+        whitelist.add(item);
+      }
+    }
+  }
+
+  return [...whitelist].sort();
+}
+
