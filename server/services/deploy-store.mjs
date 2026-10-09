@@ -2029,7 +2029,7 @@ export async function getDeployDb() {
 
 /**
  * 迁移历史数据：已有 Nginx 实例上的部署目标关闭托管开关，保留访问链接。
- * @param {import('better-sqlite3').Database} dbInstance - 数据库实例
+ * @param {DatabaseSync} dbInstance - 数据库实例
  */
 function migrateExternalNginxSiteManagedTargets(dbInstance) {
   try {
