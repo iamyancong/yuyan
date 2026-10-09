@@ -1635,6 +1635,12 @@ export async function getNextNginxInstancePort(instanceId, excludeTargetId = 0) 
 export async function syncTargetNginxSite(targetId, options = {}) {
   const force = Boolean(options.force);
   const expectedSha256 = options.expectedSha256 ? String(options.expectedSha256).toLowerCase() : null;
+  if (force && !expectedSha256) {
+    const badRequestError = new Error('强制覆盖站点配置必须提供 expectedSha256 哈希校验值');
+    badRequestError.statusCode = 400;
+    badRequestError.code = 'INVALID_ARGUMENT';
+    throw badRequestError;
+  }
   const target = await getTarget(targetId);
   if (!target) throw new Error('部署目标不存在');
   if (!target.nginxSiteManaged) throw new Error('当前部署目标未启用托管 Nginx 站点');
@@ -1680,13 +1686,23 @@ export async function syncTargetNginxSite(targetId, options = {}) {
     }
     const generatedBody = renderSiteConfigBody(target);
     const siteConfig = attachManagedHeader(generatedBody, target.id);
-    const existingResult = await execSsh(conn, `[ -f ${shellQuote(sitePath)} ]`, {
+    const existingResult = await execSsh(conn, `${sudo}test -f ${shellQuote(sitePath)}`, {
       label: '检查站点配置是否存在',
       allowFailure: true,
     });
-    let existingContent = '';
+    let fileExists = false;
     if (existingResult.code === 0) {
-      existingContent = await readRemoteText(conn, effectiveServer, sitePath).catch(() => '');
+      fileExists = true;
+    } else if (existingResult.code === 1) {
+      fileExists = false;
+    } else {
+      const errorMsg = (existingResult.stderr || existingResult.stdout || '').trim() || '未知命令执行错误';
+      throw new Error(`检查配置文件是否存在失败（退出码 ${existingResult.code}）：${errorMsg}`);
+    }
+
+    let existingContent = '';
+    if (fileExists) {
+      existingContent = await readRemoteText(conn, effectiveServer, sitePath);
       const inspection = inspectNginxConfigManagedState(existingContent, target, generatedBody);
       if (!inspection.canAutoOverwrite && !force) {
         const conflictError = new Error(inspection.reason || '配置文件存在手工修改或未被平台接管，需确认覆盖接管');
@@ -1701,7 +1717,7 @@ export async function syncTargetNginxSite(targetId, options = {}) {
         };
         throw conflictError;
       }
-      if (force && expectedSha256) {
+      if (force) {
         const actualSha = computeConfigBodySha256(existingContent);
         if (actualSha !== expectedSha256) {
           const raceError = new Error('远程配置文件在预览后已被修改，请重新对比差异后再接管覆盖');
@@ -1729,12 +1745,12 @@ export async function syncTargetNginxSite(targetId, options = {}) {
         success: true,
         requireDiffConfirm: false,
         path: sitePath,
-        backupPath: existingResult.code === 0 ? backupPath : '',
+        backupPath: fileExists ? backupPath : '',
         testOutput: `${testResult.stdout || ''}${testResult.stderr || ''}`.trim(),
         reloadOutput: `${reloadResult.stdout || ''}${reloadResult.stderr || ''}`.trim(),
       };
     } catch (error) {
-      if (existingResult.code === 0) {
+      if (fileExists) {
         await execSsh(conn, `${sudo}cp ${shellQuote(backupPath)} ${shellQuote(sitePath)}`, {
           label: '恢复站点配置备份',
           allowFailure: true,

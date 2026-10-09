@@ -1,7 +1,5 @@
-import { computed, createVNode, nextTick, reactive, ref, watch, type Ref } from 'vue';
+import { computed, nextTick, reactive, ref, watch, type Ref } from 'vue';
 import message from 'ant-design-vue/es/message';
-import Modal from 'ant-design-vue/es/modal';
-import { ExclamationCircleOutlined } from '@ant-design/icons-vue';
 import {
   createDeployTarget,
   deleteDeployTarget,
@@ -478,6 +476,12 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     const isManagedInstance = Boolean(instance?.instanceType === 'managed');
     const isManagedSite = Boolean(isFrontend && isManagedInstance);
 
+    // 非托管实例强制关闭平台托管开关并同步值
+    if (!isManagedInstance && targetForm.nginxSiteManaged) {
+      targetForm.nginxSiteManaged = false;
+      targetFormRef.value?.setValues?.({ nginxSiteManaged: false });
+    }
+
     // 只有托管实例才显示「平台管理站点」开关，已有实例一律隐藏
     targetFormRef.value?.setFieldState?.('nginxSiteManaged', (state: any) => {
       state.display = isManagedSite ? 'visible' : 'none';
@@ -646,7 +650,6 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     }
     if (!isEditMode && nginxInstance?.instanceType !== 'managed') {
       targetForm.listenPort = 0;
-      targetForm.visitUrl = '';
     }
   };
 
@@ -667,7 +670,6 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     if (!isMainDeployProject(targetForm)) {
       targetForm.nginxSiteManaged = false;
       targetForm.listenPort = 0;
-      targetForm.visitUrl = '';
       syncTargetFormValues();
       return;
     }
@@ -1276,7 +1278,9 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       } catch (error) {
         refreshError = error;
       }
-      const persistedLabel = editing ? '部署目标已更新' : '部署目标已新增';
+      const isManagedTarget = Boolean(payload.projectType !== 'backend' && payload.nginxSiteManaged);
+      const hint = isManagedTarget ? '，点击更新站点配置使其生效' : '';
+      const persistedLabel = editing ? `部署目标已更新${hint}` : `部署目标已新增${hint}`;
       if (refreshError) {
         message.warning(`${persistedLabel}，但列表刷新失败：${getErrorMessage(refreshError)}。请手动刷新查看最新配置`);
       } else {
@@ -1323,6 +1327,45 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     await refreshActiveTab({ force: true });
   };
 
+  // 冲突差异对比弹窗状态
+  const conflictModalOpen = ref(false);
+  const conflictTarget = ref<DeployTarget | null>(null);
+  const conflictData = ref<{
+    path: string;
+    currentContent: string;
+    generatedContent: string;
+    currentSha256: string;
+    reason?: string;
+  } | null>(null);
+  const conflictLoading = ref(false);
+
+  /** 确认通过 Diff 对比弹窗覆盖接管配置 */
+  const handleConfirmConflictOverwrite = async (expectedSha256: string) => {
+    if (!conflictTarget.value) return;
+    conflictLoading.value = true;
+    try {
+      await syncNginxSite(conflictTarget.value.id, {
+        force: true,
+        expectedSha256,
+      });
+      message.success('已安全备份并成功覆盖接管站点配置');
+      conflictModalOpen.value = false;
+      conflictTarget.value = null;
+      conflictData.value = null;
+      await refreshActiveTab({ force: true });
+    } catch (err: any) {
+      const errResp = err?.response?.data;
+      if (errResp?.code === 'NGINX_SITE_CONFLICT' && errResp?.data) {
+        message.warning(errResp.message || '远程配置文件已发生并发改动，已刷新最新差异');
+        conflictData.value = errResp.data;
+      } else {
+        message.error(getErrorMessage(err));
+      }
+    } finally {
+      conflictLoading.value = false;
+    }
+  };
+
   /**
    * 同步托管 Nginx 站点配置。
    * @param target 部署目标
@@ -1337,28 +1380,9 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     } catch (error: any) {
       const responseData = error?.response?.data;
       if (error?.status === 409 || error?.response?.status === 409 || responseData?.code === 'NGINX_SITE_CONFLICT') {
-        const conflictData = responseData?.data || {};
-        Modal.confirm({
-          title: '配置文件存在冲突或手工修改',
-          icon: createVNode(ExclamationCircleOutlined),
-          width: 520,
-          content: `${responseData?.message || '目标配置文件已存在且被手工修改过或属于其他来源'}。平台不会静默覆盖。如需采用平台模板覆盖接管，请确认。平台将在写入前自动创建时间戳备份。`,
-          okText: '覆盖并接管',
-          okType: 'danger',
-          cancelText: '取消',
-          onOk: async () => {
-            try {
-              await syncNginxSite(target.id, {
-                force: true,
-                expectedSha256: conflictData.currentSha256,
-              });
-              message.success('已安全备份并成功覆盖接管站点配置');
-              await refreshActiveTab({ force: true });
-            } catch (err: any) {
-              message.error(getErrorMessage(err));
-            }
-          },
-        });
+        conflictTarget.value = target;
+        conflictData.value = responseData?.data || null;
+        conflictModalOpen.value = true;
         return;
       }
       message.error(getErrorMessage(error));
@@ -1472,6 +1496,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       applyTargetServerDefaults(server, targetForm.projectName, nextInstance);
       void applyManagedNginxDefaults(server, nextInstance);
       syncTargetNginxInstanceFieldState();
+      syncTargetNginxSiteManagedState();
     }
   );
 
@@ -1483,6 +1508,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       const instance = getSelectedNginxInstance(server);
       applyTargetServerDefaults(server, targetForm.projectName, instance);
       void applyManagedNginxDefaults(server, instance);
+      syncTargetNginxSiteManagedState();
     }
   );
 
@@ -1509,7 +1535,10 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
   });
 
   watch(targetNginxInstanceOptions, () => {
-    if (targetModalOpen.value) syncTargetNginxInstanceFieldState();
+    if (targetModalOpen.value) {
+      syncTargetNginxInstanceFieldState();
+      syncTargetNginxSiteManagedState();
+    }
   });
 
   watch(
@@ -1673,6 +1702,11 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     saveTarget,
     deleteTarget,
     syncTargetSite,
+    conflictModalOpen,
+    conflictTarget,
+    conflictData,
+    conflictLoading,
+    handleConfirmConflictOverwrite,
     runTargetServiceAction,
     openTargetServiceLogs,
     refreshTargetServiceLogs,
