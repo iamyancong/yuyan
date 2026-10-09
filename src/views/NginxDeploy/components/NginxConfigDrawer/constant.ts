@@ -40,12 +40,14 @@ export const DIFF_MONACO_OPTIONS = {
   glyphMargin: true,
   diffAlgorithm: 'advanced',
   fontSize: 13,
+  automaticLayout: true,
 } as const;
 
 /** 单栏编辑态默认配置选项 */
 export const DEFAULT_MONACO_OPTIONS = {
   minimap: { enabled: false },
   fontSize: 13,
+  automaticLayout: true,
 } as const;
 
 /**
