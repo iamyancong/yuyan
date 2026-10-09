@@ -9,6 +9,7 @@ defineOptions({ name: 'RemoteFsFooter' });
 interface RemoteFsFooterProps {
   currentPath: string;
   selectedEntry: RemoteFsEntry | null;
+  selectedEntries?: RemoteFsEntry[];
   execPanelVisible: boolean;
   loading: boolean;
 }
@@ -22,12 +23,24 @@ const emit = defineEmits<{
 
 /** 计算最终将使用的目录与按钮文案 */
 const targetChoice = computed(() => {
+  if (props.selectedEntries && props.selectedEntries.length > 1) {
+    const dCount = props.selectedEntries.filter((e) => e.type === 'directory').length;
+    const fCount = props.selectedEntries.filter((e) => e.type === 'file').length;
+    return {
+      isSubDir: false,
+      name: `已选择 ${props.selectedEntries.length} 项`,
+      path: `包含 ${dCount} 目录，${fCount} 文件`,
+      label: '请选择单个目录作为部署路径',
+      disabled: true,
+    };
+  }
   if (props.selectedEntry && props.selectedEntry.type === 'directory') {
     return {
       isSubDir: true,
       name: props.selectedEntry.name,
       path: props.selectedEntry.path,
       label: `使用选中目录: ${props.selectedEntry.name}`,
+      disabled: false,
     };
   }
   return {
@@ -35,6 +48,7 @@ const targetChoice = computed(() => {
     name: '当前目录',
     path: props.currentPath,
     label: '使用当前目录',
+    disabled: false,
   };
 });
 </script>
@@ -72,7 +86,7 @@ const targetChoice = computed(() => {
         type="primary"
         size="small"
         class="confirm-use-btn"
-        :disabled="loading || !targetChoice.path"
+        :disabled="loading || !targetChoice.path || targetChoice.disabled"
         @click="emit('usePath')"
       >
         <template #icon><CheckOutlined /></template>

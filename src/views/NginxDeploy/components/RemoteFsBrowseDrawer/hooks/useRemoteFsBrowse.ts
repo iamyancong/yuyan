@@ -16,6 +16,7 @@ import {
   normalizePosix,
   isPathWithinAnyRoot,
   isSubPathOrEqual,
+  calculateRangeSelection,
   type BreadcrumbSegment,
 } from '../constant';
 
@@ -47,7 +48,14 @@ export function useRemoteFsBrowse(
   const isAtRoot = ref(true);
   const truncated = ref(false);
   const rawEntries = ref<RemoteFsEntry[]>([]);
+  const selectedEntries = ref<RemoteFsEntry[]>([]);
+  const anchorPath = ref<string | null>(null);
   const selectedEntry = ref<RemoteFsEntry | null>(null);
+
+  /** 当前被选中项的路径集合，提供高效高亮命中检测 */
+  const selectedPathSet = computed<Set<string>>(
+    () => new Set(selectedEntries.value.map((e) => e.path || ''))
+  );
 
   /**
    * 表格呈现条目：支持隐藏文件过滤、关键字过滤与多维排序（文件夹始终置顶）
@@ -141,6 +149,7 @@ export function useRemoteFsBrowse(
       sortField.value = field;
       sortAsc.value = true;
     }
+    anchorPath.value = null;
   };
 
   /**
@@ -163,6 +172,8 @@ export function useRemoteFsBrowse(
       truncated.value = res.truncated;
       rawEntries.value = res.entries || [];
       selectedEntry.value = null;
+      selectedEntries.value = [];
+      anchorPath.value = null;
     } catch (error: any) {
       message.error(error?.response?.data?.message || error?.message || '读取远程目录失败');
     } finally {
@@ -230,11 +241,89 @@ export function useRemoteFsBrowse(
   };
 
   /**
-   * 单击表格行：选中高亮
+   * 单击表格行：支持普通单选、Cmd/Ctrl 离散多选与 Shift 范围多选。
    * @param record 行条目
+   * @param event 原生鼠标事件（可选，用于判断键盘组合键）
    */
-  const handleRowClick = (record: RemoteFsEntry) => {
+  const handleRowClick = (record: RemoteFsEntry, event?: MouseEvent) => {
+    // 虚拟父目录 .. 无法加入多选，仅激活常规单选
+    if (record.type === 'parent_dir') {
+      selectedEntries.value = [];
+      anchorPath.value = null;
+      selectedEntry.value = record;
+      return;
+    }
+
+    // 主动清空可能由于 Shift+点击或拖拽意外残留的浏览器原生文本选区
+    if (typeof window !== 'undefined' && window.getSelection) {
+      window.getSelection()?.removeAllRanges();
+    }
+
+    const currentIdx = tableEntries.value.findIndex((e) => e.path === record.path);
+
+    if (event && (event.metaKey || event.ctrlKey)) {
+      // 1. Cmd (macOS) / Ctrl (Windows) 离散多选 / 取消选择
+      const existsIndex = selectedEntries.value.findIndex((e) => e.path === record.path);
+      if (existsIndex >= 0) {
+        selectedEntries.value = selectedEntries.value.filter((e) => e.path !== record.path);
+      } else {
+        selectedEntries.value = [...selectedEntries.value, record];
+      }
+      anchorPath.value = record.path;
+      selectedEntry.value = selectedEntries.value.length === 1 ? selectedEntries.value[0] : null;
+      return;
+    }
+
+    if (event && event.shiftKey) {
+      // 2. Shift 连续范围多选：依据 anchorPath 动态查找当前可见表格行号
+      const anchorIdx = anchorPath.value
+        ? tableEntries.value.findIndex((e) => e.path === anchorPath.value)
+        : -1;
+
+      if (anchorIdx < 0 || currentIdx < 0) {
+        anchorPath.value = record.path;
+        selectedEntries.value = [record];
+      } else {
+        selectedEntries.value = calculateRangeSelection(tableEntries.value, anchorIdx, currentIdx);
+      }
+      selectedEntry.value = selectedEntries.value.length === 1 ? selectedEntries.value[0] : null;
+      return;
+    }
+
+    // 3. 普通左键单击：单选重置
+    selectedEntries.value = [record];
+    anchorPath.value = record.path;
     selectedEntry.value = record;
+  };
+
+  /**
+   * 一键全选当前可见列表（排除虚拟 .. 行）
+   */
+  const selectAllEntries = () => {
+    const valid = tableEntries.value.filter((e) => e.type !== 'parent_dir');
+    selectedEntries.value = valid;
+    selectedEntry.value = valid.length === 1 ? valid[0] : null;
+    anchorPath.value = valid[0]?.path || null;
+  };
+
+  /**
+   * 清空当前所有选中项
+   */
+  const clearSelection = () => {
+    selectedEntries.value = [];
+    selectedEntry.value = null;
+    anchorPath.value = null;
+  };
+
+  /**
+   * 强制同步选中项列表（如右键菜单切流）
+   * @param entries 待设定的条目列表
+   */
+  const setSelectedEntries = (entries: RemoteFsEntry[]) => {
+    const valid = entries.filter((e) => e.type !== 'parent_dir');
+    selectedEntries.value = valid;
+    selectedEntry.value = valid.length === 1 ? valid[0] : null;
+    anchorPath.value = valid[0]?.path || null;
   };
 
   /**
@@ -266,17 +355,51 @@ export function useRemoteFsBrowse(
   };
 
   /**
+   * 批量复制多个路径到剪贴板
+   * @param paths 路径数组
+   */
+  const copyMultiplePaths = async (paths: string[]) => {
+    const text = paths.filter(Boolean).join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      message.success(`已复制 ${paths.length} 项路径`);
+    } catch {
+      message.info(`已复制 ${paths.length} 项路径`);
+    }
+  };
+
+  /**
    * 确认选定部署路径并关闭抽屉
    */
   const useCurrentPath = () => {
-    const pathValue =
-      selectedEntry.value && selectedEntry.value.type === 'directory'
-        ? selectedEntry.value.path
-        : currentPath.value;
+    const target = selectedEntries.value.length === 1 ? selectedEntries.value[0] : selectedEntry.value;
+    const pathValue = target && target.type === 'directory' ? target.path : currentPath.value;
     emit('selectPath', pathValue);
     emit('update:open', false);
     message.success(`已选择路径: ${pathValue}`);
   };
+
+  // 关键：当可见条目变化（如关键字筛选、切换显示隐藏文件、目录切换或排序）时，动态将已选项收敛到当前可见项
+  watch(
+    tableEntries,
+    (visibleList) => {
+      if (selectedEntries.value.length === 0) return;
+      const visiblePathMap = new Map(visibleList.map((e) => [e.path, e]));
+      const nextSelected = selectedEntries.value
+        .map((e) => visiblePathMap.get(e.path))
+        .filter((e): e is RemoteFsEntry => Boolean(e && e.type !== 'parent_dir'));
+
+      if (nextSelected.length !== selectedEntries.value.length) {
+        selectedEntries.value = nextSelected;
+        selectedEntry.value = nextSelected.length === 1 ? nextSelected[0] : null;
+      }
+
+      if (anchorPath.value && !visiblePathMap.has(anchorPath.value)) {
+        anchorPath.value = nextSelected[0]?.path || null;
+      }
+    },
+    { deep: false }
+  );
 
   watch(
     () => props.open,
@@ -287,6 +410,8 @@ export function useRemoteFsBrowse(
       } else {
         rawEntries.value = [];
         selectedEntry.value = null;
+        selectedEntries.value = [];
+        anchorPath.value = null;
         filterKeyword.value = '';
       }
     },
@@ -306,6 +431,8 @@ export function useRemoteFsBrowse(
     truncated,
     tableEntries,
     selectedEntry,
+    selectedEntries,
+    selectedPathSet,
     dirCount,
     fileCount,
     breadcrumbs,
@@ -315,7 +442,11 @@ export function useRemoteFsBrowse(
     drillDown,
     handleRowClick,
     handleRowDblClick,
+    selectAllEntries,
+    clearSelection,
+    setSelectedEntries,
     copyPath,
+    copyMultiplePaths,
     useCurrentPath,
   };
 }

@@ -39,6 +39,7 @@ import {
   handleListServerFsEntries,
   handleReadServerFsContent,
   handleDownloadServerFsEntry,
+  handleCreateServerFsDownloadTicket,
   handleExecServerCommand,
   handleListRecords,
   handleListServers,
@@ -149,6 +150,7 @@ router.get('/servers/:id/fs/roots', handleGetServerFsRoots);
 router.get('/servers/:id/fs/list', handleListServerFsEntries);
 router.get('/servers/:id/fs/read', handleReadServerFsContent);
 router.get('/servers/:id/fs/download', handleDownloadServerFsEntry);
+router.post('/servers/:id/fs/download-ticket', handleCreateServerFsDownloadTicket);
 router.post('/servers/:id/exec', handleExecServerCommand);
 router.get('/servers/:id/nginx-discovery', handleDiscoverServerNginx);
 router.get('/servers/:id/nginx-instances', handleListNginxInstances);

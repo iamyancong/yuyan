@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { getContextMenuItems } from '../components/RemoteFsContextMenu/constant.ts';
-import { buildFsSuggestedFileName, isDownloadCanceledError, parseDownloadFileName } from '../constant.ts';
+import { getContextMenuItems, getBatchContextMenuItems } from '../components/RemoteFsContextMenu/constant.ts';
+import {
+  buildFsSuggestedFileName,
+  buildBatchFsSuggestedFileName,
+  calculateRangeSelection,
+  isDownloadCanceledError,
+  parseDownloadFileName,
+} from '../constant.ts';
 import type { DeployServer, RemoteFsEntry } from '../../../../../api/deploy.ts';
 
 test('getContextMenuItems: 根据条目类型返回正确的右键菜单项', () => {
@@ -111,5 +117,65 @@ test('isDownloadCanceledError: 精准识别主动取消异常、门闩标志与�
   assert.equal(isDownloadCanceledError(new Error('服务器返回了空数据，下载未保存')), false);
   assert.equal(isDownloadCanceledError(null), false);
   assert.equal(isDownloadCanceledError(undefined), false);
+});
+
+
+test('getBatchContextMenuItems: 能够生成规范的批量操作菜单项', () => {
+  assert.deepEqual(getBatchContextMenuItems([]), []);
+
+  const entries: RemoteFsEntry[] = [
+    { name: 'app.js', path: '/var/www/app.js', type: 'file', size: 100, mtime: 123 },
+    { name: 'assets', path: '/var/www/assets', type: 'directory', size: null, mtime: 123 },
+    { name: 'index.html', path: '/var/www/index.html', type: 'file', size: 200, mtime: 123 },
+  ];
+  const items = getBatchContextMenuItems(entries);
+  assert.equal(items.length, 2);
+  assert.equal(items[0].key, 'download');
+  assert.equal(items[0].label, '打包下载到本地 (3 项)');
+  assert.equal(items[1].key, 'copyPath');
+  assert.equal(items[1].label, '复制所有选中路径 (3 项)');
+});
+
+test('buildBatchFsSuggestedFileName: 能够生成包含项数与时间戳的批量压缩包文件名', () => {
+  const fakeServer = {
+    name: '生产主网关 10.0.0.1',
+    host: '10.0.0.1',
+  } as DeployServer;
+
+  const entries = [
+    { name: 'dist', type: 'directory' },
+    { name: 'index.html', type: 'file' },
+    { name: 'favicon.ico', type: 'file' },
+  ];
+  const fileName = buildBatchFsSuggestedFileName(fakeServer, entries);
+  assert.match(fileName, /^生产主网关-10.0.0.1-batch-3items-\d{14}\.tar\.gz$/);
+
+  const fallbackFileName = buildBatchFsSuggestedFileName(null, []);
+  assert.match(fallbackFileName, /^server-batch-\d{14}\.tar\.gz$/);
+});
+
+test('calculateRangeSelection: 能够正确切片并强制排除 parent_dir (..)', () => {
+  const list = [
+    { name: '..', type: 'parent_dir', path: '/var' },
+    { name: 'a.txt', type: 'file', path: '/var/a.txt' },
+    { name: 'b.txt', type: 'file', path: '/var/b.txt' },
+    { name: 'c.txt', type: 'file', path: '/var/c.txt' },
+    { name: 'dir1', type: 'directory', path: '/var/dir1' },
+  ];
+
+  // 1. 从 0 到 3：索引包含 0 (..)，必须被过滤掉
+  const res1 = calculateRangeSelection(list, 0, 3);
+  assert.deepEqual(res1.map((i) => i.name), ['a.txt', 'b.txt', 'c.txt']);
+
+  // 2. 从 3 到 1（反向点击，Anchor 在后）
+  const res2 = calculateRangeSelection(list, 3, 1);
+  assert.deepEqual(res2.map((i) => i.name), ['a.txt', 'b.txt', 'c.txt']);
+
+  // 3. 单行选择（Anchor 等于 target）
+  const res3 = calculateRangeSelection(list, 4, 4);
+  assert.deepEqual(res3.map((i) => i.name), ['dir1']);
+
+  // 4. 空数组边界
+  assert.deepEqual(calculateRangeSelection([], 0, 2), []);
 });
 

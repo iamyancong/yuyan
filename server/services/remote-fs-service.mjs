@@ -4,6 +4,7 @@
  */
 
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { getServerWithCredential, listTargets } from './deploy-store.mjs';
 import { execSsh, getSftp, shellQuote, streamSshCommand, withSsh } from './ssh-service.mjs';
 
@@ -596,7 +597,7 @@ export async function streamRemoteFsEntry(serverId, requestedPath, outputStream,
 
       onReady?.(meta);
 
-      const tarCommand = `${sudo}tar -czf - -C ${shellQuote(parentDir)} ${shellQuote(baseName)}`;
+      const tarCommand = `${sudo}tar -czf - -C ${shellQuote(parentDir)} -- ${shellQuote(baseName)}`;
       await streamSshCommand(conn, tarCommand, outputStream, {
         label: `流式打包目录 [${baseName}]`,
         isAborted: options.isAborted,
@@ -627,6 +628,263 @@ export async function streamRemoteFsEntry(serverId, requestedPath, outputStream,
       label: `流式读取文件 [${baseName}]`,
       isAborted: options.isAborted,
       idleTimeoutMs: 120_000,
+    });
+
+    return meta;
+  });
+}
+
+/**
+ * 下载票据内存缓存映射 (ticketId -> { serverId, paths, createdAt })。
+ * @note 架构设计说明：当前雨燕平台后端为轻量化单进程 Node.js 服务，
+ *       采用内存 Map 结合 120s TTL 与惰性自动清理机制，可完全满足短时间内防 GET URL 超长的安全凭据中转需求。
+ *       若后续演进为多进程集群部署，可将票据存储平滑迁移至 Redis 共享缓存或使用 HMAC 签名的有状态 Token。
+ */
+const downloadTickets = new Map();
+
+/** 票据默认有效时间：120 秒 */
+export const DOWNLOAD_TICKET_TTL_MS = 120_000;
+
+/**
+ * 清理过期下载票据
+ */
+function cleanupExpiredTickets() {
+  const now = Date.now();
+  for (const [ticket, record] of downloadTickets.entries()) {
+    if (now - record.createdAt > DOWNLOAD_TICKET_TTL_MS) {
+      downloadTickets.delete(ticket);
+    }
+  }
+}
+
+/**
+ * 创建单次或多次批量下载票据。
+ * @param {number} serverId - 服务器 ID
+ * @param {string[]} paths - 目标路径列表
+ * @param {Object} [creator] - 创建者身份上下文（供审计使用）
+ * @returns {string} 随机票据 ID
+ */
+export function createDownloadTicket(serverId, paths, creator = {}) {
+  cleanupExpiredTickets();
+  const rawList = Array.isArray(paths) ? paths : [paths];
+  const normalized = Array.from(
+    new Set(
+      rawList
+        .map((p) => String(p || '').trim())
+        .filter(Boolean)
+        .map((p) => normalizePosixPath(p))
+    )
+  );
+
+  if (normalized.length === 0) {
+    throw new Error('下载票据路径不能为空');
+  }
+
+  if (normalized.length > MAX_FS_DIRECTORY_ENTRIES) {
+    const error = new Error(`单次批量下载条目数不能超过 ${MAX_FS_DIRECTORY_ENTRIES} 项`);
+    error.status = 400;
+    throw error;
+  }
+
+  const ticket = crypto.randomBytes(24).toString('hex');
+  downloadTickets.set(ticket, {
+    serverId: Number(serverId),
+    paths: normalized,
+    creator: creator && typeof creator === 'object' ? { ...creator } : {},
+    createdAt: Date.now(),
+  });
+  return ticket;
+}
+
+/**
+ * 消费并校验下载票据（单次有效）。
+ * @param {string} ticket - 票据 ID
+ * @param {number} [expectedServerId] - 期望匹配的服务器 ID
+ * @returns {{ serverId: number, paths: string[], creator: Object }} 关联的下载信息与创建者审计元数据
+ */
+export function consumeDownloadTicket(ticket, expectedServerId) {
+  cleanupExpiredTickets();
+  const trimmed = String(ticket || '').trim();
+  if (!trimmed) {
+    throw new Error('缺少下载票据');
+  }
+
+  const record = downloadTickets.get(trimmed);
+  if (!record) {
+    const error = new Error('下载票据无效或已过期，请重新发起下载');
+    error.status = 404;
+    throw error;
+  }
+
+  downloadTickets.delete(trimmed);
+
+  if (expectedServerId && Number(record.serverId) !== Number(expectedServerId)) {
+    const error = new Error('下载票据与当前服务器不匹配');
+    error.status = 403;
+    throw error;
+  }
+
+  return { serverId: record.serverId, paths: record.paths, creator: record.creator || {} };
+}
+
+/**
+ * 判断是否为持有一次性票据的远程文件系统下载请求。
+ * 仅放行 GET /servers/:id/fs/download 且带 ticket 的请求至控制器严格核销，其余请求一律严格鉴权。
+ * @param {Object} req - Express 请求对象
+ * @returns {boolean} 是否命中带票据的下载请求
+ */
+export function isTicketedFsDownloadRequest(req) {
+  return (
+    req?.method === 'GET' &&
+    /^\/servers\/\d+\/fs\/download$/.test(req?.path || '') &&
+    typeof req?.query?.ticket === 'string' &&
+    req.query.ticket.trim().length > 0
+  );
+}
+
+/**
+ * 解析下载目标路径参数（严格去重，绝不以逗号暴力切分支持文件名自带逗号）。
+ * @param {Object} params
+ * @param {string|string[]} [params.paths] - 批量路径输入
+ * @param {string} [params.path] - 单路径输入
+ * @returns {string[]} 解析并去重后的路径数组
+ */
+export function parseDownloadPaths(params = {}) {
+  const { paths, path: singlePath } = params;
+  let list = [];
+
+  if (paths !== undefined && paths !== null) {
+    if (Array.isArray(paths)) {
+      list = paths;
+    } else {
+      const raw = String(paths).trim();
+      if (raw) {
+        list = [raw];
+      }
+    }
+  } else if (singlePath) {
+    const raw = String(singlePath).trim();
+    if (raw) {
+      list = [raw];
+    }
+  }
+
+  const set = new Set();
+  const result = [];
+  for (const item of list) {
+    const str = String(item || '').trim();
+    if (str && !set.has(str)) {
+      set.add(str);
+      result.push(str);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * 拼装批量归档 tar 命令（防注入，带有 -- 参数终止符，无静默跳过参数）。
+ * @param {Object} params
+ * @param {string[]} params.safeRealPaths - 已安全校验的绝对路径列表
+ * @param {string} [params.sudo=''] - sudo 前缀
+ * @returns {string} 完整的 Shell 执行命令
+ */
+export function buildBatchTarCommand({ safeRealPaths, sudo = '' }) {
+  if (!safeRealPaths || safeRealPaths.length === 0) {
+    throw new Error('归档路径列表不能为空');
+  }
+
+  const firstParent = path.posix.dirname(safeRealPaths[0]);
+  const allSameParent = safeRealPaths.every((p) => path.posix.dirname(p) === firstParent);
+
+  if (allSameParent) {
+    const entryNames = safeRealPaths.map((p) => path.posix.basename(p));
+    const quotedEntries = entryNames.map((n) => shellQuote(n)).join(' ');
+    // 关键点：在条目列表前显式加上 -- 终止参数解析，严防以 - 开头的文件名触发 tar 选项注入
+    return `${sudo}tar -czf - -C ${shellQuote(firstParent)} -- ${quotedEntries}`;
+  }
+
+  // 跨目录场景：在根目录以相对路径打包，同样加上 --
+  const relPaths = safeRealPaths.map((p) => shellQuote(p.replace(/^\//, '')));
+  return `${sudo}tar -czf - -C / -- ${relPaths.join(' ')}`;
+}
+
+/**
+ * 流式批量打包下载服务器多个远程路径（使用 tar.gz 流式归档输出）。
+ * @param {number} serverId - 服务器 ID
+ * @param {string[]} requestedPaths - 请求的远程绝对路径列表
+ * @param {import('node:stream').Writable} outputStream - 输出流
+ * @param {Function} [onReady] - 就绪回调
+ * @param {Object} [options] - 选项
+ * @param {Function} [options.isAborted] - 中断判定函数
+ * @returns {Promise<{fileName: string, isDirectory: boolean, count: number}>} 下载完成元数据
+ */
+export async function streamRemoteFsBatch(serverId, requestedPaths, outputStream, onReady, options = {}) {
+  const server = await getServerWithCredential(Number(serverId));
+  if (!server) throw new Error(`服务器 ID ${serverId} 不存在`);
+
+  const rawList = Array.isArray(requestedPaths) ? requestedPaths : [requestedPaths];
+  // 严格去重与路径格式化
+  const paths = Array.from(
+    new Set(
+      rawList
+        .map((p) => String(p || '').trim())
+        .filter(Boolean)
+        .map((p) => normalizePosixPath(p))
+    )
+  );
+
+  if (paths.length === 0) {
+    throw new Error('批量下载目标路径不能为空');
+  }
+
+  if (paths.length > MAX_FS_DIRECTORY_ENTRIES) {
+    throw new Error(`单次批量下载条目数不能超过 ${MAX_FS_DIRECTORY_ENTRIES} 项`);
+  }
+
+  const targets = await listTargets();
+  const allowedRoots = resolveServerAllowedRoots(server, targets);
+
+  // 1. 词法级别校验所有路径的作用域白名单
+  for (const itemPath of paths) {
+    assertPathWithinRoots(itemPath, allowedRoots);
+  }
+
+  return withSsh(server, async (conn) => {
+    const sftp = await getSftp(conn);
+
+    // 2. 利用 SFTP realpath 防软链接逃逸并再次去重
+    const safeRealPaths = [];
+    const seenSafe = new Set();
+    for (const itemPath of paths) {
+      const safe = await assertSafeRealpath(sftp, itemPath, allowedRoots);
+      if (!seenSafe.has(safe)) {
+        seenSafe.add(safe);
+        safeRealPaths.push(safe);
+      }
+    }
+
+    const sudo = server.useSudo ? 'sudo -n ' : '';
+    const serverPart = sanitizeFsFileNamePart(server.name || server.host, 'server');
+    const timestamp = formatFsDownloadTimestamp();
+    const fileName = `${serverPart}-batch-${timestamp}.tar.gz`;
+
+    const meta = {
+      fileName,
+      isDirectory: true,
+      mimeType: 'application/gzip',
+      count: safeRealPaths.length,
+    };
+
+    onReady?.(meta);
+
+    // 3. 构建带有 -- 参数防注入标记的纯净 tar 命令（不包含 --ignore-failed-read）
+    const tarCommand = buildBatchTarCommand({ safeRealPaths, sudo });
+
+    await streamSshCommand(conn, tarCommand, outputStream, {
+      label: `流式批量打包 [${safeRealPaths.length}项]`,
+      isAborted: options.isAborted,
+      idleTimeoutMs: 180_000,
     });
 
     return meta;
