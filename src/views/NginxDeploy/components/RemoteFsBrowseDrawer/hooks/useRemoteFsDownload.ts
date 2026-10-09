@@ -15,7 +15,7 @@ import { isTauri } from '@/utils/env';
 import { desktopFloatingTask } from '@/utils/desktopFloatingTask';
 import { formatArchiveBytes } from '@/views/NginxDeploy/hooks/useNginxArchiveDownload';
 import { getErrorMessage } from '@/views/NginxDeploy/utils';
-import { buildFsSuggestedFileName } from '../constant';
+import { buildFsSuggestedFileName, isDownloadCanceledError } from '../constant';
 
 /** 创建可访问的下载通知关闭图标。 */
 const createDownloadNotificationCloseIcon = () => h(CloseOutlined, { 'aria-label': '关闭通知' });
@@ -28,9 +28,18 @@ export function useRemoteFsDownload() {
   /** 当前正在下载的目标绝对路径。 */
   const downloadingPath = ref<string | null>(null);
   let activeNotificationKey = '';
+  let activeAbortController: AbortController | null = null;
+  let isDownloadCancelled = false;
+  let acceptsProgress = false;
 
-  /** 请求取消正在进行的原生下载。 */
+  /** 请求取消正在进行的原生下载或浏览器端下载。 */
   const cancelActiveDownload = async () => {
+    isDownloadCancelled = true;
+    acceptsProgress = false;
+    if (activeAbortController) {
+      activeAbortController.abort();
+      activeAbortController = null;
+    }
     try {
       if (isTauri()) {
         await invoke('cancel_file_download');
@@ -51,6 +60,9 @@ export function useRemoteFsDownload() {
     isDirectory: boolean,
     progress: NativeFileDownloadProgress
   ) => {
+    if (isDownloadCancelled || !acceptsProgress) {
+      return;
+    }
     const percent = progress.totalBytes && progress.totalBytes > 0
       ? Math.min(100, Math.floor((progress.loadedBytes / progress.totalBytes) * 100))
       : null;
@@ -171,6 +183,9 @@ export function useRemoteFsDownload() {
 
     downloadingPath.value = entry.path;
     activeNotificationKey = `remote-fs-download-${Date.now()}`;
+    isDownloadCancelled = false;
+    acceptsProgress = true;
+    activeAbortController = !isTauri() ? new AbortController() : null;
 
     if (isTauri()) {
       await desktopFloatingTask.startProgress({
@@ -198,13 +213,23 @@ export function useRemoteFsDownload() {
 
     try {
       if (!isTauri()) {
-        const browserResult = await downloadServerFsEntry(server.id, entry.path, (loadedBytes) => {
-          showProgressNotification(entry.name, isDirectory, {
-            stage: 'writing',
-            loadedBytes,
-            totalBytes: null,
-          });
-        });
+        const browserResult = await downloadServerFsEntry(
+          server.id,
+          entry.path,
+          (loadedBytes) => {
+            if (isDownloadCancelled || !acceptsProgress) return;
+            showProgressNotification(entry.name, isDirectory, {
+              stage: 'writing',
+              loadedBytes,
+              totalBytes: null,
+            });
+          },
+          activeAbortController?.signal
+        );
+
+        if (isDownloadCancelled) {
+          return;
+        }
 
         const objectUrl = URL.createObjectURL(browserResult.blob);
         try {
@@ -231,9 +256,8 @@ export function useRemoteFsDownload() {
       }
 
       const progressChannel = new Channel<NativeFileDownloadProgress>();
-      let acceptsProgress = true;
       progressChannel.onmessage = (progress) => {
-        if (acceptsProgress) {
+        if (acceptsProgress && !isDownloadCancelled) {
           showProgressNotification(entry.name, isDirectory, progress);
         }
       };
@@ -246,16 +270,19 @@ export function useRemoteFsDownload() {
       });
 
       acceptsProgress = false;
+      if (isDownloadCancelled) {
+        return;
+      }
       await showNativeSuccess(result, server.name);
     } catch (error: unknown) {
-      const errText = getErrorMessage(error);
-      if (errText.includes('下载已取消') || errText.includes('导出已取消')) {
+      if (isDownloadCanceledError(error, isDownloadCancelled)) {
         await desktopFloatingTask.dismiss();
         notification.close(activeNotificationKey);
         message.info(`已取消下载 ${entry.name}`);
         return;
       }
 
+      const errText = getErrorMessage(error);
       if (isTauri()) {
         await desktopFloatingTask.finish({
           taskId: activeNotificationKey,
@@ -277,6 +304,8 @@ export function useRemoteFsDownload() {
       }
     } finally {
       downloadingPath.value = null;
+      activeAbortController = null;
+      acceptsProgress = false;
     }
   };
 

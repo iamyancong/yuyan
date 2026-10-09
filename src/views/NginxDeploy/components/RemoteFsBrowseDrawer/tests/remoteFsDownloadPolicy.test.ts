@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { getContextMenuItems } from '../components/RemoteFsContextMenu/constant.ts';
-import { buildFsSuggestedFileName, parseDownloadFileName } from '../constant.ts';
+import { buildFsSuggestedFileName, isDownloadCanceledError, parseDownloadFileName } from '../constant.ts';
 import type { DeployServer, RemoteFsEntry } from '../../../../../api/deploy.ts';
 
 test('getContextMenuItems: 根据条目类型返回正确的右键菜单项', () => {
@@ -84,5 +84,32 @@ test('parseDownloadFileName: 优先遵循 RFC 5987 / RFC 6266 解析 filename*=U
 
   assert.equal(parseDownloadFileName(null, 'fallback.tar.gz'), 'fallback.tar.gz');
   assert.equal(parseDownloadFileName('', 'fallback.tar.gz'), 'fallback.tar.gz');
+});
+
+test('isDownloadCanceledError: 精准识别主动取消异常、门闩标志与正常报错', () => {
+  // 门闩状态已取消
+  assert.equal(isDownloadCanceledError(new Error('something else'), true), true);
+  assert.equal(isDownloadCanceledError(null, true), true);
+
+  // 标准 AbortError 异常
+  const abortError = new DOMException('The user aborted a request.', 'AbortError');
+  assert.equal(isDownloadCanceledError(abortError), true);
+  assert.equal(isDownloadCanceledError({ name: 'AbortError', message: 'aborted' }), true);
+
+  // 包含中文取消文案的错误
+  assert.equal(isDownloadCanceledError('用户操作：下载已取消'), true);
+  assert.equal(isDownloadCanceledError(new Error('操作中断：导出已取消')), true);
+
+  // 包含 ECONNABORTED 或 connection aborted 等服务端网络中断异常绝不误判为用户主动取消
+  assert.equal(isDownloadCanceledError(new Error('connect ECONNABORTED 127.0.0.1:8080')), false);
+  assert.equal(isDownloadCanceledError('Error: read connection aborted by peer'), false);
+  assert.equal(isDownloadCanceledError(new Error('signal is aborted without reason')), false);
+  assert.equal(isDownloadCanceledError('FetchError: request was aborted'), false);
+
+  // 真实网络或业务异常不应被误判为取消
+  assert.equal(isDownloadCanceledError(new Error('Failed to fetch: 504 Gateway Timeout')), false);
+  assert.equal(isDownloadCanceledError(new Error('服务器返回了空数据，下载未保存')), false);
+  assert.equal(isDownloadCanceledError(null), false);
+  assert.equal(isDownloadCanceledError(undefined), false);
 });
 

@@ -229,4 +229,20 @@ export function parseDownloadFileName(disposition: string | null | undefined, fa
   return plainMatch?.[1] || fallback;
 }
 
+/**
+ * 判定错误或状态是否为主动取消下载操作。
+ * @param error 捕获到的异常对象或错误消息
+ * @param isCancelled 状态门闩是否已标记为取消
+ * @returns 是否属于主动取消
+ */
+export function isDownloadCanceledError(error: unknown, isCancelled = false): boolean {
+  if (isCancelled) return true;
+  if (typeof DOMException !== 'undefined' && error instanceof DOMException && error.name === 'AbortError') return true;
+  if (typeof error === 'object' && error !== null && 'name' in error && (error as { name?: string }).name === 'AbortError') return true;
+  const message = typeof error === 'string'
+    ? error
+    : (error instanceof Error ? error.message : String(error ?? ''));
+  return message.includes('下载已取消') || message.includes('导出已取消');
+}
+
 

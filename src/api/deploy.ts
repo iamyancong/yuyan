@@ -1085,18 +1085,41 @@ export async function downloadNginxInstanceArchive(
   let blob: Blob;
 
   if (reader) {
-    const chunks: Uint8Array[] = [];
-    let loaded = 0;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value) {
-        chunks.push(value);
-        loaded += value.length;
-        onProgress?.(loaded);
+    const onAbort = () => {
+      try {
+        void reader.cancel();
+      } catch {
+        // 忽略重复关闭
+      }
+    };
+    if (signal) {
+      if (signal.aborted) {
+        void reader.cancel();
+        throw new DOMException('The user aborted a request.', 'AbortError');
+      }
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+    try {
+      const chunks: Uint8Array[] = [];
+      let loaded = 0;
+      while (true) {
+        if (signal?.aborted) {
+          throw new DOMException('The user aborted a request.', 'AbortError');
+        }
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) {
+          chunks.push(value);
+          loaded += value.length;
+          onProgress?.(loaded);
+        }
+      }
+      blob = new Blob(chunks, { type: response.headers.get('Content-Type') || 'application/octet-stream' });
+    } finally {
+      if (signal) {
+        signal.removeEventListener('abort', onAbort);
       }
     }
-    blob = new Blob(chunks, { type: response.headers.get('Content-Type') || 'application/octet-stream' });
   } else {
     blob = await response.blob();
   }
@@ -2084,18 +2107,41 @@ export async function downloadServerFsEntry(
   let blob: Blob;
 
   if (reader) {
-    const chunks: Uint8Array[] = [];
-    let loaded = 0;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value) {
-        chunks.push(value);
-        loaded += value.length;
-        onProgress?.(loaded);
+    const onAbort = () => {
+      try {
+        void reader.cancel();
+      } catch {
+        // 忽略重复关闭
+      }
+    };
+    if (signal) {
+      if (signal.aborted) {
+        void reader.cancel();
+        throw new DOMException('The user aborted a request.', 'AbortError');
+      }
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+    try {
+      const chunks: Uint8Array[] = [];
+      let loaded = 0;
+      while (true) {
+        if (signal?.aborted) {
+          throw new DOMException('The user aborted a request.', 'AbortError');
+        }
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) {
+          chunks.push(value);
+          loaded += value.length;
+          onProgress?.(loaded);
+        }
+      }
+      blob = new Blob(chunks, { type: response.headers.get('Content-Type') || 'application/octet-stream' });
+    } finally {
+      if (signal) {
+        signal.removeEventListener('abort', onAbort);
       }
     }
-    blob = new Blob(chunks, { type: response.headers.get('Content-Type') || 'application/octet-stream' });
   } else {
     blob = await response.blob();
   }

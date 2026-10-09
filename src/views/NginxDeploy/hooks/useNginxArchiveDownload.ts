@@ -19,6 +19,7 @@ import {
 } from '@/api/deploy';
 import { isTauri } from '@/utils/env';
 import { desktopFloatingTask } from '@/utils/desktopFloatingTask';
+import { isDownloadCanceledError } from '../components/RemoteFsBrowseDrawer/constant';
 import { getErrorMessage } from '../utils';
 
 /** 归档类型文案字典。 */
@@ -98,15 +99,19 @@ const buildSuggestedFileName = (
 const saveArchiveInBrowser = async (
   instanceId: number,
   selection: NginxArchiveSelection,
-  onProgress: (loaded: number) => void
+  onProgress: (loaded: number) => void,
+  signal?: AbortSignal
 ) => {
   const result = await downloadNginxInstanceArchive(
     instanceId,
     selection.type,
     onProgress,
-    undefined,
+    signal,
     selection
   );
+  if (signal?.aborted) {
+    throw new DOMException('The user aborted a request.', 'AbortError');
+  }
   const objectUrl = URL.createObjectURL(result.blob);
   try {
     const link = document.createElement('a');
@@ -136,6 +141,9 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
   const archiveRevision = ref('');
   const archiveSites = ref<NginxArchiveSiteOption[]>([]);
   let activeNotificationKey = '';
+  let activeAbortController: AbortController | null = null;
+  let isDownloadCancelled = false;
+  let acceptsProgress = false;
 
   /** 校验当前实例是否允许读取归档站点。 */
   const validateActiveInstance = () => {
@@ -187,8 +195,14 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
     await refreshArchiveSites();
   };
 
-  /** 请求取消正在进行的原生下载。 */
+  /** 请求取消正在进行的原生下载或浏览器端下载。 */
   const cancelActiveArchiveDownload = async () => {
+    isDownloadCancelled = true;
+    acceptsProgress = false;
+    if (activeAbortController) {
+      activeAbortController.abort();
+      activeAbortController = null;
+    }
     try {
       if (isTauri()) {
         await invoke('cancel_file_download');
@@ -209,6 +223,9 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
     progress: NativeFileDownloadProgress,
     isManaged = true
   ) => {
+    if (isDownloadCancelled || !acceptsProgress) {
+      return;
+    }
     const percent = progress.totalBytes && progress.totalBytes > 0
       ? Math.min(100, Math.floor((progress.loadedBytes / progress.totalBytes) * 100))
       : null;
@@ -376,6 +393,9 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
     archiveSelectionOpen.value = false;
     runtimeArchiveDownloading.value = true;
     activeNotificationKey = `nginx-archive-${Date.now()}`;
+    isDownloadCancelled = false;
+    acceptsProgress = true;
+    activeAbortController = !isTauri() ? new AbortController() : null;
 
     if (isTauri()) {
       await desktopFloatingTask.startProgress({
@@ -403,9 +423,20 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
 
     try {
       if (!isTauri()) {
-        const browserResult = await saveArchiveInBrowser(instance.id, selection, (loadedBytes) => {
-          showProgressNotification(submit.type, { stage: 'writing', loadedBytes, totalBytes: null }, isManaged);
-        });
+        const browserResult = await saveArchiveInBrowser(
+          instance.id,
+          selection,
+          (loadedBytes) => {
+            if (isDownloadCancelled || !acceptsProgress) return;
+            showProgressNotification(submit.type, { stage: 'writing', loadedBytes, totalBytes: null }, isManaged);
+          },
+          activeAbortController?.signal
+        );
+
+        if (isDownloadCancelled) {
+          return;
+        }
+
         notification.success({
           key: activeNotificationKey,
           class: 'c4d-download-notification',
@@ -418,9 +449,10 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
       }
 
       const progressChannel = new Channel<NativeFileDownloadProgress>();
-      let acceptsProgress = true;
       progressChannel.onmessage = (progress) => {
-        if (acceptsProgress) showProgressNotification(submit.type, progress, isManaged);
+        if (acceptsProgress && !isDownloadCancelled) {
+          showProgressNotification(submit.type, progress, isManaged);
+        }
       };
       const result = await invoke<NativeFileDownloadResult>('start_file_download', {
         url: await getNginxInstanceArchiveDownloadUrl(instance.id, submit.type, selection),
@@ -429,9 +461,12 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
         onProgress: progressChannel,
       });
       acceptsProgress = false;
+      if (isDownloadCancelled) {
+        return;
+      }
       await showNativeSuccess(result, isManaged);
     } catch (error: unknown) {
-      if (getErrorMessage(error).includes('下载已取消') || getErrorMessage(error).includes('导出已取消')) {
+      if (isDownloadCanceledError(error, isDownloadCancelled)) {
         await desktopFloatingTask.dismiss();
         notification.close(activeNotificationKey);
         message.info(`已取消${isManaged ? '下载' : '导出'}${getArchiveTypeLabel(submit.type, isManaged)}`);
@@ -440,6 +475,8 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
       await showDownloadFailure(error, submit.type, isManaged);
     } finally {
       runtimeArchiveDownloading.value = false;
+      activeAbortController = null;
+      acceptsProgress = false;
     }
   };
 
