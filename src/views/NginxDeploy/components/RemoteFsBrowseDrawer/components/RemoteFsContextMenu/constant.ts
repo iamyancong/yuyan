@@ -40,3 +40,25 @@ export const getContextMenuItems = (entry: RemoteFsEntry | null): ContextMenuIte
     { key: 'copyPath', label: '复制绝对路径', iconName: 'CopyOutlined' },
   ];
 };
+
+/**
+ * 根据多选条目集合生成批量操作菜单项。
+ * @param entries 已选文件系统条目列表
+ * @returns 批量菜单项列表
+ */
+export const getBatchContextMenuItems = (entries: RemoteFsEntry[]): ContextMenuItem[] => {
+  if (!entries || entries.length === 0) return [];
+  const count = entries.length;
+  return [
+    {
+      key: 'download',
+      label: `打包下载到本地 (${count} 项)`,
+      iconName: 'CloudDownloadOutlined',
+    },
+    {
+      key: 'copyPath',
+      label: `复制所有选中路径 (${count} 项)`,
+      iconName: 'CopyOutlined',
+    },
+  ];
+};

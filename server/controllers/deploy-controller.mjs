@@ -105,12 +105,20 @@ import { listActiveCentralDeployOperations } from '../services/artifact-job-serv
 import { mergeDeployRuntimeSnapshots } from '../services/deploy-runtime-snapshot-service.mjs';
 import { listDeployRootOptions } from '../services/deploy-root-options-service.mjs';
 import { discoverServerNginx } from '../services/nginx-discovery-service.mjs';
+import { getRequestContext } from '../services/request-context.mjs';
 import {
   getServerFsRoots,
   listRemoteFsDirectory,
   readRemoteFsFile,
   execRemoteFsCommand,
   streamRemoteFsEntry,
+  streamRemoteFsBatch,
+  createDownloadTicket,
+  consumeDownloadTicket,
+  parseDownloadPaths,
+  resolveServerAllowedRoots,
+  assertPathWithinRoots,
+  DOWNLOAD_TICKET_TTL_MS,
 } from '../services/remote-fs-service.mjs';
 
 /** GitHub 托管仓库名（主库或 Fork 库） */
@@ -2287,7 +2295,70 @@ export async function handleExecServerCommand(req, res) {
 }
 
 /**
- * 流式下载服务器指定远程路径（目录打包为 tar.gz，单文件直接下载）
+ * 创建远程文件批量下载票据（供大批量路径换取短期安全下载凭据，规避 GET URL 超长限制）。
+ */
+export async function handleCreateServerFsDownloadTicket(req, res) {
+  try {
+    const serverId = Number(req.params.id);
+    if (!serverId) throw new Error('无效的服务器 ID');
+
+    // 1. 前置预检：校验服务器是否存在
+    const server = await getServerWithCredential(serverId);
+    if (!server) {
+      const error = new Error(`服务器 ID ${serverId} 不存在`);
+      error.status = 404;
+      throw error;
+    }
+
+    // 2. 严格解析与去重下载路径
+    const targetPaths = parseDownloadPaths({ paths: req.body?.paths });
+    if (!targetPaths.length) throw new Error('缺少下载目标路径列表');
+
+    // 3. 前置预检：路径作用域白名单校验（防止 GET 原生下载阶段返回 JSON 报错被存成损坏的 .tar.gz 压缩包）
+    const targets = await listTargets();
+    const allowedRoots = resolveServerAllowedRoots(server, targets);
+    for (const itemPath of targetPaths) {
+      assertPathWithinRoots(itemPath, allowedRoots);
+    }
+
+    // 4. 解析真实身份（优先使用中央 v2 上下文与 GitLab 验证身份，不盲目轻信未经鉴权的 Header）
+    const context = getRequestContext();
+    let creator;
+    if (context?.userId) {
+      creator = {
+        type: 'central_v2',
+        user: context.userId,
+        teamId: context.teamId,
+        role: context.role,
+        client: context.client || 'desktop',
+      };
+    } else if (req.webGitlabUser?.username) {
+      creator = {
+        type: 'web_gitlab',
+        user: req.webGitlabUser.username,
+        name: req.webGitlabUser.name || '',
+        gitlabHost: req.headers['x-gitlab-host'] ? String(req.headers['x-gitlab-host']) : undefined,
+      };
+    } else {
+      creator = {
+        type: String(req.headers['x-yuyan-client'] || 'local').toLowerCase(),
+        user: 'system_local',
+        ip: req.ip || req.socket.remoteAddress,
+      };
+    }
+
+    const ticket = createDownloadTicket(serverId, targetPaths, creator);
+    res.json({
+      success: true,
+      data: { ticket, expiresIn: DOWNLOAD_TICKET_TTL_MS / 1000, count: targetPaths.length },
+    });
+  } catch (error) {
+    sendError(res, error, Number(error?.status || 400));
+  }
+}
+
+/**
+ * 流式下载服务器指定远程路径（支持单个路径直连或通过下载票据批量打包归档为 tar.gz）
  */
 export async function handleDownloadServerFsEntry(req, res) {
   let isAborted = false;
@@ -2301,25 +2372,61 @@ export async function handleDownloadServerFsEntry(req, res) {
   try {
     const serverId = Number(req.params.id);
     if (!serverId) throw new Error('无效的服务器 ID');
-    const targetPath = String(req.query.path || '').trim();
-    if (!targetPath) throw new Error('缺少目标路径');
 
-    await streamRemoteFsEntry(
-      serverId,
-      targetPath,
-      res,
-      ({ fileName, mimeType }) => {
-        res.status(200);
-        res.setHeader('Content-Type', mimeType || 'application/octet-stream');
-        res.setHeader('Content-Disposition', buildSafeContentDisposition(fileName, 'remote-fs-entry.tar.gz'));
-        res.setHeader('Content-Encoding', 'identity');
-        res.setHeader('Cache-Control', 'no-cache, no-transform');
-        res.setHeader('X-Content-Type-Options', 'nosniff');
-        res.setHeader('X-Accel-Buffering', 'no');
-        res.flushHeaders?.();
-      },
-      { isAborted: () => isAborted }
-    );
+    let targetPaths = [];
+
+    // 1. 优先检查是否存在下载票据 (Ticket 模式，仅接受 query.ticket)
+    const ticket = req.query.ticket;
+    if (ticket) {
+      const ticketInfo = consumeDownloadTicket(ticket, serverId);
+      targetPaths = ticketInfo.paths;
+      const creatorDesc = ticketInfo.creator?.user || ticketInfo.creator?.clientType || 'unknown';
+      console.log(`[remote-fs-download] 票据消费触发下载: serverId=${serverId}, creator=${creatorDesc}, count=${targetPaths.length}`);
+    } else {
+      // 2. 传统参数解析（严格去重，绝不按逗号暴力切分支持文件名带逗号）
+      targetPaths = parseDownloadPaths({
+        paths: req.query.paths,
+        path: req.query.path,
+      });
+    }
+
+    if (!targetPaths.length) throw new Error('缺少目标路径');
+
+    if (targetPaths.length === 1) {
+      await streamRemoteFsEntry(
+        serverId,
+        targetPaths[0],
+        res,
+        ({ fileName, mimeType }) => {
+          res.status(200);
+          res.setHeader('Content-Type', mimeType || 'application/octet-stream');
+          res.setHeader('Content-Disposition', buildSafeContentDisposition(fileName, 'remote-fs-entry.tar.gz'));
+          res.setHeader('Content-Encoding', 'identity');
+          res.setHeader('Cache-Control', 'no-cache, no-transform');
+          res.setHeader('X-Content-Type-Options', 'nosniff');
+          res.setHeader('X-Accel-Buffering', 'no');
+          res.flushHeaders?.();
+        },
+        { isAborted: () => isAborted }
+      );
+    } else {
+      await streamRemoteFsBatch(
+        serverId,
+        targetPaths,
+        res,
+        ({ fileName, mimeType }) => {
+          res.status(200);
+          res.setHeader('Content-Type', mimeType || 'application/gzip');
+          res.setHeader('Content-Disposition', buildSafeContentDisposition(fileName, 'remote-fs-batch.tar.gz'));
+          res.setHeader('Content-Encoding', 'identity');
+          res.setHeader('Cache-Control', 'no-cache, no-transform');
+          res.setHeader('X-Content-Type-Options', 'nosniff');
+          res.setHeader('X-Accel-Buffering', 'no');
+          res.flushHeaders?.();
+        },
+        { isAborted: () => isAborted }
+      );
+    }
 
     if (!res.writableEnded) res.end();
   } catch (error) {

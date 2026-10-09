@@ -30,21 +30,31 @@ const visible = computed({ get: () => props.open, set: (val: boolean) => emit('u
 const {
   loading, showHidden, filterKeyword, sortField, sortAsc, roots,
   currentPath, pathInput, isAtRoot, truncated, tableEntries, selectedEntry,
-  dirCount, fileCount, breadcrumbs, toggleSort, fetchDirectory, navigateUp,
-  drillDown, handleRowClick, handleRowDblClick, copyPath, useCurrentPath,
+  selectedEntries, selectedPathSet, dirCount, fileCount, breadcrumbs,
+  toggleSort, fetchDirectory, navigateUp, drillDown, handleRowClick,
+  handleRowDblClick, selectAllEntries, clearSelection, setSelectedEntries,
+  copyPath, copyMultiplePaths, useCurrentPath,
 } = useRemoteFsBrowse(props, emit);
 
 const { previewVisible, previewLoading, previewFileName, previewContent, openPreview } = useFilePreview(props);
 const { execPanelVisible, commandText, executing, execResult, toggleExecPanel, runCommand } = useRemoteExec(props);
-const { downloadRemoteFsEntry } = useRemoteFsDownload();
-const { contextMenuVisible, contextMenuPosition, contextMenuTarget, openContextMenu, handleContextMenuAction } =
-  useContextMenu({
-    onDownload: (entry) => void downloadRemoteFsEntry(props.server, entry),
-    onDrillDown: (name) => drillDown(name),
-    onPreview: (entry) => void openPreview(entry),
-    onCopyPath: (p) => copyPath(p),
-    onNavigateUp: navigateUp,
-  });
+const { downloadRemoteFsEntries } = useRemoteFsDownload();
+const {
+  contextMenuVisible,
+  contextMenuPosition,
+  contextMenuTarget,
+  contextMenuSelectedEntries,
+  openContextMenu,
+  handleContextMenuAction,
+} = useContextMenu({
+  onDownload: (_entry, selectedList) => void downloadRemoteFsEntries(props.server, selectedList || [_entry]),
+  onDrillDown: (name) => drillDown(name),
+  onPreview: (entry) => void openPreview(entry),
+  onCopyPath: (p) => copyPath(p),
+  onCopyMultiplePaths: (paths) => void copyMultiplePaths(paths),
+  onNavigateUp: navigateUp,
+  onSelectExclusive: (entry) => setSelectedEntries([entry]),
+});
 </script>
 
 <template>
@@ -89,13 +99,17 @@ const { contextMenuVisible, contextMenuPosition, contextMenuTarget, openContextM
         :file-count="fileCount"
         :sort-field="sortField"
         :sort-asc="sortAsc"
+        :selected-count="selectedEntries.length"
+        :selected-path-set="selectedPathSet"
         @row-click="handleRowClick"
         @row-dblclick="(entry: RemoteFsEntry) => handleRowDblClick(entry, openPreview)"
-        @row-context-menu="openContextMenu"
+        @row-context-menu="(entry: RemoteFsEntry, event: MouseEvent) => openContextMenu(entry, event, selectedEntries)"
         @navigate-up="navigateUp"
         @drill-down="drillDown"
         @preview="openPreview"
         @toggle-sort="toggleSort"
+        @select-all="selectAllEntries"
+        @clear-selection="clearSelection"
       />
 
       <RemoteFsExecPanel
@@ -111,6 +125,7 @@ const { contextMenuVisible, contextMenuPosition, contextMenuTarget, openContextM
       <RemoteFsFooter
         :current-path="currentPath"
         :selected-entry="selectedEntry"
+        :selected-entries="selectedEntries"
         :exec-panel-visible="execPanelVisible"
         :loading="loading"
         @toggle-exec="toggleExecPanel"
@@ -132,6 +147,7 @@ const { contextMenuVisible, contextMenuPosition, contextMenuTarget, openContextM
     :x="contextMenuPosition.x"
     :y="contextMenuPosition.y"
     :entry="contextMenuTarget"
+    :selected-entries="contextMenuSelectedEntries"
     @action="handleContextMenuAction"
   />
 </template>

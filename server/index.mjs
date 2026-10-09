@@ -39,6 +39,7 @@ import { timingSafeTokenEqual } from './services/agent-security.mjs';
 import { abortAppUpdateTransfers, abortRunningDeployTasks } from './controllers/deploy-controller.mjs';
 import { startAppUpdatePreloadScheduler } from './services/app-update-release-service.mjs';
 import { disableDynamicApiCache } from './services/http-cache-policy.mjs';
+import { isTicketedFsDownloadRequest } from './services/remote-fs-service.mjs';
 
 // 创建 Express 应用
 const app = express();
@@ -78,16 +79,19 @@ async function authorizeWebGitlabRequest(req, res, next) {
   const cacheKey = crypto.createHash('sha256')
     .update(`${credential.gitlabHost}\0${credential.gitlabToken}`)
     .digest('hex');
-  const cachedUntil = Number(webGitlabAuthCache.get(cacheKey) || 0);
+  const cached = webGitlabAuthCache.get(cacheKey);
   try {
-    if (cachedUntil <= Date.now()) {
-      await verifyGitlabCredential(credential);
-      webGitlabAuthCache.set(cacheKey, Date.now() + WEB_GITLAB_AUTH_TTL_MS);
+    if (!cached || Number(cached.expiresAt) <= Date.now()) {
+      const { user } = await verifyGitlabCredential(credential);
+      webGitlabAuthCache.set(cacheKey, { expiresAt: Date.now() + WEB_GITLAB_AUTH_TTL_MS, user });
+      req.webGitlabUser = user;
       if (webGitlabAuthCache.size > 256) {
-        for (const [key, expiresAt] of webGitlabAuthCache) {
-          if (Number(expiresAt) <= Date.now()) webGitlabAuthCache.delete(key);
+        for (const [key, item] of webGitlabAuthCache) {
+          if (Number(item?.expiresAt || 0) <= Date.now()) webGitlabAuthCache.delete(key);
         }
       }
+    } else {
+      req.webGitlabUser = cached.user;
     }
     next();
   } catch (error) {
@@ -114,6 +118,7 @@ function isPublicAppUpdateDownload(req) {
 /** 非本机部署 API 鉴权中间件。 */
 function authorizeDeployApi(req, res, next) {
   if (isLoopbackBind || isTauriSubprocess || isPublicAppUpdateDownload(req)) return next();
+  if (isTicketedFsDownloadRequest(req)) return next();
   if (isWebClientRequest(req)) {
     void authorizeWebGitlabRequest(req, res, next);
     return;

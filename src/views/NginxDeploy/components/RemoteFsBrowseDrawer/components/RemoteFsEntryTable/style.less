@@ -7,6 +7,8 @@
   margin: 0;
   border: none;
   background: var(--bg-color-container);
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .remote-fs-table-area {
@@ -14,6 +16,20 @@
   flex: 1 1 auto;
   overflow: hidden;
   padding: 0;
+  user-select: none;
+  -webkit-user-select: none;
+
+  /* 彻底消除浏览器原生文本选区污染，防止 Shift 多选或鼠标滑动产生深浅蓝色杂斑 */
+  :deep(*) {
+    user-select: none !important;
+    -webkit-user-select: none !important;
+  }
+
+  /* 终极防线：无论浏览器触发任何底层文本 Range，均强制 selection 背景透明 */
+  :deep(::selection) {
+    background: transparent !important;
+    color: inherit !important;
+  }
 
   /* 彻底消除纵向列竖线，告别粗糙 Excel 切片分割 */
   :deep(.vxe-body--column),
@@ -57,19 +73,27 @@
     background-color: color-mix(in srgb, var(--primary-color) 6%, var(--bg-color-container)) !important;
   }
 
-  /* 选中行：干净纯粹的高亮，彻底无单元格竖线 */
-  :deep(.vxe-body--row.row--current) {
+  /* 选中行：干净纯粹的高亮，彻底无单元格竖线（兼容单选与多选行） */
+  :deep(.vxe-body--row.row--current),
+  :deep(.vxe-body--row.is-row-selected) {
     background-color: color-mix(in srgb, var(--primary-color) 12%, var(--bg-color-container)) !important;
   }
 
-  :deep(.vxe-body--row.row--current .vxe-body--column) {
+  /* 选中行悬停：微光增强，保障操作反馈细腻度 */
+  :deep(.vxe-body--row.row--current:hover),
+  :deep(.vxe-body--row.is-row-selected:hover) {
+    background-color: color-mix(in srgb, var(--primary-color) 16%, var(--bg-color-container)) !important;
+  }
+
+  :deep(.vxe-body--row.row--current .vxe-body--column),
+  :deep(.vxe-body--row.is-row-selected .vxe-body--column) {
     background-color: transparent !important;
-    border-top: 1px solid color-mix(in srgb, var(--primary-color) 25%, transparent) !important;
     border-bottom: 1px solid color-mix(in srgb, var(--primary-color) 25%, transparent) !important;
   }
 
   /* 仅在整行首列左侧呈现高亮光柱 */
-  :deep(.vxe-body--row.row--current .vxe-body--column:first-child) {
+  :deep(.vxe-body--row.row--current .vxe-body--column:first-child),
+  :deep(.vxe-body--row.is-row-selected .vxe-body--column:first-child) {
     box-shadow: inset 4px 0 0 0 var(--primary-color) !important;
   }
 }
@@ -166,6 +190,28 @@
       font-size: 10.5px;
       font-weight: 500;
       color: var(--text-color-secondary);
+    }
+
+    &.is-selection-active {
+      background: color-mix(in srgb, var(--primary-color) 14%, transparent);
+      border-color: color-mix(in srgb, var(--primary-color) 35%, transparent);
+      cursor: pointer;
+      transition: all 0.16s ease;
+
+      .pill-total {
+        color: var(--primary-color);
+        font-weight: 700;
+      }
+
+      .pill-detail {
+        color: var(--primary-color);
+        opacity: 0.85;
+      }
+
+      &:hover {
+        background: color-mix(in srgb, var(--primary-color) 22%, transparent);
+        border-color: var(--primary-color);
+      }
     }
   }
 

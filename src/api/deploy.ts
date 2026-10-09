@@ -2081,31 +2081,69 @@ export const execServerCommand = (
   client.post(`/servers/${serverId}/exec`, { command, cwd, ...options }).then(unwrap<RemoteExecResult>);
 
 /**
- * 构建服务器远程文件系统下载 URL。
+ * 创建服务器远程文件系统批量下载票据（供批量路径换取短期安全下载凭据，规避 GET URL 超长限制）。
  * @param serverId 服务器 ID
- * @param path 目标远程绝对路径
+ * @param paths 目标远程绝对路径列表
+ * @returns 票据 ID
+ */
+export const createServerFsDownloadTicket = async (
+  serverId: number,
+  paths: string[]
+): Promise<string> => {
+  const result = await client
+    .post(`/servers/${serverId}/fs/download-ticket`, { paths })
+    .then(unwrap<{ ticket: string; expiresIn: number; count: number }>);
+  return result.ticket;
+};
+
+/**
+ * 构建服务器远程文件系统下载 URL（支持单文件、单目录或批量路径）。
+ * 统一先通过 POST 获取下载凭据 ticket，再生成短 URL，防止路径过多触发 414/431 并使浏览器原生下载具备鉴权。
+ * @param serverId 服务器 ID
+ * @param pathOrPaths 目标远程绝对路径、路径列表或直接携带 ticket 的对象
  * @returns 完整下载 URL
  */
-export const getServerFsDownloadUrl = async (serverId: number, path: string): Promise<string> => {
-  const query = new URLSearchParams({ path });
+export const getServerFsDownloadUrl = async (
+  serverId: number,
+  pathOrPaths: string | string[] | { ticket: string }
+): Promise<string> => {
+  const query = new URLSearchParams();
+
+  if (typeof pathOrPaths === 'object' && pathOrPaths !== null && !Array.isArray(pathOrPaths) && 'ticket' in pathOrPaths) {
+    query.set('ticket', pathOrPaths.ticket);
+  } else if (Array.isArray(pathOrPaths)) {
+    if (pathOrPaths.length === 0) {
+      throw new Error('下载目标路径不能为空');
+    }
+    const ticket = await createServerFsDownloadTicket(serverId, pathOrPaths);
+    query.set('ticket', ticket);
+  } else {
+    const rawPath = String(pathOrPaths || '').trim();
+    if (!rawPath) {
+      throw new Error('下载目标路径不能为空');
+    }
+    const ticket = await createServerFsDownloadTicket(serverId, [rawPath]);
+    query.set('ticket', ticket);
+  }
+
   return getActiveDeployApiUrl(`/servers/${serverId}/fs/download?${query.toString()}`);
 };
 
 /**
- * 在 Web 浏览器端通过 fetch 流式下载服务器远程文件或打包目录。
- * @param serverId 服务器 ID
- * @param path 目标远程绝对路径
- * @param onProgress 进度回调函数（已下载字节数）
- * @param signal AbortSignal
- * @returns Blob 与文件名
+ * 将远程文件系统流式响应直接写入外部可写流（如 FileSystemWritableFileStream）。
+ * 整个过程零内存占用，不产生临时 Blob 或内存缓冲，支持实时字节数回调与 AbortSignal 取消。
+ * @param url 携带合法 ticket 的下载 URL
+ * @param writable 目标可写流
+ * @param onProgress 进度回调函数（已写入总字节数）
+ * @param signal 中断信号
+ * @returns 下载文件元数据
  */
-export async function downloadServerFsEntry(
-  serverId: number,
-  path: string,
+export async function streamServerFsEntryToWritable(
+  url: string,
+  writable: WritableStream<Uint8Array>,
   onProgress?: (loaded: number) => void,
   signal?: AbortSignal
-): Promise<{ blob: Blob; fileName: string }> {
-  const url = await getServerFsDownloadUrl(serverId, path);
+): Promise<{ fileName: string }> {
   const response = await fetch(url, {
     signal,
     headers: getDeployApiAuthHeaders(),
@@ -2121,60 +2159,27 @@ export async function downloadServerFsEntry(
     throw new Error(errorMessage);
   }
 
-  const reader = response.body?.getReader();
-  let blob: Blob;
-
-  if (reader) {
-    const onAbort = () => {
-      try {
-        void reader.cancel();
-      } catch {
-        // 忽略重复关闭
-      }
-    };
-    if (signal) {
-      if (signal.aborted) {
-        void reader.cancel();
-        throw new DOMException('The user aborted a request.', 'AbortError');
-      }
-      signal.addEventListener('abort', onAbort, { once: true });
-    }
-    try {
-      const chunks: Uint8Array[] = [];
-      let loaded = 0;
-      while (true) {
-        if (signal?.aborted) {
-          throw new DOMException('The user aborted a request.', 'AbortError');
-        }
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value) {
-          chunks.push(value);
-          loaded += value.length;
-          onProgress?.(loaded);
-        }
-      }
-      blob = new Blob(chunks, { type: response.headers.get('Content-Type') || 'application/octet-stream' });
-    } finally {
-      if (signal) {
-        signal.removeEventListener('abort', onAbort);
-      }
-    }
-  } else {
-    blob = await response.blob();
+  if (!response.body) {
+    throw new Error('服务器响应体为空，无法流式写入');
   }
 
-  if (blob.size <= 0) {
-    throw new Error('服务器返回了空数据，下载未保存');
-  }
-
-  const fallbackName = path.split('/').filter(Boolean).pop() || `server-${serverId}-file`;
   const fileName = parseDownloadFileName(
     response.headers.get('Content-Disposition'),
-    fallbackName.endsWith('.tar.gz') ? fallbackName : `${fallbackName}.tar.gz`
+    'download.tar.gz'
   );
 
-  return { blob, fileName };
+  let loaded = 0;
+  const progressStream = new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      loaded += chunk.byteLength;
+      onProgress?.(loaded);
+      controller.enqueue(chunk);
+    },
+  });
+
+  await response.body.pipeThrough(progressStream, { signal }).pipeTo(writable, { signal });
+
+  return { fileName };
 }
 
 

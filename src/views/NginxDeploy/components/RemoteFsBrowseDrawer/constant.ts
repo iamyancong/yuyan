@@ -245,4 +245,48 @@ export function isDownloadCanceledError(error: unknown, isCancelled = false): bo
   return message.includes('下载已取消') || message.includes('导出已取消');
 }
 
+/**
+ * 构建批量下载建议压缩包文件名。
+ * @param server 当前服务器
+ * @param entries 已选文件或目录项集合
+ * @returns 格式化后的压缩包文件名
+ */
+export function buildBatchFsSuggestedFileName(
+  server: { name?: string; host?: string } | null | undefined,
+  entries?: Array<{ name: string; type: string }>
+): string {
+  const sanitize = (value: string, fallback: string) =>
+    value
+      .trim()
+      .replace(/\s+/g, '-')
+      .replace(/[\\/:*?"<>|]/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-+|-+$/g, '') || fallback;
+
+  const pad = (value: number) => String(value).padStart(2, '0');
+  const now = new Date();
+  const timestamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  const serverPrefix = sanitize(server?.name || server?.host || '', 'server');
+  const count = entries?.length ? `-${entries.length}items` : '';
+  return `${serverPrefix}-batch${count}-${timestamp}.tar.gz`;
+}
+
+/**
+ * 根据起始索引与目标索引计算范围切片，并自动排除 parent_dir ('..')。
+ * @param entries 当前可见的条目列表
+ * @param anchorIndex 锚点索引
+ * @param targetIndex 目标索引
+ * @returns 选中的条目数组
+ */
+export function calculateRangeSelection<T extends { type: string }>(
+  entries: T[],
+  anchorIndex: number,
+  targetIndex: number
+): T[] {
+  if (!entries.length) return [];
+  const start = Math.max(0, Math.min(anchorIndex, targetIndex));
+  const end = Math.min(entries.length - 1, Math.max(anchorIndex, targetIndex));
+  return entries.slice(start, end + 1).filter((item) => item.type !== 'parent_dir');
+}
+
 

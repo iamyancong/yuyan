@@ -9,7 +9,7 @@ import {
   FolderOpenOutlined,
 } from '@ant-design/icons-vue';
 import type { RemoteFsEntry } from '@/api/deploy';
-import { getContextMenuItems, type RemoteFsContextAction } from './constant';
+import { getContextMenuItems, getBatchContextMenuItems, type RemoteFsContextAction } from './constant';
 
 defineOptions({ name: 'RemoteFsContextMenu' });
 
@@ -18,6 +18,7 @@ interface RemoteFsContextMenuProps {
   x: number;
   y: number;
   entry: RemoteFsEntry | null;
+  selectedEntries?: RemoteFsEntry[];
 }
 
 const props = defineProps<RemoteFsContextMenuProps>();
@@ -38,8 +39,15 @@ const iconComponents: Record<string, any> = {
   FolderOpenOutlined,
 };
 
-/** 当前条目的有效操作项。 */
-const menuItems = computed(() => getContextMenuItems(props.entry));
+/** 是否处于多选批量操作态。 */
+const isBatchMode = computed(() => (props.selectedEntries?.length || 0) > 1);
+
+/** 当前条目的有效操作项（单选或批量）。 */
+const menuItems = computed(() =>
+  isBatchMode.value
+    ? getBatchContextMenuItems(props.selectedEntries || [])
+    : getContextMenuItems(props.entry)
+);
 
 /**
  * 计算菜单智能定位样式，防止贴底或靠右超出视口边界。
@@ -110,7 +118,11 @@ onUnmounted(() => {
       :style="menuStyle"
       @contextmenu.prevent
     >
-      <div class="menu-header-info">
+      <div v-if="isBatchMode" class="menu-header-info is-batch">
+        <span class="entry-name-label">已选择 {{ selectedEntries?.length }} 个项目</span>
+        <span class="entry-badge-tag">批量</span>
+      </div>
+      <div v-else class="menu-header-info">
         <span class="entry-name-label" :title="entry.name">{{ entry.name }}</span>
         <span class="entry-badge-tag">{{ entry.type === 'directory' ? '文件夹' : '文件' }}</span>
       </div>
