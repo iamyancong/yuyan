@@ -29,6 +29,7 @@ const DeployTargetConfigModal = defineAsyncComponent(() => import('../DeployTarg
 const ServerDeployOverlays = defineAsyncComponent(() => import('../ServerDeployOverlays/index.vue'));
 const BackendDeployOverlays = defineAsyncComponent(() => import('../BackendDeployOverlays/index.vue'));
 const BackendServiceProgressModal = defineAsyncComponent(() => import('../BackendServiceProgressModal/index.vue'));
+const NginxConflictDiffModal = defineAsyncComponent(() => import('../NginxConflictDiffModal/index.vue'));
 
 /** 首次激活保活状态，未激活前零下载零挂载，关闭后保持保活避免重新渲染 */
 const serverOverlaysEverOpened = ref(false);
@@ -39,6 +40,7 @@ const rollbackProgressEverOpened = ref(false);
 const nginxConfigEverOpened = ref(false);
 const recordLogEverOpened = ref(false);
 const backendOverlaysEverOpened = ref(false);
+const conflictDiffModalEverOpened = ref(false);
 
 watch(
   () =>
@@ -57,6 +59,14 @@ watch(
   () => Boolean(unref(props.targetState?.targetModalOpen)),
   (val) => {
     if (val && !targetModalEverOpened.value) targetModalEverOpened.value = true;
+  },
+  { immediate: true }
+);
+
+watch(
+  () => Boolean(unref(props.targetState?.conflictModalOpen)),
+  (val) => {
+    if (val && !conflictDiffModalEverOpened.value) conflictDiffModalEverOpened.value = true;
   },
   { immediate: true }
 );
@@ -305,5 +315,14 @@ const updateTargetForm = (values: Partial<DeployTargetPayload>) => {
     :server-state="serverState"
     :target-state="targetState"
     :open-api-state="openApiState"
+  />
+
+  <NginxConflictDiffModal
+    v-if="conflictDiffModalEverOpened"
+    v-model:open="targetState.conflictModalOpen.value"
+    :target="targetState.conflictTarget.value"
+    :conflict-data="targetState.conflictData.value"
+    :loading="targetState.conflictLoading.value"
+    @confirm="targetState.handleConfirmConflictOverwrite"
   />
 </template>
