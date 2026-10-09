@@ -150,6 +150,7 @@ export const isWindowFocused = async (): Promise<boolean> => {
 export const checkNotificationPermission = async (): Promise<SystemNotificationPermissionState> => {
   if (isTauri()) {
     try {
+      // @ts-ignore
       const { isPermissionGranted } = await import('@tauri-apps/plugin-notification');
       const granted = await isPermissionGranted();
       return granted ? 'granted' : 'default';
@@ -173,6 +174,7 @@ export const checkNotificationPermission = async (): Promise<SystemNotificationP
 export const requestNotificationPermission = async (): Promise<boolean> => {
   if (isTauri()) {
     try {
+      // @ts-ignore
       const { isPermissionGranted, requestPermission } = await import('@tauri-apps/plugin-notification');
       let granted = await isPermissionGranted();
       if (!granted) {
