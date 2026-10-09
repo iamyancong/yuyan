@@ -2629,6 +2629,13 @@ export async function updateNginxInstance(id, payload = {}) {
     .get(Number(id));
   if (!current) return null;
   const instanceType = NGINX_INSTANCE_TYPES.has(payload.instanceType) ? payload.instanceType : current.instance_type;
+  if (current.instance_type === 'external' && instanceType === 'managed') {
+    const immutableError = new Error('已接入的已有 Nginx 实例不可直接变更为平台托管实例；如需托管请新建平台托管实例');
+    immutableError.status = 400;
+    immutableError.statusCode = 400;
+    immutableError.code = 'INSTANCE_TYPE_IMMUTABLE';
+    throw immutableError;
+  }
   const typeChanged = instanceType !== current.instance_type;
   if (typeChanged && Number(current.target_count || 0) > 0) {
     throw new Error('当前 Nginx 实例已绑定部署目标，请先迁移或删除绑定目标后再切换实例类型');

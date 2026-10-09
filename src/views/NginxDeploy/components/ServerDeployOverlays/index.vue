@@ -11,11 +11,21 @@ const props = defineProps<{ serverState: Record<string, any> }>();
 const ServerConfigDrawer = defineAsyncComponent(() => import('../ServerConfigDrawer/index.vue'));
 const NginxRuntimeDrawer = defineAsyncComponent(() => import('../NginxRuntimeDrawer/index.vue'));
 const RemoteFsBrowseDrawer = defineAsyncComponent(() => import('../RemoteFsBrowseDrawer/index.vue'));
+const NginxConflictDiffModal = defineAsyncComponent(() => import('../NginxConflictDiffModal/index.vue'));
 
 /** 首次激活标记，确保首次打开前零下载，关闭后常驻保活 */
 const serverModalEverOpened = ref(false);
 const runtimeDrawerEverOpened = ref(false);
 const fsDrawerEverOpened = ref(false);
+const conflictModalEverOpened = ref(false);
+
+watch(
+  () => Boolean(unref(props.serverState?.mainConfigConflictModalOpen)),
+  (val) => {
+    if (val && !conflictModalEverOpened.value) conflictModalEverOpened.value = true;
+  },
+  { immediate: true }
+);
 
 watch(
   () => Boolean(unref(props.serverState?.serverModalOpen)),
@@ -122,5 +132,13 @@ const updateRuntimeInstanceForm = (values: Partial<NginxInstancePayload>) => {
     :server="serverState.fsDrawerServer.value"
     :initial-path="serverState.fsDrawerInitialPath.value"
     @select-path="(path: string) => serverState.handleFsDrawerSelectPath(path)"
+  />
+  <NginxConflictDiffModal
+    v-if="conflictModalEverOpened"
+    v-model:open="serverState.mainConfigConflictModalOpen.value"
+    title="检测到远程 Nginx 主配置文件冲突"
+    :conflict-data="serverState.mainConfigConflictData.value"
+    :loading="serverState.mainConfigConflictLoading.value"
+    @confirm="serverState.handleConfirmMainConfigOverwrite"
   />
 </template>

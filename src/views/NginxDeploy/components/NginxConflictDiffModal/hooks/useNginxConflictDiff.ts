@@ -55,7 +55,11 @@ export function useNginxConflictDiff(
   );
 
   /** 弹窗标题 */
-  const modalTitle = computed(() => '检测到远程站点配置文件冲突');
+  const modalTitle = computed(() => {
+    if (props.title) return props.title;
+    if (props.target?.projectName) return `检测到远程站点配置文件冲突（${props.target.projectName}）`;
+    return '检测到远程 Nginx 配置文件冲突';
+  });
 
   /** 冲突原因描述 */
   const conflictReason = computed(() => {

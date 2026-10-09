@@ -19,8 +19,10 @@ export interface NginxConflictData {
 export interface NginxConflictDiffModalProps {
   /** 弹窗是否可见 */
   open: boolean;
-  /** 关联部署目标 */
-  target: DeployTarget | null;
+  /** 关联部署目标（可选，若为主配置冲突可为空） */
+  target?: DeployTarget | null;
+  /** 自定义弹窗标题 */
+  title?: string;
   /** 冲突详情数据 */
   conflictData: NginxConflictData | null;
   /** 覆盖接管执行中加载状态 */

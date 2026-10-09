@@ -27,6 +27,7 @@ import {
   updateNginxRuntimeState,
   upsertNginxRuntime,
 } from './deploy-store.mjs';
+export { getNginxInstanceContext } from './deploy-store.mjs';
 import {
   execSsh,
   readRemoteText,
@@ -620,11 +621,11 @@ async function detectRemoteEnvironment(conn) {
 // ──────────────────────────────────────────────
 
 /**
- * 渲染托管 Nginx 主配置。
+ * 渲染托管 Nginx 主配置正文（不含托管 Header）。
  * @param {Object} config - 运行时配置
- * @returns {string} nginx.conf 内容
+ * @returns {string} nginx.conf 正文内容
  */
-export function renderMainNginxConfig(config) {
+export function renderMainNginxConfigBody(config) {
   return [
     'worker_processes  1;',
     '',
@@ -684,6 +685,21 @@ export function renderMainNginxConfig(config) {
     '}',
     '',
   ].join('\n');
+}
+
+/**
+ * 渲染托管 Nginx 主配置。
+ * @param {Object} config - 运行时配置
+ * @param {number=} explicitInstanceId - 显式 Nginx 实例 ID
+ * @returns {string} nginx.conf 内容
+ */
+export function renderMainNginxConfig(config, explicitInstanceId = null) {
+  const body = renderMainNginxConfigBody(config);
+  const instanceId = explicitInstanceId ?? config?.id ?? config?.instanceId;
+  if (Number(instanceId) > 0) {
+    return attachManagedInstanceHeader(body, Number(instanceId));
+  }
+  return body;
 }
 
 /**
@@ -771,6 +787,8 @@ function normalizeNginxConfigValue(value, label) {
  */
 export const MANAGED_HEADER_PREFIX = '# managed-by: yuyan';
 export const MANAGED_HEADER_REGEX = /^#\s*managed-by:\s*yuyan\s+target=(\d+)\s+sha256=([a-f0-9]{64})(?:\r?\n|$)/i;
+export const MANAGED_INSTANCE_HEADER_REGEX = /^#\s*managed-by:\s*yuyan\s+instance=(\d+)\s+sha256=([a-f0-9]{64})(?:\r?\n|$)/i;
+export const MANAGED_ANY_HEADER_REGEX = /^#\s*managed-by:\s*yuyan\s+(?:target|instance)=(\d+)\s+sha256=([a-f0-9]{64})(?:\r?\n|$)/i;
 
 /**
  * 规范化并计算配置主体内容的 SHA-256 哈希值
@@ -779,7 +797,7 @@ export const MANAGED_HEADER_REGEX = /^#\s*managed-by:\s*yuyan\s+target=(\d+)\s+s
  */
 export function computeConfigBodySha256(body) {
   const normalized = String(body || '')
-    .replace(MANAGED_HEADER_REGEX, '')
+    .replace(MANAGED_ANY_HEADER_REGEX, '')
     .replace(/\r\n/g, '\n')
     .trim();
   return crypto.createHash('sha256').update(normalized).digest('hex');
@@ -840,9 +858,22 @@ export function renderSiteConfigBody(target) {
  * @returns {string} 包含标记头的完整配置文本
  */
 export function attachManagedHeader(body, targetId) {
-  const cleanBody = String(body || '').replace(MANAGED_HEADER_REGEX, '').trim();
+  const cleanBody = String(body || '').replace(MANAGED_ANY_HEADER_REGEX, '').trim();
   const hash = computeConfigBodySha256(cleanBody);
   const header = `# managed-by: yuyan target=${targetId} sha256=${hash}`;
+  return `${header}\n\n${cleanBody}\n`;
+}
+
+/**
+ * 为主配置正文追加平台托管标记头
+ * @param {string} body - 主配置正文
+ * @param {number} instanceId - Nginx 实例 ID
+ * @returns {string} 包含标记头的完整主配置文本
+ */
+export function attachManagedInstanceHeader(body, instanceId) {
+  const cleanBody = String(body || '').replace(MANAGED_ANY_HEADER_REGEX, '').trim();
+  const hash = computeConfigBodySha256(cleanBody);
+  const header = `# managed-by: yuyan instance=${instanceId} sha256=${hash}`;
   return `${header}\n\n${cleanBody}\n`;
 }
 
@@ -873,6 +904,32 @@ export function parseManagedHeader(content) {
 }
 
 /**
+ * 解析主配置文件的平台托管标记头
+ * @param {string} content - 配置文件内容
+ * @returns {{ isManaged: boolean, instanceId: number | null, expectedSha256: string | null, body: string }}
+ */
+export function parseManagedInstanceHeader(content) {
+  const text = String(content || '');
+  const match = text.match(MANAGED_INSTANCE_HEADER_REGEX);
+  if (!match) {
+    return {
+      isManaged: false,
+      instanceId: null,
+      expectedSha256: null,
+      body: text.trim(),
+    };
+  }
+  const firstLineEnd = text.indexOf('\n');
+  const body = firstLineEnd >= 0 ? text.slice(firstLineEnd + 1).trim() : '';
+  return {
+    isManaged: true,
+    instanceId: Number(match[1]),
+    expectedSha256: match[2].toLowerCase(),
+    body,
+  };
+}
+
+/**
  * 渲染项目托管站点配置（含托管 Header 标记）。
  * @param {Object} target - 部署目标
  * @returns {string} 站点完整配置
@@ -887,7 +944,7 @@ export function renderSiteConfig(target) {
  * @param {string} existingContent - 远程服务器已有配置
  * @param {Object} target - 部署目标
  * @param {string} generatedBody - 平台生成的主体配置
- * @returns {{ canAutoOverwrite: boolean, status: string, reason?: string }}
+ * @returns {{ canAutoOverwrite: boolean, status: string, reason?: string, currentSha256: string }}
  */
 export function inspectNginxConfigManagedState(existingContent, target, generatedBody) {
   const trimmed = String(existingContent || '').trim();
@@ -918,6 +975,46 @@ export function inspectNginxConfigManagedState(existingContent, target, generate
     canAutoOverwrite: false,
     status: 'unmanaged_external',
     reason: '配置文件为手工维护或已有实例文件，未包含当前目标的平台托管标记',
+    currentSha256: legacyHash,
+  };
+}
+
+/**
+ * 检查现有主配置的托管归属与覆写安全性。
+ * @param {string} existingContent - 远程服务器已有主配置
+ * @param {Object} instance - Nginx 实例
+ * @param {string} generatedBody - 平台生成的主配置主体
+ * @returns {{ canAutoOverwrite: boolean, status: string, reason?: string, currentSha256: string }}
+ */
+export function inspectMainNginxConfigManagedState(existingContent, instance, generatedBody) {
+  const trimmed = String(existingContent || '').trim();
+  if (!trimmed) {
+    return { canAutoOverwrite: true, status: 'not_found', currentSha256: '' };
+  }
+
+  const parsed = parseManagedInstanceHeader(existingContent);
+  if (parsed.isManaged) {
+    const actualHash = computeConfigBodySha256(parsed.body);
+    if (parsed.instanceId === Number(instance.id) && actualHash === parsed.expectedSha256) {
+      return { canAutoOverwrite: true, status: 'clean_managed', currentSha256: actualHash };
+    }
+    const reason = parsed.instanceId === Number(instance.id)
+      ? '主配置文件曾由平台生成，但已被手工修改过（内容哈希不匹配）'
+      : `主配置文件属于其他 Nginx 实例（#${parsed.instanceId}）`;
+    return { canAutoOverwrite: false, status: 'drifted_managed', reason, currentSha256: actualHash };
+  }
+
+  // 没有 header 标记的老文件：若内容和平台模板生成的完全一致，视为平台名下的历史文件，允许更新并补上标记
+  const legacyHash = computeConfigBodySha256(trimmed);
+  const targetHash = computeConfigBodySha256(generatedBody);
+  if (legacyHash === targetHash) {
+    return { canAutoOverwrite: true, status: 'legacy_clean_match', currentSha256: legacyHash };
+  }
+
+  return {
+    canAutoOverwrite: false,
+    status: 'unmanaged_external',
+    reason: '主配置文件为手工维护或已有实例文件，未包含当前托管实例的平台归属标记',
     currentSha256: legacyHash,
   };
 }
@@ -1174,15 +1271,46 @@ export async function initializeNginxRuntime(serverId, payload = {}, emit = {}) 
  * @returns {Promise<Object>} 初始化结果
  */
 export async function initializeNginxInstanceRuntime(instanceId, payload = {}, emit = {}) {
-  await updateNginxInstance(instanceId, {
-    ...payload,
-    instanceType: 'managed',
-  });
-  const { instance, server } = await getNginxInstanceContext(instanceId);
-  if (instance.instanceType !== 'managed') throw new Error('只有托管 Nginx 实例支持初始化');
-  const config = resolveRuntimeConfig(instance);
+  const force = Boolean(payload.force);
+  const expectedSha256 = payload.expectedSha256 ? String(payload.expectedSha256).toLowerCase() : null;
+  if (force && !expectedSha256) {
+    const badRequestError = new Error('强制覆盖主配置必须提供 expectedSha256 哈希校验值');
+    badRequestError.statusCode = 400;
+    badRequestError.code = 'INVALID_ARGUMENT';
+    throw badRequestError;
+  }
 
-  await withSsh(server, async (conn) => {
+  const { instance, server } = await getNginxInstanceContext(instanceId);
+  if (!instance) {
+    const notFoundError = new Error('Nginx 实例不存在');
+    notFoundError.statusCode = 404;
+    throw notFoundError;
+  }
+  if (instance.instanceType !== 'managed') {
+    const notManagedError = new Error('只有托管 Nginx 实例支持初始化；已接入实例不可初始化');
+    notManagedError.statusCode = 409;
+    notManagedError.code = 'NGINX_INSTANCE_NOT_MANAGED';
+    throw notManagedError;
+  }
+
+  const { instanceType: _ignored, force: _f, expectedSha256: _e, ...safePayload } = payload;
+  const effectiveBaseRoot = safePayload.baseRoot || instance.baseRoot;
+  const derivedPaths = deriveRuntimePaths(effectiveBaseRoot);
+  const effectiveInstance = {
+    ...instance,
+    ...safePayload,
+    baseRoot: effectiveBaseRoot,
+    nginxRoot: safePayload.nginxRoot || (safePayload.baseRoot ? derivedPaths.installRoot : instance.nginxRoot),
+    htmlRoot: safePayload.htmlRoot || (safePayload.baseRoot ? derivedPaths.webRoot : instance.htmlRoot),
+    sitesDir: safePayload.sitesDir || (safePayload.baseRoot ? derivedPaths.sitesDir : instance.sitesDir),
+    logsDir: safePayload.logsDir || (safePayload.baseRoot ? derivedPaths.logsDir : instance.logsDir),
+    scriptPath: safePayload.scriptPath || (safePayload.baseRoot ? derivedPaths.scriptPath : instance.scriptPath),
+  };
+  const activeServer = server;
+  const config = resolveRuntimeConfig(effectiveInstance);
+  let activeInstance = effectiveInstance;
+
+  await withSsh(activeServer, async (conn) => {
     // ── 阶段 1：校验平台 ──
     emit.stage?.('validate', 5, '校验服务器平台', '');
     const platform = await assertRemotePlatform(conn);
@@ -1192,6 +1320,66 @@ export async function initializeNginxInstanceRuntime(instanceId, payload = {}, e
     emit.stage?.('detect', 10, '探测服务器运行时环境', '');
     const { glibcVersion, hasXcrypt, summary } = await detectRemoteEnvironment(conn);
     emit.log?.('info', `服务器环境：${summary}`, 'detect');
+
+    // ── 前置主配置安全性与防篡改检查（在上传解压前预检）──
+    emit.stage?.('precheck', 12, '检查主配置安全性', config.mainConfPath);
+    const sudo = config.useSudo ? 'sudo -n ' : '';
+    const generatedBody = renderMainNginxConfigBody(config);
+    const mainConfigContent = attachManagedInstanceHeader(generatedBody, effectiveInstance.id);
+    const existingResult = await execSsh(conn, `${sudo}test -f ${shellQuote(config.mainConfPath)}`, {
+      label: '检查主配置是否存在',
+      allowFailure: true,
+    });
+    let fileExists = false;
+    if (existingResult.code === 0) {
+      fileExists = true;
+    } else if (existingResult.code === 1) {
+      fileExists = false;
+    } else {
+      const errorMsg = (existingResult.stderr || existingResult.stdout || '').trim() || '未知命令执行错误';
+      throw new Error(`检查主配置文件是否存在失败（退出码 ${existingResult.code}）：${errorMsg}`);
+    }
+
+    if (fileExists) {
+      const existingContent = await readRemoteText(conn, { ...activeServer, useSudo: config.useSudo }, config.mainConfPath);
+      const inspection = inspectMainNginxConfigManagedState(existingContent, effectiveInstance, generatedBody);
+      if (!inspection.canAutoOverwrite && !force) {
+        const conflictError = new Error(inspection.reason || '主配置文件存在手工修改或未被平台接管，需确认覆盖接管');
+        conflictError.statusCode = 409;
+        conflictError.code = 'NGINX_CONFIG_CONFLICT';
+        conflictError.details = {
+          instanceId: effectiveInstance.id,
+          path: config.mainConfPath,
+          currentContent: existingContent,
+          generatedContent: mainConfigContent,
+          currentSha256: inspection.currentSha256 || computeConfigBodySha256(existingContent),
+          reason: inspection.reason,
+        };
+        throw conflictError;
+      }
+      if (force) {
+        const actualSha = computeConfigBodySha256(existingContent);
+        if (actualSha !== expectedSha256) {
+          const raceError = new Error('远程主配置文件在预览后已被修改，请重新对比差异后再接管覆盖');
+          raceError.statusCode = 409;
+          raceError.code = 'NGINX_CONFIG_CONFLICT';
+          raceError.details = {
+            instanceId: effectiveInstance.id,
+            path: config.mainConfPath,
+            currentContent: existingContent,
+            generatedContent: mainConfigContent,
+            currentSha256: actualSha,
+            reason: '远程主配置文件已发生并发改动',
+          };
+          throw raceError;
+        }
+      }
+    }
+
+    // 预检全部通过，即将开始上传解压与覆盖写入，此时持久化更新数据库实例配置
+    if (Object.keys(safePayload).length > 0) {
+      activeInstance = await updateNginxInstance(instanceId, safePayload);
+    }
 
     // ── 阶段 3：选择运行时变体 ──
     emit.stage?.('select', 15, '选择运行时变体', '');
@@ -1229,24 +1417,24 @@ export async function initializeNginxInstanceRuntime(instanceId, payload = {}, e
     await execSsh(conn, `${config.useSudo ? 'sudo -n ' : ''}mkdir -p ${shellQuote(config.sitesDir)} ${shellQuote(config.webRoot)}`, {
       label: '创建托管 Nginx 目录',
     });
-    await writeRemoteTextWithBackup(conn, { ...server, useSudo: config.useSudo }, config.mainConfPath, renderMainNginxConfig(config));
-    await writeRemoteTextWithBackup(conn, { ...server, useSudo: config.useSudo }, config.scriptPath, renderRuntimeScript());
+    await writeRemoteTextWithBackup(conn, { ...activeServer, useSudo: config.useSudo }, config.mainConfPath, mainConfigContent);
+    await writeRemoteTextWithBackup(conn, { ...activeServer, useSudo: config.useSudo }, config.scriptPath, renderRuntimeScript());
     await execSsh(conn, `${config.useSudo ? 'sudo -n ' : ''}chmod +x ${shellQuote(config.scriptPath)}`, { label: '设置管理脚本权限' });
 
     // ── 阶段 8：校验配置 ──
     emit.stage?.('test', 85, '校验 Nginx 配置', config.scriptPath);
-    const testResult = await execRuntimeScript(conn, instance, 'test');
+    const testResult = await execRuntimeScript(conn, activeInstance, 'test');
     emit.log?.('success', `${testResult.stderr || testResult.stdout}`.trim() || 'nginx -t 校验通过', 'test');
 
     // ── 阶段 9：启动 ──
     emit.stage?.('start', 95, '启动托管 Nginx', config.scriptPath);
-    const statusResult = await execRuntimeScript(conn, instance, 'status');
+    const statusResult = await execRuntimeScript(conn, activeInstance, 'status');
     const action = statusResult.code === 0 ? 'reload' : 'start';
-    const startResult = await execRuntimeScript(conn, instance, action);
+    const startResult = await execRuntimeScript(conn, activeInstance, action);
     emit.log?.('success', `${startResult.stdout || startResult.stderr}`.trim() || `托管 Nginx 已${action === 'reload' ? '重载' : '启动'}`, 'start');
 
     // ── 更新 DB 状态（包含变体信息）──
-    await updateNginxInstanceState(instance.id, {
+    await updateNginxInstanceState(activeInstance.id, {
       runtimeVersion: manifest.version,
       packageSha256: manifest.sha256,
       packageVariant: variant.id,
@@ -1256,7 +1444,7 @@ export async function initializeNginxInstanceRuntime(instanceId, payload = {}, e
   });
 
   emit.stage?.('finish', 100, '初始化完成', config.installRoot);
-  return getNginxInstanceStatus(instance.id);
+  return getNginxInstanceStatus(activeInstance.id);
 }
 
 // ──────────────────────────────────────────────
