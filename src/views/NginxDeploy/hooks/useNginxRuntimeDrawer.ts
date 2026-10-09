@@ -395,6 +395,62 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
     await refreshRuntimeStatus();
   };
 
+    // 主配置冲突 Diff 对比弹窗状态
+  const mainConfigConflictModalOpen = ref(false);
+  const mainConfigConflictData = ref<{
+    path: string;
+    currentContent: string;
+    generatedContent: string;
+    currentSha256: string;
+    reason?: string;
+  } | null>(null);
+  const mainConfigConflictLoading = ref(false);
+
+  /** 确认通过 Diff 对比弹窗覆盖接管主配置并完成初始化 */
+  const handleConfirmMainConfigOverwrite = async (expectedSha256: string) => {
+    const instance = getActiveInstance();
+    if (!instance) return;
+    const baseRoot = String(runtimeForm.baseRoot || '').trim();
+    const portStart = Number(runtimeForm.portStart || 0);
+    mainConfigConflictLoading.value = true;
+    try {
+      runtimeInitializing.value = true;
+      resetRuntimeProgress();
+      runtimeProgressState.running = true;
+      runtimeProgressState.title = '接管覆盖主配置并初始化';
+      runtimeProgressState.detail = baseRoot;
+      const result = await initNginxInstanceWithProgress(
+        instance.id,
+        {
+          baseRoot,
+          portStart,
+          useSudo: Boolean(runtimeForm.useSudo),
+          force: true,
+          expectedSha256,
+        },
+        { onEvent: applyRuntimeProgressEvent }
+      );
+      applyRuntimeStatus(result);
+      message.success(result.running ? 'Nginx 已接管覆盖并运行' : 'Nginx 已接管覆盖初始化');
+      mainConfigConflictModalOpen.value = false;
+      mainConfigConflictData.value = null;
+      await params.refreshServerList();
+      await params.refreshActiveTab({ force: true });
+    } catch (err: any) {
+      const errResp = err?.response?.data || err?.details || err?.data;
+      if ((err?.code === 'NGINX_CONFIG_CONFLICT' || errResp?.code === 'NGINX_CONFIG_CONFLICT') && (errResp?.details || errResp?.data || errResp?.currentContent)) {
+        message.warning(err?.message || '远程主配置文件已发生并发改动，已刷新最新差异');
+        mainConfigConflictData.value = errResp?.details || errResp?.data || errResp;
+      } else {
+        message.error(getErrorMessage(err));
+      }
+    } finally {
+      mainConfigConflictLoading.value = false;
+      runtimeProgressState.running = false;
+      runtimeInitializing.value = false;
+    }
+  };
+
   /** 初始化当前服务器 Nginx 运行时 */
   const initServerNginxRuntime = async () => {
     if (!params.ensureLoggedIn()) return;
@@ -426,6 +482,13 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
       await params.refreshServerList();
       await params.refreshActiveTab({ force: true });
     } catch (error: any) {
+      const respData = error?.response?.data || error?.details || error?.data;
+      const isConflict = error?.status === 409 || error?.statusCode === 409 || error?.code === 'NGINX_CONFIG_CONFLICT' || respData?.code === 'NGINX_CONFIG_CONFLICT';
+      if (isConflict && (respData?.details || respData?.data || error?.details || respData?.currentContent)) {
+        mainConfigConflictData.value = respData.details || respData.data || error.details || respData;
+        mainConfigConflictModalOpen.value = true;
+        return;
+      }
       message.error(getErrorMessage(error));
     } finally {
       runtimeProgressState.running = false;
@@ -625,6 +688,10 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
     runServerNginxRuntimeAction,
     downloadActiveNginxArchive,
     refreshArchiveSites,
+    mainConfigConflictModalOpen,
+    mainConfigConflictData,
+    mainConfigConflictLoading,
+    handleConfirmMainConfigOverwrite,
     confirmArchiveDownload,
     createServerNginxInstance,
     openEditNginxInstance,

@@ -77,7 +77,7 @@ test('托管实例可安全纠正为已有 Nginx，并允许直接绑定现有�
 
   await assert.rejects(
     () => store.updateNginxInstance(external.id, { ...external, instanceType: 'managed' }),
-    /已绑定部署目标/
+    (error) => error?.status === 400 && error?.code === 'INSTANCE_TYPE_IMMUTABLE'
   );
 
   const managedAgain = await store.createNginxInstance(server.id, {
@@ -85,6 +85,27 @@ test('托管实例可安全纠正为已有 Nginx，并允许直接绑定现有�
     instanceType: 'managed',
     baseRoot: '/srv/yuyan',
   });
+  const managedTarget = await store.createTarget({
+    projectId: 1002,
+    projectSource: 'gitlab',
+    projectName: '托管前端项目',
+    projectPath: 'group/managed-frontend',
+    repositoryUrl: 'https://gitlab.example/group/managed-frontend.git',
+    defaultBranch: 'main',
+    envName: '测试',
+    serverId: server.id,
+    nginxInstanceId: managedAgain.id,
+    deployRoot: '/srv/yuyan/html/managed',
+    nginxConfPath: '/srv/yuyan/nginx/conf/conf.d/managed.conf',
+    nginxSiteManaged: true,
+    projectType: 'frontend',
+  });
+  assert.equal(managedTarget.nginxInstanceId, managedAgain.id);
+  await assert.rejects(
+    () => store.updateNginxInstance(managedAgain.id, { ...managedAgain, instanceType: 'external' }),
+    /已绑定部署目标/
+  );
+
   const anotherExternal = await store.createNginxInstance(server.id, {
     name: '另一套已有 Nginx',
     instanceType: 'external',
@@ -93,7 +114,7 @@ test('托管实例可安全纠正为已有 Nginx，并允许直接绑定现有�
   });
   await assert.rejects(
     () => store.updateNginxInstance(anotherExternal.id, { ...anotherExternal, instanceType: 'managed', baseRoot: '/srv/other' }),
-    /只能配置一个平台托管 Nginx/
+    (error) => error?.status === 400 && error?.code === 'INSTANCE_TYPE_IMMUTABLE'
   );
   assert.equal(managedAgain.instanceType, 'managed');
 
@@ -139,10 +160,12 @@ test('托管实例可安全纠正为已有 Nginx，并允许直接绑定现有�
     runtimeFingerprint: 'b'.repeat(64),
     defaultNginxConfPath: '/opt/nginx/conf/nginx.conf',
   });
-  const convertedManaged = await store.updateNginxInstance(externalWithFingerprint.id, {
-    ...externalWithFingerprint,
-    instanceType: 'managed',
-    baseRoot: '/opt/yuyan-managed',
-  });
-  assert.equal(convertedManaged.runtimeFingerprint, '');
+  await assert.rejects(
+    () => store.updateNginxInstance(externalWithFingerprint.id, {
+      ...externalWithFingerprint,
+      instanceType: 'managed',
+      baseRoot: '/opt/yuyan-managed',
+    }),
+    (error) => error?.status === 400 && error?.code === 'INSTANCE_TYPE_IMMUTABLE'
+  );
 });

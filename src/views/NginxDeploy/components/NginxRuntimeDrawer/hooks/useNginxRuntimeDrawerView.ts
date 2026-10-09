@@ -117,7 +117,8 @@ export function useNginxRuntimeDrawerView(props: Readonly<NginxRuntimeDrawerProp
   const computedInstanceFormSchema = computed(() => {
     const schema = JSON.parse(JSON.stringify(nginxInstanceFormSchema));
     const properties = schema.properties?.layout?.properties?.basicGrid?.properties;
-    const typeLocked = props.instanceForm.name === '系统 Nginx' || Boolean(activeInstance.value?.targetCount);
+    const isEditing = props.instanceFormEditingId !== null;
+    const typeLocked = props.instanceForm.name === '系统 Nginx' || Boolean(activeInstance.value?.targetCount) || isEditing;
     if (properties && props.instanceForm.name === '系统 Nginx') {
       if (properties.name) {
         properties.name['x-disabled'] = true;
@@ -133,6 +134,12 @@ export function useNginxRuntimeDrawerView(props: Readonly<NginxRuntimeDrawerProp
         ...properties.instanceType['x-component-props'],
         disabled: true,
       };
+      if (isEditing) {
+        properties.instanceType['x-decorator-props'] = {
+          ...properties.instanceType['x-decorator-props'],
+          extra: '已接入实例不可直接改为托管；如需托管请新建托管实例',
+        };
+      }
     }
     return schema;
   });

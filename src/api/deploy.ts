@@ -970,7 +970,11 @@ export async function initNginxRuntimeWithProgress(serverId: number, payload: Ng
 }
 
 /** 流式初始化 Nginx 实例 */
-export async function initNginxInstanceWithProgress(instanceId: number, payload: NginxRuntimePayload, options: NginxRuntimeProgressOptions = {}) {
+export async function initNginxInstanceWithProgress(
+  instanceId: number,
+  payload: NginxRuntimePayload & { force?: boolean; expectedSha256?: string },
+  options: NginxRuntimeProgressOptions = {}
+) {
   const response = await fetch(await getActiveDeployApiUrl(`/nginx-instances/${instanceId}/init?stream=1`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson', ...getDeployApiAuthHeaders() },
@@ -979,7 +983,15 @@ export async function initNginxInstanceWithProgress(instanceId: number, payload:
   });
   if (!response.ok) {
     const data = await parseJsonOrText(response);
-    throw new Error(typeof data === 'string' ? data : data?.error || data?.message || '初始化 Nginx 失败');
+    const message = typeof data === 'string' ? data : data?.error || data?.message || '初始化 Nginx 失败';
+    const err = new Error(message) as any;
+    err.status = response.status;
+    err.statusCode = response.status;
+    err.code = typeof data === 'object' ? data?.code : undefined;
+    err.details = typeof data === 'object' ? (data?.details || data?.data) : undefined;
+    err.data = typeof data === 'object' ? (data?.data || data?.details) : undefined;
+    err.response = { status: response.status, data };
+    throw err;
   }
   if (!response.body) {
     const data = await parseJsonOrText(response);
@@ -994,10 +1006,16 @@ export async function initNginxInstanceWithProgress(instanceId: number, payload:
   const consumeLine = (rawLine: string) => {
     const line = rawLine.trim();
     if (!line) return;
-    const event = JSON.parse(line) as DeployProgressEvent & { data?: NginxRuntimeStatus };
+    const event = JSON.parse(line) as DeployProgressEvent & { data?: NginxRuntimeStatus; code?: string; details?: any };
     options.onEvent?.(event);
     if (event.type === 'result') result = event.data || null;
-    if (event.type === 'error') throw new Error(event.message || '初始化 Nginx 失败');
+    if (event.type === 'error') {
+      const err = new Error(event.message || '初始化 Nginx 失败') as any;
+      err.code = (event as any).code;
+      err.details = (event as any).details;
+      err.data = (event as any).data || (event as any).details;
+      throw err;
+    }
   };
 
   while (true) {

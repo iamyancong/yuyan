@@ -10,6 +10,7 @@ import {
   deleteNginxInstance,
   deleteServer,
   deleteTarget,
+  getNginxInstanceContext,
   getRecord,
   getServerWithCredential,
   listNginxInstances,
@@ -459,7 +460,9 @@ function isStreamRequest(req) {
 function sendError(res, error, status = 500) {
   const message = error instanceof Error ? error.message : String(error);
   if (!res.headersSent) {
-    const responseStatus = Number.isInteger(error?.status) ? error.status : status;
+    const responseStatus = Number.isInteger(error?.statusCode)
+      ? error.statusCode
+      : (Number.isInteger(error?.status) ? error.status : status);
     const payload = { success: false, error: message };
     if (typeof error?.code === 'string' && error.code) payload.code = error.code;
     if (error?.details && typeof error.details === 'object') payload.details = error.details;
@@ -884,11 +887,26 @@ export async function handleInitNginxInstance(req, res) {
     stage: (stage, percent, message, detail = '') => write({ type: 'stage', stage, percent, message, detail }),
     log: (level, message, stage = '') => write({ type: 'log', level, stage, message }),
     result: (data) => write({ type: 'result', data }),
-    error: (message, stage = '') => write({ type: 'error', stage, message }),
+    error: (message, stage = '', extra = {}) => write({ type: 'error', stage, message, ...extra }),
   };
 
   try {
     validateNginxRuntimePayload(req.body || {});
+    const { instance } = await getNginxInstanceContext(instanceId);
+    if (!instance) {
+      res.status(404).json({ success: false, error: 'Nginx 实例不存在' });
+      return;
+    }
+    if (instance.instanceType !== 'managed') {
+      res.status(409).json({
+        success: false,
+        code: 'NGINX_INSTANCE_NOT_MANAGED',
+        error: '只有托管 Nginx 实例支持初始化；已接入实例不可初始化',
+        message: '只有托管 Nginx 实例支持初始化；已接入实例不可初始化',
+      });
+      return;
+    }
+
     if (!streamMode) {
       res.json({ success: true, data: await initializeNginxInstanceRuntime(instanceId, req.body || {}, emit) });
       return;
@@ -898,9 +916,24 @@ export async function handleInitNginxInstance(req, res) {
     emit.result(result);
     if (!res.writableEnded) res.end();
   } catch (error) {
-    if (streamMode) {
-      emit.error(error instanceof Error ? error.message : String(error));
+    if (streamMode && res.headersSent) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      const extra = {};
+      if (error?.code) extra.code = error.code;
+      if (error?.details) extra.details = error.details;
+      emit.error(errorMsg, '', extra);
       if (!res.writableEnded) res.end();
+      return;
+    }
+    if (error.statusCode === 409 || error.code === 'NGINX_CONFIG_CONFLICT' || error.code === 'NGINX_INSTANCE_NOT_MANAGED') {
+      res.status(409).json({
+        success: false,
+        code: error.code || 'NGINX_CONFIG_CONFLICT',
+        message: error.message,
+        error: error.message,
+        data: error.details || {},
+        details: error.details || {},
+      });
       return;
     }
     sendError(res, error, 400);
