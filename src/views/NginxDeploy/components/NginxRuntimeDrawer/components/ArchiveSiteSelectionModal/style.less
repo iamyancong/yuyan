@@ -232,6 +232,36 @@
   }
 }
 
+.archive-selection-summary__tag {
+  color: var(--text-color-secondary);
+  font-size: 12px;
+  cursor: help;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  transition: color 0.15s ease;
+
+  &.is-included {
+    color: var(--warning-color, #faad14);
+  }
+
+  &:hover {
+    color: var(--primary-color);
+  }
+}
+
+.archive-hidden-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 6px;
+}
+
+.archive-hidden-toggle__label {
+  font-size: 12px;
+  color: var(--text-color-secondary);
+  user-select: none;
+}
+
 .archive-selection-footer__actions {
   display: flex;
   align-items: center;

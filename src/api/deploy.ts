@@ -718,6 +718,7 @@ export interface NginxArchiveSelection {
   type: NginxArchiveDownloadType;
   siteIds: string[];
   revision: string;
+  includeHidden?: boolean;
 }
 
 /** 原生文件下载实时进度。 */
@@ -1053,11 +1054,12 @@ export const runNginxInstanceAction = (instanceId: number, action: NginxRuntimeA
 export const getNginxInstanceArchiveDownloadUrl = async (
   instanceId: number,
   type: NginxArchiveDownloadType = 'all',
-  selection?: Pick<NginxArchiveSelection, 'siteIds' | 'revision'>
+  selection?: Pick<NginxArchiveSelection, 'siteIds' | 'revision' | 'includeHidden'>
 ) => {
   const query = new URLSearchParams({ type });
   if (selection?.siteIds?.length) query.set('siteIds', selection.siteIds.join(','));
   if (selection?.revision) query.set('revision', selection.revision);
+  if (selection?.includeHidden) query.set('includeHidden', 'true');
   return getActiveDeployApiUrl(`/nginx-instances/${instanceId}/archive?${query.toString()}`);
 };
 
@@ -1083,7 +1085,7 @@ export async function downloadNginxInstanceArchive(
   type: NginxArchiveDownloadType = 'all',
   onProgress?: (loaded: number) => void,
   signal?: AbortSignal,
-  selection?: Pick<NginxArchiveSelection, 'siteIds' | 'revision'>
+  selection?: Pick<NginxArchiveSelection, 'siteIds' | 'revision' | 'includeHidden'>
 ): Promise<NginxInstanceArchiveDownload> {
   const response = await fetch(await getNginxInstanceArchiveDownloadUrl(instanceId, type, selection), {
     signal,
