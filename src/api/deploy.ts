@@ -2096,6 +2096,43 @@ export const createServerFsDownloadTicket = async (
   return result.ticket;
 };
 
+/** 远程文件系统预估大小统计明细条目。 */
+export interface RemoteFsSizeItem {
+  /** 远程绝对路径。 */
+  path: string;
+  /** 字节数。 */
+  bytes: number;
+}
+
+/** 远程文件系统大小查询结果。 */
+export interface RemoteFsSizeResult {
+  /** 排除隐藏文件后的预估总字节数（压缩前）。 */
+  totalBytes: number;
+  /** 各条目的大小明细。 */
+  items: RemoteFsSizeItem[];
+  /** 是否因超时未完全统计。 */
+  truncated: boolean;
+  /** 部分文件不可读或警告信息。 */
+  warning?: string;
+}
+
+/**
+ * 查询远程文件系统指定路径的磁盘占用预估大小（排除隐藏文件后的解压/压缩前体积）。
+ * @param serverId 服务器 ID
+ * @param paths 目标远程绝对路径列表
+ * @param signal 可选的中断信号
+ * @returns 预估大小结果
+ */
+export const getServerFsSize = async (
+  serverId: number,
+  paths: string[],
+  signal?: AbortSignal
+): Promise<RemoteFsSizeResult> => {
+  return client
+    .post(`/servers/${serverId}/fs/size`, { paths }, { signal })
+    .then(unwrap<RemoteFsSizeResult>);
+};
+
 /**
  * 构建服务器远程文件系统下载 URL（支持单文件、单目录或批量路径）。
  * 统一先通过 POST 获取下载凭据 ticket，再生成短 URL，防止路径过多触发 414/431 并使浏览器原生下载具备鉴权。

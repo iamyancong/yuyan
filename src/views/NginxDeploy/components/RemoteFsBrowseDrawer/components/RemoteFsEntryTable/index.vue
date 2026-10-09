@@ -3,6 +3,7 @@ import { ref } from 'vue';
 import {
   ArrowUpOutlined,
   FolderFilled,
+  LoadingOutlined,
   SortAscendingOutlined,
   SortDescendingOutlined,
 } from '@ant-design/icons-vue';
@@ -25,6 +26,11 @@ interface RemoteFsEntryTableProps {
   sortAsc: boolean;
   selectedCount?: number;
   selectedPathSet?: Set<string>;
+  sizeStatus?: 'idle' | 'loading' | 'done' | 'error';
+  formattedSize?: string;
+  sizeError?: string;
+  sizeWarning?: string;
+  isLargePackage?: boolean;
 }
 
 const props = defineProps<RemoteFsEntryTableProps>();
@@ -99,12 +105,30 @@ const { handleKeyDown, handleMouseDown, handleAreaClick, handleAreaContextMenu }
             <div
               class="th-stats-pill"
               :class="{ 'is-selection-active': (selectedCount || 0) > 0 }"
-              :title="(selectedCount || 0) > 0 ? '按 ESC 或点击清空选区' : undefined"
+              :title="(selectedCount || 0) > 0 ? ((sizeStatus === 'error' && sizeError) ? sizeError : '按 ESC 或点击清空选区') : undefined"
               @click.stop="(selectedCount || 0) > 0 ? emit('clearSelection') : undefined"
             >
               <template v-if="(selectedCount || 0) > 0">
                 <span class="pill-total">已选 {{ selectedCount }} 项</span>
-                <span class="pill-detail">按 ESC 清空</span>
+                <span v-if="sizeStatus === 'loading'" class="pill-size pill-size--loading">
+                  <LoadingOutlined :spin="true" class="size-spin-icon" />计算中…
+                </span>
+                <span
+                  v-else-if="sizeStatus === 'done' && formattedSize"
+                  class="pill-size"
+                  :class="{ 'pill-size--warn': isLargePackage || Boolean(sizeWarning) }"
+                  :title="sizeWarning ? `压缩前大小（${sizeWarning}）` : '压缩前大小，不含隐藏文件'"
+                >
+                  {{ formattedSize }}
+                </span>
+                <span
+                  v-else-if="sizeStatus === 'error'"
+                  class="pill-size pill-size--unknown"
+                  :title="sizeError || '部分路径超时或无权限，大小未知'"
+                >
+                  大小未知
+                </span>
+                <span class="pill-detail">· 按 ESC 清空</span>
               </template>
               <template v-else>
                 <span class="pill-total">{{ entries.length }} 项</span>

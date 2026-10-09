@@ -14,6 +14,7 @@ import { useRemoteExec } from './hooks/useRemoteExec';
 import { useRemoteFsBrowse } from './hooks/useRemoteFsBrowse';
 import { useContextMenu } from './hooks/useContextMenu';
 import { useRemoteFsDownload } from './hooks/useRemoteFsDownload';
+import { useSelectionSize } from './hooks/useSelectionSize';
 
 defineOptions({ name: 'RemoteFsBrowseDrawer' });
 
@@ -35,6 +36,17 @@ const {
   handleRowDblClick, selectAllEntries, clearSelection, setSelectedEntries,
   copyPath, copyMultiplePaths, useCurrentPath,
 } = useRemoteFsBrowse(props, emit);
+
+const serverIdRef = computed(() => props.server?.id);
+const {
+  sizeStatus,
+  formattedSize,
+  contextMenuSizeLabel,
+  sizeError,
+  sizeWarning,
+  isLargePackage,
+  clearSizeCache,
+} = useSelectionSize(serverIdRef, selectedEntries, currentPath);
 
 const { previewVisible, previewLoading, previewFileName, previewContent, openPreview } = useFilePreview(props);
 const { execPanelVisible, commandText, executing, execResult, toggleExecPanel, runCommand } = useRemoteExec(props);
@@ -85,7 +97,7 @@ const {
         :loading="loading"
         :breadcrumbs="breadcrumbs"
         @navigate-up="navigateUp"
-        @refresh="() => fetchDirectory(currentPath)"
+        @refresh="() => { clearSizeCache(); fetchDirectory(currentPath); }"
         @navigate-to-path="() => fetchDirectory(pathInput)"
         @copy-path="copyPath"
         @jump-breadcrumb="(p) => fetchDirectory(p)"
@@ -101,6 +113,11 @@ const {
         :sort-asc="sortAsc"
         :selected-count="selectedEntries.length"
         :selected-path-set="selectedPathSet"
+        :size-status="sizeStatus"
+        :formatted-size="formattedSize"
+        :size-error="sizeError"
+        :size-warning="sizeWarning"
+        :is-large-package="isLargePackage"
         @row-click="handleRowClick"
         @row-dblclick="(entry: RemoteFsEntry) => handleRowDblClick(entry, openPreview)"
         @row-context-menu="(entry: RemoteFsEntry, event: MouseEvent) => openContextMenu(entry, event, selectedEntries)"
@@ -148,6 +165,7 @@ const {
     :y="contextMenuPosition.y"
     :entry="contextMenuTarget"
     :selected-entries="contextMenuSelectedEntries"
+    :formatted-size="contextMenuSizeLabel"
     @action="handleContextMenuAction"
   />
 </template>

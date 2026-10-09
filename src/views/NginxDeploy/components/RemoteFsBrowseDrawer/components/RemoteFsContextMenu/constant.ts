@@ -10,14 +10,22 @@ export interface ContextMenuItem {
   iconName: string;
   danger?: boolean;
   disabled?: boolean;
+  /** 补充说明或体积文案（如 '约 210 MB'）。 */
+  subLabel?: string;
+  /** 辅助小字提示（如 '已排除隐藏文件'）。 */
+  hint?: string;
 }
 
 /**
  * 根据条目类型获取可用的右键操作菜单项。
  * @param entry 当前操作的文件系统条目
+ * @param sizeLabel 可选的预计体积标签
  * @returns 菜单项列表
  */
-export const getContextMenuItems = (entry: RemoteFsEntry | null): ContextMenuItem[] => {
+export const getContextMenuItems = (
+  entry: RemoteFsEntry | null,
+  sizeLabel?: string
+): ContextMenuItem[] => {
   if (!entry) return [];
 
   if (entry.type === 'parent_dir') {
@@ -28,7 +36,13 @@ export const getContextMenuItems = (entry: RemoteFsEntry | null): ContextMenuIte
 
   if (entry.type === 'directory') {
     return [
-      { key: 'download', label: '打包下载到本地', iconName: 'CloudDownloadOutlined' },
+      {
+        key: 'download',
+        label: '打包下载到本地',
+        iconName: 'CloudDownloadOutlined',
+        subLabel: sizeLabel,
+        hint: '已排除隐藏文件',
+      },
       { key: 'drillDown', label: '进入目录', iconName: 'FolderOpenOutlined' },
       { key: 'copyPath', label: '复制绝对路径', iconName: 'CopyOutlined' },
     ];
@@ -44,9 +58,13 @@ export const getContextMenuItems = (entry: RemoteFsEntry | null): ContextMenuIte
 /**
  * 根据多选条目集合生成批量操作菜单项。
  * @param entries 已选文件系统条目列表
+ * @param sizeLabel 可选的预计体积标签
  * @returns 批量菜单项列表
  */
-export const getBatchContextMenuItems = (entries: RemoteFsEntry[]): ContextMenuItem[] => {
+export const getBatchContextMenuItems = (
+  entries: RemoteFsEntry[],
+  sizeLabel?: string
+): ContextMenuItem[] => {
   if (!entries || entries.length === 0) return [];
   const count = entries.length;
   return [
@@ -54,6 +72,8 @@ export const getBatchContextMenuItems = (entries: RemoteFsEntry[]): ContextMenuI
       key: 'download',
       label: `打包下载到本地 (${count} 项)`,
       iconName: 'CloudDownloadOutlined',
+      subLabel: sizeLabel,
+      hint: '已排除隐藏文件',
     },
     {
       key: 'copyPath',
