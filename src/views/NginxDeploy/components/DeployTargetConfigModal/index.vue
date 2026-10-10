@@ -9,6 +9,7 @@ import {
 } from '@ant-design/icons-vue';
 import type { DeployTargetPayload } from '@/api/deploy';
 import type { FormilyRef } from '../../types';
+import { OVERLAY_Z_INDEX } from '../../constant';
 import DeployTargetForm from './components/DeployTargetForm/index.vue';
 
 defineOptions({ name: 'DeployTargetConfigModal' });
@@ -62,6 +63,7 @@ const updateFormRef = (value: FormilyRef | null) => emit('formRefChange', value)
     title="部署配置"
     width="min(1080px, 94vw)"
     class="target-config-modal"
+    :z-index="OVERLAY_Z_INDEX.modal"
     :bodyStyle="{ maxHeight: 'calc(100vh - 200px)', overflowY: 'auto', padding: '10px 18px 12px 0px' }"
     style="top: 40px"
     :confirmLoading="saving"

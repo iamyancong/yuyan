@@ -3,13 +3,22 @@ import { computed, toRef } from 'vue';
 import { PlusOutlined } from '@ant-design/icons-vue';
 import { YButton } from '@yss-ui/components/lite';
 import type { DeployEnvironment } from '@/api/deploy';
+import { OVERLAY_Z_INDEX } from '../../constant';
 import EnvironmentCard from './components/EnvironmentCard/index.vue';
 import { useBackendEnvironments } from './hooks/useBackendEnvironments';
 
 defineOptions({ name: 'BackendEnvironmentDrawer' });
 
-const props = withDefaults(defineProps<{ open: boolean; selectedEnvironmentId?: number }>(), {
+/** 后端环境依赖管理抽屉属性 */
+interface BackendEnvironmentDrawerProps {
+  open: boolean;
+  selectedEnvironmentId?: number;
+  zIndex?: number;
+}
+
+const props = withDefaults(defineProps<BackendEnvironmentDrawerProps>(), {
   selectedEnvironmentId: 0,
+  zIndex: OVERLAY_Z_INDEX.drawerAboveModal,
 });
 const emit = defineEmits<{
   (e: 'update:open', value: boolean): void;
@@ -26,7 +35,7 @@ const state = useBackendEnvironments({
 </script>
 
 <template>
-  <a-drawer v-model:open="drawerOpen" width="min(94vw, 1120px)" title="后端环境依赖管理" destroyOnClose>
+  <a-drawer v-model:open="drawerOpen" width="min(94vw, 1120px)" title="后端环境依赖管理" :z-index="props.zIndex" destroyOnClose>
     <a-alert type="info" show-icon message="Nacos 仅做地址与注册状态检测，不提供共享注册中心重启。凭据使用 AES-GCM 加密保存。" />
     <div class="environment-layout">
       <section class="environment-form">

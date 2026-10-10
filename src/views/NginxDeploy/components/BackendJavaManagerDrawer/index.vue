@@ -2,6 +2,7 @@
 import { computed, toRef } from 'vue';
 import { YButton } from '@yss-ui/components/lite';
 import type { BuildJdk, DeployServer, ServerJavaRuntime } from '@/api/deploy';
+import { OVERLAY_Z_INDEX } from '../../constant';
 import { useBackendJavaManager } from './hooks/useBackendJavaManager';
 
 defineOptions({ name: 'BackendJavaManagerDrawer' });
@@ -11,9 +12,12 @@ interface BackendJavaManagerDrawerProps {
   open: boolean;
   serverId: number;
   servers: DeployServer[];
+  zIndex?: number;
 }
 
-const props = defineProps<BackendJavaManagerDrawerProps>();
+const props = withDefaults(defineProps<BackendJavaManagerDrawerProps>(), {
+  zIndex: OVERLAY_Z_INDEX.drawerAboveModal,
+});
 const emit = defineEmits<{
   (e: 'update:open', value: boolean): void;
   (e: 'update:serverId', value: number): void;
@@ -47,7 +51,7 @@ const getArchitectureLabel = (arch: string) => {
 </script>
 
 <template>
-  <a-drawer v-model:open="drawerOpen" width="min(92vw, 980px)" title="Java 环境管理" destroyOnClose>
+  <a-drawer v-model:open="drawerOpen" width="min(92vw, 980px)" title="Java 环境管理" :z-index="props.zIndex" destroyOnClose>
     <a-spin :spinning="state.loading.value">
       <a-tabs>
         <a-tab-pane key="local" tab="本机构建 JDK">

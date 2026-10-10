@@ -1,6 +1,5 @@
 import type { YTableColumn } from '@yss-ui/components/lite';
 import type { DeployProgressEvent, DeployProgressSnapshot, DeployProjectSource, DeployRecord, DeployRecordAction, DeployUploadStrategy } from '@/api/deploy';
-import { formatServerLabel } from './utils';
 
 /** 测试环境名称 */
 export const TEST_ENV_NAME = '测试';
@@ -44,7 +43,7 @@ import {
   detectBackendTemplateKey,
   type BackendTemplateKey,
   type BackendProjectTemplate,
-} from './templates/backendTemplates';
+} from './templates/backendTemplates.ts';
 
 export {
   BACKEND_TEMPLATES,
@@ -56,7 +55,7 @@ export {
 };
 export type { BackendTemplateKey, BackendProjectTemplate };
 
-import { formatDeployDuration } from './hooks/runtimeLockPolicy';
+import { formatDeployDuration } from './hooks/runtimeLockPolicy.ts';
 export { formatDeployDuration };
 
 /** 默认产物目录，空值表示自动识别 */
@@ -1187,3 +1186,20 @@ export const targetFormSchema = {
  * @returns 替换后的字符串
  */
 export const applyProjectTemplate = (value: string, appName: string): string => String(value || '').replace(/\{appName\}/g, appName || '');
+
+/**
+ * 部署中心浮层层级常量规范。
+ * 解决 AntDV 弹窗 (a-modal) 与抽屉 (a-drawer) 默认 zIndex 均为 1000 时，因 DOM 挂载时序导致抽屉被压在弹窗下方的问题。
+ *
+ * 注：若未来在抽屉内部使用 Modal.confirm 或呼出其他弹窗，需传入大于 1010 的 zIndex（如 modalAboveDrawer: 1020），避免被抽屉遮挡。
+ */
+export const OVERLAY_Z_INDEX = {
+  /** 一级弹窗基准层级 */
+  modal: 1000,
+  /** 从一级弹窗中打开的二级抽屉层级，确保始终置于弹窗上方 */
+  drawerAboveModal: 1010,
+  /** 从二级抽屉中呼出的弹窗/确认框层级（如 Modal.confirm），确保置于抽屉上方 */
+  modalAboveDrawer: 1020,
+} as const;
+
+export type OverlayZIndex = typeof OVERLAY_Z_INDEX;
