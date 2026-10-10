@@ -1738,13 +1738,13 @@ packages:
         optional: true
 
   '@yss-ui/hooks@1.1.3':
-    resolution: {integrity: sha512-OmcCjXuUOxnCpEwBdL7vXhzYwKYEI+f7QxIS2rJ0SnfK6NWs+JnkDSb1wPfxKdGw6BMPkRKd91JRJ2CjmHUqhg==}
+    resolution: {integrity: sha512-3ySjvK64a2OVxhnoVFMG6OHi98O6QMfDMMByV42zizrq6VS2NrNO48sYBlU8iy9J0WJ3pjOFmA9dRUroAQiLaA==}
 
   '@yss-ui/theme@1.0.3':
-    resolution: {integrity: sha512-pF3LbnesmnygUj3fqnIHVMdi8WHcWOqphtuacrnXGPQ/h9cw7k1/zgXdP/egGUS9W2/gEvzJ0LIVQdf0dPYvQw==}
+    resolution: {integrity: sha512-Ls0W5gz0VGg3RlRZni7LEYzJyAp3hECbgjGcvBOxylQF+pKqRG4jjzek+hjpp2cnwjDd7NoxitprCrwjhy4CIA==}
 
   '@yss-ui/utils@1.0.6':
-    resolution: {integrity: sha512-f/owRosLC1muucWcwYnU95MKtOF4+WyXxutcZyLxlQkNKeqhceLMtlq/R47KCT8GUFv2SfUJffv7l2ibAsnt8Q==}
+    resolution: {integrity: sha512-kx4bM8atj4bbZJCt1A0PG1h7Pv0AtrLbqg4iUjF8UIOHcOdGxa0lBQFO01/EJgHohIWTJIEp0oZfvV5k+fZpVA==}
 
   accepts@2.0.0:
     resolution: {integrity: sha512-5cvg6CtKwfgdmVqY1WIiXKc3Q1bkRqGLi+2W/6ao+6Y7gu/RCwRuAhGEzh5B4KlszSuTLgZYuqFqo5bImjNKng==}
