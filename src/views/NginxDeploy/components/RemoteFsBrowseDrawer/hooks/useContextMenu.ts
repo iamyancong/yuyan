@@ -37,8 +37,8 @@ export function useContextMenu(options?: UseContextMenuOptions) {
   ) => {
     const isAlreadySelected = currentSelectedEntries.some((e) => e.path === entry.path);
 
-    if (isAlreadySelected && currentSelectedEntries.length > 1 && entry.type !== 'parent_dir') {
-      // 1. 右键命中已选多选区：保持多选态
+    if (isAlreadySelected && entry.type !== 'parent_dir') {
+      // 1. 右键命中已有选区（无论单选还是多选）：保持既有选区不丢失
       contextMenuTarget.value = entry;
       contextMenuSelectedEntries.value = currentSelectedEntries;
     } else {

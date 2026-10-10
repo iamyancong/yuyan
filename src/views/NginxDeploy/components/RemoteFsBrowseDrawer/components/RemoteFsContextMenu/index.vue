@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, type CSSProperties } from 'vue';
+import { computed, ref, toRef } from 'vue';
 import {
   ArrowUpOutlined,
   CloudDownloadOutlined,
@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons-vue';
 import type { RemoteFsEntry } from '@/api/deploy';
 import { getContextMenuItems, getBatchContextMenuItems, type RemoteFsContextAction } from './constant';
+import { useContextMenuDom } from './hooks/useContextMenuDom';
 
 defineOptions({ name: 'RemoteFsContextMenu' });
 
@@ -30,7 +31,7 @@ const emit = defineEmits<{
 
 const menuRef = ref<HTMLElement | null>(null);
 
-/** 图标组件映射。 */
+/** 图标组件映射字典。 */
 const iconComponents: Record<string, any> = {
   ArrowUpOutlined,
   CloudDownloadOutlined,
@@ -50,30 +51,13 @@ const menuItems = computed(() =>
     : getContextMenuItems(props.entry, props.formattedSize)
 );
 
-/**
- * 计算菜单智能定位样式，防止贴底或靠右超出视口边界。
- */
-const menuStyle = computed<CSSProperties>(() => {
-  const menuWidth = 180;
-  const menuHeight = 160;
-  const padding = 12;
-
-  let left = props.x;
-  let top = props.y;
-
-  if (typeof window !== 'undefined') {
-    if (left + menuWidth > window.innerWidth - padding) {
-      left = Math.max(padding, window.innerWidth - menuWidth - padding);
-    }
-    if (top + menuHeight > window.innerHeight - padding) {
-      top = Math.max(padding, window.innerHeight - menuHeight - padding);
-    }
-  }
-
-  return {
-    left: `${left}px`,
-    top: `${top}px`,
-  };
+/** 抽离 DOM 定位、捕获阶段 ESC 退出栈与外部点击防穿透逻辑 */
+const { menuStyle } = useContextMenuDom({
+  menuRef,
+  visible: toRef(props, 'visible'),
+  x: toRef(props, 'x'),
+  y: toRef(props, 'y'),
+  onClose: () => emit('update:visible', false),
 });
 
 /** 触发操作并关闭菜单。 */
@@ -82,32 +66,6 @@ const handleItemClick = (action: RemoteFsContextAction) => {
   emit('action', action, props.entry);
   emit('update:visible', false);
 };
-
-/** 点击菜单外部或按下 ESC 键自动关闭。 */
-const handleGlobalPointerDown = (event: MouseEvent) => {
-  if (event.button === 2) return;
-  if (props.visible && menuRef.value && !menuRef.value.contains(event.target as Node)) {
-    emit('update:visible', false);
-  }
-};
-
-const handleKeyDown = (event: KeyboardEvent) => {
-  if (event.key === 'Escape' && props.visible) {
-    emit('update:visible', false);
-  }
-};
-
-onMounted(() => {
-  window.addEventListener('pointerdown', handleGlobalPointerDown, true);
-  window.addEventListener('keydown', handleKeyDown);
-  window.addEventListener('scroll', () => emit('update:visible', false), true);
-});
-
-onUnmounted(() => {
-  window.removeEventListener('pointerdown', handleGlobalPointerDown, true);
-  window.removeEventListener('keydown', handleKeyDown);
-  window.removeEventListener('scroll', () => emit('update:visible', false), true);
-});
 </script>
 
 <template>
