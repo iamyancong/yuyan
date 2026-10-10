@@ -1077,7 +1077,7 @@ packages:
     resolution: {integrity: sha512-OK1UBXYt+ojcmxMktzzuyonYIFta8CmAASpX+CA+DTGK24KlHjhYI6x2iOJ/TjZF4N7/ACK1oFmEOjIY9IhzOQ==}
 
   '@tauri-apps/plugin-notification@2.4.0':
-    resolution: {integrity: sha512-xlJXMcUoKOjNupzDue5wrEsa1wytf+l/2gCAPhafHyP683Y3N7J/8clUWLZ3vpnwkpT2C1zcLMMQFjjecIG2xg==, tarball: https://registry.npmmirror.com/@tauri-apps/plugin-notification/-/plugin-notification-2.4.0.tgz}
+    resolution: {integrity: sha512-xlJXMcUoKOjNupzDue5wrEsa1wytf+l/2gCAPhafHyP683Y3N7J/8clUWLZ3vpnwkpT2C1zcLMMQFjjecIG2xg==}
 
   '@tauri-apps/plugin-opener@2.5.4':
     resolution: {integrity: sha512-1HnPkb+AmgO29HBazm4uPLKB+r7zzcTBW1d0fyYp1uP+jwtpoiNDGKMMzz58SFp49nOIrxdE3aUJtT57lfO9CQ==}
@@ -2955,13 +2955,13 @@ packages:
         optional: true
 
   vxe-pc-ui@4.14.32:
-    resolution: {integrity: sha512-IE0E5UZmkBRqgGKc9+HR3yL1qeRQMx4KWwehqIct4maBF1749wkW3W+HcceLbefmcKtq+tUlkKVrITrmh5mM6w==, tarball: https://registry.npmmirror.com/vxe-pc-ui/-/vxe-pc-ui-4.14.32.tgz}
+    resolution: {integrity: sha512-IE0E5UZmkBRqgGKc9+HR3yL1qeRQMx4KWwehqIct4maBF1749wkW3W+HcceLbefmcKtq+tUlkKVrITrmh5mM6w==}
 
   vxe-pc-ui@4.15.9:
     resolution: {integrity: sha512-7Rk/p4vhHfplDgpyY0u5AFydECbcUkLOLCwgwzIwyUMmyqMB31j164+2tGyAgsUI069VdxZ0YpV/TUjb1ogh0Q==}
 
   vxe-table@4.19.10:
-    resolution: {integrity: sha512-A7Q08vrCWD5IC0rqQtbc5PA8/Gi03Ap5N1k6iNBNWusL8aSo7DBpK5EqNTDO7lah2uXAEOM/UjZLe/2HenaKgw==, tarball: https://registry.npmmirror.com/vxe-table/-/vxe-table-4.19.10.tgz}
+    resolution: {integrity: sha512-A7Q08vrCWD5IC0rqQtbc5PA8/Gi03Ap5N1k6iNBNWusL8aSo7DBpK5EqNTDO7lah2uXAEOM/UjZLe/2HenaKgw==}
 
   warning@4.0.3:
     resolution: {integrity: sha512-rpJyN222KWIvHJ/F53XSZv0Zl/accqHR8et1kpaMTD/fLCRxtV8iX8czMzY7sVZupTI3zcUTg8eycS2kNF9l6w==}

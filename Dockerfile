@@ -9,7 +9,7 @@ WORKDIR /app
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 RUN corepack enable
 COPY package.json pnpm-lock.yaml ./.npmrc ./
-RUN pnpm install --frozen-lockfile || pnpm install --no-frozen-lockfile
+RUN pnpm install --frozen-lockfile
 COPY . .
 # 仅执行 vite build 产出前端静态资源，跳过 vue-tsc 类型检查
 # （yuyan-app 从桌面端迁移而来，部分模块的类型声明包未纳入 devDependencies，
