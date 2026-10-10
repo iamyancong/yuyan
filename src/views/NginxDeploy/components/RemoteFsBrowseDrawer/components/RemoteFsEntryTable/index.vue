@@ -164,7 +164,7 @@ const { handleKeyDown, handleMouseDown, handleAreaClick, handleAreaContextMenu }
         </template>
 
         <template #name="{ row }">
-          <div class="file-name-cell group" @contextmenu.prevent="emit('rowContextMenu', row, $event)">
+          <div class="file-name-cell group" @contextmenu.prevent.stop="emit('rowContextMenu', row, $event)">
             <div class="file-icon-badge" :class="getFileVisualBadge(row.name, row.type).category">
               <ArrowUpOutlined v-if="row.type === 'parent_dir'" />
               <FolderFilled v-else-if="row.type === 'directory'" />

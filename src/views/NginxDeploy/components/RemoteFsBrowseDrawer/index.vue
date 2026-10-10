@@ -67,6 +67,20 @@ const {
   onNavigateUp: navigateUp,
   onSelectExclusive: (entry) => setSelectedEntries([entry]),
 });
+
+/**
+ * 抽屉外壳层级按键监听：当焦点在表格外部但处于抽屉内部时，保障次高优先级按 ESC 清空选区而不误关抽屉。
+ */
+const handleShellKeyDown = (event: KeyboardEvent) => {
+  if (event.key === 'Escape') {
+    if (contextMenuVisible.value) return;
+    if (selectedEntries.value.length > 0) {
+      event.preventDefault();
+      event.stopPropagation();
+      clearSelection();
+    }
+  }
+};
 </script>
 
 <template>
@@ -87,7 +101,7 @@ const {
       />
     </template>
 
-    <div class="remote-fs-shell">
+    <div class="remote-fs-shell" @keydown="handleShellKeyDown">
       <RemoteFsToolbar
         v-model:path-input="pathInput"
         v-model:show-hidden="showHidden"
