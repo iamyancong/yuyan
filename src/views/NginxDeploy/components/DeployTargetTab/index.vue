@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { YTable } from '@yss-ui/components/lite';
 import { useTableHeight } from '@yss-ui/hooks';
 import type { YTableActionConfig } from '@yss-ui/components/lite';
+import type { DeployTarget } from '@/api/deploy';
 import type { RuntimeAwareDeployTarget, TargetFilterForm } from '../../types';
 import { targetColumns } from '../../constant';
 import NginxProjectNameCell from '../NginxProjectNameCell/index.vue';
@@ -24,7 +25,7 @@ interface SelectOption {
 interface DeployTargetTabProps {
   active?: boolean;
   loading: boolean;
-  targets: RuntimeAwareDeployTarget[];
+  targets: DeployTarget[];
   filterForm: TargetFilterForm;
   branchOptions: SelectOption[];
   serverOptions: SelectOption[];
@@ -36,8 +37,8 @@ const emit = defineEmits<{
   (e: 'update:filterForm', value: TargetFilterForm): void;
   (e: 'search'): void;
   (e: 'reset'): void;
-  (e: 'openProgress', target: RuntimeAwareDeployTarget): void;
-  (e: 'bindInstance', target: RuntimeAwareDeployTarget): void;
+  (e: 'openProgress', target: DeployTarget): void;
+  (e: 'bindInstance', target: DeployTarget): void;
 }>();
 
 const tableAreaRef = ref<HTMLElement>();
@@ -129,6 +130,7 @@ const activeColumns = computed(() => {
         :header-height="42"
         :virtual-x-config="{ enabled: true, gt: 0 }"
         :virtual-y-config="{ enabled: true, gt: 0 }"
+        :row-config="{ keyField: 'id', useKey: true }"
         :pageable="false"
         size="small"
         id="nginx-deploy-targets"
@@ -140,7 +142,7 @@ const activeColumns = computed(() => {
           <DeployServerCell :server-name="row.serverName" :server-host="row.serverHost" />
         </template>
         <template #siteSummary="{ row }">
-          <DeployTargetSiteSummaryCell :target="row" @bind-instance="(target) => emit('bindInstance', target as RuntimeAwareDeployTarget)" />
+          <DeployTargetSiteSummaryCell :target="row" @bind-instance="(target) => emit('bindInstance', target)" />
         </template>
         <template #defaultBranch="{ row }">
           <a-tooltip :title="row.defaultBranch || '-'">

@@ -259,6 +259,11 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
           needLoading: true,
         },
         clickFn: async ({ row }, _btn, helpers) => {
+          if (isTargetRunning(row)) {
+            message.warning('当前部署目标正在执行任务，请稍后重试');
+            helpers?.hideLoading?.();
+            return;
+          }
           try {
             await syncTargetSite?.(row);
           } finally {

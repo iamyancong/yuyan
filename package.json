@@ -40,7 +40,7 @@
     "@tauri-apps/plugin-opener": "^2.2.0",
     "@vue/compiler-dom": "^3.5.38",
     "@vue/compiler-sfc": "^3.5.38",
-    "@yss-ui/components": "^1.6.0",
+    "@yss-ui/components": "^1.7.6",
     "@yss-ui/hooks": "^1.1.3",
     "@yss-ui/utils": "^1.0.6",
     "ant-design-vue": "^4.2.6",

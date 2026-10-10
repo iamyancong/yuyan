@@ -1,19 +1,26 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { LoadingOutlined } from '@ant-design/icons-vue';
+import type { DeployTarget } from '@/api/deploy';
 import { formatDeployDateTime, getDeployProgressActionLabel, getDeployProgressStageLabel } from '../../constant';
 import type { RuntimeAwareDeployTarget } from '../../types';
+import { useNginxDeployContext } from '../../hooks/useNginxDeployContext';
 
 defineOptions({ name: 'DeployTargetRuntimeCell' });
 
 /** 部署目标运行态单元格属性 */
 interface DeployTargetRuntimeCellProps {
-  record: RuntimeAwareDeployTarget;
+  record: DeployTarget | RuntimeAwareDeployTarget;
 }
 
 const props = defineProps<DeployTargetRuntimeCellProps>();
 
-const snapshot = computed(() => props.record.runtimeSnapshot);
+const { targetRuntimeSnapshots } = useNginxDeployContext();
+
+/** 优先从全局响应式字典按 target.id 读取，向下兼容传入的 runtimeSnapshot */
+const snapshot = computed(() => {
+  return targetRuntimeSnapshots.value[props.record.id] ?? (props.record as RuntimeAwareDeployTarget).runtimeSnapshot;
+});
 
 /** 是否存在运行中任务 */
 const running = computed(() => Boolean(snapshot.value?.running));

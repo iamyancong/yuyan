@@ -257,7 +257,10 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     },
   });
 
-  /** 带运行态快照的部署目标表格数据 */
+  /**
+   * 带运行态快照的部署目标表格数据。
+   * @deprecated 请使用稳定的 targets 列表绑定表格，运行态快照由单元格通过 ID 从 targetRuntimeSnapshots 响应式读取
+   */
   const runtimeTargets = computed<RuntimeAwareDeployTarget[]>(() =>
     targets.value.map((target) => ({
       ...target,
