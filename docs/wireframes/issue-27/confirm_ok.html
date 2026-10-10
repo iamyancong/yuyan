@@ -1,0 +1,48 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>#27 · 发布前确认（正常）</title><link rel="stylesheet" href="file:///workspace/yuyan-wireframes/_base.css">
+<style>body{padding:20px}.shot-title{margin-bottom:8px;font-size:12px;color:#555}</style></head>
+<body>
+<div class="shot-title"><strong>#27 · 发布前确认（正常）</strong> · 低保真线框（非视觉稿）</div>
+
+<div class="overlay"><div class="mask">
+  <div class="drawer" style="width:520px">
+    <div class="hd">
+      <div style="font-weight:600">发布前确认 · 确认发布到「生产」环境</div>
+      <div class="tiny">拟发布人：Ryan · 请核对目标与影响面；开始后将拉取、构建、备份并重载 Nginx。</div>
+    </div>
+    <div class="bd">
+      <div class="card">
+        <div style="font-weight:600;margin-bottom:8px">变更摘要</div>
+        <div class="kv">
+          <div class="k">目标</div><div>营销站 / 生产</div>
+          <div class="k">服务器</div><div>prod-01</div>
+          <div class="k">站点</div><div>https://www.example.com</div>
+          <div class="k">Nginx</div><div>www.example.com（已绑定）</div>
+          <div class="k">分支</div><div>main</div>
+          <div class="k">根目录</div><div class="mono">/var/www/marketing</div>
+          <div class="k">策略</div><div>覆盖并保留静态资源</div>
+        </div>
+      </div>
+      <div class="card">
+        <div style="font-weight:600;margin-bottom:6px">影响面</div>
+        <ul style="padding-left:18px;color:#444">
+          <li>将按「覆盖并保留静态资源」写入上述根目录</li>
+          <li>https://www.example.com 将指向本次产物</li>
+          <li>将重载关联 Nginx 配置</li>
+        </ul>
+      </div>
+      <div class="tiny" style="margin-bottom:4px">预计阶段</div>
+      <div class="stage">
+        <span>○校验</span><span>○拉取</span><span>○构建</span><span>○备份</span><span>○上传</span><span>○重载</span>
+      </div>
+      <label style="display:flex;gap:8px;align-items:center;margin-top:10px"><input type="checkbox"> 本次重新安装依赖</label>
+    </div>
+    <div class="ft">
+      <span class="tiny" style="margin-right:auto">Enter 开始 · Esc 取消</span>
+      <button class="btn">取消</button>
+      <button class="btn">改配置再发</button>
+      <button class="btn primary">🚀 开始发布</button><span class="cta-note">主 CTA</span>
+    </div>
+  </div>
+</div></div>
+
+</body></html>
