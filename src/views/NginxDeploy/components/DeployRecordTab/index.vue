@@ -97,6 +97,7 @@ const { tableAreaRef, tableHeight, getCommitUrl } = useDeployRecordTab({
         :header-height="TABLE_HEADER_HEIGHT"
         :virtual-x-config="{ enabled: true, gt: 0 }"
         :virtual-y-config="{ enabled: true, gt: 0 }"
+        :row-config="{ keyField: 'id', useKey: true }"
         :pageable="true"
         :auto-flex-column="false"
         :pagination="pagination"

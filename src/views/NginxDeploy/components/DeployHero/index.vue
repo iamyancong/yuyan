@@ -2,7 +2,7 @@
 import { computed } from 'vue';
 import { CloudServerOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/icons-vue';
 import { YButton } from '@yss-ui/components/lite';
-import type { DeployServer } from '@/api/deploy';
+import type { DeployServer, DeployTarget } from '@/api/deploy';
 import type { RuntimeAwareDeployTarget } from '../../types';
 import { useNginxDeployContext } from '../../hooks/useNginxDeployContext';
 import { calcStep2Diagnostic } from './constant';
@@ -24,7 +24,7 @@ interface DeployHeroProps {
   /** 服务器列表（用于流程诊断） */
   servers?: DeployServer[];
   /** 部署目标列表（用于流程诊断） */
-  targets?: RuntimeAwareDeployTarget[];
+  targets?: (DeployTarget | RuntimeAwareDeployTarget)[];
 }
 
 const props = withDefaults(defineProps<DeployHeroProps>(), {

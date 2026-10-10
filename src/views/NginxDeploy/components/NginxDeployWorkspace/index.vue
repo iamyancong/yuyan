@@ -50,7 +50,7 @@ const handleOpenNginxRuntime = async () => {
       :project-name="project.projectName"
       :default-branch="project.defaultBranch"
       :servers="serverState.servers.value"
-      :targets="targetState.runtimeTargets.value"
+      :targets="targetState.targets.value"
       @create-server="serverState.openCreateServer"
       @nginx-manage="handleOpenNginxRuntime"
       @create-target="targetState.openCreateTarget"
@@ -84,7 +84,7 @@ const handleOpenNginxRuntime = async () => {
           <DeployTargetTab
             :active="lifecycleState.activeTabKey.value === 'targets'"
             :loading="Boolean(lifecycleState.loading.value && lifecycleState.activeTabKey.value === 'targets')"
-            :targets="targetState.runtimeTargets.value"
+            :targets="targetState.targets.value"
             :filter-form="targetState.targetFilterForm"
             :branch-options="targetState.targetBranchFilterOptions.value"
             :server-options="targetState.targetServerFilterOptions.value"

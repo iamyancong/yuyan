@@ -1,4 +1,4 @@
-import type { DeployServer } from '@/api/deploy';
+import type { DeployServer, DeployTarget } from '@/api/deploy';
 import { getVisibleNginxInstances } from '../DeployServerNginxCell/constant.ts';
 import type { RuntimeAwareDeployTarget } from '../../types';
 
@@ -21,7 +21,7 @@ export interface Step2Diagnostic {
  */
 export function calcStep2Diagnostic(
   servers: DeployServer[] = [],
-  targets: RuntimeAwareDeployTarget[] = []
+  targets: (DeployTarget | RuntimeAwareDeployTarget)[] = []
 ): Step2Diagnostic {
   if (servers.length === 0) {
     return {

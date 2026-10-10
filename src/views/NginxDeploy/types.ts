@@ -84,7 +84,11 @@ export type DeployProgressMode = Extract<DeployProgressSnapshot['action'], 'depl
 /** 部署目标筛选项来源 */
 export type DeployTargetProjectInfo = Pick<DeployTarget, 'projectId' | 'projectPath'> | DeployProjectContext;
 
-/** 携带运行态快照的部署目标行 */
+/**
+ * 携带运行态快照的部署目标行。
+ * @deprecated 运行态快照现已从 context.targetRuntimeSnapshots 单独响应式读取，表格行数据使用稳定的 DeployTarget，避免轮询重渲染
+ */
 export interface RuntimeAwareDeployTarget extends DeployTarget {
+  /** 关联的实时运行态进度快照（可选/兼容历史） */
   runtimeSnapshot?: DeployProgressSnapshot;
 }
