@@ -289,7 +289,7 @@ export interface DeployTargetPayload {
   repositoryUrl: string;
   defaultBranch: string;
   envName: string;
-  serverId: number;
+  serverId?: number;
   nginxInstanceId: number;
   deployRoot: string;
   nginxConfPath: string;

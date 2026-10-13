@@ -99,7 +99,7 @@ const createDefaultTargetForm = (project: DeployProjectContext): DeployTargetPay
   repositoryUrl: project.repositoryUrl,
   defaultBranch: project.defaultBranch,
   envName: TEST_ENV_NAME,
-  serverId: 0,
+  serverId: undefined,
   nginxInstanceId: 0,
   deployRoot: '',
   nginxConfPath: '',
@@ -704,7 +704,6 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
 
   /** 重置部署目标表单 */
   const resetTargetForm = () => {
-    const selectedServer = servers.value[0];
     activeProjectSource.value = DEFAULT_PROJECT_SOURCE;
     targetForm.projectSource = DEFAULT_PROJECT_SOURCE;
     const selectedProject = getDefaultTargetProject();
@@ -727,8 +726,8 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       repositoryUrl: selectedProject?.repositoryUrl || '',
       defaultBranch: selectedProject?.defaultBranch || 'dev',
       envName: TEST_ENV_NAME,
-      serverId: selectedServer?.id || 0,
-      nginxInstanceId: getDefaultNginxInstance(selectedServer)?.id || 0,
+      serverId: undefined,
+      nginxInstanceId: 0,
       deployRoot: '',
       nginxConfPath: '',
       nginxSiteManaged: false,
@@ -772,8 +771,6 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       openapiCommand: initialProjectType === 'backend' ? templateValues.openapiCommand : '',
       openapiOutputPath: initialProjectType === 'backend' ? templateValues.openapiOutputPath : '',
     });
-    applyTargetServerDefaults(selectedServer, selectedProject?.projectName || '');
-    void applyManagedNginxDefaults(selectedServer);
     initializingTargetForm.value = false;
     syncTargetFormValues();
   };
@@ -798,7 +795,8 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     try {
       const draft = createProjectDraftFromGitLab(selectedProject, source);
       applyTargetProjectDraft({ ...draft, defaultBranch: '' });
-      targetForm.serverId = Number(currentValues.serverId || targetForm.serverId || 0);
+      const retainedServerId = Number(currentValues.serverId || targetForm.serverId || 0);
+      targetForm.serverId = retainedServerId > 0 ? retainedServerId : undefined;
       targetForm.nginxInstanceId = Number(currentValues.nginxInstanceId || targetForm.nginxInstanceId || 0);
       targetForm.envName = TEST_ENV_NAME;
       syncTargetFormValues();
@@ -1148,6 +1146,10 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       }
       if (!payload.buildCommand) {
         message.warning('请填写构建命令');
+        return;
+      }
+      if (!payload.serverId) {
+        message.warning('请选择部署服务器');
         return;
       }
       const selectedServer = servers.value.find((server) => server.id === Number(payload.serverId));
@@ -1500,6 +1502,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       void applyManagedNginxDefaults(server, nextInstance);
       syncTargetNginxInstanceFieldState();
       syncTargetNginxSiteManagedState();
+      syncTargetFormValues();
     }
   );
 

@@ -45,4 +45,10 @@ test('新版目标 ID 和旧版业务字段都能定位已保存的部署目标'
     serverId: 3,
     deployRoot: '/home/app/frontend/html/other',
   }), undefined);
+  assert.equal(findDuplicateDeployTarget(targets, {
+    projectId: 1001,
+    envName: '测试',
+    serverId: undefined,
+    deployRoot: '/home/app/frontend/html',
+  }), undefined);
 });
