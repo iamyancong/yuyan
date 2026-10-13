@@ -575,6 +575,32 @@
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
+
+  .download-size-badge {
+    margin: 0;
+    border-radius: 999px;
+    font-size: 11px;
+    line-height: 20px;
+    border: 1px solid rgba(82, 196, 26, 0.35);
+    background: rgba(82, 196, 26, 0.12);
+    color: #52c41a;
+  }
+
+  .open-folder-btn {
+    border-radius: 6px;
+    background: rgba(124, 58, 237, 0.18);
+    border: 1px solid rgba(124, 58, 237, 0.45);
+    color: #d8b4fe;
+    font-weight: 500;
+    transition: all 0.25s ease;
+
+    &:hover {
+      background: rgba(124, 58, 237, 0.32);
+      border-color: rgba(124, 58, 237, 0.7);
+      color: #ffffff;
+      transform: translateY(-1px);
+    }
+  }
 }
 
 .result-strip {

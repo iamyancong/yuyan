@@ -49,6 +49,10 @@ export interface ScaffoldProgressWorkbenchProps {
   loading: boolean;
   progress: ProgressState;
   form: ScaffoldFormSnapshot;
+  downloading?: boolean;
+  downloaded?: boolean;
+  downloadedSize?: string;
+  downloadedPath?: string;
 }
 
 type ScaffoldProgressWorkbenchEmit = {
@@ -56,6 +60,7 @@ type ScaffoldProgressWorkbenchEmit = {
   (e: 'goto-deploy'): void;
   (e: 'goto-gitops'): void;
   (e: 'download'): void;
+  (e: 'open-folder'): void;
   (e: 'close'): void;
 };
 
@@ -254,6 +259,15 @@ export const useScaffoldProgressWorkbench = (
     visible.value = false;
   };
 
+  const downloading = computed(() => Boolean(props.downloading));
+  const downloaded = computed(() => Boolean(props.downloaded));
+  const downloadedSize = computed(() => props.downloadedSize || '');
+  const downloadedPath = computed(() => props.downloadedPath || '');
+
+  const handleOpenFolder = () => {
+    emit('open-folder');
+  };
+
   return {
     visible,
     statusText,
@@ -276,5 +290,10 @@ export const useScaffoldProgressWorkbench = (
     openGitlab,
     handleGotoDeploy,
     handleClose,
+    downloading,
+    downloaded,
+    downloadedSize,
+    downloadedPath,
+    handleOpenFolder,
   };
 };

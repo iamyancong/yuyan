@@ -127,3 +127,30 @@ export const FRAMEWORK_OPTIONS = [
   { label: 'Vue3 微应用', value: 'vue3' },
   { label: '其他框架微应用', value: 'other', disabled: true },
 ] as const;
+
+/**
+ * 格式化字节大小为易读文本
+ * @param bytes 字节数
+ * @returns 格式化字符串，如 1.8 MB
+ */
+export function formatDownloadSize(bytes: number): string {
+  if (!bytes || bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+/**
+ * 提取易读的错误消息文本。
+ * @param error 异常对象
+ * @returns 友好的错误描述字符串
+ */
+export function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  if (error && typeof error === 'object' && 'message' in error) {
+    return String((error as { message: unknown }).message);
+  }
+  return '未知异常，请重试';
+}
+

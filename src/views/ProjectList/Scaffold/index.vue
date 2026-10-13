@@ -23,7 +23,14 @@ const {
   rules,
   formRef,
 } = useScaffold();
-const { handleDownload } = useScaffoldDownload(result);
+const {
+  handleDownload,
+  openDownloadedFolder,
+  downloading,
+  downloaded,
+  downloadedSize,
+  downloadedPath,
+} = useScaffoldDownload(result);
 
 /** GitOps 配置弹窗体积较大，仅在打开时加载 */
 const GitOpsConfigModal = defineAsyncComponent(() => import('@/components/GitOpsConfigModal/index.vue'));
@@ -158,10 +165,15 @@ const handleGitOpsUpdateOpen = (visible: boolean) => {
       :loading="loading"
       :progress="progress"
       :form="form"
+      :downloading="downloading"
+      :downloaded="downloaded"
+      :downloaded-size="downloadedSize"
+      :downloaded-path="downloadedPath"
       @close="handleWorkbenchClose"
       @goto-deploy="handleGotoDeploy"
       @goto-gitops="handleGotoGitOps"
       @download="handleDownload"
+      @open-folder="openDownloadedFolder"
     />
     <GitOpsConfigModal
       v-if="gitopsVisible"
