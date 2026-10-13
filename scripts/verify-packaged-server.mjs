@@ -39,15 +39,36 @@ async function waitForHealth(port, child, readOutput) {
   throw new Error(`内嵌服务健康检查超时\n${readOutput()}`);
 }
 
-/** 结束冒烟测试子进程并等待退出。 */
+/** 结束冒烟测试子进程并清理其进程组中的所有孙进程（如后台 git clone）。 */
 async function stopChild(child) {
-  if (child.exitCode !== null) return;
-  child.kill('SIGTERM');
-  await Promise.race([
-    new Promise((resolve) => child.once('exit', resolve)),
-    new Promise((resolve) => setTimeout(resolve, 3_000)),
-  ]);
-  if (child.exitCode === null) child.kill('SIGKILL');
+  const killGroup = (signal) => {
+    try {
+      if (process.platform !== 'win32' && child.pid) {
+        process.kill(-child.pid, signal);
+      } else {
+        child.kill(signal);
+      }
+    } catch {
+      try {
+        child.kill(signal);
+      } catch {
+        /** 进程或进程组可能已退出。 */
+      }
+    }
+  };
+
+  // 1. 若主进程尚未退出，先尝试向进程组发送 SIGTERM 优雅退出，并等待退出（最多 3 秒）
+  if (child.exitCode === null && child.signalCode === null) {
+    killGroup('SIGTERM');
+    await Promise.race([
+      new Promise((resolve) => child.once('exit', resolve)),
+      new Promise((resolve) => setTimeout(resolve, 3_000)),
+    ]);
+  }
+
+  // 2. 无论主进程是否已退出，无条件补发 SIGKILL 彻底清理残留的后台孙进程（如 git clone），
+  //    防止在临时目录被删除时仍有写入导致 ENOTEMPTY。若进程组已不在，killGroup 内部会安全捕获 ESRCH。
+  killGroup('SIGKILL');
 }
 
 /** 启动安装包内嵌服务并执行健康检查。 */
@@ -62,6 +83,7 @@ async function main() {
   const port = await getAvailablePort();
   let output = '';
   const child = spawn(nodePath, [serverPath], {
+    detached: process.platform !== 'win32',
     env: {
       ...process.env,
       DEPLOY_DATA_DIR: path.join(temporaryDirectory, 'data'),
@@ -84,7 +106,8 @@ async function main() {
     console.log('✅ 安装包内嵌服务健康检查通过');
   } finally {
     await stopChild(child);
-    await fs.rm(temporaryDirectory, { recursive: true, force: true });
+    await fs.rm(temporaryDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 })
+      .catch((error) => console.warn(`⚠️ 清理临时目录失败（不影响校验结果）: ${error.message}`));
   }
 }
 
