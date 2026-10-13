@@ -7,11 +7,79 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { TEMPLATE_REPO_PATH, TEMPLATE_REPO_URL, TEMPLATE_BRANCH, GITLAB_TOKEN } from '../config/constants.mjs';
+import { TEMPLATE_REPO_PATH, TEMPLATE_REPO_URL, TEMPLATE_BRANCH, GITLAB_TOKEN, GITLAB_HOST } from '../config/constants.mjs';
 import { withHiddenWindow } from '../utils/child-process.mjs';
 import { ensureDir } from '../utils/file-utils.mjs';
 
 const execFile = promisify(execFileCb);
+
+/**
+ * 判断是否应该为模板仓库 URL 注入 GitLab Token
+ * @param {string} repoUrl 模板仓库 URL
+ * @param {string} [gitlabHost] 配置的 GitLab 基础地址
+ * @returns {boolean} 是否需要注入认证信息
+ */
+export function shouldAttachGitLabToken(repoUrl, gitlabHost = '') {
+  if (!repoUrl) return false;
+  try {
+    const repoObj = new URL(repoUrl);
+    const repoHostname = repoObj.hostname.toLowerCase();
+
+    // 明确公开的第三方开源代码托管平台，严禁携带内网 GitLab Token
+    if (
+      repoHostname === 'github.com' ||
+      repoHostname.endsWith('.github.com') ||
+      repoHostname === 'gitee.com' ||
+      repoHostname.endsWith('.gitee.com') ||
+      repoHostname === 'gitlab.com'
+    ) {
+      return false;
+    }
+
+    // 若配置了 gitlabHost，且主机名匹配
+    if (gitlabHost) {
+      try {
+        const gitlabHostObj = new URL(gitlabHost);
+        if (repoHostname === gitlabHostObj.hostname.toLowerCase()) {
+          return true;
+        }
+      } catch {
+        // 忽略非标准 gitlabHost 解析异常
+      }
+    }
+
+    // 纯内网 IPv4 地址或内部域名，且不是通用公网
+    if (/^(?:10\.|172\.(?:1[6-9]|2\d|3[01])\.|192\.168\.)/.test(repoHostname)) {
+      return true;
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 构建模板仓库 Clone/Fetch URL（防御性注入 GitLab Token）
+ * @param {string} repoUrl 原始仓库 URL
+ * @param {string} [token] 访问 Token
+ * @param {string} [gitlabHost] GitLab Host
+ * @returns {string} 可用的 Git URL
+ */
+export function buildAuthenticatedRepoUrl(repoUrl, token = '', gitlabHost = '') {
+  if (!repoUrl || !token) return repoUrl;
+  if (!shouldAttachGitLabToken(repoUrl, gitlabHost)) {
+    return repoUrl;
+  }
+  try {
+    const urlObj = new URL(repoUrl);
+    urlObj.username = 'oauth2';
+    urlObj.password = token;
+    return urlObj.toString();
+  } catch {
+    return repoUrl;
+  }
+}
 
 /**
  * 无窗口执行 Git 命令，避免 Windows 额外启动 cmd.exe。
@@ -21,6 +89,26 @@ const execFile = promisify(execFileCb);
  */
 function runGit(args, options = {}) {
   return execFile('git', args, withHiddenWindow(options));
+}
+
+/**
+ * 签出指定分支并包含 main 分支兜底机制
+ * @param {string} targetBranch 期望分支名
+ * @param {string} cwd 工作目录
+ * @returns {Promise<string>} 最终签出的分支名
+ */
+async function checkoutBranchWithFallback(targetBranch, cwd) {
+  try {
+    await runGit(['checkout', '-B', targetBranch, `origin/${targetBranch}`], { cwd });
+    return targetBranch;
+  } catch (err) {
+    if (targetBranch !== 'main') {
+      console.warn(`[template-service] 签出分支 ${targetBranch} 失败，尝试回退到 main 分支...`);
+      await runGit(['checkout', '-B', 'main', 'origin/main'], { cwd });
+      return 'main';
+    }
+    throw err;
+  }
 }
 
 /**
@@ -36,8 +124,14 @@ export async function pullLatestTemplate() {
     // 检查模板目录是否存在
     try {
       await fs.stat(TEMPLATE_REPO_PATH);
-      // 目录存在，执行更新操作
-      return await updateExistingTemplate();
+      // 目录存在，执行更新操作；若因源变更或历史分叉更新失败，则重置重建
+      try {
+        return await updateExistingTemplate();
+      } catch (updateError) {
+        console.warn('[template-service] 更新已有模板失败，清理并重新克隆:', updateError.message);
+        await fs.rm(TEMPLATE_REPO_PATH, { recursive: true, force: true });
+        return await cloneTemplate();
+      }
     } catch {
       // 目录不存在，执行克隆操作
       return await cloneTemplate();
@@ -56,32 +150,37 @@ export async function pullLatestTemplate() {
 async function updateExistingTemplate() {
   console.log(`[template-service] 更新模板仓库: ${TEMPLATE_REPO_PATH}`);
 
-  // 更新 remote URL 以支持认证
-  if (GITLAB_TOKEN) {
-    try {
-      const urlObj = new URL(TEMPLATE_REPO_URL);
-      urlObj.username = 'oauth2';
-      urlObj.password = GITLAB_TOKEN;
-      const authUrl = urlObj.toString();
+  const targetUrl = buildAuthenticatedRepoUrl(TEMPLATE_REPO_URL, GITLAB_TOKEN, GITLAB_HOST);
 
-      await runGit(['remote', 'remove', 'origin'], { cwd: TEMPLATE_REPO_PATH }).catch(() => {});
-      await runGit(['remote', 'add', 'origin', authUrl], { cwd: TEMPLATE_REPO_PATH });
-      console.log('[template-service] 已更新 git remote URL (带认证)');
-    } catch (urlError) {
-      console.warn('[template-service] 无法更新 remote URL，使用原始配置:', urlError.message);
+  // 检查并更新 remote origin URL
+  try {
+    const { stdout: currentRemote } = await runGit(['remote', 'get-url', 'origin'], { cwd: TEMPLATE_REPO_PATH }).catch(() => ({ stdout: '' }));
+    if (currentRemote.trim() !== targetUrl) {
+      await runGit(['remote', 'set-url', 'origin', targetUrl], { cwd: TEMPLATE_REPO_PATH }).catch(async () => {
+        await runGit(['remote', 'remove', 'origin'], { cwd: TEMPLATE_REPO_PATH }).catch(() => {});
+        await runGit(['remote', 'add', 'origin', targetUrl], { cwd: TEMPLATE_REPO_PATH });
+      });
+      console.log('[template-service] 已更新 git remote origin URL');
     }
+  } catch (urlError) {
+    console.warn('[template-service] 无法更新 remote URL，尝试重置:', urlError.message);
+    await runGit(['remote', 'remove', 'origin'], { cwd: TEMPLATE_REPO_PATH }).catch(() => {});
+    await runGit(['remote', 'add', 'origin', targetUrl], { cwd: TEMPLATE_REPO_PATH });
   }
 
-  // 使用 fetch + reset 方式更新（比 pull 更可靠）
+  // 使用 fetch origin 获取远端全部更新，以保证目标分支与 fallback 分支均可用
   const { stdout: fetchOut, stderr: fetchErr } = await runGit(
-    ['fetch', 'origin', TEMPLATE_BRANCH],
+    ['fetch', 'origin'],
     { cwd: TEMPLATE_REPO_PATH },
   );
   if (fetchOut) console.log('[template-service] git fetch stdout:', fetchOut);
   if (fetchErr) console.log('[template-service] git fetch stderr:', fetchErr);
 
+  // 签出目标分支（支持 main 回退）
+  const activeBranch = await checkoutBranchWithFallback(TEMPLATE_BRANCH, TEMPLATE_REPO_PATH);
+
   const { stdout: resetOut, stderr: resetErr } = await runGit(
-    ['reset', '--hard', `origin/${TEMPLATE_BRANCH}`],
+    ['reset', '--hard', `origin/${activeBranch}`],
     { cwd: TEMPLATE_REPO_PATH },
   );
   if (resetOut) console.log('[template-service] git reset stdout:', resetOut);
@@ -105,35 +204,19 @@ async function cloneTemplate() {
   const parentDir = path.dirname(TEMPLATE_REPO_PATH);
   await ensureDir(parentDir);
 
-  // 构建带认证的 URL（如果提供了 token）
-  let cloneUrl = TEMPLATE_REPO_URL;
-  if (GITLAB_TOKEN) {
-    try {
-      const urlObj = new URL(TEMPLATE_REPO_URL);
-      urlObj.username = 'oauth2';
-      urlObj.password = GITLAB_TOKEN;
-      cloneUrl = urlObj.toString();
-    } catch {
-      console.log('[template-service] 无法解析模板仓库 URL，使用原始 URL');
-    }
-  }
+  const cloneUrl = buildAuthenticatedRepoUrl(TEMPLATE_REPO_URL, GITLAB_TOKEN, GITLAB_HOST);
 
   // 克隆仓库
   const { stdout: cloneOut, stderr: cloneErr } = await runGit(['clone', cloneUrl, TEMPLATE_REPO_PATH]);
   if (cloneOut) console.log('[template-service] git clone stdout:', cloneOut);
   if (cloneErr) console.log('[template-service] git clone stderr:', cloneErr);
 
-  // checkout 到指定分支
-  const { stdout: checkoutOut, stderr: checkoutErr } = await runGit(
-    ['checkout', TEMPLATE_BRANCH],
-    { cwd: TEMPLATE_REPO_PATH },
-  );
-  if (checkoutOut) console.log('[template-service] git checkout stdout:', checkoutOut);
-  if (checkoutErr) console.log('[template-service] git checkout stderr:', checkoutErr);
+  // checkout 到指定分支（支持 main 回退）
+  const activeBranch = await checkoutBranchWithFallback(TEMPLATE_BRANCH, TEMPLATE_REPO_PATH);
 
   // 确保工作树是最新的
   const { stdout: resetOut, stderr: resetErr } = await runGit(
-    ['reset', '--hard', `origin/${TEMPLATE_BRANCH}`],
+    ['reset', '--hard', `origin/${activeBranch}`],
     { cwd: TEMPLATE_REPO_PATH },
   );
   if (resetOut) console.log('[template-service] git reset stdout:', resetOut);

@@ -40,14 +40,21 @@ loadLocalEnv();
 /** 服务端口号 */
 export const PORT = process.env.PORT ? Number(process.env.PORT) : 3100;
 
+/** 独立服务器部署数据目录 */
+export const DEPLOY_DATA_DIR = process.env.DEPLOY_DATA_DIR || path.join(PROJECT_ROOT, '.yuyan-deploy');
+
 /** 模板仓库本地路径 */
-export const TEMPLATE_REPO_PATH = process.env.TEMPLATE_REPO_PATH || '/opt/template';
+export const TEMPLATE_REPO_PATH =
+  process.env.TEMPLATE_REPO_PATH || path.join(DEPLOY_DATA_DIR, 'template');
 
 /** 模板仓库远程 URL */
-export const TEMPLATE_REPO_URL = process.env.TEMPLATE_REPO_URL || '';
+export const TEMPLATE_REPO_URL =
+  (process.env.TEMPLATE_REPO_URL && process.env.TEMPLATE_REPO_URL.trim()) ||
+  'https://github.com/iamyancong/microapp-template-vue3.git';
 
 /** 模板仓库分支名 */
-export const TEMPLATE_BRANCH = process.env.TEMPLATE_BRANCH || 'template';
+export const TEMPLATE_BRANCH =
+  (process.env.TEMPLATE_BRANCH && process.env.TEMPLATE_BRANCH.trim()) || 'main';
 
 /** GitLab 服务地址 */
 export const GITLAB_HOST = process.env.GITLAB_HOST || '';
@@ -60,9 +67,6 @@ export const GIT_USER_NAME = process.env.GIT_USER_NAME || '';
 
 /** Git 用户邮箱 */
 export const GIT_USER_EMAIL = process.env.GIT_USER_EMAIL || '';
-
-/** 独立服务器部署数据目录 */
-export const DEPLOY_DATA_DIR = process.env.DEPLOY_DATA_DIR || path.join(PROJECT_ROOT, '.yuyan-deploy');
 
 /** 独立服务器部署 SQLite 数据库路径 */
 export const DEPLOY_DB_PATH = process.env.DEPLOY_DB_PATH || path.join(DEPLOY_DATA_DIR, 'deploy.sqlite');

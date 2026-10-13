@@ -1,5 +1,13 @@
 <script setup lang="ts">
-import { CaretDownOutlined, CheckCircleOutlined, CloseOutlined, CopyOutlined, DownloadOutlined, ThunderboltOutlined } from '@ant-design/icons-vue';
+import {
+  CaretDownOutlined,
+  CheckCircleOutlined,
+  CloseOutlined,
+  CopyOutlined,
+  DownloadOutlined,
+  FolderOpenOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons-vue';
 import { useScaffoldProgressWorkbench, type ScaffoldProgressWorkbenchProps } from './hooks/useScaffoldProgressWorkbench';
 
 const props = defineProps<ScaffoldProgressWorkbenchProps>();
@@ -9,6 +17,7 @@ const emit = defineEmits<{
   (e: 'goto-deploy'): void;
   (e: 'goto-gitops'): void;
   (e: 'download'): void;
+  (e: 'open-folder'): void;
   (e: 'close'): void;
 }>();
 
@@ -34,6 +43,11 @@ const {
   openGitlab,
   handleGotoDeploy,
   handleClose,
+  downloading,
+  downloaded,
+  downloadedSize,
+  downloadedPath,
+  handleOpenFolder,
 } = useScaffoldProgressWorkbench(props, emit);
 </script>
 
@@ -159,10 +173,31 @@ const {
               <h3>结果保留区</h3>
             </div>
             <div class="result-head-actions">
-              <a-button v-if="snapshot.downloadPath" size="small" type="primary" @click="emit('download')">
-                <template #icon><DownloadOutlined /></template>
-                下载项目
-              </a-button>
+              <a-space>
+                <a-tag v-if="downloaded && downloadedSize" color="success" class="download-size-badge">
+                  <CheckCircleOutlined /> 已下载 {{ downloadedSize }}
+                </a-tag>
+                <a-button
+                  v-if="downloaded && downloadedPath"
+                  size="small"
+                  class="open-folder-btn"
+                  @click="handleOpenFolder"
+                >
+                  <template #icon><FolderOpenOutlined /></template>
+                  打开文件位置
+                </a-button>
+                <a-button
+                  v-if="snapshot.downloadPath"
+                  size="small"
+                  type="primary"
+                  :loading="downloading"
+                  :disabled="downloading"
+                  @click="emit('download')"
+                >
+                  <template #icon><DownloadOutlined v-if="!downloading" /></template>
+                  {{ downloading ? '正在打包下载...' : (downloaded ? '重新下载' : '下载项目') }}
+                </a-button>
+              </a-space>
             </div>
           </div>
 
@@ -236,6 +271,12 @@ const {
               <div class="info-item info-item-wide">
                 <span>独立部署</span>
                 <strong class="download-deploy-hint">当前为下载模式。本地解压调试完成后推送到 GitLab 仓库，即可在部署中心一键配置发布。</strong>
+              </div>
+              <div v-if="downloaded" class="info-item info-item-wide">
+                <span>下载状态</span>
+                <a-typography-text type="success">
+                  <CheckCircleOutlined /> 项目压缩包已成功下载落盘{{ downloadedSize ? ` (${downloadedSize})` : '' }}。如浏览器未自动弹出，请检查拦截设置或点击右上角「重新下载」。
+                </a-typography-text>
               </div>
             </div>
           </section>
