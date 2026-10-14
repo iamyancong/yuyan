@@ -1,0 +1,37 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>#25 · 失败结束自动定位 + 阶段折叠</title><link rel="stylesheet" href="file:///workspace/yuyan-wireframes/_base.css">
+<style>body{padding:20px}.shot-title{margin-bottom:8px;font-size:12px;color:#555}</style></head>
+<body>
+<div class="shot-title"><strong>#25 · 失败结束自动定位 + 阶段折叠</strong> · 低保真线框（非视觉稿）</div>
+
+<div class="page">
+  <div class="topbar"><div class="title">发布日志 · hasError</div></div>
+  <div class="main">
+    <div class="toolbar">
+      <input class="input" placeholder="🔍">
+      <button class="btn sm primary">仅错误 ON</button>
+      <button class="btn sm">跳到错误 · 1/3</button>
+      <button class="btn sm">复制</button>
+      <span class="tiny">跟随: ○ OFF · ⚠ 失败详情已定位</span>
+      <span class="tiny" style="margin-left:auto">显示 3 / 860</span>
+    </div>
+    <div class="card">
+      <div class="tiny">▾ validate / clone / install（已折叠）</div>
+      <div style="margin-top:8px;padding:8px;border:1px solid #c44;border-radius:6px;background:#fff8f8">
+        <div style="font-weight:600;color:#a22">▸ build（失败）</div>
+        <div class="mono" style="margin-top:6px">
+          12:01:03  error TS2307: Cannot find module '@/foo'<br>
+          12:01:03  npm ERR! code 2<br>
+          12:01:04  Build failed
+        </div>
+      </div>
+      <div class="tiny" style="margin-top:8px">▸ sync（未执行，折叠）</div>
+    </div>
+    <div class="footer-bar">
+      <button class="btn">关闭</button>
+      <button class="btn">查看发布记录</button>
+      <button class="btn primary">重新发布</button>
+    </div>
+  </div>
+</div>
+
+</body></html>

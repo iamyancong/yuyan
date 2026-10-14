@@ -1,0 +1,30 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>#26 · Overview 失败警示条</title><link rel="stylesheet" href="file:///workspace/yuyan-wireframes/_base.css">
+<style>body{padding:20px}.shot-title{margin-bottom:8px;font-size:12px;color:#555}</style></head>
+<body>
+<div class="shot-title"><strong>#26 · Overview 失败警示条</strong> · 低保真线框（非视觉稿）</div>
+
+<div class="page">
+  <div class="topbar">
+    <div class="title">部署目标 · prod-web &nbsp; <span class="chip"><span class="dot r"></span> 失败</span></div>
+    <div><button class="btn primary">重新发布</button><span class="cta-note">主 CTA</span></div>
+  </div>
+  <div class="banner err" style="margin:12px 16px 0">
+    <strong>⚠ 最近发布失败 · 12:01 · build</strong>
+    <div style="margin-top:8px">
+      <button class="btn primary sm">查看日志定位</button><span class="cta-note">→ #25</span>
+      <button class="btn sm">重新发布</button>
+      <button class="btn sm">回滚到上一成功</button><span class="tiny"> → #6</span>
+    </div>
+  </div>
+  <div class="main">
+    <div class="card">
+      <div class="tiny">迷你时间线首行标红，默认聚焦失败记录</div>
+      <table class="table" style="margin-top:8px">
+        <tr style="background:#fff0f0"><td><span class="dot r"></span> 失败</td><td>刚刚</td><td>—</td><td>main</td><td>张三</td><td><button class="btn sm">日志</button></td></tr>
+        <tr><td><span class="dot g"></span> 成功</td><td>2h</td><td>v1.3.2</td><td>main</td><td>张三</td><td></td></tr>
+      </table>
+    </div>
+  </div>
+</div>
+
+</body></html>
