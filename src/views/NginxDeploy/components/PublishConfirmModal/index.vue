@@ -41,6 +41,8 @@ const {
   logMonacoRef,
   finished,
   hasError,
+  errorSummary,
+  jumpToErrorLine,
   isSuccessFinished,
   hasValidVisitUrl,
   successDurationText,
@@ -210,6 +212,16 @@ watch(
           <h4>发布日志</h4>
           <a-space :size="8">
             <a-tag v-if="hasError" color="error">失败详情见日志</a-tag>
+            <a-button
+              v-if="hasError && errorSummary"
+              size="small"
+              danger
+              type="link"
+              class="publish-log-jump-btn"
+              @click="jumpToErrorLine"
+            >
+              🚨 定位至错误诊断
+            </a-button>
             <span>{{ logs.length }} 条</span>
           </a-space>
         </div>

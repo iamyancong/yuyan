@@ -9,13 +9,23 @@ import {
   getDeployRecordOperator,
   getDeployRecordShortCommit,
 } from '../../../constant';
-import { formatEmptyText, formatLogItem, getStatusLabel, type RecordSummaryItem } from '../constant';
+import {
+  extractErrorSummaryFromLogs,
+  formatEditorDiagnosticBanner,
+  formatEmptyText,
+  formatLogItem,
+  getStatusLabel,
+  type LogFilterMode,
+  type RecordSummaryItem,
+} from '../constant';
 import { getGitLabHost } from '@/api/gitlab';
 
 /** YMonaco 日志模式暴露方法 */
 interface MonacoLogViewerExpose {
   layout?: () => void;
   scrollToBottom: () => void;
+  getInstance?: () => any;
+  editor?: any;
 }
 
 /** 首次打开抽屉时 Monaco 懒加载和抽屉动画可能晚于内容更新，滚动需要短暂重试 */
@@ -33,12 +43,67 @@ export function useRecordLog(props: { open: boolean; record: DeployRecord | null
   const logMonacoRef = ref<MonacoLogViewerExpose | null>(null);
   let scrollSequence = 0;
 
-  /** 发布日志文本 */
-  const recordLogContent = computed(() => {
-    const logs = props.record?.logs ?? [];
-    if (!logs.length) return '暂无发布日志';
-    return logs.map(formatLogItem).join('\n');
+  /** 日志过滤模式：all 全部 | errors 仅错误与告警 */
+  const filterMode = ref<LogFilterMode>('all');
+
+  /** 错误根因诊断信息 */
+  const errorSummary = computed(() => {
+    return extractErrorSummaryFromLogs(props.record?.logs ?? [], props.record);
   });
+
+  /** 日志总数与异常数统计 */
+  const totalLogsCount = computed(() => props.record?.logs?.length ?? 0);
+  const errorLogsCount = computed(() => {
+    return (props.record?.logs ?? []).filter((l) => l.level === 'error' || l.level === 'warn').length;
+  });
+
+  /** 过滤后的日志项列表 */
+  const displayedLogs = computed(() => {
+    const logs = props.record?.logs ?? [];
+    if (filterMode.value === 'errors') {
+      return logs.filter((l) => l.level === 'error' || l.level === 'warn');
+    }
+    return logs;
+  });
+
+  /** 发布日志文本（构建失败时在末尾拼接高对比度诊断报告） */
+  const recordLogContent = computed(() => {
+    if (!displayedLogs.value.length) {
+      return filterMode.value === 'errors' ? '当前日志中无错误或告警信息' : '暂无发布日志';
+    }
+    const baseContent = displayedLogs.value.map(formatLogItem).join('\n');
+    // 如果构建失败且提取到了错误诊断信息，直接在 Monaco 编辑器末尾呈现 ASCII 终端高亮诊断报告
+    if (props.record?.status === 'failed' && errorSummary.value) {
+      const banner = formatEditorDiagnosticBanner(errorSummary.value);
+      return `${baseContent}\n${banner}`;
+    }
+    return baseContent;
+  });
+
+  /** 定位至错误根因或编辑器内的诊断报告 */
+  const jumpToErrorLine = async () => {
+    if (!errorSummary.value) return;
+    if (filterMode.value !== 'all') {
+      filterMode.value = 'all';
+    }
+    await nextTick();
+    const expose = logMonacoRef.value;
+    const rawEditor = typeof expose?.getInstance === 'function' ? expose.getInstance() : (expose as any)?.editor;
+    if (rawEditor) {
+      const lineCount = rawEditor.getModel?.()?.getLineCount() || 99999;
+      // 诊断报告通常占 20-30 行，定位到报告标题附近
+      const targetLine = Math.max(1, lineCount - 16);
+      if (typeof rawEditor.revealLineInCenter === 'function') {
+        rawEditor.revealLineInCenter(targetLine);
+      }
+      if (typeof rawEditor.setPosition === 'function') {
+        rawEditor.setPosition({ lineNumber: targetLine, column: 1 });
+      }
+      if (typeof rawEditor.focus === 'function') {
+        rawEditor.focus();
+      }
+    }
+  };
 
   /**
    * 获取 GitLab 提交记录页面链接。
@@ -106,19 +171,31 @@ export function useRecordLog(props: { open: boolean; record: DeployRecord | null
   });
 
 
-  /** 滚动历史日志到底部 */
-  const scrollRecordLogsToBottom = async (retryCount = 0, sequence = ++scrollSequence) => {
+  /** 滚动历史日志（失败时优先聚焦错误根因行，成功或正常状态滚动到底部） */
+  const scrollRecordLogsToTarget = async (retryCount = 0, sequence = ++scrollSequence) => {
     await nextTick();
     window.requestAnimationFrame(() => {
       if (!props.open || sequence !== scrollSequence) return;
 
       logMonacoRef.value?.layout?.();
+
+      // 如果有识别到的致命错误行，优先居中定位到该行
+      if (props.record?.status === 'failed' && errorSummary.value?.lineIndex && filterMode.value === 'all') {
+        const expose = logMonacoRef.value;
+        const rawEditor = typeof expose?.getInstance === 'function' ? expose.getInstance() : (expose as any)?.editor;
+        if (rawEditor?.revealLineInCenter) {
+          rawEditor.revealLineInCenter(errorSummary.value.lineIndex);
+          rawEditor.setPosition?.({ lineNumber: errorSummary.value.lineIndex, column: 1 });
+          return;
+        }
+      }
+
       logMonacoRef.value?.scrollToBottom();
 
       if (retryCount >= RECORD_LOG_SCROLL_RETRY_TIMES) return;
       window.setTimeout(() => {
         if (!props.open || sequence !== scrollSequence) return;
-        void scrollRecordLogsToBottom(retryCount + 1, sequence);
+        void scrollRecordLogsToTarget(retryCount + 1, sequence);
       }, RECORD_LOG_SCROLL_RETRY_DELAY);
     });
   };
@@ -129,7 +206,7 @@ export function useRecordLog(props: { open: boolean; record: DeployRecord | null
    */
   const handleDrawerAfterOpenChange = (open: boolean) => {
     if (open) {
-      void scrollRecordLogsToBottom();
+      void scrollRecordLogsToTarget();
       return;
     }
     scrollSequence += 1;
@@ -139,7 +216,7 @@ export function useRecordLog(props: { open: boolean; record: DeployRecord | null
     () => props.open,
     (open) => {
       if (open) {
-        void scrollRecordLogsToBottom();
+        void scrollRecordLogsToTarget();
         return;
       }
       scrollSequence += 1;
@@ -147,14 +224,19 @@ export function useRecordLog(props: { open: boolean; record: DeployRecord | null
   );
 
   watch(recordLogContent, () => {
-    if (props.open) void scrollRecordLogsToBottom();
+    if (props.open) void scrollRecordLogsToTarget();
   });
 
   return {
     logMonacoRef,
     recordLogContent,
     recordSummaries,
+    filterMode,
+    errorSummary,
+    totalLogsCount,
+    errorLogsCount,
+    jumpToErrorLine,
     handleDrawerAfterOpenChange,
-    scrollRecordLogsToBottom,
+    scrollRecordLogsToBottom: scrollRecordLogsToTarget,
   };
 }

@@ -11,11 +11,16 @@ import {
   UPLOAD_STRATEGY_LABEL_MAP,
 } from '../../../constant';
 import { calcStageStatus, getLogText, type PublishConfirmModalProps } from '../constant';
+import { extractErrorSummaryFromLogs, formatEditorDiagnosticBanner } from '../../RecordLogDrawer/constant';
+import type { DeployErrorSummary } from '@/api/deploy';
 import { formatDeployDuration, resolveRuntimeLockState } from '../../../hooks/runtimeLockPolicy';
 
 /** YMonaco 日志模式暴露方法 */
 interface MonacoLogViewerExpose {
   scrollToBottom: () => void;
+  layout?: () => void;
+  getInstance?: () => any;
+  editor?: any;
 }
 
 /**
@@ -156,10 +161,16 @@ export function usePublishConfirm(props: PublishConfirmModalProps) {
     { label: '发起时间', value: displayStartedAt.value },
   ]);
 
-  /** 发布日志文本 */
+  /** 发布日志文本（构建/发布失败时在末尾拼接高对比度终端诊断报告） */
   const publishLogContent = computed(() => {
     if (!props.logs.length) return '暂无发布日志';
-    return props.logs.map((item) => getLogText(item, props.target?.projectName)).join('\n');
+    const baseContent = props.logs.map((item) => getLogText(item, props.target?.projectName)).join('\n');
+    // 如果发布失败且识别到核心错误根因，直接在 Monaco 编辑器末尾呈现 ASCII 终端高亮诊断报告
+    if (hasError.value && errorSummary.value) {
+      const banner = formatEditorDiagnosticBanner(errorSummary.value);
+      return `${baseContent}\n${banner}`;
+    }
+    return baseContent;
   });
 
   /** 获取节点状态 */
@@ -241,10 +252,46 @@ export function usePublishConfirm(props: PublishConfirmModalProps) {
     }
   );
 
+  /** 错误根因诊断信息 */
+  const errorSummary = computed<DeployErrorSummary | null>(() => {
+    if (!hasError.value) return null;
+    const errorEvent = props.logs.find((e) => e.type === 'error' && (e as any).errorSummary);
+    if ((errorEvent as any)?.errorSummary) {
+      return (errorEvent as any).errorSummary;
+    }
+    const logItems = props.logs
+      .filter((e) => e.type === 'log' || e.type === 'error')
+      .map((e) => ({
+        level: (e.type === 'error' ? 'error' : (e as any).level || 'info') as any,
+        message: (e as any).message || '',
+        stage: e.stage || '',
+        timestamp: e.timestamp || '',
+      }));
+    return extractErrorSummaryFromLogs(logItems);
+  });
+
+  /** 定位至错误根因或底部的诊断报告 */
+  const jumpToErrorLine = async () => {
+    if (!errorSummary.value) return;
+    await nextTick();
+    const expose = logMonacoRef.value;
+    const rawEditor = typeof expose?.getInstance === 'function' ? expose.getInstance() : (expose as any)?.editor;
+    if (rawEditor) {
+      const lineCount = rawEditor.getModel?.()?.getLineCount() || 99999;
+      // 定位到诊断报告标题位置（通常位于末尾倒数 16 行左右）
+      const targetLine = Math.max(1, lineCount - 16);
+      rawEditor.revealLineInCenter?.(targetLine);
+      rawEditor.setPosition?.({ lineNumber: targetLine, column: 1 });
+      rawEditor.focus?.();
+    }
+  };
+
   return {
     logMonacoRef,
     finished,
     hasError,
+    errorSummary,
+    jumpToErrorLine,
     isSuccessFinished,
     hasValidVisitUrl,
     successDurationText,

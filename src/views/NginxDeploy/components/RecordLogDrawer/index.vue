@@ -20,7 +20,17 @@ const emit = defineEmits<{
 }>();
 
 // 业务逻辑 hook
-const { logMonacoRef, recordLogContent, recordSummaries, handleDrawerAfterOpenChange } = useRecordLog(props);
+const {
+  logMonacoRef,
+  recordLogContent,
+  recordSummaries,
+  filterMode,
+  errorSummary,
+  totalLogsCount,
+  errorLogsCount,
+  jumpToErrorLine,
+  handleDrawerAfterOpenChange,
+} = useRecordLog(props);
 
 /** 抽屉打开状态 */
 const drawerOpen = computed({
@@ -33,7 +43,7 @@ const drawerOpen = computed({
   <a-drawer
     v-model:open="drawerOpen"
     title="发布日志"
-    width="72%"
+    width="75%"
     placement="right"
     destroyOnClose
     class="record-log-drawer"
@@ -50,12 +60,37 @@ const drawerOpen = computed({
             <strong v-else>{{ item.value }}</strong>
           </div>
         </div>
+
+        <!-- 日志工具栏 -->
+        <div class="record-log-toolbar">
+          <div class="toolbar-left">
+            <span class="toolbar-title">控制台日志</span>
+            <a-radio-group v-model:value="filterMode" size="small" button-style="solid">
+              <a-radio-button value="all">全部 ({{ totalLogsCount }})</a-radio-button>
+              <a-radio-button value="errors">
+                仅错误与告警
+                <span v-if="errorLogsCount > 0">({{ errorLogsCount }})</span>
+              </a-radio-button>
+            </a-radio-group>
+          </div>
+          <div class="toolbar-right">
+            <a-button
+              v-if="record?.status === 'failed' && errorSummary"
+              size="small"
+              danger
+              @click="jumpToErrorLine"
+            >
+              🚨 定位至错误诊断
+            </a-button>
+          </div>
+        </div>
+
         <YMonaco
           ref="logMonacoRef"
           :model-value="recordLogContent"
           language="log"
           theme="vs-dark"
-          height="calc(100vh - 320px)"
+          height="calc(100vh - 290px)"
           :readonly="true"
           log-mode
           :max-lines="20000"
