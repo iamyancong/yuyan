@@ -444,6 +444,19 @@ export interface DeployLogItem {
   timestamp: string;
 }
 
+/** 发布错误根因诊断信息 */
+export interface DeployErrorSummary {
+  stage?: string;
+  category: string;
+  title: string;
+  violation?: string;
+  fileLocation?: string;
+  suggestion?: string;
+  detail?: string;
+  rawDetail?: string;
+  lineIndex?: number;
+}
+
 /** 发布记录 */
 export interface DeployRecord {
   id: number;
@@ -469,6 +482,7 @@ export interface DeployRecord {
   isCurrentVersion: boolean;
   canRollback: boolean;
   canUndoRollback: boolean;
+  errorSummary?: DeployErrorSummary | null;
   logs: DeployLogItem[];
   operator: string;
   startedAt: string;
@@ -519,7 +533,7 @@ export type DeployProgressEvent = (
   | { type: 'stage'; stage: string; percent: number; message: string; detail?: string; timestamp: string }
   | { type: 'log'; level: DeployLogItem['level']; stage?: string; message: string; timestamp: string }
   | { type: 'result'; data: DeployTaskResult; timestamp: string }
-  | { type: 'error'; stage?: string; message: string; timestamp: string }) & { taskId?: number; targetId?: number };
+  | { type: 'error'; stage?: string; message: string; errorSummary?: DeployErrorSummary; timestamp: string }) & { taskId?: number; targetId?: number };
 
 /** 流式发布配置 */
 export interface DeployProgressOptions {

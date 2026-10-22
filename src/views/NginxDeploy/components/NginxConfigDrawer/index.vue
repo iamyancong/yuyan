@@ -4,14 +4,15 @@ import { YMonaco, YMonacoDiff } from 'virtual:yss-heavy-components';
 import type { DeployTarget } from '@/api/deploy';
 import NginxConfigHeaderBar from './components/NginxConfigHeaderBar/index.vue';
 import NginxDiffToolbar from './components/NginxDiffToolbar/index.vue';
+import NginxSyntaxErrorAlert from './components/NginxSyntaxErrorAlert/index.vue';
 import { DEFAULT_MONACO_OPTIONS, DIFF_MONACO_OPTIONS } from './constant';
 import { useNginxConfig } from './hooks/useNginxConfig';
 import { useNginxDiff } from './hooks/useNginxDiff';
+import { useNginxSyntaxDiagnostics } from './hooks/useNginxSyntaxDiagnostics';
 import { useDrawerGuard } from './hooks/useDrawerGuard';
 
 defineOptions({ name: 'NginxConfigDrawer' });
 
-/** 属性与事件定义 */
 const props = defineProps<{ targetId: number | null; target?: DeployTarget | null }>();
 const emit = defineEmits<{
   (e: 'update:targetId', value: number | null): void;
@@ -19,39 +20,25 @@ const emit = defineEmits<{
 }>();
 
 // 配置读取与保存 Hook
-const {
-  loading,
-  saving,
-  configPath,
-  content,
-  originalContent,
-  isRawDirty,
-  isSemanticDirty,
-  canSave,
-  handleSave,
-  discardChanges,
-} = useNginxConfig(props, emit);
+const { loading, saving, configPath, content, originalContent, isRawDirty, isSemanticDirty, canSave, handleSave, discardChanges } =
+  useNginxConfig(props, emit, {
+    onSaveError: (err) => handleSyntaxError(err),
+    onSaveSuccess: () => clearSyntaxError(),
+    onReset: () => clearSyntaxError(),
+  });
 
 // 差异对比与导航 Hook
 const {
-  diffMode,
-  diffSummary,
-  currentChangeIndex,
-  totalChanges,
-  actionTip,
-  bindDiffEditor,
-  toggleDiffMode,
-  handleNextDiff,
-  handlePrevDiff,
-  handleRevertCurrentDiff,
-  resetDiffState,
+  diffMode, diffSummary, currentChangeIndex, totalChanges, actionTip,
+  bindDiffEditor, toggleDiffMode, handleNextDiff, handlePrevDiff, handleRevertCurrentDiff, resetDiffState, getDiffEditor,
 } = useNginxDiff(content, originalContent, isRawDirty, isSemanticDirty);
 
+// 语法错误诊断与 Monaco 标注 Hook
+const { syntaxError, bindSingleEditor, clearSyntaxError, handleSyntaxError, jumpToLine } =
+  useNginxSyntaxDiagnostics(content, diffMode, getDiffEditor);
+
 /** 确认放弃未保存修改并重置状态 */
-const handleDiscardAndReset = () => {
-  discardChanges();
-  resetDiffState();
-};
+const handleDiscardAndReset = () => { discardChanges(); resetDiffState(); clearSyntaxError(); };
 
 /** 清理可能残留脱节在 body 上的全屏 DOM 节点 */
 const cleanupFullscreenDom = () => {
@@ -62,12 +49,10 @@ const cleanupFullscreenDom = () => {
 onBeforeUnmount(cleanupFullscreenDom);
 
 /** 执行抽屉关闭 */
-const handleCloseDrawer = () => { cleanupFullscreenDom(); emit('update:targetId', null); };
+const handleCloseDrawer = () => { cleanupFullscreenDom(); clearSyntaxError(); emit('update:targetId', null); };
 
 // 抽屉关闭拦截守卫 Hook
 const { requestClose } = useDrawerGuard(isRawDirty, handleDiscardAndReset, handleCloseDrawer);
-
-/** 抽屉打开受控状态 */
 const open = computed(() => Boolean(props.targetId));
 </script>
 
@@ -86,6 +71,7 @@ const open = computed(() => Boolean(props.targetId));
     <a-spin :spinning="loading">
       <div class="nginx-config-drawer-body">
         <NginxConfigHeaderBar :target="target" :config-path="configPath" />
+        <NginxSyntaxErrorAlert :error="syntaxError" @jump-to-line="jumpToLine" @close="clearSyntaxError" />
         <div class="nginx-config-editor-shell">
           <NginxDiffToolbar
             :is-dirty="isRawDirty"
@@ -100,7 +86,6 @@ const open = computed(() => Boolean(props.targetId));
             @revert-diff="handleRevertCurrentDiff"
           />
           <div class="nginx-config-editor-content">
-            <!-- 对比模式：side-by-side 差异编辑器（左侧只读基线，右侧可编辑/还原块） -->
             <YMonacoDiff
               v-if="diffMode"
               :ref="bindDiffEditor"
@@ -115,9 +100,9 @@ const open = computed(() => Boolean(props.targetId));
               :toolbar-options="{ copy: false, fullscreen: true }"
               :options="DIFF_MONACO_OPTIONS"
             />
-            <!-- 默认态：普通单栏可编辑 Monaco -->
             <YMonaco
               v-else
+              :ref="bindSingleEditor"
               v-model:modelValue="content"
               language="nginx"
               theme="vs-dark"

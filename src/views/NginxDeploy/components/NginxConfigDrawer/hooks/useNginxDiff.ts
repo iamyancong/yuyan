@@ -287,5 +287,6 @@ export function useNginxDiff(
     handlePrevDiff,
     handleRevertCurrentDiff,
     resetDiffState,
+    getDiffEditor: () => diffEditorInstance.value,
   };
 }

@@ -2,17 +2,24 @@ import { computed, onScopeDispose, ref, watch } from 'vue';
 import message from 'ant-design-vue/es/message';
 import { readNginxConf } from '@/api/deploy';
 import { getErrorMessage, normalizeNginxContent } from '../constant';
+import { formatShortNginxErrorMessage, parseNginxError } from '../utils/nginxErrorParser';
 
 /**
  * Nginx 配置文件读取与保存逻辑 Hook
  * @param props 组件属性
  * @param emit 组件事件
+ * @param callbacks 可选的生命周期与保存回调
  */
 export function useNginxConfig(
   props: { targetId: number | null },
   emit: {
     (e: 'update:targetId', value: number | null): void;
     (e: 'save', targetId: number, content: string, done: (error?: unknown) => void): void;
+  },
+  callbacks?: {
+    onSaveError?: (error: unknown) => void;
+    onSaveSuccess?: () => void;
+    onReset?: () => void;
   }
 ) {
   const loading = ref(false);
@@ -61,11 +68,13 @@ export function useNginxConfig(
     configPath.value = '';
     content.value = '';
     originalContent.value = '';
+    callbacks?.onReset?.();
   };
 
   /** 放弃未保存的修改，恢复到基线内容 */
   const discardChanges = () => {
     content.value = originalContent.value;
+    callbacks?.onReset?.();
   };
 
   /** 保存并重载配置 */
@@ -80,8 +89,17 @@ export function useNginxConfig(
         });
       });
       originalContent.value = content.value;
+      callbacks?.onSaveSuccess?.();
     } catch (error: any) {
-      message.error(getErrorMessage(error));
+      if (callbacks?.onSaveError) {
+        callbacks.onSaveError(error);
+      }
+      const parsed = parseNginxError(error);
+      if (parsed.isNginxError) {
+        message.error(formatShortNginxErrorMessage(parsed));
+      } else {
+        message.error(getErrorMessage(error));
+      }
     } finally {
       saving.value = false;
     }
