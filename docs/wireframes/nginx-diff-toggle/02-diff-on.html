@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Nginx 修改抽屉 ·「对比变更」开 · side-by-side Diff</title>
+<link rel="stylesheet" href="../_base.css">
+<style>
+  body{padding:20px;background:#d0d0d0}
+  .shot-title{margin-bottom:10px;font-size:12px;color:#555}
+  .drawer{width:900px;min-height:640px}
+  .editor-toolbar{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:6px 10px;border:1px solid #ccc;border-radius:6px 6px 0 0;
+    background:#f0f0f0;margin-bottom:0;
+  }
+  .editor-toolbar .left,.editor-toolbar .right{display:flex;gap:8px;align-items:center}
+  .toggle{
+    display:inline-flex;align-items:center;gap:8px;
+    padding:4px 10px;border:2px solid #2f6fed;border-radius:6px;
+    background:#2f6fed;font-size:12px;font-weight:600;color:#fff;
+  }
+  .toggle .switch{
+    width:34px;height:18px;border-radius:10px;background:#1a4db8;border:1px solid #0d3a9a;
+    position:relative;
+  }
+  .toggle .switch::after{
+    content:"";position:absolute;top:1px;left:16px;width:14px;height:14px;
+    border-radius:50%;background:#fff;border:1px solid #fff;
+  }
+  .diff-wrap{
+    display:grid;grid-template-columns:1fr 1fr 18px;border:1px solid #ccc;border-top:0;
+    border-radius:0 0 6px 6px;overflow:hidden;height:360px;background:#1e1e1e;
+  }
+  .pane{overflow:hidden;font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.55;color:#d4d4d4}
+  .pane .ph{
+    padding:4px 10px;background:#2a2a2a;border-bottom:1px solid #444;color:#aaa;font-size:10px;
+    display:flex;justify-content:space-between;
+  }
+  .pane .body{padding:8px 0}
+  .pane .row{padding:1px 10px;white-space:pre}
+  .pane .ln{color:#666;display:inline-block;width:28px}
+  .del{background:rgba(255,80,80,.22);color:#f8a0a0}
+  .add{background:rgba(80,200,120,.22);color:#9fdfb0}
+  .same{color:#d4d4d4}
+  .minimap{
+    background:#252526;border-left:1px solid #444;position:relative;
+  }
+  .minimap .tick{position:absolute;left:2px;right:2px;height:3px;border-radius:1px}
+  .minimap .tick.d{background:#c44;top:28%}
+  .minimap .tick.a{background:#2a8;top:32%}
+  .minimap .tick.a2{background:#2a8;top:48%}
+  .status-row{
+    display:flex;align-items:center;justify-content:space-between;
+    margin-top:10px;padding:8px 10px;border:1px solid #48a;border-radius:6px;background:#f0f6ff;
+  }
+  .nav-chg{display:flex;gap:6px;align-items:center}
+  .legend{display:flex;gap:12px;font-size:11px;color:#666}
+  .legend span::before{content:"";display:inline-block;width:10px;height:10px;margin-right:4px;vertical-align:-1px;border-radius:2px}
+  .legend .l-del::before{background:#f8a0a0;border:1px solid #c44}
+  .legend .l-add::before{background:#9fdfb0;border:1px solid #2a8}
+</style>
+</head>
+<body>
+<div class="shot-title"><strong>态 2 ·「对比变更」开 · side-by-side Diff</strong> · 低保真线框（非视觉稿）· 对标雨燕 GitOps YMonacoDiff（左原 / 右改）</div>
+
+<div class="overlay"><div class="mask" style="padding:24px">
+  <div class="drawer">
+    <div class="hd">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div>
+          <div style="font-weight:600;font-size:14px">Nginx 配置文件管理</div>
+          <div class="tiny" style="margin-top:4px">营销站 / 生产 · prod-01</div>
+          <div class="tiny mono" style="margin-top:2px">/etc/nginx/conf.d/marketing.conf &nbsp; <span class="badge warn">有未保存变更</span></div>
+        </div>
+        <span class="tiny" style="color:#888">✕</span>
+      </div>
+    </div>
+    <div class="bd">
+      <div class="editor-toolbar hl-box">
+        <div class="left">
+          <span class="tiny mono">diff · 相对打开时基线</span>
+          <div class="nav-chg">
+            <button class="btn sm">↑ 上一处</button>
+            <button class="btn sm">↓ 下一处</button>
+            <span class="tiny">2 / 2</span>
+          </div>
+        </div>
+        <div class="right">
+          <div class="toggle">
+            <span class="switch"></span>
+            <span>对比变更</span>
+          </div>
+          <button class="btn sm">复制</button>
+          <button class="btn sm">全屏</button>
+        </div>
+      </div>
+
+      <div class="diff-wrap">
+        <div class="pane">
+          <div class="ph"><span>原始（打开时远端）</span><span class="l-del">−</span></div>
+          <div class="body">
+            <div class="row same"><span class="ln">1</span>server {</div>
+            <div class="row same"><span class="ln">2</span>  listen 80;</div>
+            <div class="row same"><span class="ln">3</span>  server_name www.example.com;</div>
+            <div class="row del"><span class="ln">4</span>- root /var/www/marketing/old;</div>
+            <div class="row same"><span class="ln">5</span>  location / {</div>
+            <div class="row same"><span class="ln">6</span>    try_files $uri $uri/ /index.html;</div>
+            <div class="row same"><span class="ln">7</span>  }</div>
+            <div class="row same"><span class="ln">8</span>}</div>
+          </div>
+        </div>
+        <div class="pane" style="border-left:1px solid #444">
+          <div class="ph"><span>修改后（当前缓冲）</span><span>+</span></div>
+          <div class="body">
+            <div class="row same"><span class="ln">1</span>server {</div>
+            <div class="row same"><span class="ln">2</span>  listen 80;</div>
+            <div class="row same"><span class="ln">3</span>  server_name www.example.com;</div>
+            <div class="row add"><span class="ln">4</span>+ root /var/www/marketing/current;</div>
+            <div class="row add"><span class="ln">5</span>+ add_header Cache-Control "no-store";</div>
+            <div class="row same"><span class="ln">6</span>  location / {</div>
+            <div class="row same"><span class="ln">7</span>    try_files $uri $uri/ /index.html;</div>
+            <div class="row same"><span class="ln">8</span>  }</div>
+            <div class="row same"><span class="ln">9</span>}</div>
+          </div>
+        </div>
+        <div class="minimap" title="minimap">
+          <div class="tick d"></div>
+          <div class="tick a"></div>
+          <div class="tick a2"></div>
+        </div>
+      </div>
+
+      <div class="status-row">
+        <div>
+          <div style="font-size:12px;color:#246;font-weight:600">对比变更已开启 · 只读 Diff（关开关可回编辑）</div>
+          <div class="tiny" style="margin-top:2px">已改 2 处 · +2 −1 · 视觉语言对齐 GitOps「配置」弹窗 YMonacoDiff</div>
+        </div>
+        <div class="legend">
+          <span class="l-del">删除 / 原</span>
+          <span class="l-add">新增 / 改</span>
+        </div>
+      </div>
+    </div>
+    <div class="ft" style="justify-content:space-between">
+      <span class="tiny">关「对比变更」→ 回到可编辑 Monaco</span>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn">关闭</button>
+        <button class="btn primary">💾 保存并重载</button>
+      </div>
+    </div>
+  </div>
+</div></div>
+
+</body>
+</html>

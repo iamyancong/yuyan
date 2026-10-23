@@ -1,0 +1,39 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>#28 · Nginx 配置编辑（dirty）</title><link rel="stylesheet" href="file:///workspace/yuyan-wireframes/_base.css">
+<style>body{padding:20px}.shot-title{margin-bottom:8px;font-size:12px;color:#555}</style></head>
+<body>
+<div class="shot-title"><strong>#28 · Nginx 配置编辑（dirty）</strong> · 低保真线框（非视觉稿）</div>
+
+<div class="overlay"><div class="mask" style="padding:24px">
+  <div class="drawer" style="width:640px">
+    <div class="hd">
+      <div style="font-weight:600">Nginx 配置文件管理</div>
+      <div>营销站 / 生产 · prod-01</div>
+      <div class="tiny mono">/etc/nginx/conf.d/marketing.conf &nbsp; <span class="badge warn">有未保存变更</span></div>
+    </div>
+    <div class="bd">
+      <div class="banner warn">⚠ 保存并重载将写入远端并影响该站点流量；建议先「仅校验」。</div>
+      <div class="toolbar">
+        <button class="btn sm">查看变更</button>
+        <button class="btn sm">仅校验</button>
+        <button class="btn sm">丢弃修改</button>
+        <button class="btn sm">重新加载远端</button>
+      </div>
+      <div class="log" style="height:180px;background:#fafafa;color:#222;border:1px solid #ccc">
+server {<br>
+&nbsp;&nbsp;listen 80;<br>
+&nbsp;&nbsp;server_name www.example.com;<br>
+&nbsp;&nbsp;root /var/www/marketing/current;<br>
+&nbsp;&nbsp;…<br>
+}
+      </div>
+      <div class="tiny" style="margin-top:8px">配置已修改 · 可先仅校验，再保存并重载</div>
+    </div>
+    <div class="ft">
+      <button class="btn">关闭</button>
+      <button class="btn">仅校验</button>
+      <button class="btn primary">💾 保存并重载</button><span class="cta-note">主 CTA</span>
+    </div>
+  </div>
+</div></div>
+
+</body></html>
