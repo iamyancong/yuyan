@@ -62,7 +62,7 @@ export async function fetchWorkflowRuns({ repo, targetSha, token, fetchFn = fetc
  * @param {string} [options.targetSha] 待验证的 Git SHA
  * @param {string} [options.repo] GitHub 仓库名称（例如 "ycwang-dev/yuyan"）
  * @param {string} [options.token] GitHub Token
- * @param {number} [options.maxWaitSeconds=900] 最长等待时间（秒，默认 15 分钟）
+ * @param {number} [options.maxWaitSeconds=1800] 最长等待时间（秒，默认 30 分钟）
  * @param {number} [options.pollIntervalMs=15000] 轮询间隔（毫秒，默认 15 秒）
  * @param {typeof fetch} [options.fetchFn=fetch] 用于网络请求的 fetch 函数
  * @param {(msg: string) => void} [options.logger=console.log] 日志打印函数
@@ -72,7 +72,7 @@ export async function verifyCiStatus({
   targetSha = process.env.TARGET_SHA || process.env.GITHUB_SHA || getGitSha(),
   repo = process.env.GITHUB_REPOSITORY || 'ycwang-dev/yuyan',
   token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN,
-  maxWaitSeconds = parseInt(process.env.MAX_WAIT_SECONDS || '900', 10),
+  maxWaitSeconds = parseInt(process.env.MAX_WAIT_SECONDS || '1800', 10),
   pollIntervalMs = 15000,
   fetchFn = fetch,
   logger = (msg) => console.log(`[verify-ci] ${msg}`),
