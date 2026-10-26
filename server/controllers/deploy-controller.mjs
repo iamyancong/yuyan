@@ -108,6 +108,13 @@ import { discoverServerNginx } from '../services/nginx-discovery-service.mjs';
 import { getRequestContext, getRequestTeamId } from '../services/request-context.mjs';
 import { getBackendStatusCacheStats, invalidateBackendStatus } from '../services/backend-status-cache.mjs';
 import { getCommitMetaHydrationStats } from '../services/commit-meta-service.mjs';
+import {
+  getDeployEventRevision,
+  getDeployEventStats,
+  publishDeployEvent,
+  setDeployRuntimeSnapshotResolver,
+  subscribeDeployEvents,
+} from '../services/deploy-event-service.mjs';
 import { getMetricsSnapshot } from '../services/runtime-metrics.mjs';
 import {
   getServerFsRoots,
@@ -163,9 +170,11 @@ const DEPLOY_SHUTDOWN_GRACE_MS = 2500;
 async function createDeployTask(targetId, action, body = {}) {
   const operator = String(body?.operator || '').trim() || '未知操作人';
   const startedAt = new Date().toISOString();
+  const teamId = getRequestTeamId();
   const persistent = await createPersistentDeployTask({ targetId, action, operator, startedAt });
   return {
     targetId: Number(targetId),
+    teamId,
     action,
     operator,
     startedAt,
@@ -257,11 +266,14 @@ function createProgressEmitter(task) {
     task.subscribers.forEach((res) => writeProgressEvent(res, event));
     if (event.type === 'stage') {
       void updatePersistentDeployTask(task.persistentId, { stage: event.stage, percent: event.percent });
+      publishDeployEvent({ teamId: task.teamId, domains: ['runtime'], targetIds: [task.targetId] });
     } else if (event.type === 'result') {
       const resultRef = event.data?.id ? String(event.data.id) : '';
       void updatePersistentDeployTask(task.persistentId, { resultRef, logPath: event.data?.logPath || '', percent: 100 });
+      publishDeployEvent({ teamId: task.teamId, domains: ['runtime'], targetIds: [task.targetId] });
     } else if (event.type === 'error') {
       void updatePersistentDeployTask(task.persistentId, { error: event.message, stage: event.stage || task.currentStage });
+      publishDeployEvent({ teamId: task.teamId, domains: ['runtime'], targetIds: [task.targetId] });
     }
     return event;
   };
@@ -302,6 +314,13 @@ function completeDeployTask(task) {
     if (!res.writableEnded) res.end();
   });
   task.subscribers.clear();
+  const changedDomains = ['runtime'];
+  if (['deploy', 'rollback', 'undoRollback'].includes(task.action)) {
+    changedDomains.push('targets', 'records', 'backend-status');
+  } else if (['start', 'stop', 'restart'].includes(task.action)) {
+    changedDomains.push('backend-status');
+  }
+  publishDeployEvent({ teamId: task.teamId, domains: changedDomains, targetIds: [task.targetId] });
 }
 
 /**
@@ -312,6 +331,7 @@ function completeDeployTask(task) {
  * @returns {Promise<Object>} 任务 Promise
  */
 function startDeployTask(task, runner, emit) {
+  publishDeployEvent({ teamId: task.teamId, domains: ['runtime'], targetIds: [task.targetId] });
   const promise = Promise.resolve()
     .then(runner)
     .then(async (result) => {
@@ -1080,6 +1100,7 @@ export async function handleGetRuntimeMetrics(_req, res) {
       success: true,
       data: getMetricsSnapshot({
         deployTasks: { running: deployTasksByTargetId.size, maxConcurrent: MAX_RUNNING_DEPLOY_TASKS },
+        sseEvents: getDeployEventStats(),
         commitMetaHydration: getCommitMetaHydrationStats(),
         backendStatusCache: getBackendStatusCacheStats(),
         sqlite: { journalMode: db.prepare('PRAGMA journal_mode').get()?.journal_mode || 'unknown' },
@@ -1090,30 +1111,119 @@ export async function handleGetRuntimeMetrics(_req, res) {
   }
 }
 
+/**
+ * 构建当前团队运行中的部署目标聚合快照批次。
+ * @returns {Promise<{items: Object[], checkedAt: string}>}
+ */
+export async function buildTeamRuntimeSnapshotBatch() {
+  const currentTeamId = getRequestTeamId();
+  const targetIndex = await listTargetRuntimeIndex();
+  const inMemorySnapshots = [];
+  deployTasksByTargetId.forEach((task, targetId) => {
+    if (!task.completed && (!task.teamId || task.teamId === currentTeamId)) {
+      inMemorySnapshots.push(serializeDeployTaskRuntime({ ...task, targetId: Number(targetId) }));
+    }
+  });
+
+  const centralOperations = await listActiveCentralDeployOperations();
+  const items = mergeDeployRuntimeSnapshots({
+    targetIds: targetIndex.map((target) => target.id),
+    inMemorySnapshots,
+    centralOperations,
+  });
+  return {
+    items,
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+setDeployRuntimeSnapshotResolver(() => buildTeamRuntimeSnapshotBatch());
+
 /** 聚合当前团队全部运行中的部署目标快照。 */
 export async function handleListTargetRuntimeSnapshots(_req, res) {
   try {
-    const targetIndex = await listTargetRuntimeIndex();
-    const inMemorySnapshots = [];
-    deployTasksByTargetId.forEach((task, targetId) => {
-      if (!task.completed) inMemorySnapshots.push(serializeDeployTaskRuntime({ ...task, targetId: Number(targetId) }));
-    });
-
-    const centralOperations = await listActiveCentralDeployOperations();
-    const items = mergeDeployRuntimeSnapshots({
-      targetIds: targetIndex.map((target) => target.id),
-      inMemorySnapshots,
-      centralOperations,
-    });
     res.json({
       success: true,
-      data: {
-        items,
-        checkedAt: new Date().toISOString(),
-      },
+      data: await buildTeamRuntimeSnapshotBatch(),
     });
   } catch (error) {
     sendError(res, error);
+  }
+}
+
+/**
+ * 建立部署模块实时事件流（SSE），用于推送运行态快照与多用户增量变更。
+ * @param {Object} req - Express 请求对象
+ * @param {Object} res - Express 响应对象
+ */
+export async function handleDeployEvents(req, res) {
+  const teamId = getRequestTeamId();
+
+  /** 写入一条标准 SSE 事件帧 */
+  const writeSseEvent = (eventName, payload) => {
+    if (res.writableEnded || res.destroyed) return;
+    const id = Number.isFinite(payload?.revision) ? payload.revision : getDeployEventRevision(teamId);
+    res.write(`id: ${id}\nevent: ${eventName}\ndata: ${JSON.stringify(payload)}\n\n`);
+  };
+
+  let unsubscribe;
+  try {
+    unsubscribe = subscribeDeployEvents({
+      teamId,
+      onEvent: (eventName, payload) => writeSseEvent(eventName, payload),
+      close: () => {
+        if (!res.writableEnded && !res.destroyed) res.end();
+      },
+    });
+  } catch (error) {
+    sendError(res, error, Number(error?.status || 503));
+    return;
+  }
+
+  res.status(200);
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+
+  let cleaned = false;
+  const heartbeatTimer = setInterval(() => {
+    if (!res.writableEnded && !res.destroyed) res.write(': heartbeat\n\n');
+  }, 25_000);
+  heartbeatTimer.unref?.();
+
+  /** 清理 SSE 订阅与心跳定时器 */
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    clearInterval(heartbeatTimer);
+    unsubscribe?.();
+  };
+  req.once('aborted', cleanup);
+  res.once('close', cleanup);
+  res.once('finish', cleanup);
+
+  try {
+    const runtime = await buildTeamRuntimeSnapshotBatch();
+    if (!cleaned) {
+      writeSseEvent('ready', {
+        revision: getDeployEventRevision(teamId),
+        domains: [],
+        targetIds: [],
+        runtime,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  } catch {
+    if (!cleaned) {
+      writeSseEvent('ready', {
+        revision: getDeployEventRevision(teamId),
+        domains: [],
+        targetIds: [],
+        timestamp: new Date().toISOString(),
+      });
+    }
   }
 }
 
@@ -1124,22 +1234,24 @@ export async function handleCreateTarget(req, res) {
   try {
     await validateTargetPayload(req.body);
     const isBackend = req.body.projectType === 'backend';
+    const created = await createTarget({
+      ...req.body,
+      projectSource: req.body.projectSource === 'gitlab' ? 'gitlab' : 'ops',
+      envName: req.body.envName || '测试',
+      installCommand: normalizeCommandText(req.body.installCommand) || (isBackend ? '' : 'pnpm install'),
+      buildCommand: normalizeCommandText(req.body.buildCommand) || (isBackend ? '' : 'pnpm build'),
+      artifactDir: req.body.artifactDir || '',
+      preserveSubDirs: req.body.preserveSubDirs || '',
+      nginxSiteManaged: Boolean(req.body.nginxSiteManaged),
+      listenPort: req.body.listenPort ? Number(req.body.listenPort) : 0,
+      serverName: req.body.serverName || '_',
+      enableNginxTest: Boolean(req.body.enableNginxTest),
+      enableNginxReload: Boolean(req.body.enableNginxReload),
+    });
+    publishDeployEvent({ teamId: getRequestTeamId(), domains: ['targets'], targetIds: [created.id] });
     res.json({
       success: true,
-      data: await createTarget({
-        ...req.body,
-        projectSource: req.body.projectSource === 'gitlab' ? 'gitlab' : 'ops',
-        envName: req.body.envName || '测试',
-        installCommand: normalizeCommandText(req.body.installCommand) || (isBackend ? '' : 'pnpm install'),
-        buildCommand: normalizeCommandText(req.body.buildCommand) || (isBackend ? '' : 'pnpm build'),
-        artifactDir: req.body.artifactDir || '',
-        preserveSubDirs: req.body.preserveSubDirs || '',
-        nginxSiteManaged: Boolean(req.body.nginxSiteManaged),
-        listenPort: req.body.listenPort ? Number(req.body.listenPort) : 0,
-        serverName: req.body.serverName || '_',
-        enableNginxTest: Boolean(req.body.enableNginxTest),
-        enableNginxReload: Boolean(req.body.enableNginxReload),
-      }),
+      data: created,
     });
   } catch (error) {
     sendError(res, error, 400);
@@ -1170,6 +1282,7 @@ export async function handleUpdateTarget(req, res) {
     if (!target) return sendError(res, new Error('部署目标不存在'), 404);
     /** 进程模式、端口、运行目录等配置变化后，旧的状态探测结果不再可信 */
     invalidateBackendStatus(getRequestTeamId(), target.id);
+    publishDeployEvent({ teamId: getRequestTeamId(), domains: ['targets', 'backend-status'], targetIds: [target.id] });
     res.json({ success: true, data: target });
   } catch (error) {
     sendError(res, error, 400);
@@ -1181,8 +1294,10 @@ export async function handleUpdateTarget(req, res) {
  */
 export async function handleDeleteTarget(req, res) {
   try {
-    const result = await deleteTarget(Number(req.params.id), { rejectRunning: String(req.query?.safe || '') === '1' });
-    invalidateBackendStatus(getRequestTeamId(), Number(req.params.id));
+    const targetId = Number(req.params.id);
+    const result = await deleteTarget(targetId, { rejectRunning: String(req.query?.safe || '') === '1' });
+    invalidateBackendStatus(getRequestTeamId(), targetId);
+    publishDeployEvent({ teamId: getRequestTeamId(), domains: ['targets', 'records', 'backend-status'], targetIds: [targetId] });
     res.json({ success: true, data: result });
   } catch (error) {
     sendError(res, error);

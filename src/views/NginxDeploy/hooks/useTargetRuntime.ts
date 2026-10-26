@@ -1,9 +1,13 @@
 import { onActivated, onDeactivated, onMounted, onUnmounted, ref, type Ref } from 'vue';
 import message from 'ant-design-vue/es/message';
+import { getAgentReconnectDelay } from '@/api/agentStream';
 import {
   getTargetDeployProgress,
   listDeployTargetRuntimeSnapshots,
+  subscribeDeployEvents,
+  type DeployChangeDomain,
   type DeployProgressSnapshot,
+  type DeployStreamEvent,
   type DeployTarget,
 } from '@/api/deploy';
 import { getDeployProgressActionLabel } from '../constant';
@@ -11,19 +15,28 @@ import { getErrorMessage, isNotFoundError } from '../utils';
 import {
   getTargetRuntimePollDelay,
   isTargetRuntimeBatchUnsupported,
+  isTargetRuntimeSseUnsupported,
   mapWithConcurrency,
+  shouldScheduleRuntimePoll,
   TARGET_RUNTIME_FALLBACK_CONCURRENCY,
 } from './targetRuntimePolicy';
 
 /** 判断当前页面是否处于后台隐藏状态。 */
 const isPageHidden = () => typeof document !== 'undefined' && document.visibilityState === 'hidden';
 
+/** 运行态 Hook 扩展配置 */
+export interface UseTargetRuntimeOptions {
+  /** 当收到其他客户端或后台任务的资源变更通知时触发 */
+  onDomainChange?: (payload: { domains: DeployChangeDomain[]; targetIds: number[] }) => void;
+}
+
 /**
- * 管理部署目标聚合运行态、自适应轮询与快照控制。
+ * 管理部署目标聚合运行态、SSE 实时流订阅与自适应轮询降级。
  * @param targets 部署目标响应式列表引用
+ * @param options 可选的增量变更回调配置
  * @returns 运行态快照字典、轮询控制及校验方法
  */
-export function useTargetRuntime(targets: Ref<DeployTarget[]>) {
+export function useTargetRuntime(targets: Ref<DeployTarget[]>, options: UseTargetRuntimeOptions = {}) {
   /** 部署目标的实时运行态快照缓存字典。 */
   const targetRuntimeSnapshots = ref<Record<number, DeployProgressSnapshot>>({});
   /** 是否正在加载运行态快照。 */
@@ -37,6 +50,11 @@ export function useTargetRuntime(targets: Ref<DeployTarget[]>) {
   let runtimePollingEnabled = false;
   let visibilityListenerAttached = false;
   let batchApiSupported = true;
+  let sseSupported = true;
+  let sseConnected = false;
+  let sseAbortController: AbortController | null = null;
+  let sseReconnectTimer: number | null = null;
+  let sseReconnectAttempt = 0;
   let consecutiveFailures = 0;
   let requestedTargetKey = '';
 
@@ -47,10 +65,37 @@ export function useTargetRuntime(targets: Ref<DeployTarget[]>) {
     targetRuntimeTimer = null;
   };
 
-  /** 根据当前任务与失败状态安排下一次刷新。 */
+  /** 清理 SSE 重连定时器。 */
+  const clearSseReconnectTimer = () => {
+    if (sseReconnectTimer === null) return;
+    window.clearTimeout(sseReconnectTimer);
+    sseReconnectTimer = null;
+  };
+
+  /** 将快照数组过滤为当前可见目标的运行态字典。 */
+  const applySnapshotList = (items: DeployProgressSnapshot[], targetList: DeployTarget[] = targets.value) => {
+    const visibleTargetIds = new Set(targetList.map((target) => target.id));
+    targetRuntimeSnapshots.value = items.reduce<Record<number, DeployProgressSnapshot>>((snapshotMap, snapshot) => {
+      if (snapshot.running && visibleTargetIds.has(snapshot.targetId)) {
+        snapshotMap[snapshot.targetId] = snapshot;
+      }
+      return snapshotMap;
+    }, {});
+  };
+
+  /** 根据当前任务与失败状态安排下一次刷新（当 SSE 已连接时自动跳过定时轮询）。 */
   const scheduleNextRefresh = () => {
     clearScheduledRefresh();
-    if (!runtimePollingEnabled || isPageHidden() || !targets.value.length) return;
+    if (
+      !shouldScheduleRuntimePoll({
+        pollingEnabled: runtimePollingEnabled,
+        pageHidden: isPageHidden(),
+        targetCount: targets.value.length,
+        sseConnected,
+      })
+    ) {
+      return;
+    }
     const delay = getTargetRuntimePollDelay(
       Object.keys(targetRuntimeSnapshots.value).length > 0,
       consecutiveFailures,
@@ -62,14 +107,87 @@ export function useTargetRuntime(targets: Ref<DeployTarget[]>) {
     }, delay);
   };
 
+  /** 处理来自 SSE 的实时事件。 */
+  const handleSseEvent = (event: DeployStreamEvent, eventName: 'ready' | 'change') => {
+    if (event.runtime && Array.isArray(event.runtime.items)) {
+      applySnapshotList(event.runtime.items);
+      consecutiveFailures = 0;
+      clearScheduledRefresh();
+    } else if (eventName === 'change' && event.domains.includes('runtime') && targets.value.length) {
+      void refreshTargetRuntimeSnapshots();
+    }
+    if (eventName === 'change' && event.domains.length) {
+      options.onDomainChange?.({
+        domains: event.domains,
+        targetIds: Array.isArray(event.targetIds) ? event.targetIds : [],
+      });
+    }
+  };
+
+  /** 停止 SSE 实时连接。 */
+  const stopSseStream = () => {
+    clearSseReconnectTimer();
+    sseConnected = false;
+    if (sseAbortController) {
+      sseAbortController.abort();
+      sseAbortController = null;
+    }
+  };
+
+  /** 启动或恢复 SSE 实时事件流，断线时自动退回轮询并按指数退避重连。 */
+  const startSseStream = () => {
+    if (!runtimePollingEnabled || !sseSupported || isPageHidden() || sseAbortController) return;
+    clearSseReconnectTimer();
+    const controller = new AbortController();
+    sseAbortController = controller;
+
+    void subscribeDeployEvents({
+      signal: controller.signal,
+      onReady: () => {
+        if (sseAbortController !== controller) return;
+        sseConnected = true;
+        sseReconnectAttempt = 0;
+        clearScheduledRefresh();
+      },
+      onEvent: handleSseEvent,
+    }).catch((error) => {
+      if (sseAbortController === controller) {
+        sseAbortController = null;
+      }
+      const wasConnected = sseConnected;
+      sseConnected = false;
+      if (controller.signal.aborted || !runtimePollingEnabled || isPageHidden()) return;
+      if (isTargetRuntimeSseUnsupported(error)) {
+        sseSupported = false;
+        scheduleNextRefresh();
+        return;
+      }
+      if (wasConnected && targets.value.length) {
+        void refreshTargetRuntimeSnapshots();
+      } else {
+        scheduleNextRefresh();
+      }
+      const delay = getAgentReconnectDelay(sseReconnectAttempt);
+      sseReconnectAttempt += 1;
+      sseReconnectTimer = window.setTimeout(() => {
+        sseReconnectTimer = null;
+        startSseStream();
+      }, delay);
+    });
+  };
+
   /** 页面可见性变化时暂停请求或立即补同步。 */
   const handleVisibilityChange = () => {
     if (isPageHidden()) {
       clearScheduledRefresh();
+      stopSseStream();
       cancelPendingRequests();
       return;
     }
-    if (runtimePollingEnabled && targets.value.length) void refreshTargetRuntimeSnapshots();
+    if (runtimePollingEnabled) {
+      startSseStream();
+      if (targets.value.length && !sseConnected) void refreshTargetRuntimeSnapshots();
+    }
   };
 
   /** 绑定页面可见性监听。 */
@@ -217,16 +335,18 @@ export function useTargetRuntime(targets: Ref<DeployTarget[]>) {
     }
   };
 
-  /** 开始部署运行态自适应轮询。 */
+  /** 开始部署运行态实时订阅与自适应轮询。 */
   const startTargetRuntimePolling = () => {
-    if (!runtimePollingEnabled) return;
+    runtimePollingEnabled = true;
     attachVisibilityListener();
+    startSseStream();
     scheduleNextRefresh();
   };
 
-  /** 停止部署运行态轮询并取消当前请求。 */
+  /** 停止部署运行态实时订阅、轮询并取消当前请求。 */
   const stopTargetRuntimePolling = () => {
     clearScheduledRefresh();
+    stopSseStream();
     detachVisibilityListener();
     runtimeAbortController?.abort();
     runtimeAbortController = null;

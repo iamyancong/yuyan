@@ -8,6 +8,7 @@ import { DEPLOY_DATA_DIR } from '../config/constants.mjs';
 import { deployBackendArtifact } from './backend-runtime-service.mjs';
 import { appendCentralAudit, ensureCentralIdentitySchema } from './central-identity-service.mjs';
 import { getDeployDb, getTarget } from './deploy-store.mjs';
+import { publishDeployEvent } from './deploy-event-service.mjs';
 import { getRequestContext, runRequestContext } from './request-context.mjs';
 import {
   abortCentralOperation,
@@ -143,6 +144,7 @@ export async function createArtifactJob(input) {
       ? Object.assign(new Error('同一部署目标已有上传或发布任务，请等待完成'), { status: 409, code: 'target_locked' })
       : error;
   }
+  publishDeployEvent({ teamId: context.teamId, domains: ['runtime'], targetIds: [payload.targetId] });
   return mapJob(db.prepare('SELECT * FROM artifact_jobs WHERE id = ?').get(id));
 }
 
@@ -242,11 +244,13 @@ async function runArtifactDeployment(jobId) {
       progress.stage = stage; progress.percent = percent; progress.message = message;
       db.prepare('UPDATE central_agent_operations SET result_json = ?, updated_at = ? WHERE id = ?')
         .run(JSON.stringify({ progress }), new Date().toISOString(), row.operation_id);
+      publishDeployEvent({ teamId: row.team_id, domains: ['runtime'], targetIds: [row.target_id] });
     },
     log() {},
     result() {},
     error() {},
   };
+  publishDeployEvent({ teamId: row.team_id, domains: ['runtime'], targetIds: [row.target_id] });
   try {
     const record = await deployBackendArtifact(row.target_id, {
       artifactPath: row.file_path,
@@ -294,6 +298,11 @@ async function runArtifactDeployment(jobId) {
   } finally {
     unregisterCentralOperationController(row.operation_id);
     await fs.rm(row.file_path, { force: true }).catch(() => undefined);
+    publishDeployEvent({
+      teamId: row.team_id,
+      domains: ['runtime', 'targets', 'records', 'backend-status'],
+      targetIds: [row.target_id],
+    });
   }
 }
 
@@ -320,6 +329,7 @@ export async function cancelCentralOperation(operationId) {
     db.prepare("UPDATE central_agent_operations SET status = 'cancelled', error_json = ?, updated_at = ? WHERE id = ?").run(JSON.stringify(error), timestamp, operationId);
     await fs.rm(row.file_path, { force: true }).catch(() => undefined);
   }
+  publishDeployEvent({ teamId: context.teamId, domains: ['runtime'], targetIds: [row.target_id] });
   return getCentralOperation(operationId);
 }
 

@@ -42,6 +42,7 @@ import {
   handleCreateServerFsDownloadTicket,
   handleGetServerFsSize,
   handleExecServerCommand,
+  handleDeployEvents,
   handleListRecords,
   handleGetRuntimeMetrics,
   handleListServers,
@@ -174,6 +175,7 @@ router.get('/nginx-instances/:id/next-port', handleGetNextNginxInstancePort);
 
 router.get('/targets', handleListTargets);
 router.get('/targets/runtime-snapshots', handleListTargetRuntimeSnapshots);
+router.get('/events', handleDeployEvents);
 router.post('/targets', handleCreateTarget);
 router.put('/targets/:id', handleUpdateTarget);
 router.delete('/targets/:id', handleDeleteTarget);

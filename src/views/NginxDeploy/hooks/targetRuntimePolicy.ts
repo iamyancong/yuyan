@@ -45,6 +45,29 @@ export function isTargetRuntimeBatchUnsupported(error: unknown): boolean {
   return [404, 501].includes(status);
 }
 
+/** 判断部署实时事件流（SSE）是否在当前服务端或代理环境不受支持。 */
+export function isTargetRuntimeSseUnsupported(error: unknown): boolean {
+  const candidate = error as { response?: { status?: number }; status?: number } | null;
+  const status = Number(candidate?.response?.status || candidate?.status || 0);
+  return [404, 405, 501].includes(status);
+}
+
+/**
+ * 判断当前是否需要启动定时器轮询（当 SSE 实时连接已就绪时暂停定时轮询，实现零轮询开销）。
+ * @param state 当前运行态控制状态
+ * @returns 是否应当安排下一次定时轮询
+ */
+export function shouldScheduleRuntimePoll(state: {
+  pollingEnabled: boolean;
+  pageHidden: boolean;
+  targetCount: number;
+  sseConnected: boolean;
+}): boolean {
+  if (!state.pollingEnabled || state.pageHidden || state.targetCount <= 0) return false;
+  if (state.sseConnected) return false;
+  return true;
+}
+
 /**
  * 以固定并发数映射数组并保持结果顺序。
  * @param items 输入数组
