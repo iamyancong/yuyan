@@ -494,7 +494,8 @@ async function bootstrap() {
       if (!DEPLOY_API_TOKEN) throw new Error('服务绑定非本机地址时必须配置 DEPLOY_API_TOKEN');
       if (!DEPLOY_ALLOWED_ORIGINS.length) throw new Error('服务绑定非本机地址时必须配置 DEPLOY_ALLOWED_ORIGINS');
     }
-    if (!isTauriSubprocess) {
+    const skipTemplateInit = process.env.YUYAN_SKIP_TEMPLATE_INIT === 'true';
+    if (!isTauriSubprocess && !skipTemplateInit) {
       await initializeTemplateRepository();
     }
 
@@ -530,7 +531,7 @@ async function bootstrap() {
       console.log('='.repeat(60));
       console.log(`✨ 服务正在运行中，等待请求...`);
 
-      if (isTauriSubprocess) {
+      if (isTauriSubprocess && !skipTemplateInit) {
         initializeTemplateRepository().catch((error) => {
           console.warn('[bootstrap] 后台预热模板仓库失败:', error);
         });
