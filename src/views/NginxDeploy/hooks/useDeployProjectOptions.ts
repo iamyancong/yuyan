@@ -1,6 +1,13 @@
 import { computed, h, reactive, ref, type VNodeChild } from 'vue';
 import type { DeployProjectSource } from '@/api/deploy';
-import { getBranches, getProject, getProjects, type GitLabBranch, type GitLabProject } from '@/api/gitlab';
+import { getBranch, getBranches, getProject, getProjects, type GitLabBranch, type GitLabProject } from '@/api/gitlab';
+import {
+  BRANCH_CACHE_TTL_MS,
+  BRANCH_SEARCH_DEBOUNCE_MS,
+  collectMissingBranchNames,
+  isBranchListTruncated,
+  mergeBranches,
+} from './branchOptionsPolicy';
 import {
   normalizeSearchKeyword,
   matchProjectCandidate,
@@ -9,6 +16,9 @@ import {
 
 /** 平台创建项目标签 */
 const OPS_PROJECT_TOPIC = 'yuyan-ops';
+
+/** 默认项目列表缓存时长：过期后弹窗仍秒开旧列表，并在后台静默刷新 */
+const DEFAULT_PROJECTS_TTL_MS = 10 * 60 * 1000;
 
 /** 项目下拉浮层样式类名 */
 export const PROJECT_SELECT_DROPDOWN_CLASS = 'project-select-dropdown';
@@ -119,6 +129,9 @@ export function useDeployProjectOptions() {
     gitlab: [],
   });
 
+  /** 各项目来源默认列表加载时间，用于 10 分钟过期后后台刷新 */
+  const defaultProjectsLoadedAt: Record<DeployProjectSource, number> = { ops: 0, gitlab: 0 };
+
   /** 各项目来源当前搜索结果 */
   const searchProjectsBySource = reactive<Record<DeployProjectSource, GitLabProject[]>>({
     ops: [],
@@ -129,6 +142,12 @@ export function useDeployProjectOptions() {
   const pinnedProjectsMap = reactive<Map<number, GitLabProject>>(new Map());
 
   const branches = ref<GitLabBranch[]>([]);
+  /** 当前项目分支是否超过单页上限（超过时启用远程搜索与精确补齐） */
+  const branchTruncated = ref(false);
+  /** 分支列表缓存：项目 ID → 分支、是否截断、过期时间 */
+  const branchCache = new Map<number, { items: GitLabBranch[]; truncated: boolean; expiresAt: number }>();
+  let branchSearchTimer: ReturnType<typeof setTimeout> | null = null;
+  let branchSearchSeq = 0;
   let branchRequestSeq = 0;
   let searchRequestSeq = 0;
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -202,24 +221,43 @@ export function useDeployProjectOptions() {
   const loadProjects = async (source: DeployProjectSource = projectSource.value): Promise<GitLabProject[]> => {
     const normalizedSource = normalizeProjectSource(source);
     projectSource.value = normalizedSource;
-    if (defaultProjectsBySource[normalizedSource].length) return defaultProjectsBySource[normalizedSource];
+    const cachedProjects = defaultProjectsBySource[normalizedSource];
+    if (cachedProjects.length) {
+      /** 缓存过期时先返回旧列表保证弹窗秒开，再后台静默刷新，避免长时间不刷新页面看不到新项目 */
+      if (Date.now() - defaultProjectsLoadedAt[normalizedSource] > DEFAULT_PROJECTS_TTL_MS) {
+        void fetchDefaultProjects(normalizedSource).catch((error) => {
+          console.warn('[useDeployProjectOptions] 后台刷新项目列表失败:', error);
+        });
+      }
+      return cachedProjects;
+    }
     initialLoading.value = true;
     try {
-      const result = await getProjects({
-        page: 1,
-        per_page: 100,
-        order_by: 'last_activity_at',
-        sort: 'desc',
-        membership: true,
-        ...(normalizedSource === 'ops' ? { topic: OPS_PROJECT_TOPIC } : {}),
-      });
-      const filtered = normalizedSource === 'ops' ? result.filter(isOpsProject) : result;
-      defaultProjectsBySource[normalizedSource] = filtered;
-      filtered.forEach((p) => pinnedProjectsMap.set(p.id, p));
-      return filtered;
+      return await fetchDefaultProjects(normalizedSource);
     } finally {
       initialLoading.value = false;
     }
+  };
+
+  /**
+   * 拉取并缓存指定来源的默认项目列表。
+   * @param normalizedSource 项目来源
+   * @returns 部署项目列表
+   */
+  const fetchDefaultProjects = async (normalizedSource: DeployProjectSource): Promise<GitLabProject[]> => {
+    const result = await getProjects({
+      page: 1,
+      per_page: 100,
+      order_by: 'last_activity_at',
+      sort: 'desc',
+      membership: true,
+      ...(normalizedSource === 'ops' ? { topic: OPS_PROJECT_TOPIC } : {}),
+    });
+    const filtered = normalizedSource === 'ops' ? result.filter(isOpsProject) : result;
+    defaultProjectsBySource[normalizedSource] = filtered;
+    defaultProjectsLoadedAt[normalizedSource] = Date.now();
+    filtered.forEach((p) => pinnedProjectsMap.set(p.id, p));
+    return filtered;
   };
 
   /**
@@ -317,26 +355,59 @@ export function useDeployProjectOptions() {
     searchLoading.value = false;
   };
 
+  /** 取消待触发的分支远程搜索 */
+  const cancelBranchSearch = () => {
+    branchSearchSeq += 1;
+    if (!branchSearchTimer) return;
+    clearTimeout(branchSearchTimer);
+    branchSearchTimer = null;
+  };
+
   /**
    * 加载指定项目分支。
+   * @description
+   * - 按项目缓存 60 秒，编辑目标、切换项目时优先展示缓存，避免重复请求 GitLab；
+   * - 分支超过单页上限时，精确补齐项目默认分支、当前已选分支和 dev，修复长列表截断导致选不到分支的问题。
    * @param projectId 项目 ID
+   * @param options.ensure 必须可选的分支名称（如编辑回显的已选分支）
    * @returns 分支列表
    */
-  const loadBranches = async (projectId: number): Promise<GitLabBranch[]> => {
+  const loadBranches = async (projectId: number, options: { ensure?: Array<string | null | undefined> } = {}): Promise<GitLabBranch[]> => {
     const normalizedProjectId = Number(projectId || 0);
     const currentSeq = ++branchRequestSeq;
+    cancelBranchSearch();
     if (!normalizedProjectId) {
       branchProjectId.value = null;
       branches.value = [];
+      branchTruncated.value = false;
       return [];
     }
     branchProjectId.value = normalizedProjectId;
-    branches.value = [];
-    branchLoading.value = true;
+    const cached = branchCache.get(normalizedProjectId);
+    const cacheFresh = Boolean(cached && cached.expiresAt > Date.now());
+    branches.value = cached?.items || [];
+    branchTruncated.value = cached?.truncated || false;
+    branchLoading.value = !cached;
     try {
-      const result = await getBranches(normalizedProjectId);
+      const firstPage = cacheFresh && cached ? cached.items : await getBranches(normalizedProjectId);
+      const truncated = cacheFresh && cached ? cached.truncated : isBranchListTruncated(firstPage);
+      let result = mergeBranches(firstPage);
+      if (truncated) {
+        const project = findProject(projectSource.value, normalizedProjectId) || pinnedProjectsMap.get(normalizedProjectId);
+        const missingNames = collectMissingBranchNames(result, [project?.default_branch, ...(options.ensure || []), 'dev']);
+        if (missingNames.length) {
+          const extras = await Promise.all(missingNames.map((name) => getBranch(normalizedProjectId, name).catch(() => null)));
+          result = mergeBranches(extras.filter((branch): branch is GitLabBranch => Boolean(branch)), result);
+        }
+      }
+      branchCache.set(normalizedProjectId, {
+        items: result,
+        truncated,
+        expiresAt: cacheFresh && cached ? cached.expiresAt : Date.now() + BRANCH_CACHE_TTL_MS,
+      });
       if (currentSeq === branchRequestSeq && branchProjectId.value === normalizedProjectId) {
         branches.value = result;
+        branchTruncated.value = truncated;
       }
       return result;
     } finally {
@@ -344,6 +415,32 @@ export function useDeployProjectOptions() {
         branchLoading.value = false;
       }
     }
+  };
+
+  /**
+   * 防抖远程搜索当前项目分支。
+   * @description 仅在分支超过单页上限时请求 GitLab；完整列表直接走下拉本地过滤，不产生请求。
+   * @param keyword 搜索关键字
+   */
+  const searchBranches = (keyword: string) => {
+    cancelBranchSearch();
+    const projectId = Number(branchProjectId.value || 0);
+    const searchText = String(keyword || '').trim();
+    if (!projectId || !searchText || !branchTruncated.value) return;
+    const currentSeq = branchSearchSeq;
+    branchSearchTimer = setTimeout(async () => {
+      branchSearchTimer = null;
+      try {
+        const result = await getBranches(projectId, { search: searchText });
+        if (currentSeq !== branchSearchSeq || branchProjectId.value !== projectId) return;
+        const merged = mergeBranches(branches.value, result);
+        branches.value = merged;
+        const cached = branchCache.get(projectId);
+        if (cached) branchCache.set(projectId, { ...cached, items: merged });
+      } catch (error) {
+        console.warn('[useDeployProjectOptions] 远程搜索分支失败:', error);
+      }
+    }, BRANCH_SEARCH_DEBOUNCE_MS);
   };
 
   /**
@@ -379,6 +476,8 @@ export function useDeployProjectOptions() {
     findProject,
     ensureProjectLoaded,
     loadBranches,
+    searchBranches,
+    branchTruncated,
     resolveDefaultBranch,
     normalizeProjectSource,
     getProjectSourceLabel: (source?: string) => PROJECT_SOURCE_LABEL_MAP[normalizeProjectSource(source)],

@@ -790,15 +790,48 @@ export interface GitLabBranch {
   default?: boolean;
 }
 
-/** 获取项目分支列表 */
-export const getBranches = async (projectId: number): Promise<GitLabBranch[]> => {
+/** 分支列表查询参数 */
+export interface GitLabBranchQuery {
+  /** 按名称远程模糊搜索 */
+  search?: string;
+  /** 每页数量，GitLab 上限 100 */
+  perPage?: number;
+}
+
+/**
+ * 获取项目分支列表。
+ * @description 单页最多 100 条；分支超过 100 个的项目请配合 search 远程搜索或 getBranch 精确补齐。
+ * @param projectId 项目 ID
+ * @param query 查询参数
+ * @returns 分支列表
+ */
+export const getBranches = async (projectId: number, query: GitLabBranchQuery = {}): Promise<GitLabBranch[]> => {
   try {
+    const search = String(query.search || '').trim();
     const { data } = await gitlabClient.get<GitLabBranch[]>(`/projects/${projectId}/repository/branches`, {
-      params: { per_page: 100 },
+      params: { per_page: query.perPage || 100, ...(search ? { search } : {}) },
     });
     return data;
   } catch (error) {
     console.error('获取分支列表失败:', error);
+    throw error;
+  }
+};
+
+/**
+ * 精确获取单个分支，不存在时返回 null。
+ * @param projectId 项目 ID
+ * @param branchName 分支名称
+ * @returns 分支信息或 null
+ */
+export const getBranch = async (projectId: number, branchName: string): Promise<GitLabBranch | null> => {
+  const name = String(branchName || '').trim();
+  if (!projectId || !name) return null;
+  try {
+    const { data } = await gitlabClient.get<GitLabBranch>(`/projects/${projectId}/repository/branches/${encodeURIComponent(name)}`);
+    return data;
+  } catch (error: any) {
+    if (error?.response?.status === 404) return null;
     throw error;
   }
 };

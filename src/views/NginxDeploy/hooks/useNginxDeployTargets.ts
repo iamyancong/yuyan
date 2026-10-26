@@ -186,6 +186,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     findProject,
     ensureProjectLoaded,
     loadBranches,
+    searchBranches,
     resolveDefaultBranch,
   } = useDeployProjectOptions();
 
@@ -376,6 +377,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       autocorrect: 'off',
       spellcheck: false,
       placeholder: targetForm.projectId ? '请选择分支' : '请先选择项目',
+      onSearch: searchBranches,
     });
   };
 
@@ -801,7 +803,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       targetForm.nginxInstanceId = Number(currentValues.nginxInstanceId || targetForm.nginxInstanceId || 0);
       targetForm.envName = TEST_ENV_NAME;
       syncTargetFormValues();
-      const branchRequest = loadBranches(normalizedProjectId);
+      const branchRequest = loadBranches(normalizedProjectId, { ensure: [draft.defaultBranch] });
       await nextTick();
       syncTargetBranchFieldState();
       await branchRequest;
@@ -988,7 +990,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       await refreshDeployEnvironments();
 
       if (targetForm.projectId) {
-        await loadBranches(Number(targetForm.projectId));
+        await loadBranches(Number(targetForm.projectId), { ensure: [targetForm.defaultBranch] });
         if (!deployBranches.value.some((branch) => branch.name === targetForm.defaultBranch)) {
           targetForm.defaultBranch = resolveDefaultBranch(targetForm.defaultBranch || 'dev');
         }
@@ -1055,7 +1057,8 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       if (!isManagedInstance) {
         targetForm.nginxSiteManaged = false;
       }
-      await loadBranches(Number(target.projectId));
+      /** 编辑回显：确保已保存的分支即使不在首页 100 个分支中也可选 */
+      await loadBranches(Number(target.projectId), { ensure: [target.defaultBranch] });
       await nextTick();
       syncTargetProjectSourceFieldState();
       syncTargetProjectFieldState();
