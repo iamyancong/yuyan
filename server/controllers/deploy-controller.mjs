@@ -105,7 +105,8 @@ import { listActiveCentralDeployOperations } from '../services/artifact-job-serv
 import { mergeDeployRuntimeSnapshots } from '../services/deploy-runtime-snapshot-service.mjs';
 import { listDeployRootOptions } from '../services/deploy-root-options-service.mjs';
 import { discoverServerNginx } from '../services/nginx-discovery-service.mjs';
-import { getRequestContext } from '../services/request-context.mjs';
+import { getRequestContext, getRequestTeamId } from '../services/request-context.mjs';
+import { invalidateBackendStatus } from '../services/backend-status-cache.mjs';
 import {
   getServerFsRoots,
   listRemoteFsDirectory,
@@ -1142,6 +1143,8 @@ export async function handleUpdateTarget(req, res) {
       enableNginxReload: Boolean(req.body.enableNginxReload),
     });
     if (!target) return sendError(res, new Error('部署目标不存在'), 404);
+    /** 进程模式、端口、运行目录等配置变化后，旧的状态探测结果不再可信 */
+    invalidateBackendStatus(getRequestTeamId(), target.id);
     res.json({ success: true, data: target });
   } catch (error) {
     sendError(res, error, 400);
@@ -1154,6 +1157,7 @@ export async function handleUpdateTarget(req, res) {
 export async function handleDeleteTarget(req, res) {
   try {
     const result = await deleteTarget(Number(req.params.id), { rejectRunning: String(req.query?.safe || '') === '1' });
+    invalidateBackendStatus(getRequestTeamId(), Number(req.params.id));
     res.json({ success: true, data: result });
   } catch (error) {
     sendError(res, error);
@@ -2056,7 +2060,8 @@ export async function handleDownloadOpenApiArtifact(req, res) {
 /** 获取后端服务真实状态。 */
 export async function handleGetBackendServiceStatus(req, res) {
   try {
-    res.json({ success: true, data: await getBackendServiceStatus(Number(req.params.id)) });
+    const fresh = ['1', 'true'].includes(String(req.query?.fresh || '').toLowerCase());
+    res.json({ success: true, data: await getBackendServiceStatus(Number(req.params.id), { fresh }) });
   } catch (error) {
     sendError(res, error, 400);
   }

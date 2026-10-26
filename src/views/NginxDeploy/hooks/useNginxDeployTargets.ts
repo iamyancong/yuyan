@@ -67,6 +67,7 @@ import {
 import { useNginxDeployContext } from './useNginxDeployContext';
 import { normalizeDeployRoot } from './deployRootRecommendationPolicy';
 import { useTargetRuntime } from './useTargetRuntime';
+import { BACKEND_SERVICE_STATUS_CONCURRENCY, mapWithConcurrency } from './targetRuntimePolicy';
 import { useTargetNginxConf } from './useTargetNginxConf';
 import {
   findDuplicateDeployTarget,
@@ -923,29 +924,39 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     startTargetRuntimePolling();
   };
 
+  /** 当前一轮后端服务状态探测的取消控制器，新一轮刷新开始时取消旧探测 */
+  let backendStatusAbortController: AbortController | null = null;
+
   /**
    * 从目标服务器刷新后端服务真实状态。
+   * @description 限制前端并发，新一轮刷新会取消上一轮未完成的探测；
+   * 中央服务按目标缓存并合并并发请求，多人同时打开页面不会放大 SSH 次数。
    * @param sourceTargets 需要探测的目标列表
    */
   const refreshBackendServiceStatuses = async (sourceTargets: DeployTarget[]) => {
+    backendStatusAbortController?.abort();
+    const controller = new AbortController();
+    backendStatusAbortController = controller;
     const backendTargets = sourceTargets.filter((target) => target.projectType === 'backend');
-    await Promise.allSettled(
-      backendTargets.map(async (target) => {
-        try {
-          const status = await getBackendServiceStatus(target.id);
-          Object.assign(target, {
-            serviceStatus: status.status,
-            serviceStatusOutput: status.output,
-            serviceStatusAt: status.checkedAt,
-            directUrl: status.directUrl || target.directUrl,
-            nacosStatus: status.nacosStatus || target.nacosStatus,
-          });
-        } catch (error: any) {
-          target.serviceStatus = 'unknown';
-          target.serviceStatusOutput = getErrorMessage(error);
-        }
-      })
-    );
+    await mapWithConcurrency(backendTargets, BACKEND_SERVICE_STATUS_CONCURRENCY, async (target) => {
+      if (controller.signal.aborted) return;
+      try {
+        const status = await getBackendServiceStatus(target.id, { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        Object.assign(target, {
+          serviceStatus: status.status,
+          serviceStatusOutput: status.output,
+          serviceStatusAt: status.checkedAt,
+          directUrl: status.directUrl || target.directUrl,
+          nacosStatus: status.nacosStatus || target.nacosStatus,
+        });
+      } catch (error: any) {
+        if (controller.signal.aborted) return;
+        target.serviceStatus = 'unknown';
+        target.serviceStatusOutput = getErrorMessage(error);
+      }
+    });
+    if (backendStatusAbortController === controller) backendStatusAbortController = null;
   };
 
   /** 打开新增部署目标弹窗 */
@@ -1461,6 +1472,8 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     targetListRefreshSequence += 1;
     stopTargetRuntimePolling();
     cancelPendingRequests();
+    backendStatusAbortController?.abort();
+    backendStatusAbortController = null;
     targets.value = [];
     allTargets.value = [];
     targetRuntimeSnapshots.value = {};

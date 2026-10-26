@@ -31,6 +31,8 @@ import {
   syncBackendWorkspace,
 } from './backend-project-service.mjs';
 import { execSsh, shellQuote, uploadFile, withSsh } from './ssh-service.mjs';
+import { getOrProbeBackendStatus, invalidateBackendStatus, runWithProbeLimit } from './backend-status-cache.mjs';
+import { getRequestTeamId } from './request-context.mjs';
 import {
   DEFAULT_BACKEND_RELEASE_KEEP,
   parseJavaMajorVersion,
@@ -492,7 +494,7 @@ esac
  * @returns {{unitName: string, unitPath: string, content: string}} unit
  */
 function buildSystemdUnit(target, server, paths) {
-  const unitName = `yuyan-${target.id}-${target.serviceName}.service`;
+  const unitName = getSystemdUnitName(target);
   const javaBin = path.posix.join(target.runtimeJavaHome, 'bin', 'java');
   const profileArg = target.springProfiles ? ` ${shellQuote(`--spring.profiles.active=${target.springProfiles}`)}` : '';
   const configArg = target.externalConfigPath ? ` ${shellQuote(`--spring.config.additional-location=${target.externalConfigPath}`)}` : '';
@@ -525,6 +527,15 @@ StandardError=append:${paths.logFile}
 WantedBy=multi-user.target
 `,
   };
+}
+
+/**
+ * 获取目标对应的 systemd unit 名称。
+ * @param {Object} target 部署目标
+ * @returns {string} unit 名称
+ */
+function getSystemdUnitName(target) {
+  return `yuyan-${target.id}-${target.serviceName}.service`;
 }
 
 /**
@@ -842,7 +853,7 @@ export async function deployBackendTarget(targetId, payload, emit) {
   let commitAuthor = '';
   try {
     previousRelease = await getCurrentBackendRelease(target.id);
-    await updateBackendServiceStatus(target.id, { status: 'deploying', output: '后端版本构建与发布中' });
+    await setBackendServiceStatus(target.id, { status: 'deploying', output: '后端版本构建与发布中' });
     stage('validate', 5, '后端发布预检', '检查 JDK、路径、端口和运行模式');
     log('info', `操作人 ${operator} 发起后端发布`, 'audit');
     stage('clone', 15, '拉取代码', `${target.projectName}#${branch}`);
@@ -931,7 +942,7 @@ export async function deployBackendTarget(targetId, payload, emit) {
         stage('health', 94, '验证服务健康', `127.0.0.1:${target.serverPort}`);
         await waitForRemoteHealth(conn, target, signal, log, context.environment);
         await activateBackendRelease(backendRelease.id);
-        await updateBackendServiceStatus(target.id, { status: 'online', output: `${controller.mode} · Java ${controller.remoteJavaMajor}` });
+        await setBackendServiceStatus(target.id, { status: 'online', output: `${controller.mode} · Java ${controller.remoteJavaMajor}` });
         await pruneBackendReleases(conn, target.id, [backendRelease.id, previousRelease?.id]);
       } catch (error) {
         if (backendRelease) await updateBackendReleaseStatus(backendRelease.id, 'failed');
@@ -969,7 +980,7 @@ export async function deployBackendTarget(targetId, payload, emit) {
   } catch (error) {
     log('error', error instanceof Error ? error.message : String(error), 'error');
     const previousStillOnline = Boolean(previousRelease && (!activationStarted || restoredPrevious));
-    await updateBackendServiceStatus(target.id, { status: previousStillOnline ? 'online' : 'error', output: error instanceof Error ? error.message : String(error) });
+    await setBackendServiceStatus(target.id, { status: previousStillOnline ? 'online' : 'error', output: error instanceof Error ? error.message : String(error) });
     const failed = await updateRecord(record.id, {
       status: signal?.aborted ? 'stopped' : 'failed',
       commitSha,
@@ -1029,7 +1040,7 @@ export async function deployBackendArtifact(targetId, payload, emit) {
   let restoredPrevious = false;
   try {
     previousRelease = await getCurrentBackendRelease(target.id);
-    await updateBackendServiceStatus(target.id, { status: 'deploying', output: '中央正在部署设备构建产物' });
+    await setBackendServiceStatus(target.id, { status: 'deploying', output: '中央正在部署设备构建产物' });
     stage('validate', 10, '中央发布预检', `Commit ${payload.commitSha}`);
     log('info', `设备产物已通过 SHA-256 校验：${actualChecksum.slice(0, 12)}`, 'validate');
     const publishedJarName = normalizePublishedJarName(payload.artifactName || path.basename(payload.artifactPath));
@@ -1069,7 +1080,7 @@ export async function deployBackendArtifact(targetId, payload, emit) {
         stage('health', 93, '验证服务健康', `127.0.0.1:${target.serverPort}`);
         await waitForRemoteHealth(conn, target, signal, log, context.environment);
         await activateBackendRelease(backendRelease.id);
-        await updateBackendServiceStatus(target.id, { status: 'online', output: `${controller.mode} · Java ${controller.remoteJavaMajor}` });
+        await setBackendServiceStatus(target.id, { status: 'online', output: `${controller.mode} · Java ${controller.remoteJavaMajor}` });
         await pruneBackendReleases(conn, target.id, [backendRelease.id, previousRelease?.id]);
       } catch (error) {
         if (backendRelease) await updateBackendReleaseStatus(backendRelease.id, 'failed');
@@ -1105,7 +1116,7 @@ export async function deployBackendArtifact(targetId, payload, emit) {
   } catch (error) {
     log('error', error instanceof Error ? error.message : String(error), 'error');
     const previousStillOnline = Boolean(previousRelease && (!activationStarted || restoredPrevious));
-    await updateBackendServiceStatus(target.id, { status: previousStillOnline ? 'online' : 'error', output: error instanceof Error ? error.message : String(error) });
+    await setBackendServiceStatus(target.id, { status: previousStillOnline ? 'online' : 'error', output: error instanceof Error ? error.message : String(error) });
     await updateRecord(record.id, {
       status: signal?.aborted ? 'stopped' : 'failed',
       commitSha: payload.commitSha,
@@ -1122,25 +1133,76 @@ export async function deployBackendArtifact(targetId, payload, emit) {
 }
 
 /**
- * 安全读取文件信息。
- * @param {string} filePath 文件路径
- * @returns {Promise<import('node:fs').Stats|null>} 文件信息
+ * 写入后端服务状态并失效状态探测缓存。
+ * @description 部署、启停、回滚会改变真实服务状态，写入后立即失效缓存，下一次列表刷新拿到最新结果。
+ * @param {number} targetId 目标 ID
+ * @param {{ status: string, output: string }} patch 状态
+ * @returns {Promise<void>}
  */
-async function fsStatSafe(filePath) {
-  const fs = await import('node:fs/promises');
-  return fs.stat(filePath).catch(() => null);
+async function setBackendServiceStatus(targetId, patch) {
+  invalidateBackendStatus(getRequestTeamId(), targetId);
+  await updateBackendServiceStatus(targetId, patch);
+}
+
+/** 只读状态探测输出中的进程模式标记 */
+const STATUS_PROBE_MODE_MARKER = '__YUYAN_PROBE_MODE__=';
+
+/**
+ * 构建只读的后端状态探测命令。
+ * @description 单条 SSH 命令内完成模式判定与状态查询，不创建目录、不检测 Java、不改写脚本和 unit，
+ * 与 prepareRuntimeController 的模式回退规则保持一致：systemd 无免密 sudo 时回退 PID 脚本。
+ * @param {Object} target 部署目标
+ * @param {Object} paths 后端运行目录
+ * @returns {string} Shell 命令
+ */
+export function buildBackendStatusProbeCommand(target, paths) {
+  const script = shellQuote(paths.scriptPath);
+  const pidBranch = `if [ -x ${script} ]; then echo ${STATUS_PROBE_MODE_MARKER}pid; ${script} status; else echo ${STATUS_PROBE_MODE_MARKER}missing; fi`;
+  if (target.processMode !== 'systemd') return pidBranch;
+  const unitName = shellQuote(getSystemdUnitName(target));
+  return `if sudo -n true >/dev/null 2>&1; then echo ${STATUS_PROBE_MODE_MARKER}systemd; sudo -n systemctl is-active ${unitName}; else ${pidBranch}; fi`;
 }
 
 /**
- * 查询后端服务真实状态。
+ * 解析只读状态探测输出。
+ * @param {string} stdout 标准输出
+ * @param {string} [stderr] 错误输出
+ * @returns {{ mode: 'pid'|'systemd'|'missing', stdout: string, stderr: string }} 探测模式与去除标记后的输出
+ */
+export function parseBackendStatusProbeOutput(stdout = '', stderr = '') {
+  const lines = String(stdout || '').split(/\r?\n/);
+  const markerIndex = lines.findIndex((line) => line.startsWith(STATUS_PROBE_MODE_MARKER));
+  if (markerIndex < 0) return { mode: 'missing', stdout: String(stdout || ''), stderr: String(stderr || '') };
+  const rawMode = lines[markerIndex].slice(STATUS_PROBE_MODE_MARKER.length).trim();
+  const mode = rawMode === 'systemd' || rawMode === 'pid' ? rawMode : 'missing';
+  const rest = [...lines.slice(0, markerIndex), ...lines.slice(markerIndex + 1)].join('\n').trim();
+  return { mode, stdout: rest, stderr: String(stderr || '') };
+}
+
+/**
+ * 通过 SSH 执行一次后端状态探测。
+ * @description 优先走只读探测；进程脚本尚未生成（历史目标首次查询）时回退完整初始化流程，保持兼容。
+ * @param {Object} context 后端上下文
  * @param {number} targetId 目标 ID
  * @returns {Promise<Object>} 状态
  */
-export async function getBackendServiceStatus(targetId) {
-  const context = await getBackendContext(targetId, { requireBuild: false });
+async function probeBackendServiceStatus(context, targetId) {
   return withSsh(context.server, async (conn) => {
-    const controller = await prepareRuntimeController(conn, context, () => {});
-    const result = await runControllerAction(conn, controller, 'status');
+    const paths = getBackendRuntimePaths(context.target);
+    const probeResult = await execSsh(conn, buildBackendStatusProbeCommand(context.target, paths), {
+      allowFailure: true,
+      label: '查询服务状态',
+    });
+    const probe = parseBackendStatusProbeOutput(probeResult.stdout, probeResult.stderr);
+    let controller;
+    let result;
+    if (probe.mode === 'missing') {
+      controller = await prepareRuntimeController(conn, context, () => {});
+      result = await runControllerAction(conn, controller, 'status');
+    } else {
+      controller = { mode: probe.mode, paths, unitName: probe.mode === 'systemd' ? getSystemdUnitName(context.target) : '' };
+      result = { stdout: probe.stdout, stderr: probe.stderr, code: probeResult.code };
+    }
     const status = parseServiceStatus(controller, result);
     const output = redactDeployLog(`${result.stdout || ''}${result.stderr || ''}`.trim());
     let nacosStatus = context.target.nacosServerAddr ? 'online' : 'unconfigured';
@@ -1173,6 +1235,31 @@ export async function getBackendServiceStatus(targetId) {
 }
 
 /**
+ * 安全读取文件信息。
+ * @param {string} filePath 文件路径
+ * @returns {Promise<import('node:fs').Stats|null>} 文件信息
+ */
+async function fsStatSafe(filePath) {
+  const fs = await import('node:fs/promises');
+  return fs.stat(filePath).catch(() => null);
+}
+
+/**
+ * 查询后端服务真实状态。
+ * @description 结果按目标缓存（默认 20s），同目标并发请求合并，SSH 受服务器级与全局并发上限保护；
+ * 与在线人数、刷新次数无关，每个目标在有效期内最多探测一次。
+ * @param {number} targetId 目标 ID
+ * @param {{ fresh?: boolean }} [options] fresh 为 true 时绕过缓存（用户手动刷新）
+ * @returns {Promise<Object>} 状态；命中缓存时 cached 为 true
+ */
+export async function getBackendServiceStatus(targetId, options = {}) {
+  return getOrProbeBackendStatus({ scope: getRequestTeamId(), targetId, fresh: Boolean(options.fresh) }, async () => {
+    const context = await getBackendContext(targetId, { requireBuild: false });
+    return runWithProbeLimit(context.server.id, () => probeBackendServiceStatus(context, targetId));
+  });
+}
+
+/**
  * 执行后端服务动作。
  * @param {number} targetId 目标 ID
  * @param {'start'|'stop'|'restart'} action 动作
@@ -1182,7 +1269,7 @@ export async function getBackendServiceStatus(targetId) {
 export async function runBackendServiceAction(targetId, action, options = {}) {
   if (!['start', 'stop', 'restart'].includes(action)) throw new Error('不支持的服务操作');
   const context = await getBackendContext(targetId, { requireBuild: false });
-  await updateBackendServiceStatus(targetId, { status: action === 'stop' ? 'stopping' : 'starting', output: `正在${action}服务` });
+  await setBackendServiceStatus(targetId, { status: action === 'stop' ? 'stopping' : 'starting', output: `正在${action}服务` });
   try {
     return await withServerActivationLock(context.server.id, async () => withSsh(context.server, async (conn) => {
       const controller = await prepareRuntimeController(conn, context, options.log || (() => {}));
@@ -1207,11 +1294,11 @@ export async function runBackendServiceAction(targetId, action, options = {}) {
         options.log?.('success', `受控服务进程已${action === 'restart' ? '重启' : '启动'}：${status}`, action);
       }
       const output = redactDeployLog(`${result.stdout || ''}${result.stderr || ''}`.trim());
-      await updateBackendServiceStatus(targetId, { status, output });
+      await setBackendServiceStatus(targetId, { status, output });
       return { targetId, action, status, output, processMode: controller.mode, checkedAt: new Date().toISOString() };
     }));
   } catch (error) {
-    await updateBackendServiceStatus(targetId, { status: 'error', output: error instanceof Error ? error.message : String(error) });
+    await setBackendServiceStatus(targetId, { status: 'error', output: error instanceof Error ? error.message : String(error) });
     throw error;
   }
 }
@@ -1272,7 +1359,7 @@ export async function restoreBackendRecord(recordId, payload, emit, action = 'ro
   let activationStarted = false;
   let restoredCurrent = false;
   try {
-    await updateBackendServiceStatus(context.target.id, { status: 'deploying', output: '正在切换后端版本' });
+    await setBackendServiceStatus(context.target.id, { status: 'deploying', output: '正在切换后端版本' });
     emit?.stage('rollback', 30, action === 'undoRollback' ? '撤销后端回滚' : '回滚后端版本', targetRelease.releaseName);
     await withServerActivationLock(context.server.id, async () => withSsh(context.server, async (conn) => {
       const controller = await prepareRuntimeController(conn, context, log);
@@ -1306,14 +1393,14 @@ export async function restoreBackendRecord(recordId, payload, emit, action = 'ro
       logs,
       finishedAt: new Date().toISOString(),
     });
-    await updateBackendServiceStatus(context.target.id, { status: 'online', output: `当前版本 ${targetRelease.releaseName}` });
+    await setBackendServiceStatus(context.target.id, { status: 'online', output: `当前版本 ${targetRelease.releaseName}` });
     emit?.stage('finish', 100, action === 'undoRollback' ? '撤销回滚完成' : '后端回滚完成', targetRelease.releaseName);
     emit?.result(success);
     return success;
   } catch (error) {
     log('error', error instanceof Error ? error.message : String(error), 'error');
     await updateRecord(record.id, { status: 'failed', logs, finishedAt: new Date().toISOString() });
-    await updateBackendServiceStatus(context.target.id, {
+    await setBackendServiceStatus(context.target.id, {
       status: !activationStarted || restoredCurrent ? 'online' : 'error',
       output: error instanceof Error ? error.message : String(error),
     });

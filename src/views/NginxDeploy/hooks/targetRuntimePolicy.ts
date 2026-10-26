@@ -13,6 +13,9 @@ export const TARGET_RUNTIME_ERROR_MAX_INTERVAL = 30_000;
 /** 旧服务端逐目标回退模式最大并发数。 */
 export const TARGET_RUNTIME_FALLBACK_CONCURRENCY = 4;
 
+/** 后端服务状态探测的前端并发上限，避免一次刷新瞬间打出大量 SSH 探测请求 */
+export const BACKEND_SERVICE_STATUS_CONCURRENCY = 3;
+
 /**
  * 计算下一次部署运行态刷新间隔。
  * @param hasRunningTask 是否存在运行任务
