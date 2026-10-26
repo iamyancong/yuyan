@@ -385,6 +385,8 @@ export interface BackendServiceRuntimeStatus {
   nacosConsoleUrl?: string;
   nacosStatus?: 'online' | 'offline' | 'unknown' | 'unconfigured';
   checkedAt: string;
+  /** 是否命中中央服务状态缓存（默认 20 秒内复用最近一次 SSH 探测结果） */
+  cached?: boolean;
 }
 
 /** 服务器 Java 运行时 */
@@ -1293,9 +1295,28 @@ export const inspectBackendTarget = (targetId: number, branch?: string, gitlabTo
     .post(`/targets/${targetId}/inspect`, { branch }, { headers: gitlabToken ? { 'X-GitLab-Token': gitlabToken } : undefined })
     .then(unwrap<BackendProjectInspection>);
 
-/** 获取后端服务真实状态 */
-export const getBackendServiceStatus = (targetId: number) =>
-  client.get(`/targets/${targetId}/service-status`).then(unwrap<BackendServiceRuntimeStatus>);
+/** 后端服务状态查询选项 */
+export interface BackendServiceStatusOptions {
+  /** 绕过中央状态缓存，强制 SSH 实时探测 */
+  fresh?: boolean;
+  /** 取消信号 */
+  signal?: AbortSignal;
+}
+
+/**
+ * 获取后端服务真实状态。
+ * @description 中央服务按目标缓存探测结果并合并并发请求；部署、启停、回滚、编辑目标后会自动失效缓存。
+ * @param targetId 部署目标 ID
+ * @param options 查询选项
+ * @returns 后端服务运行状态
+ */
+export const getBackendServiceStatus = (targetId: number, options: BackendServiceStatusOptions = {}) =>
+  client
+    .get(`/targets/${targetId}/service-status`, {
+      params: options.fresh ? { fresh: 1 } : undefined,
+      signal: options.signal,
+    })
+    .then(unwrap<BackendServiceRuntimeStatus>);
 
 /** 执行后端服务启停 */
 export const runBackendServiceAction = (targetId: number, action: 'start' | 'stop' | 'restart') =>
