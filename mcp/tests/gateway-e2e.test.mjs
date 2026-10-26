@@ -64,6 +64,7 @@ test('MCP Sidecar 通过轮换令牌访问 Loopback Agent Gateway', { timeout: 2
       ...process.env,
       PORT: String(port),
       IS_TAURI_SUBPROCESS: 'true',
+      YUYAN_SKIP_TEMPLATE_INIT: 'true',
       DEPLOY_DATA_DIR: path.join(tempRoot, 'deploy-data'),
       TEMPLATE_REPO_PATH: path.join(tempRoot, 'template'),
       YUYAN_AGENT_SESSION_TOKEN: token,
@@ -129,7 +130,21 @@ test('MCP Sidecar 通过轮换令牌访问 Loopback Agent Gateway', { timeout: 2
     eventController?.abort();
     await client?.close().catch(() => undefined);
     serverProcess.stdin?.end();
-    serverProcess.kill('SIGTERM');
-    await fs.rm(tempRoot, { recursive: true, force: true });
+    if (serverProcess.exitCode === null && serverProcess.signalCode === null) {
+      const exitPromise = new Promise((resolve) => serverProcess.once('exit', resolve));
+      serverProcess.kill('SIGTERM');
+      await Promise.race([
+        exitPromise,
+        new Promise((resolve) =>
+          setTimeout(() => {
+            try {
+              serverProcess.kill('SIGKILL');
+            } catch {}
+            resolve();
+          }, 3_000)
+        ),
+      ]);
+    }
+    await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
