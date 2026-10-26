@@ -71,6 +71,12 @@ export const GIT_USER_EMAIL = process.env.GIT_USER_EMAIL || '';
 /** 独立服务器部署 SQLite 数据库路径 */
 export const DEPLOY_DB_PATH = process.env.DEPLOY_DB_PATH || path.join(DEPLOY_DATA_DIR, 'deploy.sqlite');
 
+/**
+ * SQLite 日志模式：默认 WAL，读写互不阻塞，适合多人并发访问中央服务。
+ * 数据目录位于 NFS 等网络文件系统时（WAL 依赖共享内存，不支持网络盘），设置为 delete 回退传统回滚日志。
+ */
+export const SQLITE_JOURNAL_MODE = String(process.env.YUYAN_SQLITE_JOURNAL_MODE || 'wal').trim().toLowerCase();
+
 /** AI 控制平面 SQLite 数据库路径。 */
 export const AGENT_DB_PATH = process.env.YUYAN_AGENT_DB_PATH || path.join(DEPLOY_DATA_DIR, 'agent.sqlite');
 

@@ -8,7 +8,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { execSync } from 'node:child_process';
-import { DEPLOY_DATA_DIR, DEPLOY_DB_PATH, DEPLOY_LOG_DIR, DEPLOY_RECORD_KEEP_PER_PROJECT, DEPLOY_SECRET_KEY } from '../config/constants.mjs';
+import { DEPLOY_DATA_DIR, DEPLOY_DB_PATH, DEPLOY_LOG_DIR, DEPLOY_RECORD_KEEP_PER_PROJECT, DEPLOY_SECRET_KEY, SQLITE_JOURNAL_MODE } from '../config/constants.mjs';
 import { enqueueCommitMetaHydration, hasChineseText, resolveGitlabToken } from './commit-meta-service.mjs';
 import { normalizeBackendConfig, normalizeBackendServiceName, normalizeHealthCheckPath, parseJavaMajorVersion, validateBackendDeployRoot } from './backend-domain.mjs';
 import { getRequestTeamId, SHARED_DEPLOY_WORKSPACE_ID } from './request-context.mjs';
@@ -1082,6 +1082,37 @@ function migrateLegacyNginxInstances(db) {
 }
 
 /**
+ * 使用 VACUUM INTO 生成一致性数据库快照。
+ * @description WAL 模式下尚未检查点的数据位于 -wal 文件，直接复制主库文件会丢数据；
+ * VACUUM INTO 通过 SQLite 引擎导出完整、事务一致的独立数据库文件。
+ * @param {DatabaseSync} db 数据库实例
+ * @param {string} backupPath 备份文件路径（必须不存在）
+ */
+function backupDeployDbFile(db, backupPath) {
+  db.exec(`VACUUM INTO '${String(backupPath).replace(/'/g, "''")}'`);
+}
+
+/**
+ * 应用 SQLite 并发相关配置。
+ * @description 在全部建表与迁移完成后切换 WAL，避免影响迁移前「空库不备份」的判定；
+ * WAL 下读写互不阻塞，配合 synchronous=NORMAL 减少每次提交的 fsync 次数。
+ * @param {DatabaseSync} db 数据库实例
+ */
+function applySqliteJournalMode(db) {
+  if (SQLITE_JOURNAL_MODE !== 'wal') return;
+  try {
+    const row = db.prepare('PRAGMA journal_mode = WAL').get();
+    if (String(row?.journal_mode || '').toLowerCase() === 'wal') {
+      db.exec('PRAGMA synchronous = NORMAL');
+    } else {
+      console.warn(`[deploy-store] 当前文件系统不支持 WAL，保持 ${row?.journal_mode || 'unknown'} 日志模式`);
+    }
+  } catch (error) {
+    console.warn('[deploy-store] 切换 WAL 日志模式失败，保持默认模式:', error?.message || error);
+  }
+}
+
+/**
  * 在首次后端架构迁移前备份 SQLite 文件。
  * @param {DatabaseSync} db 数据库实例
  * @returns {Promise<string>} 备份文件路径，无需备份时为空
@@ -1095,7 +1126,7 @@ async function backupDeployDbBeforeBackendMigration(db) {
   if (!stat?.isFile() || stat.size === 0) return '';
   const timestamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
   const backupPath = `${DEPLOY_DB_PATH}.pre-backend-v3-${timestamp}.bak`;
-  await fs.copyFile(DEPLOY_DB_PATH, backupPath);
+  backupDeployDbFile(db, backupPath);
   return backupPath;
 }
 
@@ -1116,7 +1147,7 @@ async function backupDeployDbBeforeMultiTenantMigration(db) {
   if (existing) return path.join(path.dirname(DEPLOY_DB_PATH), existing);
   const timestamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
   const backupPath = `${DEPLOY_DB_PATH}.pre-multitenant-v5-${timestamp}.bak`;
-  await fs.copyFile(DEPLOY_DB_PATH, backupPath);
+  backupDeployDbFile(db, backupPath);
   return backupPath;
 }
 
@@ -1137,7 +1168,7 @@ async function backupDeployDbBeforeSharedWorkspaceMigration(db) {
   if (existing) return path.join(path.dirname(DEPLOY_DB_PATH), existing);
   const timestamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
   const backupPath = `${DEPLOY_DB_PATH}.pre-shared-workspace-v6-${timestamp}.bak`;
-  await fs.copyFile(DEPLOY_DB_PATH, backupPath);
+  backupDeployDbFile(db, backupPath);
   return backupPath;
 }
 
@@ -1675,6 +1706,8 @@ export async function getDeployDb() {
   if (dbInstance) return dbInstance;
   await fs.mkdir(DEPLOY_DATA_DIR, { recursive: true });
   dbInstance = new DatabaseSync(DEPLOY_DB_PATH);
+  /** 锁竞争时最多等待 5 秒，避免 MCP、脚本等其他连接短暂写入时直接报 SQLITE_BUSY */
+  dbInstance.exec('PRAGMA busy_timeout = 5000');
   await backupDeployDbBeforeBackendMigration(dbInstance);
   dbInstance.exec(`
     CREATE TABLE IF NOT EXISTS deploy_servers (
@@ -1952,6 +1985,7 @@ export async function getDeployDb() {
   migrateExternalNginxSiteManagedTargets(dbInstance);
   await reconcileInterruptedDeployExecutions(dbInstance);
   initializeDefaultJdks(dbInstance);
+  applySqliteJournalMode(dbInstance);
   return dbInstance;
 }
 
@@ -3675,6 +3709,18 @@ export async function listRecords(query = {}) {
   scheduleRecordCommitHydration(items, { gitlabToken: query.gitlabToken, gitlabHost: query.gitlabHost });
   decorateRecordState(db, items);
   return { items, total, page, pageSize };
+}
+
+/**
+ * 生成中央部署数据库的一致性快照文件。
+ * @description 基于 VACUUM INTO，WAL 模式下也能包含尚未检查点的最新数据，可用于运维备份。
+ * @param {string} backupPath 快照文件路径（必须不存在）
+ * @returns {Promise<string>} 快照文件路径
+ */
+export async function createDeployDbSnapshot(backupPath) {
+  const db = await getDeployDb();
+  backupDeployDbFile(db, backupPath);
+  return backupPath;
 }
 
 /**
