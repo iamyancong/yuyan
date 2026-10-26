@@ -17,16 +17,73 @@ export const DEFAULT_MAX_CONCURRENT_BUILDS = Math.max(
   Number(process.env.YUYAN_MAX_CONCURRENT_BUILDS || adaptiveDefaultSlots)
 );
 
-/** 默认单构建 Node 子进程最大老生代堆内存（MB） */
-export const DEFAULT_BUILD_MAX_OLD_SPACE_MB = Math.max(
-  512,
-  Number(process.env.YUYAN_BUILD_MAX_OLD_SPACE_MB || 2048)
+const totalSystemMemoryMb = Math.floor((Number(os.totalmem?.() || 0) || 8 * 1024 * 1024 * 1024) / (1024 * 1024));
+const adaptiveDefaultMaxOldSpaceMb = Math.max(
+  4096,
+  Math.min(8192, Math.floor(totalSystemMemoryMb * 0.75))
 );
 
-/** 默认单构建子进程 libuv 线程池大小 */
+/** 默认单构建 Node 子进程最大老生代堆内存（MB，按服务器物理内存自适应 4096~8192MB，确保大型前端工程默认顺利打包不发生 Node OOM） */
+export const DEFAULT_BUILD_MAX_OLD_SPACE_MB = Math.max(
+  512,
+  Number(process.env.YUYAN_BUILD_MAX_OLD_SPACE_MB || adaptiveDefaultMaxOldSpaceMb)
+);
+
+/** OOM 自动重试时的扩容老生代堆内存上限（MB，按服务器物理内存自适应 8192~12288MB） */
+export const FALLBACK_RETRY_MAX_OLD_SPACE_MB = Math.max(
+  DEFAULT_BUILD_MAX_OLD_SPACE_MB,
+  Math.min(12288, Math.max(8192, Math.floor(totalSystemMemoryMb * 0.85)))
+);
+
+/**
+ * 从命令文本中提取内联环境变量赋值（支持 export / cross-env 前缀、单双引号及 && 多段命令），并返回剥离后的纯命令。
+ * 彻底解决：
+ * 1. `NODE_OPTIONS="..." cd packages && pnpm build` 在 Shell 中仅对首条 cd 子命令生效的问题；
+ * 2. Windows cmd.exe 不支持 `KEY=VALUE command` 内联环境变量语法的问题；
+ * 3. 构建命令内联 `--max-old-space-size` 与默认 `NODE_OPTIONS` 护栏冲突的问题。
+ * @param {string} command 原始命令文本
+ * @returns {{ envVars: Record<string, string>, cleanedCommand: string }} 提取出的环境变量与剥离后的命令
+ */
+export function extractInlineCommandEnv(command) {
+  const raw = String(command || '').trim();
+  /** @type {Record<string, string>} */
+  const envVars = {};
+  if (!raw || /[;|<>`\n\r$()]/.test(raw)) {
+    return { envVars, cleanedCommand: raw };
+  }
+
+  const prefixTokenRegex = /^(?:export|cross-env)\s+/i;
+  const assignmentRegex = /^([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"]*)"|'([^']*)'|([^\s;&|]*))(?:\s+|$)/;
+
+  const segments = raw.split(/\s*&&\s*/);
+  const cleanedSegments = [];
+
+  for (const segment of segments) {
+    let rem = segment.trim();
+    while (rem) {
+      const prefixMatch = rem.match(prefixTokenRegex);
+      const afterPrefix = prefixMatch ? rem.slice(prefixMatch[0].length) : rem;
+      const match = afterPrefix.match(assignmentRegex);
+      if (!match) break;
+
+      const key = match[1];
+      const value = match[2] ?? match[3] ?? match[4] ?? '';
+      envVars[key] = value;
+      rem = afterPrefix.slice(match[0].length).trim();
+    }
+    if (rem) {
+      cleanedSegments.push(rem);
+    }
+  }
+
+  const cleanedCommand = cleanedSegments.length > 0 ? cleanedSegments.join(' && ') : raw;
+  return { envVars, cleanedCommand };
+}
+
+/** 默认单构建子进程 libuv 线程池大小（保持 Node.js 标准默认值 4，不人为压低文件 I/O 与打包并发） */
 export const DEFAULT_BUILD_UV_THREADPOOL_SIZE = Math.max(
   1,
-  Number(process.env.YUYAN_BUILD_UV_THREADPOOL_SIZE || 2)
+  Number(process.env.YUYAN_BUILD_UV_THREADPOOL_SIZE || 4)
 );
 
 /**
@@ -53,13 +110,27 @@ export function applyLowProcessPriority(pid) {
  * @param {boolean} [options.injectNodeHeapLimit=true] 是否在未显式指定时注入 --max-old-space-size
  * @param {number} [options.maxOldSpaceMb] 自定义老生代内存上限（MB）
  * @param {number} [options.uvThreadpoolSize] 自定义 UV_THREADPOOL_SIZE
+ * @param {string} [options.command] 待执行的命令文本（用于自动提取内联 NODE_OPTIONS 等环境变量）
  * @returns {Record<string, string>} 合并后的环境变量
  */
 export function buildIsolatedCommandEnv(baseEnv = {}, options = {}) {
+  const inlineEnv = options.command ? extractInlineCommandEnv(options.command).envVars : {};
+  const baseNodeOpts = String(baseEnv.NODE_OPTIONS ?? process.env.NODE_OPTIONS ?? '').trim();
+  const inlineNodeOpts = String(inlineEnv.NODE_OPTIONS || '').trim();
+
   const merged = {
     ...process.env,
     ...baseEnv,
+    ...inlineEnv,
   };
+
+  if (baseNodeOpts && inlineNodeOpts) {
+    // 若内联命令指定了 --max-old-space-size，移除 baseNodeOpts 中的同名参数后合并
+    const cleanedBase = /--max-old-space-size\b/.test(inlineNodeOpts)
+      ? baseNodeOpts.replace(/--max-old-space-size(?:=|\s+)\d+/g, '').trim()
+      : baseNodeOpts;
+    merged.NODE_OPTIONS = cleanedBase ? `${cleanedBase} ${inlineNodeOpts}` : inlineNodeOpts;
+  }
 
   if (!merged.CI) {
     merged.CI = 'true';
@@ -71,7 +142,11 @@ export function buildIsolatedCommandEnv(baseEnv = {}, options = {}) {
   if (options.injectNodeHeapLimit !== false) {
     const existingNodeOptions = String(merged.NODE_OPTIONS || '').trim();
     if (!/--max-old-space-size\b/.test(existingNodeOptions)) {
-      const heapMb = Math.max(512, Number(options.maxOldSpaceMb || DEFAULT_BUILD_MAX_OLD_SPACE_MB));
+      const cmdHeapMatch = String(options.command || '').match(/--max-old-space-size(?:=|\s+)(\d+)/);
+      const heapMb = Math.max(
+        512,
+        Number(options.maxOldSpaceMb || (cmdHeapMatch ? cmdHeapMatch[1] : 0) || DEFAULT_BUILD_MAX_OLD_SPACE_MB)
+      );
       const heapFlag = `--max-old-space-size=${heapMb}`;
       merged.NODE_OPTIONS = existingNodeOptions ? `${existingNodeOptions} ${heapFlag}` : heapFlag;
     }

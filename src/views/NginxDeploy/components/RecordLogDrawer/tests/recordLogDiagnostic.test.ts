@@ -90,10 +90,24 @@ Error: 首屏静态依赖包含重型运行时依赖：assets/index-BZ-ai3hJ.js
   assert.ok(!cleaned.includes('Some chunks are larger'));
   assert.ok(cleaned.includes('Error: 首屏静态依赖包含重型运行时依赖：assets/index-BZ-ai3hJ.js'));
 
-  // 3. 验证终端诊断报告生成
+  // 3. 验证终端诊断报告生成（全行顶格不带前导空格，避免触发 Monaco 缩进参考竖线）
   const banner = formatEditorDiagnosticBanner(summary!);
   assert.ok(banner.includes('雨燕构建未通过诊断报告'));
   assert.ok(banner.includes('[ERROR] 触发违规: assets/index-BZ-ai3hJ.js'));
   assert.ok(banner.includes('[INFO]  相关位置: scripts/check-build-bundle.mjs:286'));
   assert.ok(banner.includes('💡 排查与修复建议:'));
+  for (const bannerLine of banner.split('\n').filter(Boolean)) {
+    assert.equal(bannerLine, bannerLine.trimStart(), `诊断横幅行不应存在前导缩进空格: "${bannerLine}"`);
+  }
+});
+
+test('cleanLogMessage: 过滤 Rollup "use client" 打包期忽略警告并保留 OOM 核心堆栈', () => {
+  const oomErrorMessage = `构建产物 执行失败，退出码 null
+../node_modules/.pnpm/@radix-ui+react-direction@1.1.4_react@18.3.1/node_modules/@radix-ui/react-direction/dist/index.mjs (1:0): Module level directives cause errors when bundled, "use client" in "../node_modules/.pnpm/@radix-ui+react-direction@1.1.4_react@18.3.1/node_modules/@radix-ui/react-direction/dist/index.mjs" was ignored.
+<--- Last few GCs --->
+FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory`;
+
+  const cleaned = cleanLogMessage(oomErrorMessage);
+  assert.ok(!cleaned.includes('Module level directives cause errors when bundled'));
+  assert.ok(cleaned.includes('FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory'));
 });

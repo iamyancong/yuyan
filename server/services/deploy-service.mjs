@@ -37,6 +37,8 @@ import { deployBackendTarget, restoreBackendRecord } from './backend-runtime-ser
 import {
   applyLowProcessPriority,
   buildIsolatedCommandEnv,
+  extractInlineCommandEnv,
+  FALLBACK_RETRY_MAX_OLD_SPACE_MB,
   withBuildSlot,
 } from './build-isolation-service.mjs';
 
@@ -779,6 +781,35 @@ async function pruneRemoteArtifactManifests(conn, target, log, useSudo = false) 
 }
 
 /**
+ * 过滤命令执行失败时 stderr 中的打包期无关告警噪音（如 Rollup "use client" 忽略提示、分包体积提示等），保留核心错误上下文。
+ * @param {string} rawOutput - 原始错误或标准输出
+ * @returns {string} 精简后的错误输出
+ */
+function summarizeCommandFailureOutput(rawOutput) {
+  const raw = String(rawOutput || '');
+  if (!raw.includes('\n')) return raw;
+  const lines = raw.split(/\r?\n/);
+  const filtered = lines.filter((line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return false;
+    if (trimmed.includes('Module level directives cause errors when bundled') && trimmed.includes('was ignored')) {
+      return false;
+    }
+    if (trimmed.startsWith('<script') && trimmed.includes("can't be bundled")) return false;
+    if (trimmed.startsWith('(!) Some chunks are larger than')) return false;
+    if (
+      trimmed.startsWith('- Using dynamic import()') ||
+      trimmed.startsWith('- Use build.rollupOptions') ||
+      trimmed.startsWith('- Adjust chunk size')
+    ) {
+      return false;
+    }
+    return true;
+  });
+  return filtered.length > 0 ? filtered.join('\n') : raw;
+}
+
+/**
  * 执行本地命令
  * @param {string} command - 命令
  * @param {Object} options - 选项
@@ -791,11 +822,14 @@ function runLocalCommand(command, options = {}) {
       return;
     }
 
-    const child = spawn(command, withHiddenWindow({
+    const { cleanedCommand } = extractInlineCommandEnv(command);
+    const executableCommand = cleanedCommand || command;
+
+    const child = spawn(executableCommand, withHiddenWindow({
       cwd: options.cwd,
       shell: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: buildIsolatedCommandEnv(options.env || {}),
+      env: buildIsolatedCommandEnv(options.env || {}, { command }),
       detached: process.platform !== 'win32',
     }));
     applyLowProcessPriority(child.pid);
@@ -858,7 +892,8 @@ function runLocalCommand(command, options = {}) {
         resolve({ stdout, stderr });
         return;
       }
-      reject(new Error(`${options.label || command} 执行失败，退出码 ${code}\n${stderr || stdout}`));
+      const failureOutput = summarizeCommandFailureOutput(stderr || stdout);
+      reject(new Error(`${options.label || command} 执行失败，退出码 ${code}\n${failureOutput}`));
     });
   });
 }
@@ -2111,13 +2146,45 @@ export async function deployTarget(targetId, payload, emit) {
 
         throwIfDeployStopped(signal);
         stage('build', 48, '构建产物', target.buildCommand);
-        await runLocalCommandList(target.buildCommand, {
-          cwd: repoDir,
-          env: isBackend ? { ...process.env, ...jdkEnv } : npmConfigEnv,
-          label: '构建产物',
-          onLog: (level, message) => log(level, message, 'build'),
-          signal,
-        });
+        const baseBuildEnv = isBackend ? { ...process.env, ...jdkEnv } : npmConfigEnv;
+        try {
+          await runLocalCommandList(target.buildCommand, {
+            cwd: repoDir,
+            env: baseBuildEnv,
+            label: '构建产物',
+            onLog: (level, message) => log(level, message, 'build'),
+            signal,
+          });
+        } catch (buildError) {
+          const errMsg = buildError instanceof Error ? buildError.message : String(buildError);
+          const isNodeOom = !isBackend && /JavaScript heap out of memory|Allocation failed - process out of memory|FatalProcessOutOfMemory/i.test(errMsg);
+          if (!isNodeOom) {
+            throw buildError;
+          }
+          throwIfDeployStopped(signal);
+          const retryHeapMb = FALLBACK_RETRY_MAX_OLD_SPACE_MB;
+          log(
+            'warn',
+            `检测到构建过程 Node.js 堆内存触及上限，正在自动扩容内存上限至 ${retryHeapMb}MB (--max-old-space-size=${retryHeapMb}) 并重试构建...`,
+            'build'
+          );
+          const existingNodeOpts = String(baseBuildEnv?.NODE_OPTIONS || process.env.NODE_OPTIONS || '')
+            .replace(/--max-old-space-size(?:=|\s+)\d+/g, '')
+            .trim();
+          const retryNodeOpts = existingNodeOpts
+            ? `${existingNodeOpts} --max-old-space-size=${retryHeapMb}`
+            : `--max-old-space-size=${retryHeapMb}`;
+          await runLocalCommandList(target.buildCommand, {
+            cwd: repoDir,
+            env: {
+              ...baseBuildEnv,
+              NODE_OPTIONS: retryNodeOpts,
+            },
+            label: '构建产物',
+            onLog: (level, message) => log(level, message, 'build'),
+            signal,
+          });
+        }
       },
       {
         signal,

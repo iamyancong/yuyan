@@ -96,7 +96,14 @@ const drawerOpen = computed({
           :max-lines="20000"
           :auto-scroll="true"
           :show-border="false"
-          :options="{ minimap: { enabled: false }, fontSize: 13, wordWrap: 'on', readOnly: true }"
+          :options="{
+            minimap: { enabled: false },
+            fontSize: 13,
+            wordWrap: 'on',
+            readOnly: true,
+            folding: false,
+            guides: { indentation: false },
+          }"
         />
       </div>
     </a-spin>

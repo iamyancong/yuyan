@@ -175,3 +175,26 @@ test('项目名称或描述明确标注主应用时直接选择根目录', async
   assert.equal(result.status, 'resolved');
   assert.equal(result.kind, 'main');
 });
+
+test('构建命令带有前导 NODE_OPTIONS 环境变量时仍可正确解析 package scripts', async () => {
+  const result = await detectDeployApplication({
+    buildCommand: 'NODE_OPTIONS="--max-old-space-size=4096" pnpm build',
+    readFile: createReader({
+      'package.json': JSON.stringify({
+        scripts: {
+          build: 'cd packages && pnpm build',
+        },
+      }),
+      'packages/package.json': JSON.stringify({
+        scripts: {
+          build: 'vite build',
+        },
+      }),
+      'packages/.env.production': 'VITE_SUB_APP_NAME=taskFlow',
+    }),
+  });
+
+  assert.equal(result.status, 'resolved');
+  assert.equal(result.kind, 'micro');
+  assert.equal(result.appName, 'taskFlow');
+});

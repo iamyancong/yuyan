@@ -52,6 +52,9 @@ export function cleanLogMessage(rawMessage: string): string {
       const line = lines[i].trim();
       if (!line) continue;
       // 过滤掉旧日志中由 stderr 一并 dump 下来的启动/分包无关警告
+      if (line.includes('Module level directives cause errors when bundled') && line.includes('was ignored')) {
+        continue;
+      }
       if (line.startsWith('<script') && line.includes("can't be bundled")) continue;
       if (line.startsWith('(!) Some chunks are larger than')) continue;
       if (
@@ -90,7 +93,7 @@ export const formatLogItem = (item: DeployLogItem) => {
 };
 
 /**
- * 格式化在 Monaco 编辑器内部展示的终端高亮诊断报告
+ * 格式化在 Monaco 编辑器内部展示的终端高亮诊断报告（全行顶格，避免触发 Monaco 缩进参考竖线与代码折叠箭头）
  * @param summary 错误根因诊断信息
  * @returns 终端 ASCII 风格报告文本（采用 log 语法高亮格式）
  */
@@ -100,7 +103,7 @@ export function formatEditorDiagnosticBanner(summary: DeployErrorSummary): strin
   const lines: string[] = [
     '',
     line,
-    '                  🚨 雨燕构建未通过诊断报告 (BUILD DIAGNOSTIC)                  ',
+    '[ERROR] 🚨 雨燕构建未通过诊断报告 (BUILD DIAGNOSTIC)',
     line,
     `[ERROR] 拦截阶段: ${summary.stage || '构建执行'}`,
     `[ERROR] 错误类型: ${summary.category || '构建异常'}${summary.title ? ` - ${summary.title}` : ''}`,
@@ -118,7 +121,7 @@ export function formatEditorDiagnosticBanner(summary: DeployErrorSummary): strin
     lines.push('[INFO]  💡 排查与修复建议:');
     const sugLines = summary.suggestion.split(/\r?\n/);
     for (const sl of sugLines) {
-      if (sl.trim()) lines.push(`        ${sl.trim()}`);
+      if (sl.trim()) lines.push(`[INFO]  ▸ ${sl.trim()}`);
     }
   }
 
@@ -127,7 +130,7 @@ export function formatEditorDiagnosticBanner(summary: DeployErrorSummary): strin
     lines.push('[ERROR] 📋 核心错误堆栈:');
     const rawLines = summary.rawDetail.split(/\r?\n/).slice(0, 8);
     for (const rl of rawLines) {
-      if (rl.trim()) lines.push(`        ${rl.trim()}`);
+      if (rl.trim()) lines.push(`[ERROR] ▸ ${rl.trim()}`);
     }
   }
 

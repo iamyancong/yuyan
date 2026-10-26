@@ -161,10 +161,21 @@ export function usePublishConfirm(props: PublishConfirmModalProps) {
     { label: '发起时间', value: displayStartedAt.value },
   ]);
 
-  /** 发布日志文本（构建/发布失败时在末尾拼接高对比度终端诊断报告） */
+  /** 发布日志文本（构建/发布失败时在末尾拼接高对比度终端诊断报告，并去重流式结束时的重复错误事件） */
   const publishLogContent = computed(() => {
     if (!props.logs.length) return '暂无发布日志';
-    const baseContent = props.logs.map((item) => getLogText(item, props.target?.projectName)).join('\n');
+    const seenErrorMessages = new Set<string>();
+    const deduplicatedLogs = props.logs.filter((item) => {
+      if (item.type === 'log' && item.level === 'error' && item.message) {
+        seenErrorMessages.add(item.message.trim());
+        return true;
+      }
+      if (item.type === 'error' && item.message && seenErrorMessages.has(item.message.trim())) {
+        return false;
+      }
+      return true;
+    });
+    const baseContent = deduplicatedLogs.map((item) => getLogText(item, props.target?.projectName)).join('\n');
     // 如果发布失败且识别到核心错误根因，直接在 Monaco 编辑器末尾呈现 ASCII 终端高亮诊断报告
     if (hasError.value && errorSummary.value) {
       const banner = formatEditorDiagnosticBanner(errorSummary.value);

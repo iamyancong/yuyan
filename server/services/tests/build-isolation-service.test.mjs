@@ -4,7 +4,10 @@ import {
   applyLowProcessPriority,
   buildIsolatedCommandEnv,
   createBuildSlotLimiter,
+  DEFAULT_BUILD_MAX_OLD_SPACE_MB,
   DEFAULT_MAX_CONCURRENT_BUILDS,
+  extractInlineCommandEnv,
+  FALLBACK_RETRY_MAX_OLD_SPACE_MB,
 } from '../build-isolation-service.mjs';
 
 /**
@@ -102,25 +105,65 @@ test('默认本地构建并发槽位位于 3~5 区间，支持 FIFO 等待与取
   });
 });
 
-test('buildIsolatedCommandEnv 注入内存上限、线程池收敛与 CI 标志且不覆盖已有配置', () => {
+test('buildIsolatedCommandEnv 注入自适应大内存上限、标准线程池与 CI 标志且不覆盖已有配置', () => {
   const defaultEnv = buildIsolatedCommandEnv({ CUSTOM_VAR: '1', NODE_OPTIONS: '' });
   assert.equal(defaultEnv.CUSTOM_VAR, '1');
   assert.equal(defaultEnv.CI, 'true');
-  assert.equal(defaultEnv.UV_THREADPOOL_SIZE, '2');
-  assert.match(defaultEnv.NODE_OPTIONS, /--max-old-space-size=2048/);
+  assert.equal(defaultEnv.UV_THREADPOOL_SIZE, '4');
+  assert.ok(DEFAULT_BUILD_MAX_OLD_SPACE_MB >= 4096 && DEFAULT_BUILD_MAX_OLD_SPACE_MB <= 8192);
+  assert.ok(FALLBACK_RETRY_MAX_OLD_SPACE_MB >= 8192);
+  assert.match(defaultEnv.NODE_OPTIONS, new RegExp(`--max-old-space-size=${DEFAULT_BUILD_MAX_OLD_SPACE_MB}`));
 
   // 保留已有的其他 NODE_OPTIONS 参数并追加堆上限
   const mergedNodeOpts = buildIsolatedCommandEnv({ NODE_OPTIONS: '--no-warnings' }, { maxOldSpaceMb: 3072 });
   assert.equal(mergedNodeOpts.NODE_OPTIONS, '--no-warnings --max-old-space-size=3072');
 
   // 已显式配置 --max-old-space-size 时不重复追加
-  const customHeapEnv = buildIsolatedCommandEnv({ NODE_OPTIONS: '--max-old-space-size=4096' });
-  assert.equal(customHeapEnv.NODE_OPTIONS, '--max-old-space-size=4096');
+  const customHeapEnv = buildIsolatedCommandEnv({ NODE_OPTIONS: '--max-old-space-size=8192' });
+  assert.equal(customHeapEnv.NODE_OPTIONS, '--max-old-space-size=8192');
+
+  // 支持从命令文本中自动提取内联 NODE_OPTIONS 并跨 && 生效
+  const inlineCmdEnv = buildIsolatedCommandEnv(
+    { NODE_OPTIONS: '' },
+    { command: 'NODE_OPTIONS="--max-old-space-size=8192" cd packages && pnpm build' }
+  );
+  assert.equal(inlineCmdEnv.NODE_OPTIONS, '--max-old-space-size=8192');
 
   // 后端 Maven 构建关闭 Node 堆限制注入
   const mavenEnv = buildIsolatedCommandEnv({ NODE_OPTIONS: '' }, { injectNodeHeapLimit: false });
   assert.equal(mavenEnv.NODE_OPTIONS, '');
   assert.equal(mavenEnv.CI, 'true');
+});
+
+test('extractInlineCommandEnv 正确剥离前导与多段命令中的环境变量赋值', () => {
+  assert.deepEqual(
+    extractInlineCommandEnv('NODE_OPTIONS="--max-old-space-size=4096" pnpm build'),
+    {
+      envVars: { NODE_OPTIONS: '--max-old-space-size=4096' },
+      cleanedCommand: 'pnpm build',
+    }
+  );
+  assert.deepEqual(
+    extractInlineCommandEnv('NODE_OPTIONS="--max-old-space-size=8192" cd packages && pnpm build'),
+    {
+      envVars: { NODE_OPTIONS: '--max-old-space-size=8192' },
+      cleanedCommand: 'cd packages && pnpm build',
+    }
+  );
+  assert.deepEqual(
+    extractInlineCommandEnv('cd packages && cross-env NODE_OPTIONS="--max-old-space-size=6144" pnpm build'),
+    {
+      envVars: { NODE_OPTIONS: '--max-old-space-size=6144' },
+      cleanedCommand: 'cd packages && pnpm build',
+    }
+  );
+  assert.deepEqual(
+    extractInlineCommandEnv('export NODE_OPTIONS="--max-old-space-size=8192" && pnpm build'),
+    {
+      envVars: { NODE_OPTIONS: '--max-old-space-size=8192' },
+      cleanedCommand: 'pnpm build',
+    }
+  );
 });
 
 test('applyLowProcessPriority 对无效 PID 安全降级不抛异常', () => {

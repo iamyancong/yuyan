@@ -90,12 +90,31 @@ export function parseViteMode(command: string): string {
 }
 
 /**
+ * 剥离单段命令前导的环境变量赋值（如 NODE_OPTIONS="--max-old-space-size=4096"、export、cross-env）。
+ * @param commandSegment 单段命令
+ * @returns 剥离前导环境变量后的纯命令段
+ */
+function stripLeadingCommandEnv(commandSegment: string): string {
+  let rem = commandSegment.trim();
+  const prefixTokenRegex = /^(?:export|cross-env)\s+/i;
+  const assignmentRegex = /^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s;&|]*)(?:\s+|$)/;
+  while (rem) {
+    const prefixMatch = rem.match(prefixTokenRegex);
+    const afterPrefix = prefixMatch ? rem.slice(prefixMatch[0].length) : rem;
+    const match = afterPrefix.match(assignmentRegex);
+    if (!match) break;
+    rem = afterPrefix.slice(match[0].length).trim();
+  }
+  return rem;
+}
+
+/**
  * 解析 package manager 脚本调用。
  * @param commandSegment 单段命令
  * @returns 脚本名称
  */
 function parsePackageScriptName(commandSegment: string): string {
-  const segment = commandSegment.trim();
+  const segment = stripLeadingCommandEnv(commandSegment);
   const match = segment.match(/^(?:pnpm|yarn)(?:\s+run)?\s+([^\s;&|]+)|^npm\s+run\s+([^\s;&|]+)/);
   return stripShellQuotes(match?.[1] || match?.[2] || '');
 }
@@ -120,7 +139,9 @@ export async function resolveBuildContext(buildCommand: string, readFile: Reposi
     const segments = command.split(/\s*&&\s*/).map((item) => item.trim()).filter(Boolean);
     let nestedCommand = '';
 
-    for (const segment of segments) {
+    for (const rawSegment of segments) {
+      const segment = stripLeadingCommandEnv(rawSegment);
+      if (!segment) continue;
       const cdMatch = segment.match(/^cd\s+(.+)$/);
       if (cdMatch) {
         const nextDir = normalizeRepositoryPath([workingDir, stripShellQuotes(cdMatch[1])].filter(Boolean).join('/'));
