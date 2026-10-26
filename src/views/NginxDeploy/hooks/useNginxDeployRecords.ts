@@ -1,4 +1,4 @@
-import { computed, reactive, ref, watch, type Ref } from 'vue';
+import { computed, onScopeDispose, reactive, ref, watch, type Ref } from 'vue';
 import message from 'ant-design-vue/es/message';
 import {
   getDeployRecord,
@@ -13,6 +13,9 @@ import { createBranchOptions, createRecordServerOptions, createRecordTargetOptio
 
 import { useNginxDeployContext } from './useNginxDeployContext';
 import { renderTwoLineSelectOption } from './useDeployProjectOptions';
+
+/** 发布人输入防抖时长（毫秒），避免逐字输入时每个字符都触发一次中央查询 */
+const RECORD_OPERATOR_DEBOUNCE_MS = 400;
 
 /** 发布历史 Hook 参数 */
 interface UseNginxDeployRecordsParams {
@@ -60,6 +63,14 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
   const activeRecord = ref<DeployRecord | null>(null);
   let recordRefreshSequence = 0;
   let applyContextDefaults = true;
+  let operatorDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** 取消尚未触发的发布人防抖查询 */
+  const cancelOperatorDebounce = () => {
+    if (!operatorDebounceTimer) return;
+    clearTimeout(operatorDebounceTimer);
+    operatorDebounceTimer = null;
+  };
 
   const filteredTargets = computed(() => {
     if (!projectType.value || projectType.value === 'all') {
@@ -196,6 +207,8 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
 
   /** 刷新发布历史列表 */
   const refreshRecordList = async (options: RefreshActiveTabOptions = {}) => {
+    /** 任意来源的刷新都会携带最新发布人条件，待触发的防抖查询已无意义 */
+    cancelOperatorDebounce();
     const refreshSequence = ++recordRefreshSequence;
     await refreshRecordProjectOptions(options, refreshSequence);
     if (options.signal?.aborted || refreshSequence !== recordRefreshSequence) return;
@@ -289,15 +302,22 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
 
   /**
    * 切换发布历史操作人筛选。
+   * @description 输入框立即回显，查询延迟到停止输入后触发；清空时立即查询。回车/刷新按钮会直接刷新并取消待触发的防抖。
    * @param value 操作人名称
    */
-  const handleRecordOperatorChange = async (value?: string) => {
+  const handleRecordOperatorChange = (value?: string) => {
     recordOperatorFilter.value = value;
-    await refreshActiveTab({ resetRecordsPage: true, force: true });
+    cancelOperatorDebounce();
+    const delay = value ? RECORD_OPERATOR_DEBOUNCE_MS : 0;
+    operatorDebounceTimer = setTimeout(() => {
+      operatorDebounceTimer = null;
+      void refreshActiveTab({ resetRecordsPage: true, force: true });
+    }, delay);
   };
 
   /** 清空发布历史数据和临时态 */
   const clearRecordData = () => {
+    cancelOperatorDebounce();
     recordRefreshSequence += 1;
     records.value = [];
     recordTargets.value = [];
@@ -313,7 +333,10 @@ export function useNginxDeployRecords(params?: UseNginxDeployRecordsParams) {
     applyContextDefaults = true;
   };
 
+  onScopeDispose(cancelOperatorDebounce);
+
   watch(projectType, () => {
+    cancelOperatorDebounce();
     applyContextDefaults = false;
     recordRefreshSequence += 1;
     recordServerFilter.value = undefined;

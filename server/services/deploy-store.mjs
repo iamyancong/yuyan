@@ -8,9 +8,13 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { execSync } from 'node:child_process';
-import { DEPLOY_DATA_DIR, DEPLOY_DB_PATH, DEPLOY_LOG_DIR, DEPLOY_RECORD_KEEP_PER_PROJECT, DEPLOY_SECRET_KEY, GITLAB_HOST, GITLAB_TOKEN } from '../config/constants.mjs';
+import { DEPLOY_DATA_DIR, DEPLOY_DB_PATH, DEPLOY_LOG_DIR, DEPLOY_RECORD_KEEP_PER_PROJECT, DEPLOY_SECRET_KEY } from '../config/constants.mjs';
+import { enqueueCommitMetaHydration, hasChineseText, resolveGitlabToken } from './commit-meta-service.mjs';
 import { normalizeBackendConfig, normalizeBackendServiceName, normalizeHealthCheckPath, parseJavaMajorVersion, validateBackendDeployRoot } from './backend-domain.mjs';
 import { getRequestTeamId, SHARED_DEPLOY_WORKSPACE_ID } from './request-context.mjs';
+
+/** 兼容旧调用方：提交元信息查询已迁移到独立服务（带超时、缓存与并发合并） */
+export { fetchGitlabCommitMeta } from './commit-meta-service.mjs';
 
 let dbInstance = null;
 
@@ -312,157 +316,62 @@ function parseRollbackSourceRecordId(branch) {
 }
 
 /**
- * 规范化 GitLab 服务地址。
- * @param {string} host - GitLab 原始地址
- * @returns {string} GitLab 基础地址
+ * 判断发布记录是否需要后台补全提交元信息。
+ * @description 已探测过（commit_meta_checked_at 非空）的记录不再重复请求 GitLab，
+ * 避免英文名提交人每次查询都触发多次串行搜索。
+ * @param {Object} record - 发布记录
+ * @returns {boolean} 是否需要补全
  */
-function normalizeGitlabHost(host) {
-  try {
-    const url = new URL(host);
-    return `${url.protocol}//${url.host}`;
-  } catch {
-    return String(host || '').replace(/\/$/, '');
-  }
+function needsCommitMetaHydration(record) {
+  if (!record?.commitSha || record.commitMetaCheckedAt) return false;
+  const missingMessage = !String(record.commitMessage || '').trim();
+  const shouldImproveAuthor = !String(record.commitAuthor || '').trim() || !hasChineseText(record.commitAuthor);
+  return missingMessage || shouldImproveAuthor;
 }
 
 /**
- * 判断文本是否包含中文。
- * @param {string} value - 原始文本
- * @returns {boolean} 是否包含中文
+ * 将后台解析到的提交元信息回写数据库。
+ * @description 以数据库最新值为准合并，只补空缺字段；临时失败不写探测时间，退避期过后可再次补全。
+ * @param {number} recordId - 发布记录 ID
+ * @param {{ message: string, author: string, transient: boolean }} meta - 提交元信息
+ * @returns {Promise<void>}
  */
-function hasChineseText(value) {
-  return /[\u4e00-\u9fa5]/.test(String(value || ''));
-}
-
-/**
- * 从 GitLab 用户列表里选择更适合展示的用户名。
- * @param {Object[]} users - GitLab 用户列表
- * @param {string} fallbackName - 兜底名称
- * @returns {string} 展示名称
- */
-function pickGitlabUserDisplayName(users, fallbackName) {
-  const list = Array.isArray(users) ? users : [];
-  const chineseUser = list.find((user) => hasChineseText(user?.name));
-  if (chineseUser?.name) return String(chineseUser.name).trim();
-  const firstName = String(list[0]?.name || '').trim();
-  return firstName || fallbackName;
-}
-
-/**
- * 请求 GitLab 用户列表并选取展示名。
- * @param {string} url - GitLab 用户接口地址
- * @param {Record<string, string>} headers - 请求头
- * @param {string} fallbackName - 兜底名称
- * @returns {Promise<string>} 展示名
- */
-async function fetchGitlabUserDisplayName(url, headers, fallbackName) {
-  const response = await fetch(url, { headers }).catch(() => null);
-  if (!response?.ok) return fallbackName;
-  const users = await response.json().catch(() => []);
-  return pickGitlabUserDisplayName(users, fallbackName);
-}
-
-/**
- * 搜索 GitLab 用户展示名。
- * @param {string} base - GitLab 基础地址
- * @param {Record<string, string>} headers - 请求头
- * @param {number|string} projectId - GitLab 项目 ID
- * @param {string} keyword - 搜索关键字
- * @param {string} fallbackName - 兜底名称
- * @returns {Promise<string>} 用户展示名
- */
-async function searchGitlabUserDisplayName(base, headers, projectId, keyword, fallbackName) {
-  const searchText = String(keyword || '').trim();
-  if (!searchText) return fallbackName;
-  const usernameLikeText = searchText.includes('@') ? searchText.split('@')[0] : searchText;
-
-  const searchUrls = [
-    `${base}/api/v4/users?username=${encodeURIComponent(usernameLikeText)}`,
-    `${base}/api/v4/projects/${encodeURIComponent(projectId)}/members/all?query=${encodeURIComponent(usernameLikeText)}`,
-    `${base}/api/v4/projects/${encodeURIComponent(projectId)}/users?search=${encodeURIComponent(usernameLikeText)}`,
-    `${base}/api/v4/users?search=${encodeURIComponent(usernameLikeText)}`,
-  ];
-
-  if (searchText !== usernameLikeText) {
-    searchUrls.push(
-      `${base}/api/v4/projects/${encodeURIComponent(projectId)}/members/all?query=${encodeURIComponent(searchText)}`,
-      `${base}/api/v4/projects/${encodeURIComponent(projectId)}/users?search=${encodeURIComponent(searchText)}`,
-      `${base}/api/v4/users?search=${encodeURIComponent(searchText)}`
-    );
-  }
-
-  let bestName = fallbackName;
-  for (const url of searchUrls) {
-    const displayName = await fetchGitlabUserDisplayName(url, headers, fallbackName);
-    if (hasChineseText(displayName)) return displayName;
-    if (displayName && displayName !== fallbackName) bestName = displayName;
-  }
-  return bestName;
-}
-
-/**
- * 获取 GitLab 提交元信息。
- * @param {number|string} projectId - GitLab 项目 ID
- * @param {string} commitSha - Commit SHA
- * @param {string} [gitlabToken] - GitLab 访问令牌
- * @param {string} [gitlabHost] - GitLab 服务地址
- * @returns {Promise<{message: string, author: string}>} 提交元信息
- */
-export async function fetchGitlabCommitMeta(projectId, commitSha, gitlabToken = '', gitlabHost = '') {
-  const safeProjectId = Number(projectId || 0);
-  const safeCommitSha = String(commitSha || '').trim();
-  if (!safeProjectId || !safeCommitSha) return { message: '', author: '' };
-
-  const base = normalizeGitlabHost(gitlabHost || GITLAB_HOST);
-  const token = String(gitlabToken || GITLAB_TOKEN || '').trim();
-  const headers = token ? { 'PRIVATE-TOKEN': token } : {};
-  const url = `${base}/api/v4/projects/${encodeURIComponent(safeProjectId)}/repository/commits/${encodeURIComponent(safeCommitSha)}`;
-  const response = await fetch(url, { headers }).catch(() => null);
-  if (!response?.ok) return { message: '', author: '' };
-
-  const commit = await response.json().catch(() => null);
-  const title = String(commit?.title || '').trim();
-  const message = title || String(commit?.message || '').split(/\r?\n/)[0]?.trim() || '';
-  const rawAuthor = String(commit?.author_name || commit?.committer_name || '').trim();
-  const authorEmail = String(commit?.author_email || commit?.committer_email || '').trim();
-  let author = rawAuthor;
-  if (!hasChineseText(rawAuthor)) {
-    const emailDisplayName = await searchGitlabUserDisplayName(base, headers, safeProjectId, authorEmail, rawAuthor);
-    author = hasChineseText(emailDisplayName) || !rawAuthor ? emailDisplayName : await searchGitlabUserDisplayName(base, headers, safeProjectId, rawAuthor, emailDisplayName || rawAuthor);
-  }
-  return { message, author };
-}
-
-/**
- * 补全旧发布记录缺失的提交元信息，并回写数据库。
- * @param {Object[]} records - 发布记录列表
- * @param {Object} options - 补全选项
- * @returns {Promise<Object[]>} 补全后的发布记录列表
- */
-async function hydrateRecordCommitMessages(records, options = {}) {
-  const list = Array.isArray(records) ? records : [];
-  const missingRecords = list.filter((record) => {
-    const missingMessage = !String(record?.commitMessage || '').trim();
-    const shouldImproveAuthor = !String(record?.commitAuthor || '').trim() || !hasChineseText(record.commitAuthor);
-    return record?.commitSha && (missingMessage || shouldImproveAuthor);
-  });
-  if (!missingRecords.length) return list;
-
+async function persistRecordCommitMeta(recordId, meta) {
   const db = await getDeployDb();
-  const commitCache = new Map();
-  for (const record of missingRecords) {
-    const cacheKey = `${record.projectId}:${record.commitSha}`;
-    if (!commitCache.has(cacheKey)) {
-      const commitMeta = await fetchGitlabCommitMeta(record.projectId, record.commitSha, options.gitlabToken, options.gitlabHost);
-      commitCache.set(cacheKey, commitMeta);
-    }
-    const commitMeta = commitCache.get(cacheKey);
-    if (!commitMeta?.message && !commitMeta?.author) continue;
-    record.commitMessage = record.commitMessage || commitMeta.message;
-    record.commitAuthor = hasChineseText(record.commitAuthor) ? record.commitAuthor : commitMeta.author || record.commitAuthor;
-    db.prepare('UPDATE deploy_records SET commit_message = ?, commit_author = ? WHERE id = ?').run(record.commitMessage || '', record.commitAuthor || '', Number(record.id));
-  }
-  return list;
+  const row = db.prepare('SELECT commit_message, commit_author FROM deploy_records WHERE id = ?').get(Number(recordId));
+  if (!row) return;
+  const currentMessage = String(row.commit_message || '').trim();
+  const currentAuthor = String(row.commit_author || '').trim();
+  const nextMessage = currentMessage || meta?.message || '';
+  const nextAuthor = hasChineseText(currentAuthor) ? currentAuthor : meta?.author || currentAuthor;
+  const checkedAt = meta?.transient ? null : now();
+  db.prepare(
+    `UPDATE deploy_records
+     SET commit_message = ?, commit_author = ?, commit_meta_checked_at = COALESCE(?, commit_meta_checked_at)
+     WHERE id = ?`
+  ).run(nextMessage, nextAuthor, checkedAt, Number(recordId));
+}
+
+/**
+ * 异步补全发布记录缺失的提交元信息，立即返回不阻塞读接口。
+ * @description 任务进入进程级限流队列，同一记录不会重复入队，同一提交的并发请求会被合并；
+ * 本次响应使用数据库现有值，补全结果在下次查询时可见。
+ * @param {Object[]} records - 发布记录列表
+ * @param {{ gitlabToken?: string, gitlabHost?: string }} options - 补全选项
+ * @returns {number} 入队任务数
+ */
+function scheduleRecordCommitHydration(records, options = {}) {
+  const token = resolveGitlabToken(options.gitlabToken);
+  if (!token) return 0;
+  const jobs = (Array.isArray(records) ? records : []).filter(needsCommitMetaHydration).map((record) => ({
+    key: `record:${record.id}`,
+    projectId: record.projectId,
+    commitSha: record.commitSha,
+    gitlabToken: token,
+    gitlabHost: options.gitlabHost || record.repositoryUrl || '',
+    onResolved: (meta) => persistRecordCommitMeta(record.id, meta),
+  }));
+  return enqueueCommitMetaHydration(jobs);
 }
 
 /**
@@ -1004,6 +913,7 @@ function mapRecord(row, options = {}) {
     commitSha: row.commit_sha || '',
     commitMessage: row.commit_message || '',
     commitAuthor: row.commit_author || '',
+    commitMetaCheckedAt: row.commit_meta_checked_at || '',
     status: row.status,
     releasePath: row.release_path || '',
     backupPath: row.backup_path || '',
@@ -1557,6 +1467,20 @@ function applyMultiTenantSchemaMigration(db) {
 }
 
 /**
+ * 为发布历史高频查询补齐复合索引（幂等，可重复执行）。
+ * @description
+ * - team_started：覆盖「共享工作区 + 时间倒序分页」的默认列表查询，避免全表扫描后排序；
+ * - target_status_started：覆盖每页逐目标查询「当前生效成功版本」的子查询。
+ * @param {DatabaseSync} db 数据库实例
+ */
+function ensureDeployRecordQueryIndexes(db) {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_deploy_records_team_started ON deploy_records(team_id, started_at DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_deploy_records_target_status_started ON deploy_records(target_id, status, started_at DESC, id DESC);
+  `);
+}
+
+/**
  * 规范化每个团队的服务器排序值，兼容升级前没有排序字段的历史数据。
  * @param {DatabaseSync} db 数据库实例
  * @param {boolean} manageTransaction 是否由当前方法管理事务
@@ -2002,6 +1926,9 @@ export async function getDeployDb() {
   if (!recordColumns.includes('commit_author')) {
     dbInstance.exec('ALTER TABLE deploy_records ADD COLUMN commit_author TEXT');
   }
+  if (!recordColumns.includes('commit_meta_checked_at')) {
+    dbInstance.exec('ALTER TABLE deploy_records ADD COLUMN commit_meta_checked_at TEXT');
+  }
   const hadRecordActionColumn = recordColumns.includes('action');
   if (!hadRecordActionColumn) {
     dbInstance.exec("ALTER TABLE deploy_records ADD COLUMN action TEXT NOT NULL DEFAULT 'deploy'");
@@ -2020,6 +1947,7 @@ export async function getDeployDb() {
   applyNginxRuntimeFingerprintMigration(dbInstance);
   await backupDeployDbBeforeMultiTenantMigration(dbInstance);
   applyMultiTenantSchemaMigration(dbInstance);
+  ensureDeployRecordQueryIndexes(dbInstance);
   normalizeServerSortOrder(dbInstance);
   migrateExternalNginxSiteManagedTargets(dbInstance);
   await reconcileInterruptedDeployExecutions(dbInstance);
@@ -3521,10 +3449,13 @@ export async function updateRecord(id, patch) {
   if (patch.logs) {
     nextLogPath = await writeRecordLogs(id, patch.logs);
   }
+  /** 提交变化时重置探测标记，允许后台按新提交重新补全元信息 */
+  const commitChanged = patch.commitSha !== undefined && String(patch.commitSha || '') !== String(current.commitSha || '');
   db.prepare(
     `UPDATE deploy_records
      SET commit_sha = ?, commit_message = ?, commit_author = ?, status = ?, release_path = ?, backup_path = ?,
-         action = ?, source_record_id = ?, restored_record_id = ?, backup_record_id = ?, logs = ?, log_path = ?, finished_at = ?
+         action = ?, source_record_id = ?, restored_record_id = ?, backup_record_id = ?, logs = ?, log_path = ?, finished_at = ?,
+         commit_meta_checked_at = CASE WHEN ? THEN NULL ELSE commit_meta_checked_at END
      WHERE id = ?`
   ).run(
     patch.commitSha ?? current.commitSha,
@@ -3540,6 +3471,7 @@ export async function updateRecord(id, patch) {
     '[]',
     nextLogPath,
     patch.finishedAt ?? current.finishedAt ?? '',
+    commitChanged ? 1 : 0,
     Number(id)
   );
   return getRecord(id);
@@ -3547,8 +3479,10 @@ export async function updateRecord(id, patch) {
 
 /**
  * 获取发布记录详情
+ * @description 只读本地数据库；仅当 scheduleCommitHydration 为 true（用户查看详情）时异步补全提交元信息，
+ * 发布流程内部的 create/update 调用不会触发任何 GitLab 请求。
  * @param {number} id - 发布记录 ID
- * @param {Object} options - 查询选项
+ * @param {{ gitlabToken?: string, gitlabHost?: string, scheduleCommitHydration?: boolean }} options - 查询选项
  * @returns {Promise<Object|null>} 发布记录
  */
 export async function getRecord(id, options = {}) {
@@ -3565,17 +3499,18 @@ export async function getRecord(id, options = {}) {
   const record = mapRecord(row, { includeLogs: false });
   if (!record) return null;
   record.logs = await readRecordLogs(row);
-  await hydrateRecordCommitMessages([record], options);
+  if (options.scheduleCommitHydration) scheduleRecordCommitHydration([record], options);
   return decorateRecordState(db, [record])[0] || record;
 }
 
 /**
  * 获取部署目标当前最新成功发布记录。
+ * @description 发布流程内部调用，只读本地数据库，不触发 GitLab 请求。
  * @param {number} targetId - 部署目标 ID
- * @param {Object} options - 查询选项
+ * @param {Object} [_options] - 兼容保留的查询选项
  * @returns {Promise<Object|null>} 当前成功记录
  */
-export async function getLatestSuccessfulRecord(targetId, options = {}) {
+export async function getLatestSuccessfulRecord(targetId, _options = {}) {
   const db = await getDeployDb();
   const row = db
     .prepare(
@@ -3590,7 +3525,6 @@ export async function getLatestSuccessfulRecord(targetId, options = {}) {
     .get(Number(targetId));
   const record = mapRecord(row, { includeLogs: false });
   if (!record) return null;
-  await hydrateRecordCommitMessages([record], options);
   return decorateRecordState(db, [record])[0] || record;
 }
 
@@ -3665,18 +3599,8 @@ export async function listRecords(query = {}) {
   const pageSize = Math.min(100, Math.max(1, Number(query.pageSize || query.perPage || 10)));
   const offset = (page - 1) * pageSize;
   const whereParts = ['r.team_id = ?'];
-  let fromSql = `
-    SELECT r.*, t.project_description, t.project_path, t.repository_url, t.project_type, t.server_id, s.name AS server_name, s.host AS server_host
-    FROM deploy_records r
-    LEFT JOIN deploy_targets t ON t.id = r.target_id
-    LEFT JOIN deploy_servers s ON s.id = t.server_id
-  `;
-  let countSql = `
-    SELECT COUNT(*) AS total
-    FROM deploy_records r
-    LEFT JOIN deploy_targets t ON t.id = r.target_id
-    LEFT JOIN deploy_servers s ON s.id = t.server_id
-  `;
+  /** 计数查询仅在筛选条件引用部署目标字段时才关联 deploy_targets，默认列表直接走 team 索引计数 */
+  let countNeedsTargetJoin = false;
   if (query.targetId) {
     whereParts.push('r.target_id = ?');
     params.push(Number(query.targetId));
@@ -3699,17 +3623,20 @@ export async function listRecords(query = {}) {
     }
     if (conditions.length) {
       whereParts.push(`(${conditions.join(' OR ')})`);
+      countNeedsTargetJoin = true;
     }
   }
   const serverId = Number(query.serverId || 0);
   if (serverId) {
     whereParts.push('t.server_id = ?');
     params.push(serverId);
+    countNeedsTargetJoin = true;
   }
   const projectType = String(query.projectType || '').trim();
   if (projectType === 'frontend' || projectType === 'backend') {
     whereParts.push('t.project_type = ?');
     params.push(projectType);
+    countNeedsTargetJoin = true;
   }
   const branch = String(query.branch || '').trim();
   if (branch) {
@@ -3726,17 +3653,26 @@ export async function listRecords(query = {}) {
     whereParts.push('r.action = ?');
     params.push(action);
   }
-  if (whereParts.length) {
-    const whereSql = ` WHERE ${whereParts.join(' AND ')}`;
-    fromSql += whereSql;
-    countSql += whereSql;
-  }
+  const whereSql = ` WHERE ${whereParts.join(' AND ')}`;
+  const fromSql = `
+    SELECT r.*, t.project_description, t.project_path, t.repository_url, t.project_type, t.server_id, s.name AS server_name, s.host AS server_host
+    FROM deploy_records r
+    LEFT JOIN deploy_targets t ON t.id = r.target_id
+    LEFT JOIN deploy_servers s ON s.id = t.server_id
+    ${whereSql}
+  `;
+  const countSql = `
+    SELECT COUNT(*) AS total
+    FROM deploy_records r
+    ${countNeedsTargetJoin ? 'LEFT JOIN deploy_targets t ON t.id = r.target_id' : ''}
+    ${whereSql}
+  `;
   const total = Number(db.prepare(countSql).get(...params)?.total || 0);
   const items = db
     .prepare(`${fromSql} ORDER BY r.started_at DESC, r.id DESC LIMIT ? OFFSET ?`)
     .all(...params, pageSize, offset)
     .map((row) => mapRecord(row, { includeLogs: false }));
-  await hydrateRecordCommitMessages(items, { gitlabToken: query.gitlabToken, gitlabHost: query.gitlabHost });
+  scheduleRecordCommitHydration(items, { gitlabToken: query.gitlabToken, gitlabHost: query.gitlabHost });
   decorateRecordState(db, items);
   return { items, total, page, pageSize };
 }
