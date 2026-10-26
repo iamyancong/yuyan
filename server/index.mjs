@@ -37,6 +37,7 @@ import { closeDeployDb, getDeployDb, migrateCentralDeployWorkspace } from './ser
 import { closeAgentDb, getAgentDb } from './services/agent-store.mjs';
 import { timingSafeTokenEqual } from './services/agent-security.mjs';
 import { abortAppUpdateTransfers, abortRunningDeployTasks } from './controllers/deploy-controller.mjs';
+import { closeAllDeployEventStreams } from './services/deploy-event-service.mjs';
 import { startAppUpdatePreloadScheduler } from './services/app-update-release-service.mjs';
 import { disableDynamicApiCache } from './services/http-cache-policy.mjs';
 import { httpMetricsMiddleware } from './services/runtime-metrics.mjs';
@@ -401,6 +402,12 @@ async function shutdown(reason = 'unknown') {
     await abortRunningDeployTasks(`雨燕服务关闭（${reason}），发布任务已停止`);
   } catch (error) {
     console.warn('[shutdown] 收口运行中的部署任务失败:', error);
+  }
+
+  try {
+    closeAllDeployEventStreams();
+  } catch (error) {
+    console.warn('[shutdown] 关闭部署实时事件流失败:', error);
   }
 
   try {

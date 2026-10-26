@@ -7,6 +7,7 @@ import {
   getLatestDesktopOpenApi,
   readDesktopOpenApi,
 } from '@/api/agent';
+import { createSseFrameParser } from '@/api/agentStream';
 import { buildLocalDeployApiUrl } from '@/api/localDeployUrl';
 
 /** 服务器认证方式 */
@@ -576,6 +577,18 @@ export interface DeployProgressSnapshot {
 export interface DeployRuntimeSnapshotBatch {
   items: DeployProgressSnapshot[];
   checkedAt: string;
+}
+
+/** 部署模块 SSE 变更域。 */
+export type DeployChangeDomain = 'runtime' | 'targets' | 'records' | 'backend-status';
+
+/** 部署模块 SSE 事件负载。 */
+export interface DeployStreamEvent {
+  revision: number;
+  domains: DeployChangeDomain[];
+  targetIds: number[];
+  runtime?: DeployRuntimeSnapshotBatch;
+  timestamp: string;
 }
 
 interface CentralDeployOperation {
@@ -1267,6 +1280,62 @@ export async function getTargetDeployProgress(
 /** 获取当前团队全部运行中部署目标的聚合快照。 */
 export const listDeployTargetRuntimeSnapshots = (signal?: AbortSignal) =>
   client.get('/targets/runtime-snapshots', { signal }).then(unwrap<DeployRuntimeSnapshotBatch>);
+
+/**
+ * 订阅部署模块实时事件流（SSE），在服务端推送运行态或资源变更时实时回调。
+ * @param options 取消信号、连接就绪回调与事件回调
+ */
+export async function subscribeDeployEvents(options: {
+  signal: AbortSignal;
+  onReady?: (event: DeployStreamEvent) => void;
+  onEvent: (event: DeployStreamEvent, eventName: 'ready' | 'change') => void;
+}): Promise<void> {
+  const url = await getActiveDeployApiUrl('/events');
+  const response = await fetch(url, {
+    headers: {
+      Accept: 'text/event-stream',
+      ...getDeployApiAuthHeaders(),
+    },
+    signal: options.signal,
+  });
+  if (!response.ok) {
+    const body = await parseJsonOrText(response).catch(() => null);
+    const error = new Error(
+      typeof body === 'string' ? body : body?.error?.message || body?.error || `部署实时事件流返回 HTTP ${response.status}`,
+    ) as Error & { status?: number; response?: { status: number } };
+    error.status = response.status;
+    error.response = { status: response.status };
+    throw error;
+  }
+  const reader = response.body?.getReader();
+  if (!reader) {
+    const error = new Error('当前环境不支持 SSE 流式读取') as Error & { status?: number };
+    error.status = 501;
+    throw error;
+  }
+  const decoder = new TextDecoder();
+  const parser = createSseFrameParser((frame) => {
+    if (frame.event !== 'ready' && frame.event !== 'change') return;
+    try {
+      const event = JSON.parse(frame.data) as DeployStreamEvent;
+      if (!Number.isFinite(event.revision) || !Array.isArray(event.domains)) return;
+      if (frame.event === 'ready') options.onReady?.(event);
+      options.onEvent(event, frame.event);
+    } catch {
+      /** 忽略单帧解析异常，保持后续长连接可用 */
+    }
+  });
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) parser.push(decoder.decode(value, { stream: true }));
+  }
+  parser.push(decoder.decode());
+  parser.finish();
+  if (!options.signal.aborted) {
+    throw new Error('部署实时事件流连接已断开');
+  }
+}
 
 /**
  * 停止部署目标运行中的发布任务。

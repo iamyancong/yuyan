@@ -228,7 +228,9 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
   // 站点域名与端口冲突预检 Hook
   const { confirmIfConflict } = useSiteConflictCheck();
 
-  // 运行态长轮询与快照子 Hook
+  let domainChangeRefreshTimer: number | null = null;
+
+  // 运行态 SSE 实时订阅与自适应轮询子 Hook
   const {
     targetRuntimeSnapshots,
     targetRuntimeLoading,
@@ -240,7 +242,25 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     startTargetRuntimePolling,
     stopTargetRuntimePolling,
     cancelPendingRequests,
-  } = useTargetRuntime(targets);
+  } = useTargetRuntime(targets, {
+    onDomainChange: ({ domains, targetIds }) => {
+      if (targetSaving.value || targetModalOpen.value) return;
+      if (domains.includes('targets') || domains.includes('records')) {
+        if (domainChangeRefreshTimer !== null) window.clearTimeout(domainChangeRefreshTimer);
+        domainChangeRefreshTimer = window.setTimeout(() => {
+          domainChangeRefreshTimer = null;
+          void refreshActiveTab({ silent: true }).catch(() => undefined);
+        }, 500);
+        return;
+      }
+      if (domains.includes('backend-status') && targetIds.length) {
+        const matchedTargets = targets.value.filter(
+          (target) => target.projectType === 'backend' && targetIds.includes(target.id),
+        );
+        if (matchedTargets.length) void refreshBackendServiceStatuses(matchedTargets);
+      }
+    },
+  });
 
   // Nginx 配置文件读写与校验子 Hook
   const {
