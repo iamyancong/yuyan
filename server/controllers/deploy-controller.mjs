@@ -1177,7 +1177,11 @@ export async function handleListRecords(req, res) {
  */
 export async function handleGetRecord(req, res) {
   try {
-    const record = await getRecord(Number(req.params.id), { gitlabToken: getGitlabTokenFromRequest(req), gitlabHost: getGitlabHostFromRequest(req) });
+    const record = await getRecord(Number(req.params.id), {
+      gitlabToken: getGitlabTokenFromRequest(req),
+      gitlabHost: getGitlabHostFromRequest(req),
+      scheduleCommitHydration: true,
+    });
     if (!record) return sendError(res, new Error('发布记录不存在'), 404);
     res.json({ success: true, data: record });
   } catch (error) {
