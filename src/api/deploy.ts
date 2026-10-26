@@ -565,6 +565,9 @@ export interface DeployProgressSnapshot {
   operator: string;
   startedAt: string;
   currentStage: string;
+  queued?: boolean;
+  queuePosition?: number;
+  queuedCount?: number;
   running: boolean;
   result: DeployTaskResult | null;
   error: string | null;

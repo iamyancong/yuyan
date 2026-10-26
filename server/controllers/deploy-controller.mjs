@@ -106,6 +106,7 @@ import { mergeDeployRuntimeSnapshots } from '../services/deploy-runtime-snapshot
 import { listDeployRootOptions } from '../services/deploy-root-options-service.mjs';
 import { discoverServerNginx } from '../services/nginx-discovery-service.mjs';
 import { getRequestContext, getRequestTeamId } from '../services/request-context.mjs';
+import { acquireTargetLease } from '../services/central-deploy-guard.mjs';
 import { getBackendStatusCacheStats, invalidateBackendStatus } from '../services/backend-status-cache.mjs';
 import { getCommitMetaHydrationStats } from '../services/commit-meta-service.mjs';
 import {
@@ -115,6 +116,10 @@ import {
   setDeployRuntimeSnapshotResolver,
   subscribeDeployEvents,
 } from '../services/deploy-event-service.mjs';
+import {
+  deployTaskScheduler,
+  DeployQueueFullError,
+} from '../services/deploy-task-scheduler.mjs';
 import { getMetricsSnapshot } from '../services/runtime-metrics.mjs';
 import {
   getServerFsRoots,
@@ -147,14 +152,14 @@ class DeployStoppedError extends Error {
   }
 }
 
-/** 同时运行的发布/回滚任务上限 */
-const MAX_RUNNING_DEPLOY_TASKS = 5;
+/** 同时运行的发布/回滚任务上限（默认 7，超出进入有界 FIFO 排队队列） */
+const MAX_RUNNING_DEPLOY_TASKS = deployTaskScheduler.maxRunning;
 
-/** 发布停止前允许中断的阶段 */
-const STOPPABLE_DEPLOY_STAGE_KEYS = new Set(['validate', 'clone', 'install', 'build', 'openapi']);
+/** 发布停止前允许中断的阶段（包含 queued 排队阶段） */
+const STOPPABLE_DEPLOY_STAGE_KEYS = new Set(['queued', 'validate', 'clone', 'install', 'build', 'openapi']);
 
-/** 当前进程内正在执行的部署目标任务 */
-const deployTasksByTargetId = new Map();
+/** 当前进程内正在执行或排队中的部署目标任务（与调度器共享同一 Map） */
+const deployTasksByTargetId = deployTaskScheduler.tasksByTargetId;
 
 /** 关闭服务时等待部署任务收口的最长时间 */
 const DEPLOY_SHUTDOWN_GRACE_MS = 2500;
@@ -164,13 +169,23 @@ const DEPLOY_SHUTDOWN_GRACE_MS = 2500;
  * @param {number} targetId - 部署目标 ID
  * @param {'deploy'|'rollback'|'undoRollback'|'openapi'|'start'|'stop'|'restart'} action - 任务类型
  * @param {Object} body - 请求体
- * @returns {Object} 任务上下文
+ * @returns {Promise<Object>} 任务上下文
  */
 async function createDeployTask(targetId, action, body = {}) {
   const operator = String(body?.operator || '').trim() || '未知操作人';
   const startedAt = new Date().toISOString();
+  const context = getRequestContext();
   const teamId = getRequestTeamId();
-  const persistent = await createPersistentDeployTask({ targetId, action, operator, startedAt });
+  const releaseTargetLease = !context?.legacy && action === 'deploy'
+    ? await acquireTargetLease(context, Number(targetId))
+    : null;
+  let persistent;
+  try {
+    persistent = await createPersistentDeployTask({ targetId, action, operator, startedAt });
+  } catch (error) {
+    releaseTargetLease?.();
+    throw error;
+  }
   return {
     targetId: Number(targetId),
     teamId,
@@ -182,10 +197,13 @@ async function createDeployTask(targetId, action, body = {}) {
     events: [],
     subscribers: new Set(),
     currentStage: 'validate',
+    queued: false,
+    queuePosition: 0,
     completed: false,
     result: null,
     error: null,
     promise: null,
+    releaseTargetLease,
   };
 }
 
@@ -195,6 +213,7 @@ async function createDeployTask(targetId, action, body = {}) {
  * @returns {Object} 快照
  */
 function serializeDeployTask(task) {
+  const stats = deployTaskScheduler.getStats();
   return {
     taskId: task.persistentId,
     targetId: task.targetId,
@@ -202,12 +221,15 @@ function serializeDeployTask(task) {
     operator: task.operator,
     startedAt: task.startedAt,
     currentStage: task.currentStage,
+    queued: Boolean(task.queued || task.currentStage === 'queued'),
+    queuePosition: Number(task.queuePosition || 0),
+    queuedCount: stats.queuedCount,
     running: !task.completed,
     result: task.result,
     error: task.error,
     events: task.events,
-    maxConcurrent: MAX_RUNNING_DEPLOY_TASKS,
-    runningCount: deployTasksByTargetId.size,
+    maxConcurrent: stats.maxConcurrent,
+    runningCount: stats.runningCount,
   };
 }
 
@@ -309,6 +331,7 @@ function hasTaskErrorEvent(task) {
 function completeDeployTask(task) {
   task.completed = true;
   deployTasksByTargetId.delete(task.targetId);
+  task.releaseTargetLease?.();
   task.subscribers.forEach((res) => {
     if (!res.writableEnded) res.end();
   });
@@ -323,7 +346,7 @@ function completeDeployTask(task) {
 }
 
 /**
- * 启动部署目标任务。
+ * 启动或排队调度部署目标任务。
  * @param {Object} task - 任务上下文
  * @param {() => Promise<Object>} runner - 任务执行器
  * @param {Object} emit - 进度输出器
@@ -331,39 +354,94 @@ function completeDeployTask(task) {
  */
 function startDeployTask(task, runner, emit) {
   publishDeployEvent({ teamId: task.teamId, domains: ['runtime'], targetIds: [task.targetId] });
-  const promise = Promise.resolve()
-    .then(runner)
-    .then(async (result) => {
-      task.result = result;
+  return deployTaskScheduler.scheduleTask(task, runner, {
+    onQueued(_queuedTask, position, stats) {
+      emit.stage(
+        'queued',
+        2,
+        '排队等待执行',
+        `当前排在第 ${position} 位（运行中 ${stats.runningCount}/${stats.maxConcurrent}），前序任务完成后将自动开始`
+      );
+      emit.log(
+        'info',
+        `当前并发槽位已满（${stats.runningCount}/${stats.maxConcurrent}），任务已进入排队队列，当前第 ${position} 位`,
+        'queued'
+      );
+    },
+    onPositionChanged(_queuedTask, position, stats) {
+      emit.stage(
+        'queued',
+        2,
+        '排队等待执行',
+        `当前排在第 ${position} 位（运行中 ${stats.runningCount}/${stats.maxConcurrent}），前序任务完成后将自动开始`
+      );
+      emit.log('info', `排队名次已更新：当前排在第 ${position} 位`, 'queued');
+    },
+    onStartExecution(runningTask) {
+      if (runningTask.events.some((event) => event.type === 'stage' && event.stage === 'queued')) {
+        emit.log('info', '已获得执行槽位，开始执行任务', 'validate');
+      }
+    },
+    async onAbortedWhileQueued(abortedTask, reason) {
+      if (reason?.code === 'DEPLOY_QUEUE_TIMEOUT') {
+        abortedTask.error = reason.message;
+        emit.error(abortedTask.error, 'queued');
+        await updatePersistentDeployTask(abortedTask.persistentId, {
+          status: 'failed',
+          error: abortedTask.error,
+          stage: 'queued',
+        });
+        throw reason;
+      }
+      const stopMessage = reason instanceof Error ? reason.message : '排队任务已取消';
+      emit.log('warn', stopMessage, 'cancel');
+      emit.stage('queued', 0, '已停止', '任务已在排队阶段取消，未产生构建或发布变更');
+      const stoppedResult = {
+        id: 0,
+        targetId: abortedTask.targetId,
+        action: abortedTask.action,
+        status: 'stopped',
+        operator: abortedTask.operator,
+        startedAt: abortedTask.startedAt,
+        finishedAt: new Date().toISOString(),
+      };
+      abortedTask.result = stoppedResult;
+      await updatePersistentDeployTask(abortedTask.persistentId, {
+        status: 'stopped',
+        stage: 'queued',
+        percent: 0,
+        result: stoppedResult,
+      });
+      emit.result(stoppedResult);
+      return stoppedResult;
+    },
+    async onSuccess(completedTask, result) {
+      completedTask.result = result;
       const status = result?.status === 'stopped' ? 'stopped' : 'success';
-      await updatePersistentDeployTask(task.persistentId, {
+      await updatePersistentDeployTask(completedTask.persistentId, {
         status,
         percent: 100,
         resultRef: result?.id ? String(result.id) : '',
         result,
         logPath: result?.logPath || '',
       });
-      return result;
-    })
-    .catch(async (error) => {
-      task.error = error instanceof Error ? error.message : String(error);
-      if (!hasTaskErrorEvent(task)) emit.error(task.error, task.currentStage);
+    },
+    async onError(failedTask, error) {
+      failedTask.error = error instanceof Error ? error.message : String(error);
+      if (!hasTaskErrorEvent(failedTask)) emit.error(failedTask.error, failedTask.currentStage);
       const failedRecord = error?.deployRecord || null;
-      await updatePersistentDeployTask(task.persistentId, {
+      await updatePersistentDeployTask(failedTask.persistentId, {
         status: 'failed',
-        error: task.error,
-        stage: task.currentStage,
+        error: failedTask.error,
+        stage: failedTask.currentStage,
         resultRef: failedRecord?.id ? String(failedRecord.id) : '',
         logPath: failedRecord?.logPath || '',
       });
-      throw error;
-    })
-    .finally(() => {
-      completeDeployTask(task);
-    });
-  task.promise = promise;
-  promise.catch(() => {});
-  return promise;
+    },
+    onComplete(finishedTask) {
+      completeDeployTask(finishedTask);
+    },
+  });
 }
 
 /**
@@ -421,16 +499,21 @@ async function sendDeployTaskProgress(req, res, task, streamMode) {
 }
 
 /**
- * 返回并发上限冲突。
+ * 返回并发与等待队列已满冲突。
  * @param {Object} res - Express 响应对象
  */
 function sendDeployLimitConflict(res) {
-  res.status(409).json({
+  const stats = deployTaskScheduler.getStats();
+  const queueError = new DeployQueueFullError(stats.maxConcurrent, stats.maxQueueSize);
+  res.status(queueError.status).json({
     success: false,
-    error: `当前已有 ${MAX_RUNNING_DEPLOY_TASKS} 个发布任务正在执行，请稍后重试`,
+    code: queueError.code,
+    error: queueError.message,
     data: {
-      maxConcurrent: MAX_RUNNING_DEPLOY_TASKS,
-      runningCount: deployTasksByTargetId.size,
+      maxConcurrent: stats.maxConcurrent,
+      runningCount: stats.runningCount,
+      queuedCount: stats.queuedCount,
+      maxQueueSize: stats.maxQueueSize,
     },
   });
 }
@@ -1095,10 +1178,14 @@ export async function handleListTargets(req, res) {
 export async function handleGetRuntimeMetrics(_req, res) {
   try {
     const db = await getDeployDb();
+    const schedulerStats = deployTaskScheduler.getStats();
     res.json({
       success: true,
       data: getMetricsSnapshot({
-        deployTasks: { running: deployTasksByTargetId.size, maxConcurrent: MAX_RUNNING_DEPLOY_TASKS },
+        deployTasks: {
+          running: schedulerStats.runningCount,
+          ...schedulerStats,
+        },
         sseEvents: getDeployEventStats(),
         commitMetaHydration: getCommitMetaHydrationStats(),
         backendStatusCache: getBackendStatusCacheStats(),
@@ -1405,12 +1492,18 @@ export async function handleDeployTarget(req, res) {
     await sendDeployTaskProgress(req, res, runningTask, streamMode);
     return;
   }
-  if (deployTasksByTargetId.size >= MAX_RUNNING_DEPLOY_TASKS) {
+  if (!deployTaskScheduler.canAcceptTask()) {
     sendDeployLimitConflict(res);
     return;
   }
 
-  const task = await createDeployTask(targetId, 'deploy', req.body || {});
+  let task;
+  try {
+    task = await createDeployTask(targetId, 'deploy', req.body || {});
+  } catch (error) {
+    sendError(res, error, Number(error?.status || 409));
+    return;
+  }
   const emit = createProgressEmitter(task);
   deployTasksByTargetId.set(targetId, task);
   startDeployTask(task, () => deployTarget(targetId, { ...(req.body || {}), signal: task.controller.signal }, emit), emit);
@@ -1458,7 +1551,8 @@ export async function handleStopDeployTarget(req, res) {
     sendError(res, new Error('该部署目标当前没有运行中的发布任务'), 404);
     return;
   }
-  if (!['deploy', 'openapi'].includes(task.action)) {
+  const isQueued = Boolean(task.queued || task.currentStage === 'queued');
+  if (!isQueued && !['deploy', 'openapi'].includes(task.action)) {
     sendError(res, new Error('当前任务不支持停止'), 400);
     return;
   }
@@ -1510,7 +1604,7 @@ async function handleRestoreRecordTask(req, res, action, runner) {
     sendDeployTargetBusy(res, runningTask);
     return;
   }
-  if (deployTasksByTargetId.size >= MAX_RUNNING_DEPLOY_TASKS) {
+  if (!deployTaskScheduler.canAcceptTask()) {
     sendDeployLimitConflict(res);
     return;
   }
@@ -2107,7 +2201,7 @@ async function handleTargetOperationTask(req, res, targetId, action, runner) {
     await sendDeployTaskProgress(req, res, runningTask, streamMode);
     return;
   }
-  if (deployTasksByTargetId.size >= MAX_RUNNING_DEPLOY_TASKS) {
+  if (!deployTaskScheduler.canAcceptTask()) {
     sendDeployLimitConflict(res);
     return;
   }

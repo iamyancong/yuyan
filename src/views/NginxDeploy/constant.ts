@@ -208,6 +208,7 @@ export const getDeployRecordStatusColor = (status?: DeployRecord['status'] | nul
 
 /** 运行中任务阶段展示文案 */
 export const DEPLOY_PROGRESS_STAGE_LABEL_MAP: Record<string, string> = {
+  queued: '排队等待',
   validate: '参数校验',
   clone: '拉取代码',
   install: '安装依赖',
