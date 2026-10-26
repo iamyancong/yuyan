@@ -34,6 +34,7 @@ import { execSsh, shellQuote, uploadFile, withSsh } from './ssh-service.mjs';
 import { getOrProbeBackendStatus, invalidateBackendStatus, runWithProbeLimit } from './backend-status-cache.mjs';
 import { getRequestTeamId } from './request-context.mjs';
 import { incrementCounter, measure } from './runtime-metrics.mjs';
+import { withBuildSlot } from './build-isolation-service.mjs';
 import {
   DEFAULT_BACKEND_RELEASE_KEEP,
   parseJavaMajorVersion,
@@ -41,12 +42,6 @@ import {
   redactDeployLog,
   validateBackendDeployRoot,
 } from './backend-domain.mjs';
-
-/** 本地 Maven 构建并发数 */
-const MAX_BACKEND_BUILDS = 2;
-
-/** 当前本地 Maven 构建数量 */
-let activeBackendBuilds = 0;
 
 /** 同一服务器的激活阶段队列 */
 const serverActivationTails = new Map();
@@ -95,18 +90,13 @@ function delay(ms, signal) {
 }
 
 /**
- * 以本地构建并发槽执行任务。
+ * 以统一本地构建并发槽（默认 3~5）执行后端构建任务。
  * @param {() => Promise<*>} runner 任务
+ * @param {Object} [options={}] 取消信号与等待通知
  * @returns {Promise<*>} 结果
  */
-async function withBackendBuildSlot(runner) {
-  if (activeBackendBuilds >= MAX_BACKEND_BUILDS) throw new Error('当前已有 2 个后端构建任务，请稍后重试');
-  activeBackendBuilds += 1;
-  try {
-    return await runner();
-  } finally {
-    activeBackendBuilds -= 1;
-  }
+async function withBackendBuildSlot(runner, options = {}) {
+  return withBuildSlot(runner, options);
 }
 
 /**
@@ -150,26 +140,34 @@ export async function buildBackendArtifactOnDevice(target, payload = {}, emit = 
   const buildCommand = await prepareBackendMavenCommand(target.buildCommand, workspace.repoDir, {
     onLog: (level, message) => log(level, message, 'build'),
   });
-  await withBackendBuildSlot(async () => {
-    if (installCommand) {
-      emit.stage?.('install', 26, '设备正在准备 Maven 依赖', installCommand);
-      await runBackendLocalCommand(installCommand, {
+  await withBackendBuildSlot(
+    async () => {
+      if (installCommand) {
+        emit.stage?.('install', 26, '设备正在准备 Maven 依赖', installCommand);
+        await runBackendLocalCommand(installCommand, {
+          cwd: workspace.repoDir,
+          env,
+          signal,
+          label: 'Maven 预热',
+          onLog: (level, message) => log(level, message, 'install'),
+        });
+      }
+      emit.stage?.('build', 42, '设备正在构建后端 Jar', buildCommand);
+      await runBackendLocalCommand(buildCommand, {
         cwd: workspace.repoDir,
         env,
         signal,
-        label: 'Maven 预热',
-        onLog: (level, message) => log(level, message, 'install'),
+        label: 'Maven 构建',
+        onLog: (level, message) => log(level, message, 'build'),
       });
-    }
-    emit.stage?.('build', 42, '设备正在构建后端 Jar', buildCommand);
-    await runBackendLocalCommand(buildCommand, {
-      cwd: workspace.repoDir,
-      env,
+    },
+    {
       signal,
-      label: 'Maven 构建',
-      onLog: (level, message) => log(level, message, 'build'),
-    });
-  });
+      onWait: ({ waitingPosition, activeBuilds, maxConcurrentBuilds }) => {
+        log('info', `当前本地构建槽位已满（${activeBuilds}/${maxConcurrentBuilds}），正在等待空闲槽位（排第 ${waitingPosition} 位）...`, 'build');
+      },
+    }
+  );
   const artifact = await resolveBackendArtifact(workspace.repoDir, target.artifactPattern || target.artifactDir);
   const artifactSha256 = await createFileSha256(artifact.jarPath);
   const stat = await fsStatSafe(artifact.jarPath);
@@ -873,26 +871,34 @@ export async function deployBackendTarget(targetId, payload, emit) {
     const buildCommand = await prepareBackendMavenCommand(target.buildCommand, workspace.repoDir, {
       onLog: (level, message) => log(level, message, 'build'),
     });
-    await withBackendBuildSlot(async () => {
-      if (installCommand) {
-        stage('install', 28, 'Maven 仓库预热', installCommand);
-        await runBackendLocalCommand(installCommand, {
+    await withBackendBuildSlot(
+      async () => {
+        if (installCommand) {
+          stage('install', 28, 'Maven 仓库预热', installCommand);
+          await runBackendLocalCommand(installCommand, {
+            cwd: workspace.repoDir,
+            env,
+            signal,
+            label: 'Maven 预热',
+            onLog: (level, message) => log(level, message, 'install'),
+          });
+        }
+        stage('build', 46, '构建后端 Jar', buildCommand);
+        await runBackendLocalCommand(buildCommand, {
           cwd: workspace.repoDir,
           env,
           signal,
-          label: 'Maven 预热',
-          onLog: (level, message) => log(level, message, 'install'),
+          label: 'Maven 构建',
+          onLog: (level, message) => log(level, message, 'build'),
         });
-      }
-      stage('build', 46, '构建后端 Jar', buildCommand);
-      await runBackendLocalCommand(buildCommand, {
-        cwd: workspace.repoDir,
-        env,
+      },
+      {
         signal,
-        label: 'Maven 构建',
-        onLog: (level, message) => log(level, message, 'build'),
-      });
-    });
+        onWait: ({ waitingPosition, activeBuilds, maxConcurrentBuilds }) => {
+          log('info', `当前本地构建槽位已满（${activeBuilds}/${maxConcurrentBuilds}），正在等待空闲槽位（排第 ${waitingPosition} 位）...`, 'build');
+        },
+      }
+    );
     const artifact = await resolveBackendArtifact(workspace.repoDir, target.artifactPattern || target.artifactDir);
     const checksum = await createFileSha256(artifact.jarPath);
     const publishedJarName = normalizePublishedJarName(artifact.jarName);

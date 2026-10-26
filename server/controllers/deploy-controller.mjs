@@ -120,6 +120,7 @@ import {
   deployTaskScheduler,
   DeployQueueFullError,
 } from '../services/deploy-task-scheduler.mjs';
+import { getBuildLimiterStats } from '../services/build-isolation-service.mjs';
 import { getMetricsSnapshot } from '../services/runtime-metrics.mjs';
 import {
   getServerFsRoots,
@@ -1186,6 +1187,7 @@ export async function handleGetRuntimeMetrics(_req, res) {
           running: schedulerStats.runningCount,
           ...schedulerStats,
         },
+        buildLimiter: getBuildLimiterStats(),
         sseEvents: getDeployEventStats(),
         commitMetaHydration: getCommitMetaHydrationStats(),
         backendStatusCache: getBackendStatusCacheStats(),

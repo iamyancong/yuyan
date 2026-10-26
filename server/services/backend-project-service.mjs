@@ -27,6 +27,11 @@ import {
   validateRepositoryRelativePath,
 } from './backend-domain.mjs';
 import { scanLocalBuildJdks } from './backend-toolchain-service.mjs';
+import {
+  applyLowProcessPriority,
+  buildIsolatedCommandEnv,
+  withBuildSlot,
+} from './build-isolation-service.mjs';
 
 /** Maven/OpenAPI 默认超时 */
 const DEFAULT_COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
@@ -143,9 +148,10 @@ export function runBackendLocalCommand(command, options = {}) {
       cwd: options.cwd,
       shell: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, ...(options.env || {}) },
+      env: buildIsolatedCommandEnv(options.env || {}, { injectNodeHeapLimit: false }),
       detached: process.platform !== 'win32',
     }));
+    applyLowProcessPriority(child.pid);
     let stdout = '';
     let stderr = '';
     let settled = false;
@@ -518,14 +524,27 @@ async function generateOpenApiForTarget(target, options = {}) {
   const openapiCommand = await prepareBackendMavenCommand(target.openapiCommand, workspace.repoDir, {
     onLog: (level, message) => log(level, message, 'openapi'),
   });
-  await runBackendLocalCommand(openapiCommand, {
-    cwd: workspace.repoDir,
-    env,
-    signal: options.signal,
-    timeoutMs: DEFAULT_OPENAPI_TIMEOUT_MS,
-    label: '生成 OpenAPI',
-    onLog: (level, message) => log(level, message, 'openapi'),
-  });
+  await withBuildSlot(
+    () =>
+      runBackendLocalCommand(openapiCommand, {
+        cwd: workspace.repoDir,
+        env,
+        signal: options.signal,
+        timeoutMs: DEFAULT_OPENAPI_TIMEOUT_MS,
+        label: '生成 OpenAPI',
+        onLog: (level, message) => log(level, message, 'openapi'),
+      }),
+    {
+      signal: options.signal,
+      onWait: ({ waitingPosition, activeBuilds, maxConcurrentBuilds }) => {
+        log(
+          'info',
+          `当前本地构建槽位已满（${activeBuilds}/${maxConcurrentBuilds}），OpenAPI 生成正在等待空闲槽位（排第 ${waitingPosition} 位）...`,
+          'openapi'
+        );
+      },
+    }
+  );
   const relativeOutput = validateRepositoryRelativePath(target.openapiOutputPath, 'OpenAPI 输出路径');
   const outputPath = path.resolve(workspace.repoDir, relativeOutput);
   const outputStat = await fs.stat(outputPath).catch(() => null);
