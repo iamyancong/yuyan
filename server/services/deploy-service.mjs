@@ -34,6 +34,11 @@ import {
   writeRemoteTextWithBackup,
 } from './ssh-service.mjs';
 import { deployBackendTarget, restoreBackendRecord } from './backend-runtime-service.mjs';
+import {
+  applyLowProcessPriority,
+  buildIsolatedCommandEnv,
+  withBuildSlot,
+} from './build-isolation-service.mjs';
 
 /** 发布任务停止错误 */
 class DeployStoppedError extends Error {
@@ -790,9 +795,10 @@ function runLocalCommand(command, options = {}) {
       cwd: options.cwd,
       shell: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, ...(options.env || {}) },
+      env: buildIsolatedCommandEnv(options.env || {}),
       detached: process.platform !== 'win32',
     }));
+    applyLowProcessPriority(child.pid);
 
     let stdout = '';
     let stderr = '';
@@ -2029,11 +2035,12 @@ export async function deployTarget(targetId, payload, emit) {
     }
 
     let npmConfigEnv = {};
+    let installPlan = null;
     if (!isBackend) {
       npmConfigEnv = await prepareRuntimeNpmConfig(repoDir, log);
 
       throwIfDeployStopped(signal);
-      const installPlan = await resolveDependencyInstallPlan({
+      installPlan = await resolveDependencyInstallPlan({
         repoDir,
         metaPath,
         target,
@@ -2042,70 +2049,87 @@ export async function deployTarget(targetId, payload, emit) {
         forceInstallDependencies: Boolean(payload.forceInstallDependencies),
         signal,
       });
-      stage(
-        'install',
-        30,
-        '安装依赖',
-        installPlan.shouldInstall ? installPlan.reasons.join('；') || target.installCommand : '依赖缓存命中，跳过安装依赖'
-      );
-      if (installPlan.shouldInstall) {
-        log('info', `依赖缓存未命中：${installPlan.reasons.join('；')}`, 'install');
-        await removeDependencyInstallArtifacts(repoDir);
-        log('info', '已清理旧依赖目录，准备重新安装依赖', 'install');
-        await ensureLegacyHuskyPreparePlaceholder(repoDir, log);
-        await executeDependencyInstallWithHealing({
-          command: target.installCommand,
-          cwd: repoDir,
-          env: npmConfigEnv,
-          signal,
-          log,
-        });
-        if (installPlan.cacheable) {
-          await writeDependencyCacheMeta(metaPath, {
-            targetId: target.id,
-            projectId: target.projectId,
-            projectName: target.projectName,
-            branch,
-            commitSha,
-            dependencyCacheKey: installPlan.dependencyCacheKey,
-            installCommand: normalizeInstallCommand(target.installCommand),
-            packageManager: installPlan.packageManager,
-            packageManagerVersion: installPlan.packageManagerVersion,
-            nodeVersion: installPlan.nodeVersion,
-            platform: installPlan.platform,
-            arch: installPlan.arch,
-            inputFileCount: installPlan.inputFileCount,
-            updatedAt: new Date().toISOString(),
-          });
-          log('success', `依赖安装完成，已更新依赖缓存指纹：${installPlan.dependencyCacheKey.slice(0, 12)}`, 'install');
-        } else {
-          log('success', '依赖安装完成；当前安装命令或锁文件不满足跳过安装条件，本次不写入跳过安装缓存', 'install');
-        }
-      } else {
-        log('success', `依赖缓存命中，跳过安装依赖：${installPlan.dependencyCacheKey.slice(0, 12)}`, 'install');
-      }
-    } else if (target.installCommand) {
-      stage('install', 30, '下载依赖', target.installCommand);
-      await runLocalCommandList(target.installCommand, {
-        cwd: repoDir,
-        env: { ...process.env, ...jdkEnv },
-        label: '下载依赖',
-        onLog: (level, message) => log(level, message, 'install'),
-        signal,
-      });
-    } else {
-      stage('install', 30, '跳过依赖安装', '未配置依赖安装命令，依赖将通过打包命令自动下载');
     }
 
-    throwIfDeployStopped(signal);
-    stage('build', 48, '构建产物', target.buildCommand);
-    await runLocalCommandList(target.buildCommand, {
-      cwd: repoDir,
-      env: isBackend ? { ...process.env, ...jdkEnv } : npmConfigEnv,
-      label: '构建产物',
-      onLog: (level, message) => log(level, message, 'build'),
-      signal,
-    });
+    await withBuildSlot(
+      async () => {
+        if (!isBackend) {
+          stage(
+            'install',
+            30,
+            '安装依赖',
+            installPlan.shouldInstall ? installPlan.reasons.join('；') || target.installCommand : '依赖缓存命中，跳过安装依赖'
+          );
+          if (installPlan.shouldInstall) {
+            log('info', `依赖缓存未命中：${installPlan.reasons.join('；')}`, 'install');
+            await removeDependencyInstallArtifacts(repoDir);
+            log('info', '已清理旧依赖目录，准备重新安装依赖', 'install');
+            await ensureLegacyHuskyPreparePlaceholder(repoDir, log);
+            await executeDependencyInstallWithHealing({
+              command: target.installCommand,
+              cwd: repoDir,
+              env: npmConfigEnv,
+              signal,
+              log,
+            });
+            if (installPlan.cacheable) {
+              await writeDependencyCacheMeta(metaPath, {
+                targetId: target.id,
+                projectId: target.projectId,
+                projectName: target.projectName,
+                branch,
+                commitSha,
+                dependencyCacheKey: installPlan.dependencyCacheKey,
+                installCommand: normalizeInstallCommand(target.installCommand),
+                packageManager: installPlan.packageManager,
+                packageManagerVersion: installPlan.packageManagerVersion,
+                nodeVersion: installPlan.nodeVersion,
+                platform: installPlan.platform,
+                arch: installPlan.arch,
+                inputFileCount: installPlan.inputFileCount,
+                updatedAt: new Date().toISOString(),
+              });
+              log('success', `依赖安装完成，已更新依赖缓存指纹：${installPlan.dependencyCacheKey.slice(0, 12)}`, 'install');
+            } else {
+              log('success', '依赖安装完成；当前安装命令或锁文件不满足跳过安装条件，本次不写入跳过安装缓存', 'install');
+            }
+          } else {
+            log('success', `依赖缓存命中，跳过安装依赖：${installPlan.dependencyCacheKey.slice(0, 12)}`, 'install');
+          }
+        } else if (target.installCommand) {
+          stage('install', 30, '下载依赖', target.installCommand);
+          await runLocalCommandList(target.installCommand, {
+            cwd: repoDir,
+            env: { ...process.env, ...jdkEnv },
+            label: '下载依赖',
+            onLog: (level, message) => log(level, message, 'install'),
+            signal,
+          });
+        } else {
+          stage('install', 30, '跳过依赖安装', '未配置依赖安装命令，依赖将通过打包命令自动下载');
+        }
+
+        throwIfDeployStopped(signal);
+        stage('build', 48, '构建产物', target.buildCommand);
+        await runLocalCommandList(target.buildCommand, {
+          cwd: repoDir,
+          env: isBackend ? { ...process.env, ...jdkEnv } : npmConfigEnv,
+          label: '构建产物',
+          onLog: (level, message) => log(level, message, 'build'),
+          signal,
+        });
+      },
+      {
+        signal,
+        onWait: ({ waitingPosition, activeBuilds, maxConcurrentBuilds }) => {
+          log(
+            'info',
+            `当前本地构建槽位已满（${activeBuilds}/${maxConcurrentBuilds}），正在等待空闲构建槽位（排第 ${waitingPosition} 位）...`,
+            'build'
+          );
+        },
+      }
+    );
 
     let localJarPath = '';
     let jarFileName = '';
