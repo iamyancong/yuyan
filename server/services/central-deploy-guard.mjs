@@ -4,8 +4,9 @@ import { appendCentralAudit } from './central-identity-service.mjs';
 import { getDeployDb } from './deploy-store.mjs';
 import { getRequestContext } from './request-context.mjs';
 
-/** 为中央前端发布获取跨进程目标租约。 */
-async function acquireTargetLease(context, targetId) {
+/** 为中央前端发布获取跨进程目标租约（绑定任务生命周期，而非单次 HTTP 流生命周期）。 */
+export async function acquireTargetLease(context, targetId) {
+  if (!context?.teamId || !targetId) return () => {};
   const db = await getDeployDb();
   db.exec(`
     CREATE TABLE IF NOT EXISTS central_target_locks (
@@ -18,18 +19,26 @@ async function acquireTargetLease(context, targetId) {
     )
   `);
   const timestamp = new Date().toISOString();
+  const requestId = String(context.requestId || `task-${targetId}-${Date.now()}`);
   db.prepare('DELETE FROM central_target_locks WHERE expires_at <= ?').run(timestamp);
   try {
     db.prepare('INSERT INTO central_target_locks (team_id, target_id, request_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?)')
-      .run(context.teamId, targetId, context.requestId, new Date(Date.now() + 2 * 60 * 60_000).toISOString(), timestamp);
+      .run(context.teamId, Number(targetId), requestId, new Date(Date.now() + 2 * 60 * 60_000).toISOString(), timestamp);
   } catch {
     const error = new Error('同一部署目标已有其他设备任务执行，请等待其完成');
     error.code = 'target_locked';
     error.status = 409;
     throw error;
   }
-  return () => db.prepare('DELETE FROM central_target_locks WHERE team_id = ? AND target_id = ? AND request_id = ?')
-    .run(context.teamId, targetId, context.requestId);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    try {
+      db.prepare('DELETE FROM central_target_locks WHERE team_id = ? AND target_id = ? AND request_id = ?')
+        .run(context.teamId, Number(targetId), requestId);
+    } catch {}
+  };
 }
 
 /** 返回稳定权限错误。 */
@@ -104,18 +113,6 @@ export async function guardCentralDeployRequest(req, res, next) {
         deny(res, 409, 'destructive_confirmation_mismatch', '删除确认名称与当前资源不一致，请刷新后重新确认');
         return;
       }
-    }
-    let releaseTargetLease = null;
-    if (req.method === 'POST' && /^\/targets\/\d+\/deploy$/.test(req.path)) {
-      releaseTargetLease = await acquireTargetLease(context, lookup.id);
-      let released = false;
-      const releaseOnce = () => {
-        if (released) return;
-        released = true;
-        releaseTargetLease?.();
-      };
-      res.once('finish', releaseOnce);
-      res.once('close', releaseOnce);
     }
     const originalJson = res.json.bind(res);
     res.json = (body) => {

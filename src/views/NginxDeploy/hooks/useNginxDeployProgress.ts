@@ -19,8 +19,8 @@ import { DEPLOY_FAILURE_BRIEF, getDeployProgressActionLabel, getDeployProgressFa
 import type { DeployProgressMode, RefreshActiveTabOptions } from '../types';
 import { getErrorMessage, isAbortError, isDeployConflictError, isNotFoundError } from '../utils';
 
-/** 发布停止前允许中断的阶段 */
-const STOPPABLE_PUBLISH_STAGE_KEYS = new Set(['validate', 'clone', 'install', 'build']);
+/** 发布停止前允许中断的阶段（包含排队等待阶段） */
+const STOPPABLE_PUBLISH_STAGE_KEYS = new Set(['queued', 'validate', 'clone', 'install', 'build']);
 
 import { useDeployConnectionState } from './useDeployConnectionState';
 import { useNginxDeployContext } from './useNginxDeployContext';
