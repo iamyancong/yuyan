@@ -33,6 +33,7 @@ import {
 import { execSsh, shellQuote, uploadFile, withSsh } from './ssh-service.mjs';
 import { getOrProbeBackendStatus, invalidateBackendStatus, runWithProbeLimit } from './backend-status-cache.mjs';
 import { getRequestTeamId } from './request-context.mjs';
+import { incrementCounter, measure } from './runtime-metrics.mjs';
 import {
   DEFAULT_BACKEND_RELEASE_KEEP,
   parseJavaMajorVersion,
@@ -1253,10 +1254,12 @@ async function fsStatSafe(filePath) {
  * @returns {Promise<Object>} 状态；命中缓存时 cached 为 true
  */
 export async function getBackendServiceStatus(targetId, options = {}) {
-  return getOrProbeBackendStatus({ scope: getRequestTeamId(), targetId, fresh: Boolean(options.fresh) }, async () => {
+  const result = await getOrProbeBackendStatus({ scope: getRequestTeamId(), targetId, fresh: Boolean(options.fresh) }, async () => {
     const context = await getBackendContext(targetId, { requireBuild: false });
-    return runWithProbeLimit(context.server.id, () => probeBackendServiceStatus(context, targetId));
+    return runWithProbeLimit(context.server.id, () => measure('ssh.backend_status_probe', () => probeBackendServiceStatus(context, targetId)));
   });
+  incrementCounter(result.cached ? 'backend_status.cache_hit' : 'backend_status.probe');
+  return result;
 }
 
 /**

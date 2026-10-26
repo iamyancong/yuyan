@@ -43,6 +43,7 @@ import {
   handleGetServerFsSize,
   handleExecServerCommand,
   handleListRecords,
+  handleGetRuntimeMetrics,
   handleListServers,
   handleReorderServers,
   handleListTargets,
@@ -192,6 +193,8 @@ router.post('/targets/:id/openapi/generate', handleGenerateTargetOpenApi);
 router.get('/targets/:id/openapi/latest', handleGetLatestTargetOpenApi);
 router.get('/openapi-artifacts/:id/content', handleReadOpenApiArtifact);
 router.get('/openapi-artifacts/:id/download', handleDownloadOpenApiArtifact);
+
+router.get('/metrics', handleGetRuntimeMetrics);
 
 router.get('/records', handleListRecords);
 router.get('/records/:id', handleGetRecord);

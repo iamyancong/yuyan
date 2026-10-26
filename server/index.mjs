@@ -39,6 +39,7 @@ import { timingSafeTokenEqual } from './services/agent-security.mjs';
 import { abortAppUpdateTransfers, abortRunningDeployTasks } from './controllers/deploy-controller.mjs';
 import { startAppUpdatePreloadScheduler } from './services/app-update-release-service.mjs';
 import { disableDynamicApiCache } from './services/http-cache-policy.mjs';
+import { httpMetricsMiddleware } from './services/runtime-metrics.mjs';
 import { isTicketedFsDownloadRequest } from './services/remote-fs-service.mjs';
 
 // 创建 Express 应用
@@ -205,6 +206,8 @@ app.use((error, _req, res, next) => {
 });
 app.use(express.json({ limit: '2mb' }));
 app.use(disableDynamicApiCache);
+/** 按路由模板采集接口耗时与错误率，慢请求打印告警，供 /deploy-api/v2/metrics 查看 */
+app.use(['/deploy-api', '/api/v2', '/agent-api', '/scaffold-api'], httpMetricsMiddleware);
 
 // 健康检查路由
 app.use('/health', healthRoutes);
