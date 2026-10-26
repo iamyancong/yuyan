@@ -68,6 +68,7 @@ import { useNginxDeployContext } from './useNginxDeployContext';
 import { normalizeDeployRoot } from './deployRootRecommendationPolicy';
 import { useTargetRuntime } from './useTargetRuntime';
 import { BACKEND_SERVICE_STATUS_CONCURRENCY, mapWithConcurrency } from './targetRuntimePolicy';
+import { filterDeployTargets } from './targetFilterPolicy';
 import { useTargetNginxConf } from './useTargetNginxConf';
 import {
   findDuplicateDeployTarget,
@@ -893,29 +894,18 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     void syncTargetProject(nextProjectId);
   }
 
-  /** 刷新部署目标列表 */
+  /**
+   * 刷新部署目标列表。
+   * @description 只请求一次全量目标（同时作为分支选项、目录占用校验的元数据），筛选在前端完成；
+   * 原先有筛选时最多 3 次请求（筛选结果、全量、默认服务器重查），现固定 1 次。
+   */
   const refreshTargetList = async (signal?: AbortSignal) => {
     const refreshSequence = ++targetListRefreshSequence;
-    let queryParams = getTargetQueryParams();
-    /** 有筛选时同步刷新全量元数据，纠正分支选项及目录占用校验缓存；无筛选时复用列表结果。 */
-    const shouldLoadAllTargets = Boolean(Object.keys(queryParams).length);
-    const [initialTargetList, completeTargetList] = await Promise.all([
-      listDeployTargets(queryParams, signal),
-      shouldLoadAllTargets ? listDeployTargets(undefined, signal) : Promise.resolve<DeployTarget[] | null>(null),
-    ]);
+    const completeTargetList = await listDeployTargets(undefined, signal);
     if (signal?.aborted || refreshSequence !== targetListRefreshSequence) return;
-    let targetList = initialTargetList;
-    if (completeTargetList) {
-      allTargets.value = completeTargetList;
-    } else if (!Object.keys(queryParams).length) {
-      allTargets.value = initialTargetList;
-    }
-    const shouldReloadByDefaultServer = ensureTargetServerFilter() && !queryParams.serverId;
-    if (shouldReloadByDefaultServer) {
-      queryParams = getTargetQueryParams();
-      targetList = await listDeployTargets(queryParams, signal);
-      if (signal?.aborted || refreshSequence !== targetListRefreshSequence) return;
-    }
+    allTargets.value = completeTargetList;
+    ensureTargetServerFilter();
+    const targetList = filterDeployTargets(completeTargetList, getTargetQueryParams());
     targets.value = targetList;
     /** 运行态独立探测，不占用中央列表恢复预算；徽章稍后更新，失败由运行态轮询退避处理。 */
     void refreshTargetRuntimeSnapshots(targetList);
