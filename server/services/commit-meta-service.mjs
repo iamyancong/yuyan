@@ -5,6 +5,7 @@
  */
 
 import { GITLAB_HOST, GITLAB_TOKEN } from '../config/constants.mjs';
+import { recordTiming } from './runtime-metrics.mjs';
 
 /** 单次 GitLab 请求超时（毫秒） */
 const GITLAB_REQUEST_TIMEOUT_MS = Number(process.env.YUYAN_GITLAB_REQUEST_TIMEOUT_MS || 3000);
@@ -158,15 +159,20 @@ function createRequestSignal(budgetSignal) {
  * @returns {Promise<{ ok: boolean, transient: boolean, data: any }>} 请求结果
  */
 async function fetchGitlabJson(url, headers, budgetSignal) {
+  const startedAt = Date.now();
   try {
     const response = await fetch(url, { headers, signal: createRequestSignal(budgetSignal) });
     if (!response.ok) {
       await response.body?.cancel().catch(() => {});
-      return { ok: false, transient: isTransientStatus(response.status), data: null };
+      const transient = isTransientStatus(response.status);
+      recordTiming('gitlab.commit_meta', Date.now() - startedAt, { error: transient });
+      return { ok: false, transient, data: null };
     }
     const data = await response.json().catch(() => null);
+    recordTiming('gitlab.commit_meta', Date.now() - startedAt);
     return { ok: true, transient: false, data };
-  } catch {
+  } catch (error) {
+    recordTiming('gitlab.commit_meta', Date.now() - startedAt, { error: true, timeout: error?.name === 'TimeoutError' || error?.name === 'AbortError' });
     return { ok: false, transient: true, data: null };
   }
 }

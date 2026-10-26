@@ -106,7 +106,9 @@ import { mergeDeployRuntimeSnapshots } from '../services/deploy-runtime-snapshot
 import { listDeployRootOptions } from '../services/deploy-root-options-service.mjs';
 import { discoverServerNginx } from '../services/nginx-discovery-service.mjs';
 import { getRequestContext, getRequestTeamId } from '../services/request-context.mjs';
-import { invalidateBackendStatus } from '../services/backend-status-cache.mjs';
+import { getBackendStatusCacheStats, invalidateBackendStatus } from '../services/backend-status-cache.mjs';
+import { getCommitMetaHydrationStats } from '../services/commit-meta-service.mjs';
+import { getMetricsSnapshot } from '../services/runtime-metrics.mjs';
 import {
   getServerFsRoots,
   listRemoteFsDirectory,
@@ -1061,6 +1063,28 @@ export async function handleGetNextNginxRuntimePort(req, res) {
 export async function handleListTargets(req, res) {
   try {
     res.json({ success: true, data: await listTargets(req.query || {}) });
+  } catch (error) {
+    sendError(res, error);
+  }
+}
+
+/**
+ * 获取中央服务运行指标。
+ * @description 汇总接口耗时分位、GitLab/SSH 外部依赖耗时与失败、缓存命中与后台队列状态，用于定位卡顿来源；
+ * 仅包含路由模板与聚合数值，不含业务 ID、参数或凭据。
+ */
+export async function handleGetRuntimeMetrics(_req, res) {
+  try {
+    const db = await getDeployDb();
+    res.json({
+      success: true,
+      data: getMetricsSnapshot({
+        deployTasks: { running: deployTasksByTargetId.size, maxConcurrent: MAX_RUNNING_DEPLOY_TASKS },
+        commitMetaHydration: getCommitMetaHydrationStats(),
+        backendStatusCache: getBackendStatusCacheStats(),
+        sqlite: { journalMode: db.prepare('PRAGMA journal_mode').get()?.journal_mode || 'unknown' },
+      }),
+    });
   } catch (error) {
     sendError(res, error);
   }
