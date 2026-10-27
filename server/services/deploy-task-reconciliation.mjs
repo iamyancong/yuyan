@@ -7,6 +7,7 @@ export async function getDeployTaskReconciliation(targetId, taskId) {
   const task = await getPersistentDeployTask(taskId);
   if (!task || String(task.targetId) !== String(target.id)) return null;
   const record = ['deploy', 'rollback', 'undoRollback'].includes(task.action) && task.resultRef ? await getRecord(task.resultRef) : null;
+  const isTaskActive = ['running', 'queued'].includes(task.status);
   return {
     taskId: task.id,
     targetId: task.targetId,
@@ -14,11 +15,11 @@ export async function getDeployTaskReconciliation(targetId, taskId) {
     operator: task.operator,
     startedAt: task.startedAt,
     currentStage: task.stage,
-    running: task.status === 'running',
+    running: isTaskActive,
     result: record || task.result,
     error: ['failed', 'interrupted'].includes(task.status) ? task.error || '服务重启或任务执行中断' : null,
     events: [],
     maxConcurrent: 1,
-    runningCount: task.status === 'running' ? 1 : 0,
+    runningCount: isTaskActive ? 1 : 0,
   };
 }

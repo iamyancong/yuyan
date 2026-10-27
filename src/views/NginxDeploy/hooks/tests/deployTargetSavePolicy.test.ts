@@ -4,6 +4,7 @@ import {
   findDuplicateDeployTarget,
   getDuplicateDeployTargetId,
   isDuplicateDeployTargetError,
+  resolveTargetSaveBuildMemoryMb,
 } from '../deployTargetSavePolicy.ts';
 
 test('只从部署目标重复冲突中提取已有目标 ID', () => {
@@ -51,4 +52,52 @@ test('新版目标 ID 和旧版业务字段都能定位已保存的部署目标'
     serverId: undefined,
     deployRoot: '/home/app/frontend/html',
   }), undefined);
+});
+
+test('编辑部署目标未改动「构建内存」时保存不带 buildMemoryMb 字段，避免覆盖 OOM 刚记住的扩容值', () => {
+  // 1. 新增目标时始终携带规范化后的数值
+  assert.equal(
+    resolveTargetSaveBuildMemoryMb({
+      isEditing: false,
+      initialBuildMemoryMb: null,
+      currentBuildMemoryMb: 0,
+    }),
+    0,
+  );
+  assert.equal(
+    resolveTargetSaveBuildMemoryMb({
+      isEditing: false,
+      initialBuildMemoryMb: null,
+      currentBuildMemoryMb: 4096.8,
+    }),
+    4096,
+  );
+
+  // 2. 编辑目标时若用户未修改（初始 0，当前仍为 0），返回 undefined
+  assert.equal(
+    resolveTargetSaveBuildMemoryMb({
+      isEditing: true,
+      initialBuildMemoryMb: 0,
+      currentBuildMemoryMb: 0,
+    }),
+    undefined,
+  );
+
+  // 3. 编辑目标时若用户将 8192 重置为 0 或修改为 4096，则正常携带新值并封顶 65536
+  assert.equal(
+    resolveTargetSaveBuildMemoryMb({
+      isEditing: true,
+      initialBuildMemoryMb: 8192,
+      currentBuildMemoryMb: 0,
+    }),
+    0,
+  );
+  assert.equal(
+    resolveTargetSaveBuildMemoryMb({
+      isEditing: true,
+      initialBuildMemoryMb: 0,
+      currentBuildMemoryMb: 999999,
+    }),
+    65536,
+  );
 });

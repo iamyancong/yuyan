@@ -30,6 +30,8 @@ import { scanLocalBuildJdks } from './backend-toolchain-service.mjs';
 import {
   applyLowProcessPriority,
   buildIsolatedCommandEnv,
+  DEFAULT_MAVEN_BUILD_MEMORY_MB,
+  formatBuildWaitStage,
   withBuildSlot,
 } from './build-isolation-service.mjs';
 
@@ -525,23 +527,28 @@ async function generateOpenApiForTarget(target, options = {}) {
     onLog: (level, message) => log(level, message, 'openapi'),
   });
   await withBuildSlot(
-    () =>
-      runBackendLocalCommand(openapiCommand, {
+    () => {
+      options.stage?.('openapi', 45, '正在生成 OpenAPI', openapiCommand);
+      return runBackendLocalCommand(openapiCommand, {
         cwd: workspace.repoDir,
         env,
         signal: options.signal,
         timeoutMs: DEFAULT_OPENAPI_TIMEOUT_MS,
         label: '生成 OpenAPI',
         onLog: (level, message) => log(level, message, 'openapi'),
-      }),
+      });
+    },
     {
+      memoryMb: Math.max(DEFAULT_MAVEN_BUILD_MEMORY_MB, Number(target.buildMemoryMb || 0)),
       signal: options.signal,
-      onWait: ({ waitingPosition, activeBuilds, maxConcurrentBuilds }) => {
-        log(
-          'info',
-          `当前本地构建槽位已满（${activeBuilds}/${maxConcurrentBuilds}），OpenAPI 生成正在等待空闲槽位（排第 ${waitingPosition} 位）...`,
-          'openapi'
-        );
+      onWait: (waitInfo) => {
+        const formatted = formatBuildWaitStage(waitInfo);
+        options.stage?.(formatted.stageKey, 24, formatted.message, formatted.detail);
+        log('info', formatted.logMessage, 'waiting-build-slot');
+      },
+      onPositionChange: (waitInfo) => {
+        const formatted = formatBuildWaitStage(waitInfo);
+        options.stage?.(formatted.stageKey, 24, formatted.message, formatted.detail);
       },
     }
   );

@@ -20,6 +20,8 @@ import {
   pruneProjectRecords,
   pruneTargetBackupReferences,
   updateRecord,
+  updateTargetBuildMemoryMb,
+  updateTargetBuildPeakMb,
   getManagedNginxInstanceByServerId,
   getJdk,
 } from './deploy-store.mjs';
@@ -37,9 +39,13 @@ import { deployBackendTarget, restoreBackendRecord } from './backend-runtime-ser
 import {
   applyLowProcessPriority,
   buildIsolatedCommandEnv,
+  createProcessTreeRssSampler,
+  DEFAULT_MAVEN_BUILD_MEMORY_MB,
+  executeBuildWithOomRetry,
   extractInlineCommandEnv,
-  FALLBACK_RETRY_MAX_OLD_SPACE_MB,
-  withBuildSlot,
+  formatBuildWaitStage,
+  resolveBuildHeapLimitMb,
+  resolveBuildMemoryRequirementMb,
 } from './build-isolation-service.mjs';
 
 /** 发布任务停止错误 */
@@ -829,15 +835,33 @@ function runLocalCommand(command, options = {}) {
       cwd: options.cwd,
       shell: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: buildIsolatedCommandEnv(options.env || {}, { command }),
+      env: buildIsolatedCommandEnv(options.env || {}, {
+        command,
+        maxOldSpaceMb: options.maxOldSpaceMb,
+      }),
       detached: process.platform !== 'win32',
     }));
     applyLowProcessPriority(child.pid);
+    const rssSampler = options.onPeakRssMb
+      ? createProcessTreeRssSampler(child.pid, {
+          onPeak: (peakMb) => options.onPeakRssMb?.(peakMb),
+        })
+      : null;
 
     let stdout = '';
     let stderr = '';
     let stopped = false;
     let killTimer = null;
+    let lastOutputSampleAt = 0;
+
+    const triggerOutputRssSample = () => {
+      if (!rssSampler) return;
+      const nowMs = Date.now();
+      if (nowMs - lastOutputSampleAt >= 500) {
+        lastOutputSampleAt = nowMs;
+        void rssSampler.sampleOnce();
+      }
+    };
 
     const cleanupAbortListener = () => {
       if (killTimer) clearTimeout(killTimer);
@@ -867,23 +891,27 @@ function runLocalCommand(command, options = {}) {
     options.signal?.addEventListener?.('abort', handleAbort, { once: true });
 
     child.stdout?.on('data', (chunk) => {
+      triggerOutputRssSample();
       const text = chunk.toString();
       stdout += text;
       for (const line of splitLines(text)) options.onLog?.('info', line);
     });
 
     child.stderr?.on('data', (chunk) => {
+      triggerOutputRssSample();
       const text = chunk.toString();
       stderr += text;
       for (const line of splitLines(text)) options.onLog?.('warn', line);
     });
 
-    child.on('error', (error) => {
+    child.on('error', async (error) => {
       cleanupAbortListener();
+      await rssSampler?.stop();
       reject(stopped || options.signal?.aborted ? createDeployStoppedError(options.signal) : error);
     });
-    child.on('close', (code) => {
+    child.on('close', async (code) => {
       cleanupAbortListener();
+      await rssSampler?.stop();
       if (stopped || options.signal?.aborted) {
         reject(createDeployStoppedError(options.signal));
         return;
@@ -2086,8 +2114,31 @@ export async function deployTarget(targetId, payload, emit) {
       });
     }
 
-    await withBuildSlot(
-      async () => {
+    const baseBuildEnv = isBackend ? { ...process.env, ...jdkEnv } : npmConfigEnv;
+    const initialHeapMb = isBackend
+      ? Math.max(DEFAULT_MAVEN_BUILD_MEMORY_MB, Number(target.buildMemoryMb || 0))
+      : resolveBuildHeapLimitMb({
+          command: target.buildCommand,
+          env: npmConfigEnv,
+          targetBuildMemoryMb: target.buildMemoryMb,
+        });
+    const initialReserveMb = isBackend
+      ? Math.max(DEFAULT_MAVEN_BUILD_MEMORY_MB, Number(target.buildMemoryMb || 0))
+      : resolveBuildMemoryRequirementMb({
+          command: target.buildCommand,
+          env: npmConfigEnv,
+          targetBuildMemoryMb: target.buildMemoryMb,
+          targetBuildPeakMb: target.buildPeakMb,
+        });
+
+    await executeBuildWithOomRetry({
+      initialHeapMb,
+      initialReserveMb,
+      enableOomRetry: !isBackend,
+      targetId: target.id,
+      label: `${target.projectName || 'target'}#${target.id}`,
+      signal,
+      prepareInInitialSlot: async () => {
         if (!isBackend) {
           stage(
             'install',
@@ -2143,60 +2194,72 @@ export async function deployTarget(targetId, payload, emit) {
         } else {
           stage('install', 30, '跳过依赖安装', '未配置依赖安装命令，依赖将通过打包命令自动下载');
         }
-
+      },
+      runBuild: async (heapMb, isRetry, slotContext) => {
         throwIfDeployStopped(signal);
-        stage('build', 48, '构建产物', target.buildCommand);
-        const baseBuildEnv = isBackend ? { ...process.env, ...jdkEnv } : npmConfigEnv;
-        try {
-          await runLocalCommandList(target.buildCommand, {
-            cwd: repoDir,
-            env: baseBuildEnv,
-            label: '构建产物',
-            onLog: (level, message) => log(level, message, 'build'),
-            signal,
-          });
-        } catch (buildError) {
-          const errMsg = buildError instanceof Error ? buildError.message : String(buildError);
-          const isNodeOom = !isBackend && /JavaScript heap out of memory|Allocation failed - process out of memory|FatalProcessOutOfMemory/i.test(errMsg);
-          if (!isNodeOom) {
-            throw buildError;
+        if (!isRetry) {
+          if (!isBackend) {
+            log(
+              'info',
+              `构建内存预算池已预占 ${initialReserveMb}MB（上次峰值 ${Number(target.buildPeakMb || 0)}MB，子进程堆上限 --max-old-space-size=${heapMb}）`,
+              'build'
+            );
           }
-          throwIfDeployStopped(signal);
-          const retryHeapMb = FALLBACK_RETRY_MAX_OLD_SPACE_MB;
-          log(
-            'warn',
-            `检测到构建过程 Node.js 堆内存触及上限，正在自动扩容内存上限至 ${retryHeapMb}MB (--max-old-space-size=${retryHeapMb}) 并重试构建...`,
-            'build'
-          );
-          const existingNodeOpts = String(baseBuildEnv?.NODE_OPTIONS || process.env.NODE_OPTIONS || '')
-            .replace(/--max-old-space-size(?:=|\s+)\d+/g, '')
-            .trim();
-          const retryNodeOpts = existingNodeOpts
-            ? `${existingNodeOpts} --max-old-space-size=${retryHeapMb}`
-            : `--max-old-space-size=${retryHeapMb}`;
-          await runLocalCommandList(target.buildCommand, {
-            cwd: repoDir,
-            env: {
-              ...baseBuildEnv,
-              NODE_OPTIONS: retryNodeOpts,
-            },
-            label: '构建产物',
-            onLog: (level, message) => log(level, message, 'build'),
-            signal,
-          });
+          stage('build', 48, '构建产物', target.buildCommand);
+        } else {
+          stage('build', 52, '构建产物（扩容重试）', `${target.buildCommand} (--max-old-space-size=${heapMb})`);
+        }
+        await runLocalCommandList(target.buildCommand, {
+          cwd: repoDir,
+          env: baseBuildEnv,
+          maxOldSpaceMb: isBackend ? undefined : heapMb,
+          label: '构建产物',
+          onLog: (level, message) => log(level, message, 'build'),
+          onPeakRssMb: (peakMb) => slotContext?.reportPeakRssMb?.(peakMb),
+          signal,
+        });
+      },
+      onInitialWait: (waitInfo) => {
+        const formatted = formatBuildWaitStage(waitInfo);
+        stage(formatted.stageKey, 26, formatted.message, formatted.detail);
+        log('info', formatted.logMessage, 'waiting-build-slot');
+      },
+      onInitialPositionChange: (waitInfo) => {
+        const formatted = formatBuildWaitStage(waitInfo);
+        stage(formatted.stageKey, 26, formatted.message, formatted.detail);
+      },
+      onBeforeRetry: (failedHeapMb, retryHeapMb) => {
+        throwIfDeployStopped(signal);
+        log(
+          'warn',
+          `检测到构建过程 Node.js 堆内存触及上限（${failedHeapMb}MB），正在释放原预占（${initialReserveMb}MB）并向内存预算池重新申请 ${retryHeapMb}MB (--max-old-space-size=${retryHeapMb}) 重试构建...`,
+          'build'
+        );
+      },
+      onRetryWait: (waitInfo) => {
+        const formatted = formatBuildWaitStage(waitInfo);
+        stage(formatted.stageKey, 50, formatted.message, formatted.detail);
+        log('info', formatted.logMessage, 'waiting-build-slot');
+      },
+      onRetryPositionChange: (waitInfo) => {
+        const formatted = formatBuildWaitStage(waitInfo);
+        stage(formatted.stageKey, 50, formatted.message, formatted.detail);
+      },
+      onRetrySuccess: async (retryHeapMb) => {
+        await updateTargetBuildMemoryMb(target.id, retryHeapMb);
+        target.buildMemoryMb = retryHeapMb;
+        log(
+          'success',
+          `扩容重试构建成功，已将该部署目标的构建预占内存持久化为 ${retryHeapMb}MB（下次部署将按 ${retryHeapMb}MB 预占并注入）`,
+          'build'
+        );
+      },
+      onFinally: async ({ peakRssMb, succeeded }) => {
+        if (peakRssMb > 0) {
+          target.buildPeakMb = await updateTargetBuildPeakMb(target.id, peakRssMb, { succeeded });
         }
       },
-      {
-        signal,
-        onWait: ({ waitingPosition, activeBuilds, maxConcurrentBuilds }) => {
-          log(
-            'info',
-            `当前本地构建槽位已满（${activeBuilds}/${maxConcurrentBuilds}），正在等待空闲构建槽位（排第 ${waitingPosition} 位）...`,
-            'build'
-          );
-        },
-      }
-    );
+    });
 
     let localJarPath = '';
     let jarFileName = '';

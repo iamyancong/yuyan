@@ -231,6 +231,8 @@ export interface DeployTarget {
   enableNginxReload: boolean;
   installCommand: string;
   buildCommand: string;
+  buildMemoryMb?: number;
+  buildPeakMb?: number;
   artifactDir: string;
   preserveSubDirs: string;
   uploadStrategy: DeployUploadStrategy;
@@ -301,6 +303,8 @@ export interface DeployTargetPayload {
   enableNginxReload: boolean;
   installCommand: string;
   buildCommand: string;
+  buildMemoryMb?: number;
+  buildPeakMb?: number;
   artifactDir: string;
   preserveSubDirs?: string;
   uploadStrategy?: DeployUploadStrategy;
@@ -476,6 +480,8 @@ export interface DeployRecord {
   commitMessage: string;
   commitAuthor: string;
   status: DeployRecordStatus;
+  stopReason?: 'timeout' | 'cancelled';
+  message?: string;
   releasePath: string;
   backupPath: string;
   action: DeployRecordAction;

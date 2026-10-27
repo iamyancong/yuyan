@@ -34,7 +34,11 @@ import { execSsh, shellQuote, uploadFile, withSsh } from './ssh-service.mjs';
 import { getOrProbeBackendStatus, invalidateBackendStatus, runWithProbeLimit } from './backend-status-cache.mjs';
 import { getRequestTeamId } from './request-context.mjs';
 import { incrementCounter, measure } from './runtime-metrics.mjs';
-import { withBuildSlot } from './build-isolation-service.mjs';
+import {
+  DEFAULT_MAVEN_BUILD_MEMORY_MB,
+  formatBuildWaitStage,
+  withBuildSlot,
+} from './build-isolation-service.mjs';
 import {
   DEFAULT_BACKEND_RELEASE_KEEP,
   parseJavaMajorVersion,
@@ -162,9 +166,16 @@ export async function buildBackendArtifactOnDevice(target, payload = {}, emit = 
       });
     },
     {
+      memoryMb: Math.max(DEFAULT_MAVEN_BUILD_MEMORY_MB, Number(target.buildMemoryMb || 0)),
       signal,
-      onWait: ({ waitingPosition, activeBuilds, maxConcurrentBuilds }) => {
-        log('info', `当前本地构建槽位已满（${activeBuilds}/${maxConcurrentBuilds}），正在等待空闲槽位（排第 ${waitingPosition} 位）...`, 'build');
+      onWait: (waitInfo) => {
+        const formatted = formatBuildWaitStage(waitInfo);
+        emit.stage?.(formatted.stageKey, 22, formatted.message, formatted.detail);
+        log('info', formatted.logMessage, 'waiting-build-slot');
+      },
+      onPositionChange: (waitInfo) => {
+        const formatted = formatBuildWaitStage(waitInfo);
+        emit.stage?.(formatted.stageKey, 22, formatted.message, formatted.detail);
       },
     }
   );
@@ -893,9 +904,16 @@ export async function deployBackendTarget(targetId, payload, emit) {
         });
       },
       {
+        memoryMb: Math.max(DEFAULT_MAVEN_BUILD_MEMORY_MB, Number(target.buildMemoryMb || 0)),
         signal,
-        onWait: ({ waitingPosition, activeBuilds, maxConcurrentBuilds }) => {
-          log('info', `当前本地构建槽位已满（${activeBuilds}/${maxConcurrentBuilds}），正在等待空闲槽位（排第 ${waitingPosition} 位）...`, 'build');
+        onWait: (waitInfo) => {
+          const formatted = formatBuildWaitStage(waitInfo);
+          stage(formatted.stageKey, 24, formatted.message, formatted.detail);
+          log('info', formatted.logMessage, 'waiting-build-slot');
+        },
+        onPositionChange: (waitInfo) => {
+          const formatted = formatBuildWaitStage(waitInfo);
+          stage(formatted.stageKey, 24, formatted.message, formatted.detail);
         },
       }
     );

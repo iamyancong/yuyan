@@ -211,6 +211,7 @@ export const DEPLOY_PROGRESS_STAGE_LABEL_MAP: Record<string, string> = {
   queued: '排队等待',
   validate: '参数校验',
   clone: '拉取代码',
+  'waiting-build-slot': '等待构建资源',
   install: '安装依赖',
   build: '构建产物',
   upload: '上传产物',
@@ -279,13 +280,32 @@ export const getDeployProgressFailureTitle = (params: {
 };
 
 /**
+ * 获取部署目标运行态主标题文案（区分排队第 N 位、等待构建资源与正在执行）。
+ * @param snapshot 运行中任务快照
+ * @returns 主标题文案
+ */
+export const getDeployTargetRuntimeHeadline = (snapshot?: DeployProgressSnapshot | null): string => {
+  if (!snapshot?.running) return '空闲';
+  if (snapshot.queued || snapshot.currentStage === 'queued') {
+    const position = Number(snapshot.queuePosition || 0);
+    return position > 0 ? `排队第 ${position} 位` : '排队等待';
+  }
+  if (snapshot.currentStage === 'waiting-build-slot') {
+    return '等待构建资源';
+  }
+  return `正在${getDeployProgressActionLabel(snapshot.action)}`;
+};
+
+/**
  * 格式化部署目标运行态展示文案。
  * @param snapshot 运行中任务快照
  * @returns 运行态文案
  */
 export const formatDeployTargetRuntimeStatus = (snapshot?: DeployProgressSnapshot | null): string => {
   if (!snapshot?.running) return '空闲';
-  return `正在${getDeployProgressActionLabel(snapshot.action)} · ${getDeployProgressStageLabel(snapshot)}`;
+  const headline = getDeployTargetRuntimeHeadline(snapshot);
+  const stageLabel = getDeployProgressStageLabel(snapshot);
+  return headline === stageLabel ? headline : `${headline} · ${stageLabel}`;
 };
 
 /** 日期时间格式化器 */
@@ -391,6 +411,7 @@ export interface PublishStage {
 export const publishStages: PublishStage[] = [
   { key: 'validate', title: '参数校验', percent: 5 },
   { key: 'clone', title: '拉取代码', percent: 15 },
+  { key: 'waiting-build-slot', title: '等待构建资源', percent: 26 },
   { key: 'install', title: '安装依赖', percent: 30 },
   { key: 'build', title: '构建产物', percent: 48 },
   { key: 'upload', title: '上传产物', percent: 66 },
@@ -1007,6 +1028,26 @@ export const targetFormSchema = {
               'x-reactions': {
                 dependencies: ['projectType'],
                 fulfill: { state: { visible: '{{$deps[0] !== "backend"}}' } },
+              },
+            },
+            buildMemoryMb: {
+              type: 'number',
+              title: '最低构建内存 (MB)',
+              required: false,
+              default: 0,
+              'x-decorator': 'FormItem',
+              'x-decorator-props': {
+                tooltip:
+                  '最低构建内存，填 0 表示自动（无历史峰值时按 3072MB 预占，有历史峰值后按上次实际峰值×1.2 预占；填写高于自动计算值或默认堆上限时会一并抬高预占值与子进程堆上限）。若发生 OOM 扩容成功会自动记住扩容值；服务器换为小内存后可手动改小或填 0 重置为自动。',
+              },
+              'x-component': 'InputNumber',
+              'x-component-props': {
+                min: 0,
+                max: 65536,
+                step: 1024,
+                precision: 0,
+                placeholder: '最低构建内存，填 0 表示自动',
+                style: { width: '100%' },
               },
             },
             uploadStrategy: {

@@ -11,6 +11,7 @@ process.env.DEPLOY_DB_PATH = path.join(root, 'deploy.sqlite');
 process.env.DEPLOY_SECRET_KEY = 'task-reconciliation-test';
 const store = await import('../deploy-store.mjs');
 const { getDeployTaskReconciliation } = await import('../deploy-task-reconciliation.mjs');
+const { acquireTargetLease } = await import('../central-deploy-guard.mjs');
 const { runRequestContext } = await import('../request-context.mjs');
 const context = { accountId: 'a', userId: 'a', teamId: 'team-a', role: 'operator' };
 const inTeam = (callback) => runRequestContext(context, callback);
@@ -55,11 +56,34 @@ test('任务成功结果跨重启持久化，对账验证目标及团队隔离',
   assert.equal(await runRequestContext({ ...context, teamId: 'team-b' }, () => getDeployTaskReconciliation(target.id, task.id)), null);
 
   const interrupted = await inTeam(() => store.createPersistentDeployTask({ targetId: target.id, action: 'deploy' }));
+  const queuedTask = await inTeam(() => store.createPersistentDeployTask({ targetId: target.id, action: 'deploy' }));
+  await inTeam(() => store.updatePersistentDeployTask(queuedTask.id, { status: 'queued', stage: 'queued', percent: 2 }));
+
+  // 模拟进程异常退出前遗留的 central_target_locks 租约锁
+  await acquireTargetLease(context, target.id);
+
+  // 模拟服务重启：重新打开数据库会触发 reconcileInterruptedDeployExecutions
   store.closeDeployDb();
   const recovered = await inTeam(() => getDeployTaskReconciliation(target.id, interrupted.id));
   assert.equal(recovered.running, false);
   assert.ok(recovered.error);
   assert.equal(recovered.result, null);
+
+  // 验证 queued 状态任务在重启后同样收口为 interrupted，不残留僵尸排队态
+  const recoveredQueued = await inTeam(() => getDeployTaskReconciliation(target.id, queuedTask.id));
+  assert.equal(recoveredQueued.running, false);
+  assert.ok(recoveredQueued.error);
+
+  // 验证重启后 central_target_locks 已清空，目标可立即重新获取租约而不被锁死 2 小时
+  const releaseAfterRestart = await acquireTargetLease(context, target.id);
+  assert.equal(typeof releaseAfterRestart, 'function');
+  releaseAfterRestart();
+
+  // 验证 OOM 扩容成功后持久化的 buildMemoryMb 可被记忆并在普通编辑目标时保留
+  const rememberedMb = await inTeam(() => store.updateTargetBuildMemoryMb(target.id, 8192));
+  assert.equal(rememberedMb, 8192);
+  const reloadedTarget = await inTeam(() => store.getTarget(target.id));
+  assert.equal(reloadedTarget.buildMemoryMb, 8192);
 });
 
 test('Agent 中央查询恢复网络错误且不重试权限错误', async () => {

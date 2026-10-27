@@ -833,6 +833,8 @@ function mapTarget(row) {
     enableNginxReload: Boolean(row.enable_nginx_reload),
     installCommand: row.install_command,
     buildCommand: row.build_command,
+    buildMemoryMb: Math.max(0, Number(row.build_memory_mb || 0)),
+    buildPeakMb: Math.max(0, Number(row.build_peak_mb || 0)),
     artifactDir: row.artifact_dir,
     preserveSubDirs: row.preserve_sub_dirs || '',
     uploadStrategy: row.upload_strategy || 'overlayKeepAssets',
@@ -1670,8 +1672,12 @@ async function reconcileInterruptedDeployExecutions(db) {
   db.prepare(
     `UPDATE deploy_tasks
      SET status = 'interrupted', error = ?, heartbeat_at = ?, finished_at = ?
-     WHERE status = 'running'`
+     WHERE status IN ('queued', 'running')`
   ).run(DEPLOY_INTERRUPTED_LOG_MESSAGE, interruptedAt, interruptedAt);
+
+  if (hasTable(db, 'central_target_locks')) {
+    db.prepare('DELETE FROM central_target_locks').run();
+  }
 
   db.prepare(
     `UPDATE backend_target_configs
@@ -1821,6 +1827,8 @@ export async function getDeployDb() {
       enable_nginx_reload INTEGER NOT NULL DEFAULT 0,
       install_command TEXT NOT NULL,
       build_command TEXT NOT NULL,
+      build_memory_mb INTEGER NOT NULL DEFAULT 0,
+      build_peak_mb INTEGER NOT NULL DEFAULT 0,
       artifact_dir TEXT NOT NULL DEFAULT 'dist',
       preserve_sub_dirs TEXT NOT NULL DEFAULT '',
       upload_strategy TEXT NOT NULL DEFAULT 'overlayKeepAssets',
@@ -1939,6 +1947,12 @@ export async function getDeployDb() {
   }
   if (!targetColumns.includes('health_check_url')) {
     dbInstance.exec('ALTER TABLE deploy_targets ADD COLUMN health_check_url TEXT');
+  }
+  if (!targetColumns.includes('build_memory_mb')) {
+    dbInstance.exec('ALTER TABLE deploy_targets ADD COLUMN build_memory_mb INTEGER NOT NULL DEFAULT 0');
+  }
+  if (!targetColumns.includes('build_peak_mb')) {
+    dbInstance.exec('ALTER TABLE deploy_targets ADD COLUMN build_peak_mb INTEGER NOT NULL DEFAULT 0');
   }
   const runtimeColumns = getTableColumns(dbInstance, 'nginx_runtimes');
   if (!runtimeColumns.includes('package_variant')) {
@@ -3261,10 +3275,10 @@ export async function createTarget(payload) {
     .prepare(
       `INSERT INTO deploy_targets
        (project_id, project_source, project_name, project_description, project_path, repository_url, default_branch, env_name, server_id, deploy_root,
-        nginx_instance_id, nginx_conf_path, nginx_site_managed, listen_port, server_name, enable_nginx_test, enable_nginx_reload, install_command, build_command, artifact_dir,
+        nginx_instance_id, nginx_conf_path, nginx_site_managed, listen_port, server_name, enable_nginx_test, enable_nginx_reload, install_command, build_command, build_memory_mb, artifact_dir,
         preserve_sub_dirs, upload_strategy, visit_url, remark, created_by, created_at, updated_at,
         project_type, jdk_id, stop_command, start_command, health_check_url)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       Number(safePayload.projectId),
@@ -3286,6 +3300,7 @@ export async function createTarget(payload) {
       safePayload.enableNginxReload ? 1 : 0,
       payload.installCommand || '',
       payload.buildCommand || '',
+      Math.min(Math.max(0, Math.floor(Number(payload.buildMemoryMb || 0) || 0)), 65536),
       payload.artifactDir || '',
       payload.preserveSubDirs || '',
       payload.uploadStrategy || 'overlayKeepAssets',
@@ -3314,7 +3329,8 @@ export async function createTarget(payload) {
 export async function updateTarget(id, payload) {
   const db = await getDeployDb();
   const teamId = getRequestTeamId();
-  if (!db.prepare('SELECT id FROM deploy_targets WHERE id = ? AND team_id = ?').get(Number(id), teamId)) return null;
+  const currentTargetRow = db.prepare('SELECT id, build_memory_mb FROM deploy_targets WHERE id = ? AND team_id = ?').get(Number(id), teamId);
+  if (!currentTargetRow) return null;
   if (!hasServer(db, payload.serverId)) {
     throw new Error('部署服务器不存在，请先新增独立服务器');
   }
@@ -3341,11 +3357,14 @@ export async function updateTarget(id, payload) {
   }
   const duplicateBackendPort = getDuplicateBackendPort(db, safePayload, Number(id));
   if (duplicateBackendPort) throw new Error(`端口 ${safePayload.serverPort} 已被后端项目 ${duplicateBackendPort.project_name} 占用`);
+  const nextBuildMemoryMb = payload.buildMemoryMb !== undefined
+    ? Math.min(Math.max(0, Math.floor(Number(payload.buildMemoryMb || 0) || 0)), 65536)
+    : Math.min(Math.max(0, Math.floor(Number(currentTargetRow.build_memory_mb || 0) || 0)), 65536);
   db.prepare(
     `UPDATE deploy_targets
      SET project_id = ?, project_source = ?, project_name = ?, project_description = ?, project_path = ?, repository_url = ?, default_branch = ?, env_name = ?,
          server_id = ?, nginx_instance_id = ?, deploy_root = ?, nginx_conf_path = ?, nginx_site_managed = ?, listen_port = ?, server_name = ?,
-         enable_nginx_test = ?, enable_nginx_reload = ?, install_command = ?, build_command = ?,
+         enable_nginx_test = ?, enable_nginx_reload = ?, install_command = ?, build_command = ?, build_memory_mb = ?,
          artifact_dir = ?, preserve_sub_dirs = ?, upload_strategy = ?, visit_url = ?, remark = ?, updated_at = ?,
          project_type = ?, jdk_id = ?, stop_command = ?, start_command = ?, health_check_url = ?
      WHERE id = ? AND team_id = ?`
@@ -3369,6 +3388,7 @@ export async function updateTarget(id, payload) {
     safePayload.enableNginxReload ? 1 : 0,
     safePayload.installCommand || '',
     safePayload.buildCommand || '',
+    nextBuildMemoryMb,
     safePayload.artifactDir || '',
     safePayload.preserveSubDirs || '',
     safePayload.uploadStrategy || 'overlayKeepAssets',
@@ -3388,6 +3408,58 @@ export async function updateTarget(id, payload) {
 }
 
 /**
+ * 持久化部署目标的手动指定/OOM 记忆预占内存（MB，支持扩容写回、下调或重置为 0 自动，封顶 65536MB）。
+ * @param {number} targetId 部署目标 ID
+ * @param {number} buildMemoryMb 预占构建内存（MB，0 表示自动）
+ * @returns {Promise<number>} 更新后的预占构建内存（MB）
+ */
+export async function updateTargetBuildMemoryMb(targetId, buildMemoryMb) {
+  const db = await getDeployDb();
+  const numericTargetId = Number(targetId);
+  if (!numericTargetId) return 0;
+  const safeMemoryMb = Math.min(Math.max(0, Math.floor(Number(buildMemoryMb || 0) || 0)), 65536);
+  db.prepare(
+    `UPDATE deploy_targets
+     SET build_memory_mb = ?
+     WHERE id = ?`
+  ).run(safeMemoryMb, numericTargetId);
+  const row = db.prepare('SELECT build_memory_mb FROM deploy_targets WHERE id = ?').get(numericTargetId);
+  return Math.max(0, Number(row?.build_memory_mb || 0));
+}
+
+/**
+ * 持久化部署目标最近一次构建观测到的进程树实际 RSS 峰值（MB）：
+ * - 构建成功时直接覆盖为最新峰值；
+ * - 构建失败或被取消时，仅在新峰值高于历史峰值时才更新，避免中途提前失败将高内存项目的历史峰值冲低。
+ * @param {number} targetId 部署目标 ID
+ * @param {number} buildPeakMb 构建进程树实际 RSS 峰值（MB）
+ * @param {{succeeded?: boolean, overwrite?: boolean}} [options={}] 更新策略选项
+ * @returns {Promise<number>} 更新后的构建实际峰值（MB）
+ */
+export async function updateTargetBuildPeakMb(targetId, buildPeakMb, options = {}) {
+  const db = await getDeployDb();
+  const numericTargetId = Number(targetId);
+  if (!numericTargetId) return 0;
+  const safePeakMb = Math.min(Math.max(0, Math.floor(Number(buildPeakMb || 0) || 0)), 65536);
+  const shouldOverwrite = options?.succeeded !== false && options?.overwrite !== false;
+  if (shouldOverwrite) {
+    db.prepare(
+      `UPDATE deploy_targets
+       SET build_peak_mb = ?
+       WHERE id = ?`
+    ).run(safePeakMb, numericTargetId);
+  } else {
+    db.prepare(
+      `UPDATE deploy_targets
+       SET build_peak_mb = CASE WHEN ? > COALESCE(build_peak_mb, 0) THEN ? ELSE COALESCE(build_peak_mb, 0) END
+       WHERE id = ?`
+    ).run(safePeakMb, safePeakMb, numericTargetId);
+  }
+  const row = db.prepare('SELECT build_peak_mb FROM deploy_targets WHERE id = ?').get(numericTargetId);
+  return Math.max(0, Number(row?.build_peak_mb || 0));
+}
+
+/**
  * 删除部署目标
  * @param {number} id - 部署目标 ID
  * @param {{rejectRunning?: boolean}} options 安全删除选项
@@ -3401,7 +3473,7 @@ export async function deleteTarget(id, options = {}) {
     return { deletedTargets: 0, deletedRecords: 0 };
   }
   if (options.rejectRunning) {
-    const runningTask = db.prepare("SELECT id FROM deploy_tasks WHERE target_id = ? AND status = 'running' LIMIT 1").get(targetId);
+    const runningTask = db.prepare("SELECT id FROM deploy_tasks WHERE target_id = ? AND status IN ('queued', 'running') LIMIT 1").get(targetId);
     if (runningTask) throw new Error('部署目标仍有运行中的发布或生成任务，无法删除');
   }
   const recordRows = db.prepare('SELECT log_path FROM deploy_records WHERE target_id = ?').all(targetId);

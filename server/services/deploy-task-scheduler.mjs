@@ -22,6 +22,37 @@ export const DEFAULT_QUEUE_WAIT_TIMEOUT_MS = Math.max(
   Number(process.env.YUYAN_DEPLOY_QUEUE_TIMEOUT_MS || 15 * 60_000)
 );
 
+/** 不涉及 Git 克隆与本地编译的轻量级远程操作集合（绕过全局构建/发布排队队列，仅受单目标互斥锁保护） */
+export const LIGHTWEIGHT_DEPLOY_ACTIONS = new Set([
+  'rollback',
+  'undoRollback',
+  'start',
+  'stop',
+  'restart',
+]);
+
+/**
+ * 判断任务动作是否属于轻量级快速通道操作（回滚、撤销回滚、服务启停重启）。
+ * @param {string} action 任务动作
+ * @returns {boolean}
+ */
+export function isLightweightDeployAction(action) {
+  return LIGHTWEIGHT_DEPLOY_ACTIONS.has(String(action || '').trim());
+}
+
+/**
+ * 根据排队位次与并发上限估算排队等待分钟数。
+ * @param {number} queuePosition 当前排队名次（从 1 开始）
+ * @param {number} maxRunning 最大并发运行数
+ * @param {number} [avgWaveMinutes=4] 每批平均耗时（分钟）
+ * @returns {number} 预计等待分钟数
+ */
+export function estimateQueueWaitMinutes(queuePosition, maxRunning, avgWaveMinutes = 4) {
+  const pos = Math.max(1, Number(queuePosition || 1));
+  const cap = Math.max(1, Number(maxRunning || DEFAULT_MAX_RUNNING_DEPLOY_TASKS));
+  return Math.max(1, Math.ceil(pos / cap) * avgWaveMinutes);
+}
+
 /** 队列已满冲突错误 */
 export class DeployQueueFullError extends Error {
   /**
@@ -37,6 +68,27 @@ export class DeployQueueFullError extends Error {
   }
 }
 
+/** 同一部署目标已有活跃任务（运行中或排队中）时的互斥冲突错误 */
+export class DeployTargetBusyError extends Error {
+  /**
+   * @param {number} targetId 部署目标 ID
+   * @param {Object} [existingTask] 当前占用的任务对象
+   */
+  constructor(targetId, existingTask = null) {
+    const operatorText = existingTask?.operator ? `「${existingTask.operator}」` : '其他成员';
+    const isQueued = Boolean(existingTask?.queued || existingTask?.currentStage === 'queued');
+    const stateVerb = isQueued ? '排队等待' : '执行';
+    const suffix = isQueued ? '，可先停止排队中的发布后再操作' : '，请稍后重试';
+    super(`该部署目标正由 ${operatorText} ${stateVerb}任务${suffix}`);
+    this.name = 'DeployTargetBusyError';
+    this.code = 'DEPLOY_TARGET_BUSY';
+    this.status = 409;
+    this.statusCode = 409;
+    this.targetId = targetId;
+    this.existingTask = existingTask;
+  }
+}
+
 /**
  * 创建部署任务并发与 FIFO 队列调度器实例。
  * @param {Object} [options] 调度器参数
@@ -48,6 +100,7 @@ export class DeployQueueFullError extends Error {
 export function createDeployTaskScheduler(options = {}) {
   const maxRunning = Math.max(1, Number(options.maxRunning || DEFAULT_MAX_RUNNING_DEPLOY_TASKS));
   const maxQueued = Math.max(1, Number(options.maxQueued || DEFAULT_MAX_QUEUED_DEPLOY_TASKS));
+  const hasCustomTimeout = options.queueTimeoutMs !== undefined && options.queueTimeoutMs !== null;
   const queueTimeoutMs = Math.max(20, Number(options.queueTimeoutMs || DEFAULT_QUEUE_WAIT_TIMEOUT_MS));
 
   /** @type {Map<number, Object>} 包含正在运行与正在排队的全部活跃任务（按 targetId 唯一） */
@@ -108,7 +161,9 @@ export function createDeployTaskScheduler(options = {}) {
       nextEntry.cleanupQueueListeners();
       const { task, runner, hooks, resolve, reject } = nextEntry;
       if (task.completed || task.controller?.signal?.aborted) {
-        tasksByTargetId.delete(task.targetId);
+        if (tasksByTargetId.get(task.targetId) === task) {
+          tasksByTargetId.delete(task.targetId);
+        }
         continue;
       }
       task.queued = false;
@@ -129,9 +184,11 @@ export function createDeployTaskScheduler(options = {}) {
    * @param {Object} task 任务对象
    * @param {() => Promise<Object>} runner 执行函数
    * @param {Object} hooks 生命周期回调
+   * @param {{bypassQueue?: boolean}} [execOptions] 执行选项
    * @returns {Promise<Object>}
    */
-  async function executeTask(task, runner, hooks) {
+  async function executeTask(task, runner, hooks, execOptions = {}) {
+    const bypassQueue = Boolean(execOptions.bypassQueue);
     try {
       const result = await runner();
       if (hooks?.onSuccess) {
@@ -144,23 +201,49 @@ export function createDeployTaskScheduler(options = {}) {
       }
       throw error;
     } finally {
-      runningTargetIds.delete(task.targetId);
-      tasksByTargetId.delete(task.targetId);
+      if (!bypassQueue) {
+        runningTargetIds.delete(task.targetId);
+      }
+      if (tasksByTargetId.get(task.targetId) === task) {
+        tasksByTargetId.delete(task.targetId);
+      }
       try {
         hooks?.onComplete?.(task, getStats());
       } catch {}
-      drainQueue();
+      if (!bypassQueue) {
+        drainQueue();
+      }
     }
   }
 
   /**
-   * 提交任务：若有空闲运行槽位则立即执行，否则进入 FIFO 等待队列。
+   * 提交任务：轻量操作走快速通道直通执行；重型发布/构建任务若有空闲槽位则立即执行，否则进入 FIFO 等待队列。
    * @param {Object} task 任务上下文
    * @param {() => Promise<Object>} runner 实际执行函数
    * @param {Object} [hooks] 生命周期钩子
    * @returns {Promise<Object>} 任务终态 Promise
    */
   function scheduleTask(task, runner, hooks = {}) {
+    const existingTask = tasksByTargetId.get(task.targetId);
+    if (existingTask && existingTask !== task && !existingTask.completed) {
+      throw new DeployTargetBusyError(task.targetId, existingTask);
+    }
+
+    const bypassQueue = Boolean(hooks?.bypassQueue ?? isLightweightDeployAction(task?.action));
+
+    if (bypassQueue) {
+      tasksByTargetId.set(task.targetId, task);
+      task.queued = false;
+      task.queuePosition = 0;
+      try {
+        hooks?.onStartExecution?.(task, getStats());
+      } catch {}
+      const promise = executeTask(task, runner, hooks, { bypassQueue: true });
+      task.promise = promise;
+      promise.catch(() => {});
+      return promise;
+    }
+
     if (!canAcceptTask()) {
       throw new DeployQueueFullError(maxRunning, maxQueued);
     }
@@ -183,6 +266,10 @@ export function createDeployTaskScheduler(options = {}) {
     task.queued = true;
     task.currentStage = 'queued';
     task.queuePosition = pendingQueue.length + 1;
+
+    const effectiveQueueTimeoutMs = hasCustomTimeout
+      ? queueTimeoutMs
+      : Math.max(queueTimeoutMs, Math.ceil(task.queuePosition / maxRunning) * 10 * 60_000);
 
     const promise = new Promise((resolve, reject) => {
       let timeoutId = null;
@@ -212,7 +299,9 @@ export function createDeployTaskScheduler(options = {}) {
         if (index >= 0) pendingQueue.splice(index, 1);
         task.queued = false;
         task.queuePosition = 0;
-        tasksByTargetId.delete(task.targetId);
+        if (tasksByTargetId.get(task.targetId) === task) {
+          tasksByTargetId.delete(task.targetId);
+        }
         refreshQueuePositions();
 
         Promise.resolve()
@@ -241,11 +330,11 @@ export function createDeployTaskScheduler(options = {}) {
       timeoutId = setTimeout(() => {
         timeoutId = null;
         if (!task.controller?.signal?.aborted) {
-          const timeoutError = new Error('发布排队等待超时，已自动取消任务，请稍后重试');
+          const timeoutError = new Error('排队超时，未产生任何变更');
           timeoutError.code = 'DEPLOY_QUEUE_TIMEOUT';
           task.controller?.abort?.(timeoutError);
         }
-      }, queueTimeoutMs);
+      }, effectiveQueueTimeoutMs);
 
       task.controller?.signal?.addEventListener?.('abort', handleAbortWhileQueued, { once: true });
       pendingQueue.push(entry);

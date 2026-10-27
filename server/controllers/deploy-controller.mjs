@@ -119,6 +119,9 @@ import {
 import {
   deployTaskScheduler,
   DeployQueueFullError,
+  DeployTargetBusyError,
+  estimateQueueWaitMinutes,
+  isLightweightDeployAction,
 } from '../services/deploy-task-scheduler.mjs';
 import { getBuildLimiterStats } from '../services/build-isolation-service.mjs';
 import { getMetricsSnapshot } from '../services/runtime-metrics.mjs';
@@ -157,8 +160,16 @@ class DeployStoppedError extends Error {
 /** 同时运行的发布/回滚任务上限（默认 7，超出进入有界 FIFO 排队队列） */
 const MAX_RUNNING_DEPLOY_TASKS = deployTaskScheduler.maxRunning;
 
-/** 发布停止前允许中断的阶段（包含 queued 排队阶段） */
-const STOPPABLE_DEPLOY_STAGE_KEYS = new Set(['queued', 'validate', 'clone', 'install', 'build', 'openapi']);
+/** 发布停止前允许中断的阶段（包含 queued 排队阶段与 waiting-build-slot 等待构建资源阶段） */
+const STOPPABLE_DEPLOY_STAGE_KEYS = new Set([
+  'queued',
+  'validate',
+  'clone',
+  'waiting-build-slot',
+  'install',
+  'build',
+  'openapi',
+]);
 
 /** 当前进程内正在执行或排队中的部署目标任务（与调度器共享同一 Map） */
 const deployTasksByTargetId = deployTaskScheduler.tasksByTargetId;
@@ -178,7 +189,7 @@ async function createDeployTask(targetId, action, body = {}) {
   const startedAt = new Date().toISOString();
   const context = getRequestContext();
   const teamId = getRequestTeamId();
-  const releaseTargetLease = !context?.legacy && action === 'deploy'
+  const releaseTargetLease = !context?.legacy
     ? await acquireTargetLease(context, Number(targetId))
     : null;
   let persistent;
@@ -332,7 +343,9 @@ function hasTaskErrorEvent(task) {
  */
 function completeDeployTask(task) {
   task.completed = true;
-  deployTasksByTargetId.delete(task.targetId);
+  if (deployTasksByTargetId.get(task.targetId) === task) {
+    deployTasksByTargetId.delete(task.targetId);
+  }
   task.releaseTargetLease?.();
   task.subscribers.forEach((res) => {
     if (!res.writableEnded) res.end();
@@ -348,6 +361,44 @@ function completeDeployTask(task) {
 }
 
 /**
+ * 当任务在同步入队/调度阶段直接抛出错误（如队列已满、目标已被并发抢占）时，
+ * 立即回收 Map 登记、目标租约与持久化 running 任务行，防止残留孤儿锁导致目标永久显示繁忙。
+ * @param {Object} task 待回收的任务上下文
+ * @param {unknown} error 入队异常
+ * @param {Object} res Express 响应对象
+ */
+export async function cleanupAndRespondScheduleError(task, error, res) {
+  task.completed = true;
+  if (deployTasksByTargetId.get(task.targetId) === task) {
+    deployTasksByTargetId.delete(task.targetId);
+  }
+  try {
+    task.releaseTargetLease?.();
+  } catch {}
+  const errMsg = error instanceof Error ? error.message : String(error || '任务调度失败');
+  await updatePersistentDeployTask(task.persistentId, {
+    status: 'stopped',
+    stage: task.currentStage || 'validate',
+    percent: 0,
+    error: errMsg,
+  }).catch(() => {});
+  publishDeployEvent({ teamId: task.teamId, domains: ['runtime'], targetIds: [task.targetId] });
+
+  if (error instanceof DeployTargetBusyError || error?.code === 'DEPLOY_TARGET_BUSY') {
+    const activeTask = error.existingTask || deployTasksByTargetId.get(task.targetId);
+    if (activeTask) {
+      sendDeployTargetBusy(res, activeTask);
+      return;
+    }
+  }
+  if (error instanceof DeployQueueFullError || error?.code === 'DEPLOY_QUEUE_FULL') {
+    sendDeployLimitConflict(res);
+    return;
+  }
+  sendError(res, error, Number(error?.status || error?.statusCode || 409));
+}
+
+/**
  * 启动或排队调度部署目标任务。
  * @param {Object} task - 任务上下文
  * @param {() => Promise<Object>} runner - 任务执行器
@@ -356,53 +407,68 @@ function completeDeployTask(task) {
  */
 function startDeployTask(task, runner, emit) {
   publishDeployEvent({ teamId: task.teamId, domains: ['runtime'], targetIds: [task.targetId] });
+  const bypassQueue = isLightweightDeployAction(task.action);
   return deployTaskScheduler.scheduleTask(task, runner, {
-    onQueued(_queuedTask, position, stats) {
+    bypassQueue,
+    onQueued(queuedTask, position, stats) {
+      const etaMinutes = estimateQueueWaitMinutes(position, stats.maxConcurrent);
+      void updatePersistentDeployTask(queuedTask.persistentId, {
+        status: 'queued',
+        stage: 'queued',
+        percent: 2,
+      });
       emit.stage(
         'queued',
         2,
         '排队等待执行',
-        `当前排在第 ${position} 位（运行中 ${stats.runningCount}/${stats.maxConcurrent}），前序任务完成后将自动开始`
+        `当前排在第 ${position} 位（运行中 ${stats.runningCount}/${stats.maxConcurrent}，预计等待约 ${etaMinutes} 分钟），前序任务完成后将自动开始`
       );
       emit.log(
         'info',
-        `当前并发槽位已满（${stats.runningCount}/${stats.maxConcurrent}），任务已进入排队队列，当前第 ${position} 位`,
+        `当前并发槽位已满（${stats.runningCount}/${stats.maxConcurrent}），任务已进入排队队列，当前第 ${position} 位（预计等待约 ${etaMinutes} 分钟）`,
         'queued'
       );
     },
     onPositionChanged(_queuedTask, position, stats) {
+      const etaMinutes = estimateQueueWaitMinutes(position, stats.maxConcurrent);
       emit.stage(
         'queued',
         2,
         '排队等待执行',
-        `当前排在第 ${position} 位（运行中 ${stats.runningCount}/${stats.maxConcurrent}），前序任务完成后将自动开始`
+        `当前排在第 ${position} 位（运行中 ${stats.runningCount}/${stats.maxConcurrent}，预计等待约 ${etaMinutes} 分钟），前序任务完成后将自动开始`
       );
-      emit.log('info', `排队名次已更新：当前排在第 ${position} 位`, 'queued');
+      emit.log('info', `排队名次已更新：当前排在第 ${position} 位（预计等待约 ${etaMinutes} 分钟）`, 'queued');
     },
     onStartExecution(runningTask) {
       if (runningTask.events.some((event) => event.type === 'stage' && event.stage === 'queued')) {
+        void updatePersistentDeployTask(runningTask.persistentId, {
+          status: 'running',
+          stage: 'validate',
+        });
         emit.log('info', '已获得执行槽位，开始执行任务', 'validate');
       }
     },
     async onAbortedWhileQueued(abortedTask, reason) {
-      if (reason?.code === 'DEPLOY_QUEUE_TIMEOUT') {
-        abortedTask.error = reason.message;
-        emit.error(abortedTask.error, 'queued');
-        await updatePersistentDeployTask(abortedTask.persistentId, {
-          status: 'failed',
-          error: abortedTask.error,
-          stage: 'queued',
-        });
-        throw reason;
-      }
-      const stopMessage = reason instanceof Error ? reason.message : '排队任务已取消';
-      emit.log('warn', stopMessage, 'cancel');
-      emit.stage('queued', 0, '已停止', '任务已在排队阶段取消，未产生构建或发布变更');
+      const isQueueTimeout = reason?.code === 'DEPLOY_QUEUE_TIMEOUT';
+      const stopMessage = isQueueTimeout
+        ? '排队超时，未产生任何变更'
+        : reason instanceof Error
+          ? reason.message
+          : '排队任务已取消';
+      emit.log('warn', stopMessage, isQueueTimeout ? 'queued' : 'cancel');
+      emit.stage(
+        'queued',
+        0,
+        isQueueTimeout ? '排队超时已停止' : '已停止',
+        isQueueTimeout ? '排队超时，未产生任何变更' : '任务已在排队阶段取消，未产生构建或发布变更'
+      );
       const stoppedResult = {
         id: 0,
         targetId: abortedTask.targetId,
         action: abortedTask.action,
         status: 'stopped',
+        stopReason: isQueueTimeout ? 'timeout' : 'cancelled',
+        message: stopMessage,
         operator: abortedTask.operator,
         startedAt: abortedTask.startedAt,
         finishedAt: new Date().toISOString(),
@@ -412,6 +478,7 @@ function startDeployTask(task, runner, emit) {
         status: 'stopped',
         stage: 'queued',
         percent: 0,
+        error: isQueueTimeout ? stopMessage : '',
         result: stoppedResult,
       });
       emit.result(stoppedResult);
@@ -462,11 +529,20 @@ export async function abortRunningDeployTasks(reason = '雨燕服务关闭，发
   });
 
   const pendingPromises = tasks.map((task) => task.promise).filter(Boolean);
-  if (!pendingPromises.length) return;
-  await Promise.race([
-    Promise.allSettled(pendingPromises),
-    new Promise((resolve) => setTimeout(resolve, DEPLOY_SHUTDOWN_GRACE_MS)),
-  ]);
+  try {
+    if (pendingPromises.length) {
+      await Promise.race([
+        Promise.allSettled(pendingPromises),
+        new Promise((resolve) => setTimeout(resolve, DEPLOY_SHUTDOWN_GRACE_MS)),
+      ]);
+    }
+  } finally {
+    tasks.forEach((task) => {
+      try {
+        task.releaseTargetLease?.();
+      } catch {}
+    });
+  }
 }
 
 /**
@@ -526,13 +602,26 @@ function sendDeployLimitConflict(res) {
  * @param {Object} task - 当前执行中的任务
  */
 function sendDeployTargetBusy(res, task) {
-  const actionText = task?.action === 'undoRollback' ? '撤销回滚' : task?.action === 'rollback' ? '回滚' : '发布';
+  const actionMap = {
+    undoRollback: '撤销回滚',
+    rollback: '回滚',
+    start: '启动服务',
+    stop: '停止服务',
+    restart: '重启服务',
+    openapi: 'OpenAPI 生成',
+    deploy: '发布',
+  };
+  const actionText = actionMap[task?.action] || '发布';
   const operatorText = task?.operator ? `「${task.operator}」` : '其他成员';
   const startedText = task?.startedAt ? `（开始于 ${task.startedAt}）` : '';
+  const isQueued = Boolean(task?.queued || task?.currentStage === 'queued');
+  const stateVerb = isQueued ? '排队等待' : '执行';
+  const tailHint = isQueued ? '，可先停止排队中的发布后再操作' : '，请稍后重试';
   res.status(409).json({
     success: false,
-    error: `该部署目标正由 ${operatorText} 执行${actionText}${startedText}，请稍后重试`,
-    data: serializeDeployTask(task),
+    code: 'DEPLOY_TARGET_BUSY',
+    error: `该部署目标正由 ${operatorText} ${stateVerb}${actionText}${startedText}${tailHint}`,
+    data: task ? serializeDeployTask(task) : null,
   });
 }
 
@@ -1329,6 +1418,10 @@ export async function handleCreateTarget(req, res) {
       envName: req.body.envName || '测试',
       installCommand: normalizeCommandText(req.body.installCommand) || (isBackend ? '' : 'pnpm install'),
       buildCommand: normalizeCommandText(req.body.buildCommand) || (isBackend ? '' : 'pnpm build'),
+      buildMemoryMb:
+        req.body.buildMemoryMb !== undefined
+          ? Math.min(Math.max(0, Math.floor(Number(req.body.buildMemoryMb || 0) || 0)), 65536)
+          : 0,
       artifactDir: req.body.artifactDir || '',
       preserveSubDirs: req.body.preserveSubDirs || '',
       nginxSiteManaged: Boolean(req.body.nginxSiteManaged),
@@ -1360,6 +1453,10 @@ export async function handleUpdateTarget(req, res) {
       envName: req.body.envName || '测试',
       installCommand: normalizeCommandText(req.body.installCommand) || (isBackend ? '' : 'pnpm install'),
       buildCommand: normalizeCommandText(req.body.buildCommand) || (isBackend ? '' : 'pnpm build'),
+      buildMemoryMb:
+        req.body.buildMemoryMb !== undefined
+          ? Math.min(Math.max(0, Math.floor(Number(req.body.buildMemoryMb || 0) || 0)), 65536)
+          : undefined,
       artifactDir: req.body.artifactDir || '',
       preserveSubDirs: req.body.preserveSubDirs || '',
       nginxSiteManaged: Boolean(req.body.nginxSiteManaged),
@@ -1508,8 +1605,12 @@ export async function handleDeployTarget(req, res) {
     return;
   }
   const emit = createProgressEmitter(task);
-  deployTasksByTargetId.set(targetId, task);
-  startDeployTask(task, () => deployTarget(targetId, { ...(req.body || {}), signal: task.controller.signal }, emit), emit);
+  try {
+    startDeployTask(task, () => deployTarget(targetId, { ...(req.body || {}), signal: task.controller.signal }, emit), emit);
+  } catch (scheduleError) {
+    await cleanupAndRespondScheduleError(task, scheduleError, res);
+    return;
+  }
   if (!streamMode) {
     try {
       res.json({ success: true, data: await task.promise });
@@ -1607,16 +1708,22 @@ async function handleRestoreRecordTask(req, res, action, runner) {
     sendDeployTargetBusy(res, runningTask);
     return;
   }
-  if (!deployTaskScheduler.canAcceptTask()) {
-    sendDeployLimitConflict(res);
-    return;
-  }
 
   const streamMode = isStreamRequest(req);
-  const task = await createDeployTask(sourceRecord.targetId, action, req.body || {});
+  let task;
+  try {
+    task = await createDeployTask(sourceRecord.targetId, action, req.body || {});
+  } catch (error) {
+    sendError(res, error, Number(error?.status || 409));
+    return;
+  }
   const emit = createProgressEmitter(task);
-  deployTasksByTargetId.set(sourceRecord.targetId, task);
-  startDeployTask(task, () => runner(recordId, req.body || {}, emit), emit);
+  try {
+    startDeployTask(task, () => runner(recordId, req.body || {}, emit), emit);
+  } catch (scheduleError) {
+    await cleanupAndRespondScheduleError(task, scheduleError, res);
+    return;
+  }
   if (!streamMode) {
     try {
       res.json({ success: true, data: await task.promise });
@@ -2204,18 +2311,28 @@ async function handleTargetOperationTask(req, res, targetId, action, runner) {
     await sendDeployTaskProgress(req, res, runningTask, streamMode);
     return;
   }
-  if (!deployTaskScheduler.canAcceptTask()) {
+  if (!isLightweightDeployAction(action) && !deployTaskScheduler.canAcceptTask()) {
     sendDeployLimitConflict(res);
     return;
   }
-  const task = await createDeployTask(targetId, action, req.body || {});
+  let task;
+  try {
+    task = await createDeployTask(targetId, action, req.body || {});
+  } catch (error) {
+    sendError(res, error, Number(error?.status || 409));
+    return;
+  }
   const emit = createProgressEmitter(task);
-  deployTasksByTargetId.set(targetId, task);
-  startDeployTask(task, async () => {
-    const result = await runner(task, emit);
-    emit.result(result);
-    return result;
-  }, emit);
+  try {
+    startDeployTask(task, async () => {
+      const result = await runner(task, emit);
+      emit.result(result);
+      return result;
+    }, emit);
+  } catch (scheduleError) {
+    await cleanupAndRespondScheduleError(task, scheduleError, res);
+    return;
+  }
   if (!streamMode) {
     try {
       res.json({ success: true, data: await task.promise });
@@ -2252,6 +2369,7 @@ export async function handleGenerateTargetOpenApi(req, res) {
       force: Boolean(req.body?.force),
       gitlabToken: getGitlabTokenFromRequest(req),
       signal: task.controller.signal,
+      stage: (stageKey, percent, message, detail) => emit.stage(stageKey, percent, message, detail),
       log: (level, message, stage) => emit.log(level, message, stage),
     });
     emit.stage('finish', 100, 'OpenAPI 生成完成', artifact.fileName);

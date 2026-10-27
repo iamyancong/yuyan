@@ -19,11 +19,21 @@ import { DEPLOY_FAILURE_BRIEF, getDeployProgressActionLabel, getDeployProgressFa
 import type { DeployProgressMode, RefreshActiveTabOptions } from '../types';
 import { getErrorMessage, isAbortError, isDeployConflictError, isNotFoundError } from '../utils';
 
-/** 发布停止前允许中断的阶段（包含排队等待阶段） */
-const STOPPABLE_PUBLISH_STAGE_KEYS = new Set(['queued', 'validate', 'clone', 'install', 'build']);
+/** 发布停止前允许中断的阶段（包含排队等待阶段与等待构建资源阶段） */
+const STOPPABLE_PUBLISH_STAGE_KEYS = new Set([
+  'queued',
+  'validate',
+  'clone',
+  'waiting-build-slot',
+  'install',
+  'build',
+]);
 
 import { useDeployConnectionState } from './useDeployConnectionState';
 import { useNginxDeployContext } from './useNginxDeployContext';
+import { resolveStoppedDeployProgressPresentation } from './targetRuntimePolicy';
+
+export { resolveStoppedDeployProgressPresentation };
 
 /** 发布进度 Hook 参数 */
 interface UseNginxDeployProgressParams {
@@ -223,20 +233,34 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
    */
   const hydrateProgressFromSnapshot = (snapshot: DeployProgressSnapshot) => {
     const stageEvent = [...snapshot.events].reverse().find((event) => event.type === 'stage');
+    const isStopped = snapshot.result?.status === 'stopped';
+    const stoppedPresentation = isStopped
+      ? resolveStoppedDeployProgressPresentation({
+          stopReason: (snapshot.result as unknown as { stopReason?: string })?.stopReason,
+          message: (snapshot.result as unknown as { message?: string })?.message,
+          stageMessage: stageEvent?.type === 'stage' ? stageEvent.message : undefined,
+        })
+      : null;
     Object.assign(progressState, {
       percent: stageEvent?.type === 'stage' ? stageEvent.percent : snapshot.result ? 100 : 0,
-      title: stageEvent?.type === 'stage' ? stageEvent.message : `正在${getDeployProgressActionLabel(snapshot.action)}`,
+      title: stoppedPresentation
+        ? stoppedPresentation.title
+        : stageEvent?.type === 'stage'
+          ? stageEvent.message
+          : `正在${getDeployProgressActionLabel(snapshot.action)}`,
       detail:
         stageEvent?.type === 'stage'
           ? stageEvent.detail || ''
-          : `${snapshot.operator || '未知操作人'}发起，当前阶段：${getDeployProgressStageLabel(snapshot)}`,
+          : stoppedPresentation
+            ? stoppedPresentation.detail
+            : `${snapshot.operator || '未知操作人'}发起，当前阶段：${getDeployProgressStageLabel(snapshot)}`,
       logs: [...snapshot.events],
       running: snapshot.running,
-      stopped: snapshot.result?.status === 'stopped',
+      stopped: isStopped,
       operator: snapshot.operator || '',
       startedAt: snapshot.startedAt || '',
     });
-    if (snapshot.error) {
+    if (snapshot.error && !isStopped) {
       progressState.title = getDeployProgressFailureTitle({
         action: snapshot.action,
         events: snapshot.events,
@@ -251,14 +275,20 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     if (!hasProgressEvent(event)) progressState.logs.push(event);
     if (event.type === 'stage') {
       progressState.percent = event.percent;
-      progressState.title = event.message;
+      progressState.title = event.message === '排队超时已停止' ? '排队超时' : event.message;
       progressState.detail = event.detail || '';
     }
     if (event.type === 'result') {
       if (event.data.status === 'stopped') {
+        const stoppedPayload = event.data as unknown as { stopReason?: string; message?: string };
+        const stoppedPresentation = resolveStoppedDeployProgressPresentation({
+          stopReason: stoppedPayload?.stopReason,
+          message: stoppedPayload?.message,
+          currentTitle: progressState.title,
+        });
         progressState.stopped = true;
-        progressState.title = '已停止';
-        progressState.detail = '发布任务已停止，未进入上传产物阶段。';
+        progressState.title = stoppedPresentation.title;
+        progressState.detail = stoppedPresentation.detail;
         return;
       }
       progressState.percent = 100;
@@ -341,9 +371,15 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       );
       if (sessionId !== progressSessionId) return;
       if (result.status === 'stopped' || abortController.signal.aborted) {
+        const stoppedPayload = result as unknown as { stopReason?: string; message?: string };
+        const stoppedPresentation = resolveStoppedDeployProgressPresentation({
+          stopReason: stoppedPayload?.stopReason,
+          message: stoppedPayload?.message,
+          currentTitle: progressState.title,
+        });
         progressState.stopped = true;
-        progressState.title = '已停止';
-        progressState.detail = '发布任务已停止，未进入上传产物阶段。';
+        progressState.title = stoppedPresentation.title;
+        progressState.detail = stoppedPresentation.detail;
         void notifyDeployResult({
           status: 'stopped',
           projectName: target.projectName,

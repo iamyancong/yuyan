@@ -74,7 +74,10 @@ import {
   findDuplicateDeployTarget,
   getDuplicateDeployTargetId,
   isDuplicateDeployTargetError,
+  resolveTargetSaveBuildMemoryMb,
 } from './deployTargetSavePolicy';
+
+export { resolveTargetSaveBuildMemoryMb };
 
 /** 部署目标 Hook 参数 */
 interface UseNginxDeployTargetsParams {
@@ -112,6 +115,7 @@ const createDefaultTargetForm = (project: DeployProjectContext): DeployTargetPay
   enableNginxReload: false,
   installCommand: DEFAULT_INSTALL_COMMAND,
   buildCommand: DEFAULT_BUILD_COMMAND,
+  buildMemoryMb: 0,
   artifactDir: DEFAULT_ARTIFACT_DIR,
   preserveSubDirs: DEFAULT_PRESERVE_SUB_DIRS,
   uploadStrategy: DEFAULT_UPLOAD_STRATEGY,
@@ -214,6 +218,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
 
   const targetModalOpen = ref(false);
   const activeTargetId = ref<number | null>(null);
+  const initialEditBuildMemoryMb = ref<number | null>(null);
   const targetFormRef = ref<FormilyRef | null>(null);
   const initializingTargetForm = ref(false);
   const syncingProjectId = ref<number | null>(null);
@@ -733,6 +738,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     const selectedProject = getDefaultTargetProject();
     initializingTargetForm.value = true;
     activeTargetId.value = null;
+    initialEditBuildMemoryMb.value = null;
     const initialProjectType = projectType.value !== 'all' ? projectType.value : 'frontend';
     const recommendedTemplate = recommendTemplateForProject(selectedProject?.projectName || '');
     const templateValues = resolveBackendTemplateValues(recommendedTemplate, selectedProject?.projectName || '');
@@ -761,6 +767,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       enableNginxReload: false,
       installCommand: initialInstallCmd,
       buildCommand: initialBuildCmd,
+      buildMemoryMb: 0,
       artifactDir: initialArtifact,
       preserveSubDirs: DEFAULT_PRESERVE_SUB_DIRS,
       uploadStrategy: DEFAULT_UPLOAD_STRATEGY,
@@ -1032,6 +1039,10 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     resetSearch();
     targetFormLoading.value = true;
     activeTargetId.value = target.id;
+    initialEditBuildMemoryMb.value = Math.min(
+      Math.max(0, Math.floor(Number(target.buildMemoryMb ?? 0) || 0)),
+      65536
+    );
     initializingTargetForm.value = true;
     const targetSource = normalizeProjectSource(target.projectSource);
     Object.assign(targetForm, { ...target, projectSource: targetSource, serverName: target.nginxServerName || '_' });
@@ -1144,6 +1155,11 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       const values = submittedValues;
       const installCommand = normalizeCommandText(values.installCommand ?? targetForm.installCommand);
       const buildCommand = normalizeCommandText(values.buildCommand ?? targetForm.buildCommand);
+      const resolvedBuildMemoryMb = resolveTargetSaveBuildMemoryMb({
+        isEditing: Boolean(activeTargetId.value),
+        initialBuildMemoryMb: initialEditBuildMemoryMb.value,
+        currentBuildMemoryMb: values.buildMemoryMb ?? targetForm.buildMemoryMb,
+      });
       const payload = {
         ...targetForm,
         ...values,
@@ -1154,7 +1170,11 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
         uploadStrategy: values.uploadStrategy || targetForm.uploadStrategy || DEFAULT_UPLOAD_STRATEGY,
         installCommand,
         buildCommand,
+        buildMemoryMb: resolvedBuildMemoryMb,
       };
+      if (resolvedBuildMemoryMb === undefined) {
+        delete (payload as Partial<DeployTargetPayload>).buildMemoryMb;
+      }
       if (!payload.projectId || !payload.projectName || !payload.repositoryUrl) {
         message.warning(payload.projectSource === 'gitlab' ? '请选择 GitLab 仓库' : '请选择平台应用');
         return;

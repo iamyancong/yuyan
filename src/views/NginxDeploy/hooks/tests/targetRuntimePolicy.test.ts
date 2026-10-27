@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  formatDeployTargetRuntimeStatus,
+  getDeployTargetRuntimeHeadline,
+  publishStages,
+} from '../../constant.ts';
+import {
   getTargetRuntimePollDelay,
   isTargetRuntimeBatchUnsupported,
   isTargetRuntimeSseUnsupported,
   mapWithConcurrency,
+  resolveStoppedDeployProgressPresentation,
   shouldScheduleRuntimePoll,
   TARGET_RUNTIME_ACTIVE_INTERVAL,
   TARGET_RUNTIME_ERROR_MAX_INTERVAL,
@@ -52,4 +58,106 @@ test('旧接口回退映射限制并发并保持结果顺序', async () => {
 
   assert.equal(maxActiveWorkers, 4);
   assert.deepEqual(result, [2, 4, 6, 8, 10, 12]);
+});
+
+test('getDeployTargetRuntimeHeadline 区分排队第 N 位、等待构建资源与正在执行，且 publishStages 包含 waiting-build-slot', () => {
+  assert.equal(getDeployTargetRuntimeHeadline(null), '空闲');
+  assert.equal(getDeployTargetRuntimeHeadline({ running: false, events: [] } as any), '空闲');
+
+  assert.equal(
+    getDeployTargetRuntimeHeadline({
+      running: true,
+      queued: true,
+      queuePosition: 3,
+      currentStage: 'queued',
+      action: 'deploy',
+      events: [],
+    } as any),
+    '排队第 3 位',
+  );
+  assert.equal(
+    getDeployTargetRuntimeHeadline({
+      running: true,
+      queued: true,
+      queuePosition: 0,
+      currentStage: 'queued',
+      action: 'deploy',
+      events: [],
+    } as any),
+    '排队等待',
+  );
+  assert.equal(
+    getDeployTargetRuntimeHeadline({
+      running: true,
+      queued: false,
+      currentStage: 'waiting-build-slot',
+      action: 'deploy',
+      events: [],
+    } as any),
+    '等待构建资源',
+  );
+  assert.equal(
+    getDeployTargetRuntimeHeadline({
+      running: true,
+      queued: false,
+      currentStage: 'build',
+      action: 'deploy',
+      events: [],
+    } as any),
+    '正在发布',
+  );
+  assert.equal(
+    getDeployTargetRuntimeHeadline({
+      running: true,
+      queued: false,
+      currentStage: 'rollback',
+      action: 'rollback',
+      events: [],
+    } as any),
+    '正在回滚',
+  );
+  assert.equal(
+    formatDeployTargetRuntimeStatus({
+      running: true,
+      queued: false,
+      currentStage: 'waiting-build-slot',
+      action: 'deploy',
+      events: [{ type: 'stage', stage: 'waiting-build-slot', percent: 26, message: '等待构建资源（内存）…', timestamp: '' }],
+    } as any),
+    '等待构建资源 · 等待构建资源（内存）…',
+  );
+
+  const waitingStage = publishStages.find((stage) => stage.key === 'waiting-build-slot');
+  assert.ok(waitingStage, 'publishStages 应包含 waiting-build-slot 步骤');
+  assert.equal(waitingStage?.title, '等待构建资源');
+  assert.equal(waitingStage?.percent, 26);
+});
+
+test('排队超时与手动取消停止态标题区分：stopReason=timeout 显示「排队超时」', () => {
+  const timeoutStop = resolveStoppedDeployProgressPresentation({
+    stopReason: 'timeout',
+    message: '排队超时，未产生任何变更',
+  });
+  assert.deepEqual(timeoutStop, {
+    isQueueTimeout: true,
+    title: '排队超时',
+    detail: '排队超时，未产生任何变更',
+  });
+
+  const stageTimeoutStop = resolveStoppedDeployProgressPresentation({
+    stageMessage: '排队超时已停止',
+  });
+  assert.equal(stageTimeoutStop.isQueueTimeout, true);
+  assert.equal(stageTimeoutStop.title, '排队超时');
+  assert.equal(stageTimeoutStop.detail, '排队超时，未产生任何变更');
+
+  const manualStop = resolveStoppedDeployProgressPresentation({
+    stopReason: 'cancelled',
+    message: '任务已在排队阶段取消，未产生构建或发布变更',
+  });
+  assert.deepEqual(manualStop, {
+    isQueueTimeout: false,
+    title: '已停止',
+    detail: '任务已在排队阶段取消，未产生构建或发布变更',
+  });
 });

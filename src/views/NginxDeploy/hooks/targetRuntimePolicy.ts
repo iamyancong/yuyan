@@ -92,3 +92,30 @@ export async function mapWithConcurrency<T, R>(
   await Promise.all(Array.from({ length: Math.min(Math.max(1, concurrency), items.length) }, runWorker));
   return results;
 }
+
+/**
+ * 解析发布任务停止态（手动取消 vs 排队超时）的标题与说明文案。
+ * @param options 停止态上下文
+ * @returns 标题与说明文案
+ */
+export function resolveStoppedDeployProgressPresentation(options: {
+  stopReason?: string;
+  message?: string;
+  stageMessage?: string;
+  currentTitle?: string;
+  defaultStoppedDetail?: string;
+}): { isQueueTimeout: boolean; title: '排队超时' | '已停止'; detail: string } {
+  const isQueueTimeout =
+    options.stopReason === 'timeout' ||
+    options.stageMessage === '排队超时已停止' ||
+    options.currentTitle === '排队超时';
+  const rawDetail = String(options.message || '').trim();
+  const fallbackDetail = isQueueTimeout
+    ? '排队超时，未产生任何变更'
+    : options.defaultStoppedDetail || '发布任务已停止，未进入上传产物阶段。';
+  return {
+    isQueueTimeout,
+    title: isQueueTimeout ? '排队超时' : '已停止',
+    detail: rawDetail || fallbackDetail,
+  };
+}

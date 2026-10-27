@@ -75,3 +75,33 @@ export function findDuplicateDeployTarget<T extends DeployTargetIdentity>(
     && matchesProject(target)
   ));
 }
+
+/**
+ * 计算保存部署目标时是否需要携带 `buildMemoryMb` 字段：
+ * - 新增目标时始终携带规范化后的数值（0 ~ 65536 整数）；
+ * - 编辑已有目标时，若用户未修改「构建内存」字段，返回 `undefined`（不随请求发送），避免覆盖服务端刚由 OOM 重试记住的扩容值。
+ */
+export function resolveTargetSaveBuildMemoryMb(options: {
+  isEditing: boolean;
+  initialBuildMemoryMb: number | null | undefined;
+  currentBuildMemoryMb: unknown;
+}): number | undefined {
+  const normalized = Math.min(
+    Math.max(0, Math.floor(Number(options.currentBuildMemoryMb ?? 0) || 0)),
+    65536,
+  );
+  if (
+    options.isEditing &&
+    options.initialBuildMemoryMb !== null &&
+    options.initialBuildMemoryMb !== undefined
+  ) {
+    const normalizedInitial = Math.min(
+      Math.max(0, Math.floor(Number(options.initialBuildMemoryMb) || 0)),
+      65536,
+    );
+    if (normalized === normalizedInitial) {
+      return undefined;
+    }
+  }
+  return normalized;
+}

@@ -2,7 +2,12 @@
 import { computed } from 'vue';
 import { LoadingOutlined } from '@ant-design/icons-vue';
 import type { DeployTarget } from '@/api/deploy';
-import { formatDeployDateTime, getDeployProgressActionLabel, getDeployProgressStageLabel } from '../../constant';
+import {
+  formatDeployDateTime,
+  getDeployProgressActionLabel,
+  getDeployProgressStageLabel,
+  getDeployTargetRuntimeHeadline,
+} from '../../constant';
 import type { RuntimeAwareDeployTarget } from '../../types';
 import { useNginxDeployContext } from '../../hooks/useNginxDeployContext';
 
@@ -42,6 +47,9 @@ const serviceState = computed(() => {
 
 /** 当前任务操作类型 */
 const actionLabel = computed(() => getDeployProgressActionLabel(snapshot.value?.action));
+
+/** 当前任务运行态主标题（区分排队第 N 位、等待构建资源与正在发布） */
+const runningHeadline = computed(() => getDeployTargetRuntimeHeadline(snapshot.value));
 
 /** 当前任务阶段 */
 const stageLabel = computed(() => getDeployProgressStageLabel(snapshot.value));
@@ -96,7 +104,7 @@ const emit = defineEmits<{
         <span v-else class="target-runtime-cell__dot" />
       </span>
       <span class="target-runtime-cell__content">
-        <strong>{{ running ? `正在${actionLabel}` : serviceState.title }}</strong>
+        <strong>{{ running ? runningHeadline : serviceState.title }}</strong>
         <small>{{ running ? runningDetailText : serviceState.detail }}</small>
       </span>
       <span v-if="running" class="target-runtime-cell__progress" />
