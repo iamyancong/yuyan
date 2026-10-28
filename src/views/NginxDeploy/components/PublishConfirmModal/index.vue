@@ -19,6 +19,7 @@ import { computed, h, ref, watch } from 'vue';
 import type { DeployTarget } from '@/api/deploy';
 import type { PublishConfirmModalProps, PublishStartOptions } from './constant';
 import { usePublishConfirm } from './hooks/usePublishConfirm';
+import DeployLogLegend from '../DeployLogLegend/index.vue';
 
 defineOptions({ name: 'PublishConfirmModal' });
 
@@ -225,6 +226,7 @@ watch(
             <span>{{ logs.length }} 条</span>
           </a-space>
         </div>
+        <DeployLogLegend />
         <YMonaco
           ref="logMonacoRef"
           class="publish-log-monaco"

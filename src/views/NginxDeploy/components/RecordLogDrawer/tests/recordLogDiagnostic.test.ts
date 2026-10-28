@@ -111,3 +111,8 @@ FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaS
   assert.ok(!cleaned.includes('Module level directives cause errors when bundled'));
   assert.ok(cleaned.includes('FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory'));
 });
+
+test('cleanLogMessage: 兼容历史记录中的 ANSI 颜色控制码', () => {
+  const raw = '\u001b[36mvite v6.0.5 \u001b[32mbuilding for production...\u001b[36m\u001b[39m';
+  assert.equal(cleanLogMessage(raw), 'vite v6.0.5 building for production...');
+});

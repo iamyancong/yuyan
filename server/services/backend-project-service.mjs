@@ -10,6 +10,7 @@ import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { DEPLOY_DATA_DIR, DEPLOY_OPENAPI_DIR } from '../config/constants.mjs';
 import { withHiddenWindow } from '../utils/child-process.mjs';
+import { resolveStderrLogLevel, splitProcessOutputLines, stripAnsi, TOOL_LOG_SOURCE } from '../utils/process-output.mjs';
 import { buildAuthUrl } from './git-service.mjs';
 import { shellQuote } from './ssh-service.mjs';
 import {
@@ -182,17 +183,18 @@ export function runBackendLocalCommand(command, options = {}) {
     };
     options.signal?.addEventListener?.('abort', onAbort, { once: true });
 
-    /** 输出日志行。 */
-    const consume = (level, chunk) => {
+    /** 输出日志行（去除 ANSI 控制码；stderr 按内容判定级别，避免 Maven / Gradle 进度被误标为告警）。 */
+    const consume = (stream, chunk) => {
       const text = chunk.toString();
-      if (level === 'info') stdout += text;
+      if (stream === 'stdout') stdout += text;
       else stderr += text;
-      for (const line of text.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)) {
-        options.onLog?.(level, redactDeployLog(line));
+      for (const line of splitProcessOutputLines(text)) {
+        const level = stream === 'stdout' ? 'info' : resolveStderrLogLevel(line);
+        options.onLog?.(level, redactDeployLog(line), TOOL_LOG_SOURCE);
       }
     };
-    child.stdout?.on('data', (chunk) => consume('info', chunk));
-    child.stderr?.on('data', (chunk) => consume('warn', chunk));
+    child.stdout?.on('data', (chunk) => consume('stdout', chunk));
+    child.stderr?.on('data', (chunk) => consume('stderr', chunk));
     child.on('error', (error) => {
       if (settled) return;
       settled = true;
@@ -213,7 +215,7 @@ export function runBackendLocalCommand(command, options = {}) {
         resolve({ stdout, stderr });
         return;
       }
-      const suffix = redactDeployLog(stderr || stdout).trim();
+      const suffix = redactDeployLog(stripAnsi(stderr || stdout)).trim();
       const diagnostic = getBackendCommandNotFoundHint(code, suffix);
       reject(new Error(`${options.label || '命令'}执行失败，退出码 ${code}${suffix ? `\n${suffix}` : ''}${diagnostic ? `\n${diagnostic}` : ''}`));
     });
@@ -248,7 +250,7 @@ export async function syncBackendWorkspace(options) {
     await runBackendLocalCommand(`git clone --depth 1 --branch ${shellQuote(branch)} ${shellQuote(cloneUrl)} ${shellQuote(repoDir)}`, {
       label: 'git clone',
       signal,
-      onLog: (level, message) => log(level, message, 'clone'),
+      onLog: (level, message, source) => log(level, message, 'clone', source),
     });
   } else {
     log('info', '复用后端项目工作区并同步最新提交', 'clone');
@@ -258,7 +260,7 @@ export async function syncBackendWorkspace(options) {
         cwd: repoDir,
         label: 'git fetch',
         signal,
-        onLog: (level, message) => log(level, message, 'clone'),
+        onLog: (level, message, source) => log(level, message, 'clone', source),
       });
       await runBackendLocalCommand('git reset --hard', { cwd: repoDir, label: '重置工作区', signal });
       await runBackendLocalCommand('git clean -fdx', { cwd: repoDir, label: '清理构建残留', signal });
@@ -524,7 +526,7 @@ async function generateOpenApiForTarget(target, options = {}) {
   }
   log('info', `使用 ${jdk.name} 生成 OpenAPI`, 'openapi');
   const openapiCommand = await prepareBackendMavenCommand(target.openapiCommand, workspace.repoDir, {
-    onLog: (level, message) => log(level, message, 'openapi'),
+    onLog: (level, message, source) => log(level, message, 'openapi', source),
   });
   await withBuildSlot(
     () => {
@@ -535,7 +537,7 @@ async function generateOpenApiForTarget(target, options = {}) {
         signal: options.signal,
         timeoutMs: DEFAULT_OPENAPI_TIMEOUT_MS,
         label: '生成 OpenAPI',
-        onLog: (level, message) => log(level, message, 'openapi'),
+        onLog: (level, message, source) => log(level, message, 'openapi', source),
       });
     },
     {

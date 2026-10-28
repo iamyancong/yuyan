@@ -6,13 +6,7 @@
 import { spawn } from 'node:child_process';
 import { GIT_USER_NAME, GIT_USER_EMAIL } from '../config/constants.mjs';
 import { withHiddenWindow } from '../utils/child-process.mjs';
-
-function splitLines(text) {
-  return String(text)
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-}
+import { resolveStderrLogLevel, splitProcessOutputLines, TOOL_LOG_SOURCE } from '../utils/process-output.mjs';
 
 function runGitCommand(args, projectDir, onLog) {
   return new Promise((resolve, reject) => {
@@ -27,16 +21,17 @@ function runGitCommand(args, projectDir, onLog) {
     child.stdout?.on('data', (chunk) => {
       const text = chunk.toString();
       stdout += text;
-      for (const line of splitLines(text)) {
-        onLog?.({ level: 'info', message: line });
+      for (const line of splitProcessOutputLines(text)) {
+        onLog?.({ level: 'info', message: line, source: TOOL_LOG_SOURCE });
       }
     });
 
     child.stderr?.on('data', (chunk) => {
       const text = chunk.toString();
       stderr += text;
-      for (const line of splitLines(text)) {
-        onLog?.({ level: 'warn', message: line });
+      // git 的 fetch / clone 进度默认写入 stderr，仅含告警或错误语义的行才标记为 warn
+      for (const line of splitProcessOutputLines(text)) {
+        onLog?.({ level: resolveStderrLogLevel(line), message: line, source: TOOL_LOG_SOURCE });
       }
     });
 

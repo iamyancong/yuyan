@@ -1,5 +1,6 @@
 import type { DeployErrorSummary, DeployLogItem, DeployRecord } from '@/api/deploy';
 import { formatDeployDateTime } from '../../constant.ts';
+import { isToolLog, presentDeployLogMessage, shouldHideLevelTag } from '../../logPresentation.ts';
 
 /** 记录摘要项 */
 export interface RecordSummaryItem {
@@ -36,13 +37,34 @@ export const getStatusLabel = (status?: DeployRecord['status']) => {
   return status ? statusMap[status] : '-';
 };
 
+/** ANSI 转义序列（CSI 颜色 / 光标控制 + OSC 超链接 / 标题） */
+// eslint-disable-next-line no-control-regex
+const ANSI_PATTERN = /\u001b\[[0-?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001b[@-Z\\-_]/g;
+
+/** 除换行 / 制表 / 回车外的其他不可见控制字符（含残留的孤立 ESC） */
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHAR_PATTERN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
+
+/**
+ * 去除终端颜色控制码（兼容旧版本后端已落库的 `ESC[36m` 等原始输出）。
+ * @param text 原始文本
+ * @returns 纯文本
+ */
+export function stripAnsi(text: string): string {
+  return String(text ?? '')
+    .replace(ANSI_PATTERN, '')
+    .replace(CONTROL_CHAR_PATTERN, '');
+}
+
 /**
  * 清洗单条日志消息（特别是兼容旧后端将整坨 stderr 拼在同一 message 里的历史记录）
  * @param rawMessage 原始消息字符串
  * @returns 清洗后的消息字符串
  */
 export function cleanLogMessage(rawMessage: string): string {
-  if (!rawMessage || !rawMessage.includes('\n')) return rawMessage;
+  if (!rawMessage) return rawMessage;
+  rawMessage = stripAnsi(rawMessage);
+  if (!rawMessage.includes('\n')) return rawMessage;
 
   // 如果包含 "构建产物 执行失败，退出码" 说明是旧后端序列化的全量 stderr 堆叠
   if (/构建产物\s*执行失败/i.test(rawMessage)) {
@@ -83,12 +105,13 @@ export function cleanLogMessage(rawMessage: string): string {
 /**
  * 格式化单条发布日志
  * @param item 发布日志项
- * @returns 适合 Monaco 展示的日志文本
+ * @param showHints 是否在行尾追加白话提示
+ * @returns 适合 Monaco 展示的日志文本（工具输出以 │ 缩进并隐藏 info 标签）
  */
-export const formatLogItem = (item: DeployLogItem) => {
-  const level = item.level.toUpperCase().padEnd(7, ' ');
-  const stage = item.stage ? `[${item.stage}] ` : '';
-  const message = cleanLogMessage(item.message);
+export const formatLogItem = (item: DeployLogItem, showHints = false) => {
+  const level = shouldHideLevelTag(item) ? ''.padEnd(7, ' ') : item.level.toUpperCase().padEnd(7, ' ');
+  const stage = item.stage && !isToolLog(item) ? `[${item.stage}] ` : '';
+  const message = presentDeployLogMessage(item, cleanLogMessage(item.message), showHints);
   return `${formatDeployDateTime(item.timestamp)} ${level} ${stage}${message}`;
 };
 
@@ -163,7 +186,7 @@ export function extractErrorSummaryFromLogs(
   const flattened: { lineIndex: number; clean: string; raw: string }[] = [];
   let lineCounter = 1;
   for (const item of logs) {
-    const lines = String(item.message || '').split(/\r?\n/);
+    const lines = stripAnsi(String(item.message || '')).split(/\r?\n/);
     for (const sub of lines) {
       const trimmed = sub.trim();
       const clean = trimmed

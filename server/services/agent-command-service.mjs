@@ -192,7 +192,7 @@ async function deployBackendViaCentral(operation, payload, target, settings, sig
     signal,
   }, {
     stage: (stage, percent, message) => updateOperationProgress(operation.id, stage, Math.min(48, percent), message),
-    log: (level, message, stage) => appendOperationLog(operation.id, level, message, stage),
+    log: (level, message, stage, source) => appendOperationLog(operation.id, level, message, stage, source),
   });
   if (payload.commitSha && artifact.commitSha !== payload.commitSha) {
     throw new AgentError('commit_changed', `设备构建的 Commit ${artifact.commitSha} 与审批绑定 Commit ${payload.commitSha} 不一致`);
@@ -313,13 +313,14 @@ const getServerIdentityHash = (server) => hashAgentPayload({
 });
 
 /** 向操作追加受限阶段日志。 */
-function appendOperationLog(operationId, level, message, stage = '') {
+function appendOperationLog(operationId, level, message, stage = '', source = '') {
   const current = getAgentOperationInternal(operationId);
   if (!current) return;
   const logs = [...(current.logs || []), {
     timestamp: new Date().toISOString(),
     level,
     stage,
+    ...(source ? { source } : {}),
     message: redactAgentText(message),
   }].slice(-300);
   updateAgentOperationInternal(operationId, { logs });
@@ -775,7 +776,7 @@ async function runApprovedOperation(operationId) {
           const cached = getLatestDeviceOpenApiArtifact(target.id, branch, { includePath: true });
           return cached?.commitSha === commitSha ? cached : null;
         },
-        log: (level, message, stage) => appendOperationLog(operationId, level, message, stage),
+        log: (level, message, stage, source) => appendOperationLog(operationId, level, message, stage, source),
       });
       result = saveDeviceOpenApiArtifact(artifact);
     } else if (operation.toolName === 'yuyan_delete_deploy_target') {

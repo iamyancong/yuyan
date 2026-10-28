@@ -1,8 +1,12 @@
 <script setup lang="ts">
 import type { DeployProgressEvent } from '@/api/deploy';
 import { getLogText } from './constant';
+import { useDeployLogHints } from '../../hooks/useDeployLogHints';
 
 defineOptions({ name: 'DeployProgressPanel' });
+
+/** 白话提示开关（与发布日志抽屉共享） */
+const { showLogHints } = useDeployLogHints();
 
 /** 属性定义 */
 defineProps<{
@@ -26,7 +30,7 @@ defineProps<{
         :key="`${item.timestamp}-${index}`"
         :class="['deploy-progress-log', `is-${item.type}`]"
       >
-        {{ getLogText(item) }}
+        {{ getLogText(item, showLogHints) }}
       </div>
     </div>
   </div>

@@ -40,7 +40,7 @@ export interface AgentOperation {
   actor?: AgentExecutionContext;
   result?: Record<string, unknown> & { executionReport?: AgentExecutionReport };
   error?: { code: string; message: string; retryable: boolean };
-  logs: Array<{ timestamp: string; level: string; stage?: string; message: string }>;
+  logs: Array<{ timestamp: string; level: string; stage?: string; source?: 'system' | 'tool'; message: string }>;
   approvalSummary?: Record<string, unknown>;
   approvedBy?: string;
   createdAt: string;

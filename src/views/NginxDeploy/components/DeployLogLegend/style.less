@@ -1,0 +1,67 @@
+.deploy-log-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  flex: 0 0 auto;
+  margin-bottom: 8px;
+  color: var(--text-color-secondary);
+  font-size: 12px;
+}
+
+.deploy-log-legend__items {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+}
+
+.deploy-log-legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: help;
+  white-space: nowrap;
+
+  &.is-info {
+    --legend-color: var(--info-color, var(--primary-color));
+  }
+
+  &.is-success {
+    --legend-color: var(--success-color);
+  }
+
+  &.is-warn {
+    --legend-color: var(--warning-color);
+  }
+
+  &.is-error {
+    --legend-color: var(--error-color);
+  }
+
+  &.is-tool {
+    --legend-color: var(--text-color-secondary);
+  }
+}
+
+.deploy-log-legend__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--legend-color);
+}
+
+.deploy-log-legend__bar {
+  color: var(--legend-color);
+  font-style: normal;
+  font-weight: 700;
+}
+
+.deploy-log-legend__switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}

@@ -316,8 +316,8 @@ function createProgressEmitter(task) {
     stage(stage, percent, message, detail = '') {
       return write({ type: 'stage', stage, percent, message, detail });
     },
-    log(level, message, stage = '') {
-      return write({ type: 'log', level, stage, message });
+    log(level, message, stage = '', source = '') {
+      return write({ type: 'log', level, stage, message, ...(source ? { source } : {}) });
     },
     result(data) {
       return write({ type: 'result', data });
@@ -1096,7 +1096,7 @@ export async function handleInitNginxInstance(req, res) {
   };
   const emit = {
     stage: (stage, percent, message, detail = '') => write({ type: 'stage', stage, percent, message, detail }),
-    log: (level, message, stage = '') => write({ type: 'log', level, stage, message }),
+    log: (level, message, stage = '', source = '') => write({ type: 'log', level, stage, message, ...(source ? { source } : {}) }),
     result: (data) => write({ type: 'result', data }),
     error: (message, stage = '', extra = {}) => write({ type: 'error', stage, message, ...extra }),
   };
@@ -1200,7 +1200,7 @@ export async function handleInitNginxRuntime(req, res) {
   };
   const emit = {
     stage: (stage, percent, message, detail = '') => write({ type: 'stage', stage, percent, message, detail }),
-    log: (level, message, stage = '') => write({ type: 'log', level, stage, message }),
+    log: (level, message, stage = '', source = '') => write({ type: 'log', level, stage, message, ...(source ? { source } : {}) }),
     result: (data) => write({ type: 'result', data }),
     error: (message, stage = '') => write({ type: 'error', stage, message }),
   };
@@ -2370,7 +2370,7 @@ export async function handleGenerateTargetOpenApi(req, res) {
       gitlabToken: getGitlabTokenFromRequest(req),
       signal: task.controller.signal,
       stage: (stageKey, percent, message, detail) => emit.stage(stageKey, percent, message, detail),
-      log: (level, message, stage) => emit.log(level, message, stage),
+      log: (level, message, stage, source) => emit.log(level, message, stage, source),
     });
     emit.stage('finish', 100, 'OpenAPI 生成完成', artifact.fileName);
     return artifact;
@@ -2433,7 +2433,7 @@ export async function handleRunBackendServiceAction(req, res) {
     emit.stage(action, 30, `${action} 后端服务`, '执行受控进程操作');
     const result = await runBackendServiceAction(targetId, action, {
       signal: task.controller.signal,
-      log: (level, message, stage) => emit.log(level, message, stage),
+      log: (level, message, stage, source) => emit.log(level, message, stage, source),
     });
     emit.stage('finish', 100, '服务操作完成', result.status);
     return result;

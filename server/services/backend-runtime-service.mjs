@@ -123,7 +123,7 @@ export async function buildBackendArtifactOnDevice(target, payload = {}, emit = 
   const branch = String(payload.branch || target.defaultBranch || '').trim();
   if (!branch) throw new Error('后端发布分支不能为空');
   const signal = payload.signal;
-  const log = (level, message, stage = '') => emit.log?.(level, redactDeployLog(message), stage);
+  const log = (level, message, stage = '', source = '') => emit.log?.(level, redactDeployLog(message), stage, source);
   emit.stage?.('clone', 12, '设备正在同步后端代码', `${target.projectName || target.id}#${branch}`);
   const workspace = await syncBackendWorkspace({
     target,
@@ -138,11 +138,11 @@ export async function buildBackendArtifactOnDevice(target, payload = {}, emit = 
   }
   const installCommand = target.installCommand
     ? await prepareBackendMavenCommand(target.installCommand, workspace.repoDir, {
-        onLog: (level, message) => log(level, message, 'install'),
+        onLog: (level, message, source) => log(level, message, 'install', source),
       })
     : '';
   const buildCommand = await prepareBackendMavenCommand(target.buildCommand, workspace.repoDir, {
-    onLog: (level, message) => log(level, message, 'build'),
+    onLog: (level, message, source) => log(level, message, 'build', source),
   });
   await withBackendBuildSlot(
     async () => {
@@ -153,7 +153,7 @@ export async function buildBackendArtifactOnDevice(target, payload = {}, emit = 
           env,
           signal,
           label: 'Maven 预热',
-          onLog: (level, message) => log(level, message, 'install'),
+          onLog: (level, message, source) => log(level, message, 'install', source),
         });
       }
       emit.stage?.('build', 42, '设备正在构建后端 Jar', buildCommand);
@@ -162,7 +162,7 @@ export async function buildBackendArtifactOnDevice(target, payload = {}, emit = 
         env,
         signal,
         label: 'Maven 构建',
-        onLog: (level, message) => log(level, message, 'build'),
+        onLog: (level, message, source) => log(level, message, 'build', source),
       });
     },
     {
@@ -836,10 +836,10 @@ export async function deployBackendTarget(targetId, payload, emit) {
   const operator = String(payload.operator || '').trim() || '未知操作人';
   const signal = payload.signal;
   const logs = [];
-  const log = (level, message, stage = '') => {
+  const log = (level, message, stage = '', source = '') => {
     const safeMessage = redactDeployLog(message);
-    logs.push({ level, message: safeMessage, stage, timestamp: new Date().toISOString() });
-    emit?.log(level, safeMessage, stage);
+    logs.push({ level, message: safeMessage, stage, ...(source ? { source } : {}), timestamp: new Date().toISOString() });
+    emit?.log(level, safeMessage, stage, source);
   };
   const stage = (key, percent, message, detail = '') => emit?.stage(key, percent, message, detail);
   const record = await createRecord({
@@ -876,11 +876,11 @@ export async function deployBackendTarget(targetId, payload, emit) {
     }
     const installCommand = target.installCommand
       ? await prepareBackendMavenCommand(target.installCommand, workspace.repoDir, {
-          onLog: (level, message) => log(level, message, 'install'),
+          onLog: (level, message, source) => log(level, message, 'install', source),
         })
       : '';
     const buildCommand = await prepareBackendMavenCommand(target.buildCommand, workspace.repoDir, {
-      onLog: (level, message) => log(level, message, 'build'),
+      onLog: (level, message, source) => log(level, message, 'build', source),
     });
     await withBackendBuildSlot(
       async () => {
@@ -891,7 +891,7 @@ export async function deployBackendTarget(targetId, payload, emit) {
             env,
             signal,
             label: 'Maven 预热',
-            onLog: (level, message) => log(level, message, 'install'),
+            onLog: (level, message, source) => log(level, message, 'install', source),
           });
         }
         stage('build', 46, '构建后端 Jar', buildCommand);
@@ -900,7 +900,7 @@ export async function deployBackendTarget(targetId, payload, emit) {
           env,
           signal,
           label: 'Maven 构建',
-          onLog: (level, message) => log(level, message, 'build'),
+          onLog: (level, message, source) => log(level, message, 'build', source),
         });
       },
       {
@@ -1037,10 +1037,10 @@ export async function deployBackendArtifact(targetId, payload, emit) {
   const operator = String(payload.operator || '').trim() || '未知操作人';
   const signal = payload.signal;
   const logs = [];
-  const log = (level, message, stage = '') => {
+  const log = (level, message, stage = '', source = '') => {
     const safeMessage = redactDeployLog(message);
-    logs.push({ level, message: safeMessage, stage, timestamp: new Date().toISOString() });
-    emit?.log(level, safeMessage, stage);
+    logs.push({ level, message: safeMessage, stage, ...(source ? { source } : {}), timestamp: new Date().toISOString() });
+    emit?.log(level, safeMessage, stage, source);
   };
   const stage = (key, percent, message, detail = '') => emit?.stage(key, percent, message, detail);
   const localStat = await fsStatSafe(payload.artifactPath);
@@ -1364,10 +1364,10 @@ export async function restoreBackendRecord(recordId, payload, emit, action = 'ro
   if (!currentRelease) throw new Error('当前后端版本不存在');
   const operator = String(payload.operator || '').trim() || '未知操作人';
   const logs = [];
-  const log = (level, message, stage = '') => {
+  const log = (level, message, stage = '', source = '') => {
     const safeMessage = redactDeployLog(message);
-    logs.push({ level, message: safeMessage, stage, timestamp: new Date().toISOString() });
-    emit?.log(level, safeMessage, stage);
+    logs.push({ level, message: safeMessage, stage, ...(source ? { source } : {}), timestamp: new Date().toISOString() });
+    emit?.log(level, safeMessage, stage, source);
   };
   const record = await createRecord({
     targetId: context.target.id,

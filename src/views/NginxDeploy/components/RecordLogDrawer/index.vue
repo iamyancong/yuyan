@@ -4,6 +4,7 @@ import { YMonaco } from 'virtual:yss-heavy-components';
 import { openExternal } from '@/utils/open';
 import type { DeployRecord } from '@/api/deploy';
 import { useRecordLog } from './hooks/useRecordLog';
+import DeployLogLegend from '../DeployLogLegend/index.vue';
 
 defineOptions({ name: 'RecordLogDrawer' });
 
@@ -85,12 +86,14 @@ const drawerOpen = computed({
           </div>
         </div>
 
+        <DeployLogLegend />
+
         <YMonaco
           ref="logMonacoRef"
           :model-value="recordLogContent"
           language="log"
           theme="vs-dark"
-          height="calc(100vh - 290px)"
+          height="calc(100vh - 320px)"
           :readonly="true"
           log-mode
           :max-lines="20000"

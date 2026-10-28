@@ -27,6 +27,7 @@ import {
 } from './deploy-store.mjs';
 import { DEPLOY_BACKUP_KEEP_PER_TARGET, DEPLOY_DATA_DIR, DEPLOY_RECORD_KEEP_PER_PROJECT } from '../config/constants.mjs';
 import { withHiddenWindow } from '../utils/child-process.mjs';
+import { resolveStderrLogLevel, splitProcessOutputLines, stripAnsi, TOOL_LOG_SOURCE } from '../utils/process-output.mjs';
 import {
   execSsh,
   shellQuote,
@@ -203,18 +204,6 @@ function resolveDeployWorkspace(targetId, branch) {
     repoDir: path.join(workspaceRoot, 'repo'),
     metaPath: path.join(workspaceRoot, DEPENDENCY_CACHE_META_FILE),
   };
-}
-
-/**
- * 拆分输出行
- * @param {string} text - 原始输出
- * @returns {string[]} 非空行列表
- */
-function splitLines(text) {
-  return String(text)
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
 }
 
 /**
@@ -792,7 +781,7 @@ async function pruneRemoteArtifactManifests(conn, target, log, useSudo = false) 
  * @returns {string} 精简后的错误输出
  */
 function summarizeCommandFailureOutput(rawOutput) {
-  const raw = String(rawOutput || '');
+  const raw = stripAnsi(rawOutput);
   if (!raw.includes('\n')) return raw;
   const lines = raw.split(/\r?\n/);
   const filtered = lines.filter((line) => {
@@ -894,14 +883,15 @@ function runLocalCommand(command, options = {}) {
       triggerOutputRssSample();
       const text = chunk.toString();
       stdout += text;
-      for (const line of splitLines(text)) options.onLog?.('info', line);
+      for (const line of splitProcessOutputLines(text)) options.onLog?.('info', line, TOOL_LOG_SOURCE);
     });
 
     child.stderr?.on('data', (chunk) => {
       triggerOutputRssSample();
       const text = chunk.toString();
       stderr += text;
-      for (const line of splitLines(text)) options.onLog?.('warn', line);
+      // stderr 不等于告警：vite / pnpm / git 会把正常进度写入 stderr，按内容判定级别
+      for (const line of splitProcessOutputLines(text)) options.onLog?.(resolveStderrLogLevel(line), line, TOOL_LOG_SOURCE);
     });
 
     child.on('error', async (error) => {
@@ -995,7 +985,7 @@ async function syncDeployWorkspace({ target, branch, cloneUrl, repoDir, signal, 
     log('info', '未找到可复用发布工作区，正在首次克隆仓库', 'clone');
     await runLocalCommand(`git clone --depth 1 --branch ${shellQuote(branch)} ${shellQuote(cloneUrl)} ${shellQuote(repoDir)}`, {
       label: 'git clone',
-      onLog: (level, message) => log(level, message, 'clone'),
+      onLog: (level, message, source) => log(level, message, 'clone', source),
       signal,
     });
     await runLocalCommand(`git remote set-url origin ${shellQuote(target.repositoryUrl)}`, {
@@ -1012,7 +1002,7 @@ async function syncDeployWorkspace({ target, branch, cloneUrl, repoDir, signal, 
     await runLocalCommand(`git fetch --depth 1 origin ${shellQuote(branch)}`, {
       cwd: repoDir,
       label: 'git fetch',
-      onLog: (level, message) => log(level, message, 'clone'),
+      onLog: (level, message, source) => log(level, message, 'clone', source),
       signal,
     });
     await runLocalCommand('git reset --hard', { cwd: repoDir, label: '重置工作区', signal });
@@ -1253,7 +1243,7 @@ export async function executeDependencyInstallWithHealing({ command, cwd, env, s
       cwd,
       env,
       label: '安装依赖',
-      onLog: (level, message) => log(level, message, 'install'),
+      onLog: (level, message, source) => log(level, message, 'install', source),
       signal,
     });
   } catch (error) {
@@ -1278,7 +1268,7 @@ export async function executeDependencyInstallWithHealing({ command, cwd, env, s
         cwd,
         env,
         label: '安装依赖（重试）',
-        onLog: (level, message) => log(level, message, 'install'),
+        onLog: (level, message, source) => log(level, message, 'install', source),
         signal,
       });
       log('success', '依赖安装重试成功，Yarn 缓存损坏已自动自愈', 'install');
@@ -2013,9 +2003,9 @@ export async function deployTarget(targetId, payload, emit) {
   const operator = String(payload.operator || '').trim() || '未知操作人';
   const signal = payload.signal;
   const logs = [];
-  const log = (level, message, stage = '') => {
-    logs.push({ level, message, stage, timestamp: new Date().toISOString() });
-    emit?.log(level, message, stage);
+  const log = (level, message, stage = '', source = '') => {
+    logs.push({ level, message, stage, ...(source ? { source } : {}), timestamp: new Date().toISOString() });
+    emit?.log(level, message, stage, source);
   };
   log('info', `操作人 ${operator} 发起发布`, 'audit');
   log('info', `保留子目录：${protectedSubDirs.length ? protectedSubDirs.join('、') : '无'}`, 'validate');
@@ -2188,7 +2178,7 @@ export async function deployTarget(targetId, payload, emit) {
             cwd: repoDir,
             env: { ...process.env, ...jdkEnv },
             label: '下载依赖',
-            onLog: (level, message) => log(level, message, 'install'),
+            onLog: (level, message, source) => log(level, message, 'install', source),
             signal,
           });
         } else {
@@ -2214,7 +2204,7 @@ export async function deployTarget(targetId, payload, emit) {
           env: baseBuildEnv,
           maxOldSpaceMb: isBackend ? undefined : heapMb,
           label: '构建产物',
-          onLog: (level, message) => log(level, message, 'build'),
+          onLog: (level, message, source) => log(level, message, 'build', source),
           onPeakRssMb: (peakMb) => slotContext?.reportPeakRssMb?.(peakMb),
           signal,
         });
@@ -2573,9 +2563,9 @@ async function restoreRecordVersion(recordId, payload, emit, action) {
   let rollbackRootRestored = false;
   let currentStage = 'rollback';
   const logs = [];
-  const log = (level, message, stage = '') => {
-    logs.push({ level, message, stage, timestamp: new Date().toISOString() });
-    emit?.log(level, message, stage);
+  const log = (level, message, stage = '', source = '') => {
+    logs.push({ level, message, stage, ...(source ? { source } : {}), timestamp: new Date().toISOString() });
+    emit?.log(level, message, stage, source);
   };
   log('info', `操作人 ${operator} 发起${meta.operationText}，来源发布记录 #${sourceRecord.id}`, 'audit');
   log('info', `本次恢复目标：#${restoredRecord.id}${restoredRecord.commitSha ? ` ${restoredRecord.commitSha.slice(0, 8)}` : ''}${restoredRecord.commitMessage ? ` ${restoredRecord.commitMessage}` : ''}`, 'validate');

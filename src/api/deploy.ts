@@ -448,8 +448,13 @@ export interface DeployLogItem {
   level: 'info' | 'success' | 'warn' | 'error';
   message: string;
   stage?: string;
+  /** 日志来源：tool 为 git / pnpm / vite 等工具原始输出；缺省为雨燕系统说明 */
+  source?: DeployLogSource;
   timestamp: string;
 }
+
+/** 日志来源：system 雨燕系统说明 | tool 工具原始输出 */
+export type DeployLogSource = 'system' | 'tool';
 
 /** 发布错误根因诊断信息 */
 export interface DeployErrorSummary {
@@ -540,7 +545,7 @@ export type DeployTaskResult = DeployRecord | OpenApiArtifact | BackendServiceRu
 
 export type DeployProgressEvent = (
   | { type: 'stage'; stage: string; percent: number; message: string; detail?: string; timestamp: string }
-  | { type: 'log'; level: DeployLogItem['level']; stage?: string; message: string; timestamp: string }
+  | { type: 'log'; level: DeployLogItem['level']; stage?: string; source?: DeployLogSource; message: string; timestamp: string }
   | { type: 'result'; data: DeployTaskResult; timestamp: string }
   | { type: 'error'; stage?: string; message: string; errorSummary?: DeployErrorSummary; timestamp: string }) & { taskId?: number; targetId?: number };
 
@@ -1587,7 +1592,7 @@ export async function generateTargetOpenApiWithProgress(
         const level: 'info' | 'success' | 'warn' | 'error' = ['success', 'warn', 'error'].includes(log.level)
           ? log.level as 'success' | 'warn' | 'error'
           : 'info';
-        options.onEvent?.({ type: 'log', level, stage: log.stage, message: log.message, timestamp: log.timestamp });
+        options.onEvent?.({ type: 'log', level, stage: log.stage, source: log.source, message: log.message, timestamp: log.timestamp });
       }
       emittedLogCount = operation.logs.length;
     },
@@ -1627,7 +1632,7 @@ export async function deployTargetWithProgress(
           const level: 'info' | 'success' | 'warn' | 'error' = ['success', 'warn', 'error'].includes(log.level)
             ? log.level as 'success' | 'warn' | 'error'
             : 'info';
-          options.onEvent?.({ type: 'log', level, stage: log.stage || '', message: log.message, timestamp: log.timestamp });
+          options.onEvent?.({ type: 'log', level, stage: log.stage || '', source: log.source, message: log.message, timestamp: log.timestamp });
         }
         emittedLogCount = current.logs.length;
       },

@@ -272,6 +272,8 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
 
   /** 处理流式进度事件 */
   const handleProgressEvent = (event: DeployProgressEvent) => {
+    // 「已连接发布任务」属于传输层握手消息，重连时会以任务开始时间重复下发，不写入业务日志，避免时间乱序
+    if (event.type === 'log' && event.stage === 'connection') return;
     if (!hasProgressEvent(event)) progressState.logs.push(event);
     if (event.type === 'stage') {
       progressState.percent = event.percent;

@@ -19,6 +19,7 @@ import {
   type RecordSummaryItem,
 } from '../constant';
 import { getGitLabHost } from '@/api/gitlab';
+import { useDeployLogHints } from '../../../hooks/useDeployLogHints';
 
 /** YMonaco 日志模式暴露方法 */
 interface MonacoLogViewerExpose {
@@ -42,6 +43,9 @@ export function useRecordLog(props: { open: boolean; record: DeployRecord | null
   /** 历史日志 Monaco 实例引用 */
   const logMonacoRef = ref<MonacoLogViewerExpose | null>(null);
   let scrollSequence = 0;
+
+  /** 白话提示开关（跨抽屉共享） */
+  const { showLogHints } = useDeployLogHints();
 
   /** 日志过滤模式：all 全部 | errors 仅错误与告警 */
   const filterMode = ref<LogFilterMode>('all');
@@ -71,7 +75,7 @@ export function useRecordLog(props: { open: boolean; record: DeployRecord | null
     if (!displayedLogs.value.length) {
       return filterMode.value === 'errors' ? '当前日志中无错误或告警信息' : '暂无发布日志';
     }
-    const baseContent = displayedLogs.value.map(formatLogItem).join('\n');
+    const baseContent = displayedLogs.value.map((item) => formatLogItem(item, showLogHints.value)).join('\n');
     // 如果构建失败且提取到了错误诊断信息，直接在 Monaco 编辑器末尾呈现 ASCII 终端高亮诊断报告
     if (props.record?.status === 'failed' && errorSummary.value) {
       const banner = formatEditorDiagnosticBanner(errorSummary.value);

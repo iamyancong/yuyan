@@ -14,6 +14,7 @@ import { calcStageStatus, getLogText, type PublishConfirmModalProps } from '../c
 import { extractErrorSummaryFromLogs, formatEditorDiagnosticBanner } from '../../RecordLogDrawer/constant';
 import type { DeployErrorSummary } from '@/api/deploy';
 import { formatDeployDuration, resolveRuntimeLockState } from '../../../hooks/runtimeLockPolicy';
+import { useDeployLogHints } from '../../../hooks/useDeployLogHints';
 
 /** YMonaco 日志模式暴露方法 */
 interface MonacoLogViewerExpose {
@@ -30,6 +31,9 @@ interface MonacoLogViewerExpose {
 export function usePublishConfirm(props: PublishConfirmModalProps) {
   /** 发布日志 Monaco 实例引用 */
   const logMonacoRef = ref<MonacoLogViewerExpose | null>(null);
+
+  /** 白话提示开关（跨抽屉共享） */
+  const { showLogHints } = useDeployLogHints();
 
   /** 当前展示的操作人/发布人 */
   const displayOperator = computed(() => {
@@ -175,7 +179,9 @@ export function usePublishConfirm(props: PublishConfirmModalProps) {
       }
       return true;
     });
-    const baseContent = deduplicatedLogs.map((item) => getLogText(item, props.target?.projectName)).join('\n');
+    const baseContent = deduplicatedLogs
+      .map((item) => getLogText(item, props.target?.projectName, showLogHints.value))
+      .join('\n');
     // 如果发布失败且识别到核心错误根因，直接在 Monaco 编辑器末尾呈现 ASCII 终端高亮诊断报告
     if (hasError.value && errorSummary.value) {
       const banner = formatEditorDiagnosticBanner(errorSummary.value);
