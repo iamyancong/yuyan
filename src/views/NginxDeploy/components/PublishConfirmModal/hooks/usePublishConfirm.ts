@@ -15,6 +15,7 @@ import { extractErrorSummaryFromLogs, formatEditorDiagnosticBanner } from '../..
 import type { DeployErrorSummary } from '@/api/deploy';
 import { formatDeployDuration, resolveRuntimeLockState } from '../../../hooks/runtimeLockPolicy';
 import { useDeployLogHints } from '../../../hooks/useDeployLogHints';
+import { isDeployFailureEvent } from '../../../logPresentation';
 
 /** YMonaco 日志模式暴露方法 */
 interface MonacoLogViewerExpose {
@@ -75,7 +76,8 @@ export function usePublishConfirm(props: PublishConfirmModalProps) {
   const finished = computed(() => props.started && !props.running && !props.resultUnconfirmed && props.logs.some((item) => item.type === 'result') && !props.stopped);
 
   /** 是否发布失败 */
-  const hasError = computed(() => props.logs.some((item) => item.type === 'error' || (item.type === 'log' && item.level === 'error')));
+  // 工具原始输出的 error 行（可能被自动重试兜住）不代表发布失败，只看雨燕系统判定的错误（#46）
+  const hasError = computed(() => props.logs.some((item) => isDeployFailureEvent(item)));
 
   /** 当前可见发布节点 */
   const visibleStages = computed(() => publishStages.filter((stage) => !stage.nginxOption || Boolean(props.target?.[stage.nginxOption])));

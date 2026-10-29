@@ -3,12 +3,20 @@
  * @description 不改变日志行数（保证错误诊断定位行号准确），只做三件事：
  * 1. 区分来源：工具原始输出（git / pnpm / vite / maven）以 `│` 缩进并隐藏 info 级别标签，视觉上降级为「附录」；
  * 2. 白话提示：对高频但费解的输出在行尾追加 `💡 一句话解释`；
- * 3. 级别图例：统一 info / success / warn / error 的用户语义。
+ * 3. 级别图例：统一 info / success / warn / error 的用户语义；
+ * 4. 失败上下文保护（#46）：「仅错误与告警」模式下，工具 error 行之后同一段工具输出一直保留到下一条雨燕系统日志，
+ *    保证 `file:` 定位行与堆栈不被过滤，并以 `┆` 弱化标出。
  */
 import type { DeployLogItem } from '@/api/deploy';
 
 /** 工具输出行前缀（缩进 + 竖线，表示归属上一条雨燕系统说明） */
 export const TOOL_LOG_PREFIX = '│ ';
+
+/** 失败上下文行前缀（虚线竖线，表示该行因失败上下文保护而保留，本身不是错误或告警） */
+export const TOOL_CONTEXT_LOG_PREFIX = '┆ ';
+
+/** 失败上下文行在 Monaco 中的弱化样式类名（全局样式见 RecordLogDrawer/style.less） */
+export const DEPLOY_LOG_CONTEXT_LINE_CLASS = 'deploy-log-context-line';
 
 /** 白话提示前缀 */
 export const LOG_HINT_PREFIX = '  💡 ';
@@ -31,7 +39,7 @@ export const DEPLOY_LOG_HINT_RULES: DeployLogHintRule[] = [
   { pattern: /^\*\s+branch\s+(\S+)\s+->\s+FETCH_HEAD/, hint: (m) => `已获取远端 ${m[1]} 分支的最新提交` },
   {
     pattern: /^\+\s*[0-9a-f]{6,}\.{2,3}[0-9a-f]{6,}\s+(\S+)\s+->\s+\S+\s+\(forced update\)/,
-    hint: (m) => `远端 ${m[1]} 分支被强制推送（force push）过，已直接同步为远端最新代码，属正常现象`,
+    hint: (m) => `远端 ${m[1]} 分支被强制更新（force push），已同步到最新提交，请确认部署的提交符合预期`,
   },
   {
     pattern: /^[0-9a-f]{6,}\.{2}[0-9a-f]{6,}\s+(\S+)\s+->\s+\S+/,
@@ -65,7 +73,7 @@ export const DEPLOY_LOG_HINT_RULES: DeployLogHintRule[] = [
   { pattern: /^Done in\s+([\d.]+\s*m?s)/i, hint: (m) => `执行完成，耗时 ${m[1]}` },
   { pattern: /ELIFECYCLE.*Command failed/i, hint: '构建脚本异常退出，请向上查找第一条红色错误' },
   { pattern: /ERR_PNPM_(\w+)/, hint: (m) => `pnpm 执行出错（${m[1]}），请结合上下文排查` },
-  { pattern: /JavaScript heap out of memory/i, hint: '构建内存不足，可勾选「本次重新安装依赖」重试或联系管理员调高内存上限' },
+  { pattern: /JavaScript heap out of memory/i, hint: '构建内存不足：系统会自动按更大内存重试；如果仍然失败，请调高目标的「最低构建内存」' },
   // ---------- Maven / Gradle ----------
   { pattern: /^\[INFO\] BUILD SUCCESS/, hint: 'Java 构建成功' },
   { pattern: /^\[INFO\] BUILD FAILURE/, hint: 'Java 构建失败，请向上查找 [ERROR] 行' },
@@ -110,27 +118,88 @@ export function shouldHideLevelTag(item: Pick<DeployLogItem, 'level' | 'source'>
 }
 
 /**
- * 生成日志正文：工具输出加 `│` 缩进前缀，按需在行尾追加白话提示。
+ * 生成日志正文：工具输出加 `│` 缩进前缀（失败上下文行为 `┆`），按需在行尾追加白话提示。
  * 不会新增换行，保证 Monaco 行号与错误诊断定位一致。
  * @param item 日志项
  * @param cleanedMessage 已清洗（去 ANSI / 去噪）的消息
  * @param showHints 是否展示白话提示
+ * @param context 是否为失败上下文保护保留的行
  * @returns 日志正文
  */
 export function presentDeployLogMessage(
   item: Pick<DeployLogItem, 'source'>,
   cleanedMessage: string,
-  showHints: boolean
+  showHints: boolean,
+  context = false
 ): string {
   const hint = showHints ? resolveDeployLogHint(cleanedMessage) : '';
-  const body = `${isToolLog(item) ? TOOL_LOG_PREFIX : ''}${cleanedMessage}`;
+  const prefix = isToolLog(item) ? (context ? TOOL_CONTEXT_LOG_PREFIX : TOOL_LOG_PREFIX) : '';
+  const body = `${prefix}${cleanedMessage}`;
   return hint ? `${body}${LOG_HINT_PREFIX}${hint}` : body;
+}
+
+/** 是否为「仅错误与告警」模式关注的级别 */
+export function isAttentionLevel(level: DeployLogItem['level'] | undefined): boolean {
+  return level === 'error' || level === 'warn';
+}
+
+/** 「仅错误与告警」模式下的展示项 */
+export interface AttentionLogEntry<T> {
+  /** 原始日志项 */
+  item: T;
+  /** 是否因失败上下文保护而保留（本身不是 error / warn） */
+  context: boolean;
+}
+
+/**
+ * 「仅错误与告警」过滤，附带失败上下文保护（#46）。
+ * - error / warn 行照常保留；
+ * - 工具输出（source=tool）出现 error 行后，同一段工具输出的后续行（`file:` 定位、堆栈等 info 行）全部保留并标记为 context，
+ *   直到下一条雨燕系统日志（非工具输出）为止；
+ * - 其余 info / success 行过滤掉。
+ * 只在展示层生效，不改变落库级别。
+ * @param logs 日志列表（按时间顺序）
+ * @returns 过滤后的展示项
+ */
+export function filterAttentionLogs<T extends Pick<DeployLogItem, 'level' | 'source'>>(logs: T[]): AttentionLogEntry<T>[] {
+  const entries: AttentionLogEntry<T>[] = [];
+  let protecting = false;
+  for (const item of logs) {
+    if (!isToolLog(item)) {
+      // 下一条雨燕系统日志：结束本段工具输出的上下文保护
+      protecting = false;
+      if (isAttentionLevel(item.level)) entries.push({ item, context: false });
+      continue;
+    }
+    if (item.level === 'error') protecting = true;
+    if (isAttentionLevel(item.level)) {
+      entries.push({ item, context: false });
+    } else if (protecting) {
+      entries.push({ item, context: true });
+    }
+  }
+  return entries;
+}
+
+/**
+ * 进度事件是否代表发布失败。
+ * 工具原始输出的 error 行（如被自动重试兜住的 OOM、Yarn 缓存损坏）不代表整次发布失败，
+ * 只有雨燕系统判定的 error 日志或 error 事件才算。
+ * @param event 进度事件
+ */
+export function isDeployFailureEvent(event: {
+  type: string;
+  level?: DeployLogItem['level'];
+  source?: DeployLogItem['source'];
+}): boolean {
+  if (event.type === 'error') return true;
+  return event.type === 'log' && event.level === 'error' && !isToolLog(event);
 }
 
 /** 日志级别图例项 */
 export interface DeployLogLegendItem {
   /** 级别标识，与 Monaco log 高亮一致 */
-  level: DeployLogItem['level'] | 'tool';
+  level: DeployLogItem['level'] | 'tool' | 'context';
   /** 用户语义 */
   label: string;
   /** 用户需要做什么 */
@@ -141,7 +210,14 @@ export interface DeployLogLegendItem {
 export const DEPLOY_LOG_LEGEND: DeployLogLegendItem[] = [
   { level: 'info', label: '进度', description: '雨燕的执行说明，正常过程' },
   { level: 'success', label: '成功', description: '阶段完成' },
-  { level: 'warn', label: '提醒', description: '不影响本次发布，有空再看' },
-  { level: 'error', label: '错误', description: '导致发布失败，必须处理' },
-  { level: 'tool', label: '工具输出', description: '以 │ 开头，git / pnpm / vite 等工具的原始输出，一般无需关注' },
+  { level: 'warn', label: '提醒', description: '可能有问题，不一定导致失败' },
+  { level: 'error', label: '错误', description: '导致本次失败，优先查看' },
+  { level: 'tool', label: '工具输出', description: '以 │ 开头，git / pnpm / vite 等工具原始输出，失败时请结合上下文查看' },
 ];
+
+/** 失败上下文图例（仅「仅错误与告警」模式展示） */
+export const DEPLOY_LOG_CONTEXT_LEGEND: DeployLogLegendItem = {
+  level: 'context',
+  label: '失败上下文',
+  description: '以 ┆ 开头并弱化显示：错误行之后同一段工具输出（如文件定位、堆栈），保留到下一条雨燕系统日志为止',
+};

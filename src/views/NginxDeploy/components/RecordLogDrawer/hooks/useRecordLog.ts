@@ -10,16 +10,17 @@ import {
   getDeployRecordShortCommit,
 } from '../../../constant';
 import {
+  buildRecordLogView,
   extractErrorSummaryFromLogs,
   formatEditorDiagnosticBanner,
   formatEmptyText,
-  formatLogItem,
   getStatusLabel,
   type LogFilterMode,
   type RecordSummaryItem,
 } from '../constant';
 import { getGitLabHost } from '@/api/gitlab';
 import { useDeployLogHints } from '../../../hooks/useDeployLogHints';
+import { DEPLOY_LOG_CONTEXT_LINE_CLASS, isAttentionLevel, TOOL_CONTEXT_LOG_PREFIX } from '../../../logPresentation';
 
 /** YMonaco 日志模式暴露方法 */
 interface MonacoLogViewerExpose {
@@ -58,24 +59,20 @@ export function useRecordLog(props: { open: boolean; record: DeployRecord | null
   /** 日志总数与异常数统计 */
   const totalLogsCount = computed(() => props.record?.logs?.length ?? 0);
   const errorLogsCount = computed(() => {
-    return (props.record?.logs ?? []).filter((l) => l.level === 'error' || l.level === 'warn').length;
+    return (props.record?.logs ?? []).filter((l) => isAttentionLevel(l.level)).length;
   });
 
-  /** 过滤后的日志项列表 */
-  const displayedLogs = computed(() => {
-    const logs = props.record?.logs ?? [];
-    if (filterMode.value === 'errors') {
-      return logs.filter((l) => l.level === 'error' || l.level === 'warn');
-    }
-    return logs;
-  });
+  /** 过滤后的日志展示（「仅错误与告警」模式附带失败上下文保护，#46） */
+  const recordLogView = computed(() =>
+    buildRecordLogView(props.record?.logs ?? [], filterMode.value, showLogHints.value)
+  );
 
   /** 发布日志文本（构建失败时在末尾拼接高对比度诊断报告） */
   const recordLogContent = computed(() => {
-    if (!displayedLogs.value.length) {
+    if (!recordLogView.value.count) {
       return filterMode.value === 'errors' ? '当前日志中无错误或告警信息' : '暂无发布日志';
     }
-    const baseContent = displayedLogs.value.map((item) => formatLogItem(item, showLogHints.value)).join('\n');
+    const baseContent = recordLogView.value.text;
     // 如果构建失败且提取到了错误诊断信息，直接在 Monaco 编辑器末尾呈现 ASCII 终端高亮诊断报告
     if (props.record?.status === 'failed' && errorSummary.value) {
       const banner = formatEditorDiagnosticBanner(errorSummary.value);
@@ -83,6 +80,40 @@ export function useRecordLog(props: { open: boolean; record: DeployRecord | null
     }
     return baseContent;
   });
+
+  /** 失败上下文行的 Monaco 装饰集合 */
+  let contextDecorations: { set: (decorations: unknown[]) => void } | null = null;
+  /** 装饰集合所属的编辑器实例（抽屉 destroyOnClose 后会重建编辑器） */
+  let decoratedEditor: unknown = null;
+
+  /**
+   * 弱化显示失败上下文行（仅「仅错误与告警」模式）。
+   * 只装饰内容确实以 ┆ 开头的行，避免 Monaco 尚未同步新内容时装饰错行。
+   */
+  const applyContextLineDecorations = () => {
+    const expose = logMonacoRef.value;
+    const rawEditor = typeof expose?.getInstance === 'function' ? expose.getInstance() : (expose as any)?.editor;
+    const model = rawEditor?.getModel?.();
+    if (!model || typeof rawEditor.createDecorationsCollection !== 'function') return;
+    const lineCount = model.getLineCount();
+    const decorations = (filterMode.value === 'errors' ? recordLogView.value.contextLineNumbers : [])
+      .filter((lineNumber) => lineNumber <= lineCount && model.getLineContent(lineNumber).includes(TOOL_CONTEXT_LOG_PREFIX))
+      .map((lineNumber) => ({
+        range: { startLineNumber: lineNumber, startColumn: 1, endLineNumber: lineNumber, endColumn: model.getLineMaxColumn(lineNumber) },
+        options: { isWholeLine: true, inlineClassName: DEPLOY_LOG_CONTEXT_LINE_CLASS },
+      }));
+    try {
+      if (contextDecorations && decoratedEditor === rawEditor) {
+        contextDecorations.set(decorations);
+      } else {
+        contextDecorations = rawEditor.createDecorationsCollection(decorations);
+        decoratedEditor = rawEditor;
+      }
+    } catch {
+      contextDecorations = null;
+      decoratedEditor = null;
+    }
+  };
 
   /** 定位至错误根因或编辑器内的诊断报告 */
   const jumpToErrorLine = async () => {
@@ -182,6 +213,7 @@ export function useRecordLog(props: { open: boolean; record: DeployRecord | null
       if (!props.open || sequence !== scrollSequence) return;
 
       logMonacoRef.value?.layout?.();
+      applyContextLineDecorations();
 
       // 如果有识别到的致命错误行，优先居中定位到该行
       if (props.record?.status === 'failed' && errorSummary.value?.lineIndex && filterMode.value === 'all') {

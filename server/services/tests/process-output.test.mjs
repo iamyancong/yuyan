@@ -29,28 +29,97 @@ test('resolveStderrLogLevel: git / vite 正常进度不再误标为 warn', () =>
   }
 });
 
-test('resolveStderrLogLevel: 告警与错误语义保持 warn', () => {
+test('resolveStderrLogLevel: 告警语义保持 warn', () => {
   for (const line of [
     'WARN  deprecated eslint@8.57.0',
+    'WARN  deprecated some-error-lib@1.0.0',
+    'npm warn deprecated inflight@1.0.6',
+    'warning: in the working copy of \'a.txt\', LF will be replaced by CRLF',
     '(!) Some chunks are larger than 500 kB after minification.',
-    'npm ERR! code ERESOLVE',
-    'error during build:',
-    'fatal: could not read Username',
+    'Module level directives cause errors when bundled, "use client" in "node_modules/x/index.js" was ignored.',
     "<script src=\"/a.js\"> in \"/index.html\" can't be bundled without type=\"module\"",
-    'x Build failed in 262ms',
-    '✗ Build failed',
   ]) {
     assert.equal(resolveStderrLogLevel(line), 'warn', line);
   }
 });
 
-test('runBackendLocalCommand: 工具输出标记 source=tool、去除 ANSI，stderr 正常进度不标 warn', async () => {
+test('resolveStderrLogLevel(#46): 导致失败的工具错误行判为 error', () => {
+  for (const line of [
+    // Issue #46 表格中的样例
+    'RollupError: Could not resolve "./x" from "src/main.ts"',
+    'Could not resolve "./x" from "src/main.ts"',
+    'SyntaxError: Unexpected token (12:3)',
+    'Killed',
+    // 决策评论中列出的错误语义
+    'error during build:',
+    "fatal: Authentication failed for 'http://192.168.167.142:8081/group/app.git/'",
+    'fatal: could not read Username',
+    ' ELIFECYCLE  Command failed with exit code 1.',
+    'ELIFECYCLE Command failed',
+    'error Command failed with exit code 1.',
+    'npm ERR! code ERESOLVE',
+    'npm error code ERESOLVE',
+    'ERR_PNPM_OUTDATED_LOCKFILE  Cannot install with "frozen-lockfile"',
+    'FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory',
+    'sh: line 1: 12345 Killed                  node node_modules/.bin/vite build',
+    // \w*Error 类名（可带 [...] 前缀）
+    'TypeError: Cannot read properties of undefined (reading \'map\')',
+    '[vite:vue] SyntaxError: Unexpected token',
+    '[vite:esbuild] Transform failed with 1 error:',
+    '[plugin:vite:css] [postcss] CssSyntaxError: Unknown word',
+    'Error [ERR_MODULE_NOT_FOUND]: Cannot find package \'foo\' imported from /app/vite.config.ts',
+    'Error: Cannot find module \'@vitejs/plugin-vue\'',
+    '[vite]: Rollup failed to resolve import "nope" from "/app/src/main.ts".',
+    // 构建 / 编译失败
+    'x Build failed in 262ms',
+    '✗ Build failed',
+    'src/a.ts(1,22): error TS2307: Cannot find module \'./b\' or its corresponding type declarations.',
+    '[ERROR] Failed to execute goal org.apache.maven.plugins:maven-compiler-plugin:3.8.1:compile',
+    'src/main.ts:3:7: ERROR: Expected ";" but found "x"',
+  ]) {
+    assert.equal(resolveStderrLogLevel(line), 'error', line);
+  }
+});
+
+test('resolveStderrLogLevel(#46): 普通进度与含 error 字样的普通行仍判 info，不误伤', () => {
+  for (const line of [
+    // 普通进度
+    'vite v6.0.5 building for production...',
+    'transforming...',
+    '✓ 1024 modules transformed.',
+    'rendering chunks...',
+    'computing gzip size...',
+    'remote: Enumerating objects: 5, done.',
+    'Receiving objects: 100% (5/5), done.',
+    'Progress: resolved 1024, reused 1000, downloaded 24, added 0',
+    // 失败上下文行本身是 info（由前端失败上下文保护负责显示）
+    'file: /app/src/views/a.vue:12:3',
+    '    at getRollupError (file:///app/node_modules/rollup/dist/es/shared/parseAst.js:401:41)',
+    'at error (file:///app/node_modules/rollup/dist/es/shared/parseAst.js:333:42)',
+    'at async Promise.all (index 0)',
+    '[vite:build-html] src/main.js (1:10): Expression expected',
+    // 含 error 字样的普通行
+    '0 errors',
+    'Found 0 errors and 0 warnings.',
+    'No errors found',
+    'Errors: 0',
+    'no-error',
+    'dist/assets/error-boundary-Bx1c2.js   1.20 kB │ gzip: 0.62 kB',
+    'dist/assets/ErrorPage-a1b2c3.css      0.31 kB',
+    'eslint-plugin-no-fail-fast@1.0.0',
+  ]) {
+    assert.equal(resolveStderrLogLevel(line), 'info', line);
+  }
+});
+
+test('runBackendLocalCommand: 工具输出标记 source=tool、去除 ANSI，stderr 按内容分 info / warn / error', async () => {
   const { runBackendLocalCommand } = await import('../backend-project-service.mjs');
   const entries = [];
   const script = [
     "process.stdout.write('\\u001b[32mBUILD OK\\u001b[39m\\n')",
     "process.stderr.write('From http://git.example.com/group/app\\n')",
     "process.stderr.write('WARN deprecated foo@1.0.0\\n')",
+    "process.stderr.write('error during build:\\n')",
   ].join(';');
   await runBackendLocalCommand(`node -e "${script}"`, {
     label: '测试命令',
@@ -60,6 +129,7 @@ test('runBackendLocalCommand: 工具输出标记 source=tool、去除 ANSI，std
   entries.sort((a, b) => a.message.localeCompare(b.message));
   assert.deepEqual(entries, [
     { level: 'info', message: 'BUILD OK', source: 'tool' },
+    { level: 'error', message: 'error during build:', source: 'tool' },
     { level: 'info', message: 'From http://git.example.com/group/app', source: 'tool' },
     { level: 'warn', message: 'WARN deprecated foo@1.0.0', source: 'tool' },
   ]);

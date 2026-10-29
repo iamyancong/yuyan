@@ -1,6 +1,6 @@
 import type { DeployErrorSummary, DeployLogItem, DeployRecord } from '@/api/deploy';
 import { formatDeployDateTime } from '../../constant.ts';
-import { isToolLog, presentDeployLogMessage, shouldHideLevelTag } from '../../logPresentation.ts';
+import { filterAttentionLogs, isToolLog, presentDeployLogMessage, shouldHideLevelTag } from '../../logPresentation.ts';
 
 /** 记录摘要项 */
 export interface RecordSummaryItem {
@@ -106,14 +106,48 @@ export function cleanLogMessage(rawMessage: string): string {
  * 格式化单条发布日志
  * @param item 发布日志项
  * @param showHints 是否在行尾追加白话提示
+ * @param context 是否为失败上下文保护保留的行（以 ┆ 代替 │）
  * @returns 适合 Monaco 展示的日志文本（工具输出以 │ 缩进并隐藏 info 标签）
  */
-export const formatLogItem = (item: DeployLogItem, showHints = false) => {
+export const formatLogItem = (item: DeployLogItem, showHints = false, context = false) => {
   const level = shouldHideLevelTag(item) ? ''.padEnd(7, ' ') : item.level.toUpperCase().padEnd(7, ' ');
   const stage = item.stage && !isToolLog(item) ? `[${item.stage}] ` : '';
-  const message = presentDeployLogMessage(item, cleanLogMessage(item.message), showHints);
+  const message = presentDeployLogMessage(item, cleanLogMessage(item.message), showHints, context);
   return `${formatDeployDateTime(item.timestamp)} ${level} ${stage}${message}`;
 };
+
+/** 发布日志展示文本 */
+export interface RecordLogView {
+  /** Monaco 展示文本（不含诊断报告） */
+  text: string;
+  /** 实际展示的日志条数 */
+  count: number;
+  /** 失败上下文行的行号（1 开始，用于 Monaco 弱化装饰） */
+  contextLineNumbers: number[];
+}
+
+/**
+ * 按过滤模式生成发布日志展示文本。
+ * 「仅错误与告警」模式带失败上下文保护：工具 error 行之后同一段工具输出保留到下一条雨燕系统日志为止（#46）。
+ * @param logs 日志列表
+ * @param filterMode 过滤模式
+ * @param showHints 是否在行尾追加白话提示
+ * @returns 展示文本与失败上下文行号
+ */
+export function buildRecordLogView(logs: DeployLogItem[], filterMode: LogFilterMode, showHints = false): RecordLogView {
+  const entries = filterMode === 'errors' ? filterAttentionLogs(logs) : logs.map((item) => ({ item, context: false }));
+  const lines: string[] = [];
+  const contextLineNumbers: number[] = [];
+  for (const { item, context } of entries) {
+    const text = formatLogItem(item, showHints, context);
+    const lineCount = text.split('\n').length;
+    if (context) {
+      for (let offset = 1; offset <= lineCount; offset++) contextLineNumbers.push(lines.length + offset);
+    }
+    lines.push(...text.split('\n'));
+  }
+  return { text: lines.join('\n'), count: entries.length, contextLineNumbers };
+}
 
 /**
  * 格式化在 Monaco 编辑器内部展示的终端高亮诊断报告（全行顶格，避免触发 Monaco 缩进参考竖线与代码折叠箭头）
@@ -303,7 +337,7 @@ export function extractErrorSummaryFromLogs(
         stage: 'build',
         category: '构建内存溢出',
         title: 'Node.js 堆内存耗尽 (OOM)',
-        suggestion: '打包构建消耗内存超出上限，可在构建命令前加入 NODE_OPTIONS="--max-old-space-size=4096"。',
+        suggestion: '打包构建消耗内存超出上限。系统会自动按更大内存重试；如果仍然失败，请在部署目标中调高「最低构建内存」。',
         rawDetail: clean,
         lineIndex,
       };

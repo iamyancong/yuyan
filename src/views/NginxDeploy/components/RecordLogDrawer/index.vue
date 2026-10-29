@@ -86,7 +86,7 @@ const drawerOpen = computed({
           </div>
         </div>
 
-        <DeployLogLegend />
+        <DeployLogLegend :show-context="filterMode === 'errors'" />
 
         <YMonaco
           ref="logMonacoRef"

@@ -74,3 +74,9 @@
     gap: 8px;
   }
 }
+
+/* 失败上下文行（#46）：Monaco 装饰渲染在组件作用域之外，需使用全局类名 */
+:global(.deploy-log-context-line) {
+  opacity: 0.6;
+  font-style: italic;
+}
