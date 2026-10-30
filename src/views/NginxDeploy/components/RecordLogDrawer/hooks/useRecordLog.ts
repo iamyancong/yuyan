@@ -197,11 +197,11 @@ export function useRecordLog(props: { open: boolean; record: DeployRecord | null
       { label: '当前生效Commit', value: getDeployRecordShortCommit(record), link: commitUrl || undefined },
       { label: '当前生效提交信息', value: getDeployRecordCommitMessage(record), link: commitUrl || undefined },
       { label: '当前生效提交人', value: getDeployRecordCommitAuthor(record) },
-      { label: '来源记录', value: formatDeployRecordRef(record.sourceRecordId) },
+      // { label: '来源记录', value: formatDeployRecordRef(record.sourceRecordId) },
       { label: '可恢复版本', value: formatDeployRecordRef(record.backupRecordId) },
       { label: '开始时间', value: formatDeployDateTime(record.startedAt) },
       { label: '结束时间', value: formatDeployDateTime(record.finishedAt) },
-      { label: '环境', value: formatEmptyText(record.envName) },
+      // { label: '环境', value: formatEmptyText(record.envName) },
     ];
   });
 
