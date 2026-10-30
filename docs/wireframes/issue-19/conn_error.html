@@ -1,0 +1,27 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>#19 · conn_error — 服务器连通恢复条</title><link rel="stylesheet" href="file:///workspace/yuyan-wireframes/_base.css">
+<style>body{padding:20px}.shot-title{margin-bottom:8px;font-size:12px;color:#555}</style></head>
+<body>
+<div class="shot-title"><strong>#19 · conn_error — 服务器连通恢复条</strong> · 低保真线框（非视觉稿）</div>
+
+<div class="page">
+  <div class="topbar"><div class="title">服务器: prod-fe-01</div><div><span class="chip"><span class="dot r"></span> 不可达</span></div></div>
+  <div class="main">
+    <div class="card" style="border-color:#c44">
+      <div style="display:flex;justify-content:space-between;align-items:start">
+        <div>
+          <div><span class="badge err">连接超时</span> <span class="tiny">22/tcp · 已重试 3 次</span></div>
+          <div style="margin:8px 0">原因：连接超时 · 无法建立 SSH 会话</div>
+          <div class="mono">host: 10.0.12.8:22 · code: SSH_TIMEOUT <button class="btn sm">复制诊断</button></div>
+        </div>
+      </div>
+      <div class="footer-bar" style="border:0;justify-content:flex-start">
+        <button class="btn primary">重新探测</button><span class="cta-note">主 CTA</span>
+        <button class="btn">编辑 SSH</button>
+        <button class="btn ghost sm">查看最近成功探测</button>
+      </div>
+    </div>
+    <div class="anno">conn_error：分类徽章 + 可复制诊断 + 重新探测/编辑连接；禁止只 toast</div>
+  </div>
+</div>
+
+</body></html>
