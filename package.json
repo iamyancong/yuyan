@@ -25,7 +25,7 @@
     "mcp:build": "tsc -p mcp/tsconfig.json && node scripts/bundle-mcp.mjs",
     "test:mcp": "pnpm run mcp:build && node --test mcp/tests/*.test.mjs",
     "tauri": "tauri",
-    "test:deploy-resilience": "node --experimental-strip-types --test src/utils/tests/centralReadRecovery.test.ts && node --test scripts/tests/deploy-resilience.test.mjs server/services/tests/deploy-task-reconciliation.test.mjs"
+    "test:deploy-resilience": "node --experimental-strip-types --test src/utils/tests/centralReadRecovery.test.ts src/utils/tests/centralRefreshNoticePolicy.test.ts && node --test scripts/tests/deploy-resilience.test.mjs server/services/tests/deploy-task-reconciliation.test.mjs"
   },
   "dependencies": {
     "@ant-design/icons-vue": "^7.0.1",

@@ -1,3 +1,5 @@
+import { monitorEventLoopDelay } from 'node:perf_hooks';
+
 /**
  * 中央服务运行指标
  * @description 进程内轻量指标采集（无第三方依赖、内存有界），用于定位多人使用时的卡顿来源：
@@ -18,6 +20,72 @@ export const SLOW_REQUEST_THRESHOLD_MS = Number(process.env.YUYAN_SLOW_REQUEST_M
 
 /** 进程启动时间 */
 const startedAt = new Date().toISOString();
+
+/** 事件循环延迟统计窗口（毫秒）；每个窗口结束滚动一次，保留上一窗口供排查 */
+const EVENT_LOOP_WINDOW_MS = Math.max(5_000, Number(process.env.YUYAN_EVENT_LOOP_WINDOW_MS || 60_000));
+
+/** 事件循环延迟直方图；同步阻塞（大 JSON、同步 SQLite、GC）会直接体现为延迟升高 */
+let eventLoopHistogram = null;
+/** 采样间隔（毫秒）；直方图读数包含该间隔本身，导出时扣除，使空闲时读数接近 0 */
+const EVENT_LOOP_RESOLUTION_MS = 20;
+let eventLoopWindowStartedAt = Date.now();
+let previousEventLoopWindow = null;
+try {
+  eventLoopHistogram = monitorEventLoopDelay({ resolution: EVENT_LOOP_RESOLUTION_MS });
+  eventLoopHistogram.enable();
+} catch {
+  eventLoopHistogram = null;
+}
+
+/**
+ * 将直方图转换为毫秒统计。
+ * @param {import('node:perf_hooks').IntervalHistogram} histogram 直方图
+ * @returns {{ p50Ms: number, p99Ms: number, maxMs: number, meanMs: number }} 统计
+ */
+function summarizeEventLoopHistogram(histogram) {
+  const toMs = (value) => (Number.isFinite(value) ? Math.max(0, Math.round(value / 1e5 - EVENT_LOOP_RESOLUTION_MS * 10) / 10) : 0);
+  if (!histogram.count) return { p50Ms: 0, p99Ms: 0, maxMs: 0, meanMs: 0 };
+  return {
+    p50Ms: toMs(histogram.percentile(50)),
+    p99Ms: toMs(histogram.percentile(99)),
+    maxMs: toMs(histogram.max),
+    meanMs: toMs(histogram.mean),
+  };
+}
+
+/** 超过窗口时长则滚动窗口。 */
+function rollEventLoopWindow(nowMs = Date.now()) {
+  if (!eventLoopHistogram || nowMs - eventLoopWindowStartedAt < EVENT_LOOP_WINDOW_MS) return;
+  previousEventLoopWindow = {
+    ...summarizeEventLoopHistogram(eventLoopHistogram),
+    startedAt: new Date(eventLoopWindowStartedAt).toISOString(),
+    endedAt: new Date(nowMs).toISOString(),
+  };
+  eventLoopHistogram.reset();
+  eventLoopWindowStartedAt = nowMs;
+}
+
+/**
+ * 读取事件循环延迟统计。
+ * @returns {{ enabled: boolean, windowSeconds: number, current: Object, previous: Object|null }} 当前窗口与上一窗口
+ */
+export function getEventLoopDelayStats() {
+  if (!eventLoopHistogram) return { enabled: false, windowSeconds: 0, current: summarizeEventLoopHistogram({ count: 0 }), previous: null };
+  rollEventLoopWindow();
+  return {
+    enabled: true,
+    windowSeconds: Math.round((Date.now() - eventLoopWindowStartedAt) / 1000),
+    current: summarizeEventLoopHistogram(eventLoopHistogram),
+    previous: previousEventLoopWindow,
+  };
+}
+
+/** 慢请求日志附带的事件循环摘要，区分「中央整体被阻塞」与「单接口慢」。 */
+function formatEventLoopHint() {
+  const stats = getEventLoopDelayStats();
+  if (!stats.enabled) return '';
+  return `，事件循环 p99 ${stats.current.p99Ms}ms / max ${stats.current.maxMs}ms（近 ${stats.windowSeconds}s）`;
+}
 
 /**
  * 耗时序列
@@ -121,7 +189,7 @@ export function httpMetricsMiddleware(req, res, next) {
     /** 流式发布、日志等长连接接口天然耗时较长，不计入慢请求告警 */
     const isStream = String(res.getHeader('Content-Type') || '').includes('ndjson') || String(res.getHeader('Content-Type') || '').includes('event-stream');
     if (!isStream && durationMs >= SLOW_REQUEST_THRESHOLD_MS) {
-      console.warn(`[metrics] 慢请求 ${name} ${res.statusCode} ${durationMs.toFixed(0)}ms`);
+      console.warn(`[metrics] 慢请求 ${name} ${res.statusCode} ${durationMs.toFixed(0)}ms${formatEventLoopHint()}`);
     }
   });
   next();
@@ -172,6 +240,7 @@ export function getMetricsSnapshot(extra = {}) {
     startedAt,
     uptimeSeconds: Math.round(process.uptime()),
     memoryMb: { rss: Math.round(memory.rss / 1048576), heapUsed: Math.round(memory.heapUsed / 1048576) },
+    eventLoopDelay: getEventLoopDelayStats(),
     timings: series,
     counters: Object.fromEntries(counters),
     ...extra,
@@ -182,4 +251,7 @@ export function getMetricsSnapshot(extra = {}) {
 export function resetMetrics() {
   timings.clear();
   counters.clear();
+  eventLoopHistogram?.reset();
+  eventLoopWindowStartedAt = Date.now();
+  previousEventLoopWindow = null;
 }

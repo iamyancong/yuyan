@@ -257,7 +257,8 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
         domainChangeRefreshTimer = window.setTimeout(() => {
           domainChangeRefreshTimer = null;
           void refreshActiveTab({ silent: true }).catch(() => undefined);
-        }, 500);
+          // 发布结束时会连续推送多个领域变化，1.5 秒合并为一次后台刷新，进行中的同查询请求会被复用
+        }, 1500);
         return;
       }
       if (domains.includes('backend-status') && targetIds.length) {

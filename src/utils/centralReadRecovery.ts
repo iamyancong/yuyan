@@ -1,6 +1,9 @@
 /** 中央读取恢复的默认退避间隔，快速失败时也覆盖 20 秒停机窗口。 */
 export const CENTRAL_RETRY_DELAYS = [1000, 2000, 4000, 6000, 8000];
 
+/** 中央列表类只读请求的单次超时；构建高峰时中央可能短暂排队，5 秒过于敏感。 */
+export const CENTRAL_LIST_READ_TIMEOUT_MS = 12000;
+
 /** 判断是否为主动取消，取消不应被展示为服务故障。 */
 export const isReadCancelled = (error: unknown): boolean => {
   const value = error as { name?: string; code?: string } | null;

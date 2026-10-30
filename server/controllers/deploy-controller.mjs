@@ -46,6 +46,9 @@ import axios from 'axios';
 import { DEPLOY_DB_PATH } from '../config/constants.mjs';
 import { endArchiveSseWithError } from '../services/archive-sse.mjs';
 import { buildSafeContentDisposition } from '../utils/http-header-utils.mjs';
+import { getProgressStreamStats, writeProgressStreamEvent } from '../services/progress-stream-writer.mjs';
+import { createRuntimeSnapshotCache } from '../services/runtime-snapshot-cache.mjs';
+import { findLatestStageEvent } from '../services/deploy-runtime-snapshot-service.mjs';
 
 import {
   deployTarget,
@@ -255,7 +258,7 @@ function serializeDeployTask(task) {
 
 /** 将进程内任务映射为列表页使用的轻量运行态快照。 */
 function serializeDeployTaskRuntime(task) {
-  const latestStage = [...task.events].reverse().find((event) => event.type === 'stage');
+  const latestStage = findLatestStageEvent(task.events);
   return {
     ...serializeDeployTask(task),
     events: latestStage ? [latestStage] : [],
@@ -268,10 +271,8 @@ function serializeDeployTaskRuntime(task) {
  * @param {Object} event - 进度事件
  */
 function writeProgressEvent(res, event) {
-  try {
-    if (!res.writableEnded && !res.destroyed) res.write(`${JSON.stringify(event)}\n`);
-  } catch {
-  }
+  /** 日志行在 100ms 窗口内合并写出，阶段/结果/错误立即写出，顺序不变 */
+  writeProgressStreamEvent(res, event);
 }
 
 /**
@@ -1299,6 +1300,8 @@ export async function handleGetRuntimeMetrics(_req, res) {
         sseEvents: getDeployEventStats(),
         commitMetaHydration: getCommitMetaHydrationStats(),
         backendStatusCache: getBackendStatusCacheStats(),
+        progressStream: getProgressStreamStats(),
+        sseReadySnapshotCache: sseReadySnapshotCache.getStats(),
         sqlite: { journalMode: db.prepare('PRAGMA journal_mode').get()?.journal_mode || 'unknown' },
       }),
     });
@@ -1334,6 +1337,9 @@ export async function buildTeamRuntimeSnapshotBatch() {
 }
 
 setDeployRuntimeSnapshotResolver(() => buildTeamRuntimeSnapshotBatch());
+
+/** SSE 建连时的运行态快照短缓存，避免重连风暴时每个连接都现算一次。 */
+const sseReadySnapshotCache = createRuntimeSnapshotCache();
 
 /** 聚合当前团队全部运行中的部署目标快照。 */
 export async function handleListTargetRuntimeSnapshots(_req, res) {
@@ -1401,7 +1407,7 @@ export async function handleDeployEvents(req, res) {
   res.once('finish', cleanup);
 
   try {
-    const runtime = await buildTeamRuntimeSnapshotBatch();
+    const runtime = await sseReadySnapshotCache.get(teamId, getDeployEventRevision(teamId), () => buildTeamRuntimeSnapshotBatch());
     if (!cleaned) {
       writeSseEvent('ready', {
         revision: getDeployEventRevision(teamId),

@@ -68,7 +68,8 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
   let pageActive = true;
   let refreshOnActivation = false;
   const showLoading = ref(false);
-  const refreshError = computed(() => (recovery.error.value ? getErrorMessage(recovery.error.value) : ''));
+  /** 仅在提示条可见时暴露错误，单次抖动或后台刷新重试期间保持页面安静。 */
+  const refreshError = computed(() => (recovery.noticeVisible.value && recovery.error.value ? getErrorMessage(recovery.error.value) : ''));
   const activeTabKey = ref<NginxDeployTabKey>('targets');
   const tabLoadedFlags = ref<Record<NginxDeployTabKey, boolean>>({
     targets: false,
@@ -78,7 +79,7 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
   const snapshotKeys = ref<Partial<Record<NginxDeployTabKey, string>>>({});
   const queryKey = () => `${activeTabKey.value}:${params?.getRefreshKey?.() || ''}`;
   const hasSnapshot = computed(() => snapshotKeys.value[activeTabKey.value] !== undefined);
-  const loading = computed(() => recovery.status.value === 'loading' && showLoading.value && !refreshError.value);
+  const loading = computed(() => ['loading', 'recovering'].includes(recovery.status.value) && showLoading.value && !refreshError.value);
   const refreshWarning = computed(() => hasSnapshot.value && recovery.retrying.value);
   const refreshTitle = computed(() =>
     recovery.retrying.value
@@ -129,14 +130,17 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
           await refreshRecordList({ ...options, signal });
         } else {
           /** 等待两个读取都结束，避免失败重试与上轮未结束请求交叉回写。 */
-          const results = await Promise.allSettled([refreshServerList(signal), refreshTargetList(signal)]);
-          const failed = results.find((result) => result.status === 'rejected');
-          if (failed?.status === 'rejected') throw failed.reason;
+          const [serverResult, targetResult] = await Promise.allSettled([refreshServerList(signal), refreshTargetList(signal)]);
+          if (targetResult.status === 'rejected') throw targetResult.reason;
+          /** 服务器列表只是目标页的辅助数据：失败时保留旧数据，不把整页标为异常。 */
+          if (serverResult.status === 'rejected' && !signal.aborted) {
+            console.warn('[NginxDeploy] 服务器列表刷新失败，保留上次数据', serverResult.reason);
+          }
         }
         signal.throwIfAborted();
         tabLoadedFlags.value[tabKey] = true;
         snapshotKeys.value[tabKey] = queryKey();
-      });
+      }, { quiet: Boolean(options.silent) });
     } catch (error) {
       if (options.propagateError) throw error;
     }

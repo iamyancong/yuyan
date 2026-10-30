@@ -50,3 +50,17 @@ export function mergeDeployRuntimeSnapshots({ targetIds, inMemorySnapshots, cent
   const runningCount = items.length;
   return items.map((snapshot) => ({ ...snapshot, runningCount }));
 }
+
+/**
+ * 从尾部查找最近一次阶段事件。
+ * @description 构建任务的事件数组可达数万条，原实现每次快照都 `[...events].reverse()` 整体复制，
+ * 多构建并发时每次运行态广播都要复制全部日志；改为从尾部回溯，不再分配整份副本。
+ * @param {object[]} events 任务事件
+ * @returns {object|undefined} 最近的阶段事件
+ */
+export function findLatestStageEvent(events = []) {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (events[index]?.type === 'stage') return events[index];
+  }
+  return undefined;
+}

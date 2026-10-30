@@ -1107,7 +1107,10 @@ function backupDeployDbFile(db, backupPath) {
  * @param {DatabaseSync} db 数据库实例
  */
 function applySqliteJournalMode(db) {
-  if (SQLITE_JOURNAL_MODE !== 'wal') return;
+  if (SQLITE_JOURNAL_MODE !== 'wal') {
+    console.warn(`[deploy-store] YUYAN_SQLITE_JOURNAL_MODE=${SQLITE_JOURNAL_MODE}，未启用 WAL：发布写库期间列表读取可能被阻塞`);
+    return;
+  }
   try {
     const row = db.prepare('PRAGMA journal_mode = WAL').get();
     if (String(row?.journal_mode || '').toLowerCase() === 'wal') {

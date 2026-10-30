@@ -1,5 +1,5 @@
 import { DeployResultUnconfirmed, reconcileDeployTask } from './deployTaskRecovery';
-import { isReadCancelled, isRecoverableReadError, recoverCentralRead } from '@/utils/centralReadRecovery';
+import { CENTRAL_LIST_READ_TIMEOUT_MS, isReadCancelled, isRecoverableReadError, recoverCentralRead } from '@/utils/centralReadRecovery';
 import axios from 'axios';
 import {
   deployBackendTargetFromDesktop,
@@ -938,7 +938,7 @@ client.interceptors.request.use(async (config) => {
 const unwrap = <T>(response: { data: { data: T } }) => response.data.data;
 
 /** 获取服务器列表 */
-export const listDeployServers = (signal?: AbortSignal) => client.get('/servers', { signal, timeout: 5000 }).then(unwrap<DeployServer[]>);
+export const listDeployServers = (signal?: AbortSignal) => client.get('/servers', { signal, timeout: CENTRAL_LIST_READ_TIMEOUT_MS }).then(unwrap<DeployServer[]>);
 
 /**
  * 保存部署服务器顺序。
@@ -1249,7 +1249,7 @@ export const getNextNginxInstancePort = (instanceId: number, excludeTargetId = 0
   client.get(`/nginx-instances/${instanceId}/next-port`, { params: excludeTargetId ? { excludeTargetId } : undefined }).then(unwrap<{ port: number }>);
 
 /** 获取部署目标列表 */
-export const listDeployTargets = (params?: DeployTargetQuery, signal?: AbortSignal) => client.get('/targets', { params, signal, timeout: 5000 }).then(unwrap<DeployTarget[]>);
+export const listDeployTargets = (params?: DeployTargetQuery, signal?: AbortSignal) => client.get('/targets', { params, signal, timeout: CENTRAL_LIST_READ_TIMEOUT_MS }).then(unwrap<DeployTarget[]>);
 
 /** 创建部署目标 */
 export const createDeployTarget = (payload: DeployTargetPayload) => client.post('/targets', payload).then(unwrap<DeployTarget>);
@@ -1263,7 +1263,7 @@ export const deleteDeployTarget = (id: number, expectedName: string) => client.d
 /** 获取中央 API 的发布记录列表。 */
 export const listDeployRecords = (params?: DeployRecordQuery, gitlabToken = '', gitlabHost = '', signal?: AbortSignal) =>
   client
-    .get('/records', { params, signal, timeout: 5000, headers: gitlabToken ? { 'X-GitLab-Token': gitlabToken, 'X-GitLab-Host': gitlabHost } : undefined })
+    .get('/records', { params, signal, timeout: CENTRAL_LIST_READ_TIMEOUT_MS, headers: gitlabToken ? { 'X-GitLab-Token': gitlabToken, 'X-GitLab-Host': gitlabHost } : undefined })
     .then(unwrap<DeployRecordPage>);
 
 /** 获取中央 API 的发布记录详情。 */
