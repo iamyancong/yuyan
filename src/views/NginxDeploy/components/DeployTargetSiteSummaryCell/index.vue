@@ -84,9 +84,12 @@ const handleBindClick = () => {
       </a>
 
       <!-- 关联实例信息胶囊 -->
-      <a-tooltip v-if="meta.instanceName" :title="`关联实例：${meta.instanceName} (${meta.instanceTypeLabel || '默认'})`">
+      <a-tooltip
+        v-if="meta.instanceName"
+        :title="`关联实例：${meta.instanceName} (${meta.instanceTypeLabel || '默认'})${meta.listenPort ? ` · 端口 :${meta.listenPort}` : ''}`"
+      >
         <span class="instance-pill">
-          {{ meta.instanceTypeLabel ? `[${meta.instanceTypeLabel}] ` : '' }}{{ meta.instanceName }}
+          {{ meta.instanceTypeLabel ? `[${meta.instanceTypeLabel}] ` : '' }}{{ meta.instanceName }}{{ meta.listenPort ? ` :${meta.listenPort}` : '' }}
         </span>
       </a-tooltip>
     </div>

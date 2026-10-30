@@ -19,6 +19,8 @@ export interface TargetSiteMeta {
   instanceName: string;
   /** 关联实例类型展示文案 */
   instanceTypeLabel: string;
+  /** 监听端口 */
+  listenPort?: number;
   /** 是否可以直接打开访问 */
   isAccessible: boolean;
   /** 访问地址 */
@@ -75,9 +77,13 @@ export function getSiteReadinessStatus(target?: DeployTarget | null): TargetSite
   const showSiteConfig = Boolean(target.nginxSiteManaged || hasDomain);
   const showDeploymentPath = Boolean(target.deployRoot?.trim());
   const domainText = hasDomain ? String(target.nginxServerName).trim() : '未填域名';
-  const portSuffix = hasPort ? `:${target.listenPort}` : '';
+  const listenPort = target.listenPort ? Number(target.listenPort) : undefined;
+  const portSuffix = listenPort ? `:${listenPort}` : '';
   const destinationText = `${target.deployRoot || '未设路径'}${portSuffix}`;
   const instanceTypeLabel = target.nginxInstanceType === 'managed' ? '托管' : target.nginxInstanceType === 'external' ? '已有' : '';
+  const rawInstanceName = target.nginxInstanceName || (target.nginxInstanceId ? `实例 #${target.nginxInstanceId}` : '');
+  const matchedPort = listenPort ? rawInstanceName.match(/^(.*\S)\s+:(\d+)$/) : null;
+  const instanceName = matchedPort && Number(matchedPort[2]) === listenPort ? matchedPort[1] : rawInstanceName;
 
   // 2. 可访问优先判定：只看 visitUrl 是否有效，彻底解耦端口和域名要求
   if (isAccessible) {
@@ -87,8 +93,9 @@ export function getSiteReadinessStatus(target?: DeployTarget | null): TargetSite
       statusColor: 'success',
       domainText,
       destinationText,
-      instanceName: target.nginxInstanceName || `实例 #${target.nginxInstanceId}`,
+      instanceName,
       instanceTypeLabel,
+      listenPort,
       isAccessible: true,
       visitUrl: String(target.visitUrl).trim(),
       showSiteConfig,
@@ -104,8 +111,9 @@ export function getSiteReadinessStatus(target?: DeployTarget | null): TargetSite
       statusColor: 'warning',
       domainText,
       destinationText,
-      instanceName: target.nginxInstanceName || `实例 #${target.nginxInstanceId}`,
+      instanceName,
       instanceTypeLabel,
+      listenPort,
       isAccessible: false,
       visitUrl: '',
       showSiteConfig,
@@ -120,8 +128,9 @@ export function getSiteReadinessStatus(target?: DeployTarget | null): TargetSite
     statusColor: 'processing',
     domainText,
     destinationText,
-    instanceName: target.nginxInstanceName || `实例 #${target.nginxInstanceId}`,
+    instanceName,
     instanceTypeLabel,
+    listenPort,
     isAccessible: false,
     visitUrl: '',
     showSiteConfig,
