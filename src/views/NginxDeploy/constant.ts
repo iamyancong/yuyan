@@ -336,6 +336,14 @@ export const serverColumns: YTableColumn[] = [
   { field: 'name', title: '服务器名称', minWidth: 220 },
   { field: 'host', title: 'IP / 域名', minWidth: 160 },
   { field: 'port', title: '端口', width: 80, align: 'center' },
+  {
+    field: 'connectionStatus',
+    title: '连接状态',
+    width: 116,
+    align: 'center',
+    showOverflow: false,
+    slots: { default: 'connectionStatus' },
+  },
   { field: 'username', title: '账号', width: 120 },
   {
     field: 'authType',

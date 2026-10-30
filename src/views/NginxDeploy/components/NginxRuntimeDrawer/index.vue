@@ -208,6 +208,7 @@ const openConnectedNginx = (instanceId: number) => {
           @select="applyDiscoveredNginx"
           @update-use-sudo="updateDiscoverySudo"
           @open-connected="openConnectedNginx"
+          @edit-server="(value) => emit('editServer', value)"
         />
       </template>
     </YssFormily>

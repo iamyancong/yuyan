@@ -91,6 +91,8 @@ watch(() => props.logs.length, async () => {
         </li>
       </ol>
 
+      <div v-if="$slots.guide" class="service-progress__guide"><slot name="guide" /></div>
+
       <section class="service-progress__logs" :class="{ 'is-collapsed': !logExpanded }">
         <button class="service-progress__logs-head" type="button" @click="logExpanded = !logExpanded">
           <span><i />实时运行日志 <small>{{ logs.length }} 条</small></span><UpOutlined v-if="logExpanded" /><DownOutlined v-else />

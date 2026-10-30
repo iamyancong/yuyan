@@ -4,7 +4,6 @@
  */
 
 import {
-  createServer,
   createTarget,
   createNginxInstance,
   deleteNginxInstance,
@@ -20,7 +19,6 @@ import {
   listTargets,
   listTargetRuntimeIndex,
   updateNginxInstance,
-  updateServer,
   updateTarget,
   closeDeployDb,
   getDeployDb,
@@ -54,7 +52,6 @@ import {
   readNginxConfig,
   rollbackRecord,
   saveNginxConfig,
-  testServer,
   testTargetNginx,
   undoRollbackRecord,
 } from '../services/deploy-service.mjs';
@@ -105,6 +102,12 @@ import { listActiveCentralDeployOperations } from '../services/artifact-job-serv
 import { mergeDeployRuntimeSnapshots } from '../services/deploy-runtime-snapshot-service.mjs';
 import { listDeployRootOptions } from '../services/deploy-root-options-service.mjs';
 import { discoverServerNginx } from '../services/nginx-discovery-service.mjs';
+import {
+  createServerWithVerification,
+  testSavedServerConnection,
+  updateServerWithVerification,
+} from '../services/server-connection-service.mjs';
+import { getSshFailureEventExtra, isSshConnectionError } from '../services/ssh-errors.mjs';
 import { getRequestContext, getRequestTeamId } from '../services/request-context.mjs';
 import { acquireTargetLease } from '../services/central-deploy-guard.mjs';
 import { getBackendStatusCacheStats, invalidateBackendStatus } from '../services/backend-status-cache.mjs';
@@ -215,6 +218,8 @@ async function createDeployTask(targetId, action, body = {}) {
     completed: false,
     result: null,
     error: null,
+    failureCode: '',
+    failure: null,
     promise: null,
     releaseTargetLease,
   };
@@ -240,6 +245,8 @@ function serializeDeployTask(task) {
     running: !task.completed,
     result: task.result,
     error: task.error,
+    failureCode: task.failureCode || '',
+    failure: task.failure || null,
     events: task.events,
     maxConcurrent: stats.maxConcurrent,
     runningCount: stats.runningCount,
@@ -295,7 +302,11 @@ function createProgressEmitter(task) {
     };
     if (event.type === 'stage') task.currentStage = event.stage;
     if (event.type === 'result') task.result = event.data;
-    if (event.type === 'error') task.error = event.message;
+    if (event.type === 'error') {
+      task.error = event.message;
+      if (event.code) task.failureCode = event.code;
+      if (event.failure) task.failure = event.failure;
+    }
     task.events.push(event);
     task.subscribers.forEach((res) => writeProgressEvent(res, event));
     if (event.type === 'stage') {
@@ -306,7 +317,7 @@ function createProgressEmitter(task) {
       void updatePersistentDeployTask(task.persistentId, { resultRef, logPath: event.data?.logPath || '', percent: 100 });
       publishDeployEvent({ teamId: task.teamId, domains: ['runtime'], targetIds: [task.targetId] });
     } else if (event.type === 'error') {
-      void updatePersistentDeployTask(task.persistentId, { error: event.message, stage: event.stage || task.currentStage });
+      void updatePersistentDeployTask(task.persistentId, { error: event.message, stage: event.stage || task.currentStage, failureCode: event.code || '' });
       publishDeployEvent({ teamId: task.teamId, domains: ['runtime'], targetIds: [task.targetId] });
     }
     return event;
@@ -316,14 +327,14 @@ function createProgressEmitter(task) {
     stage(stage, percent, message, detail = '') {
       return write({ type: 'stage', stage, percent, message, detail });
     },
-    log(level, message, stage = '', source = '') {
-      return write({ type: 'log', level, stage, message, ...(source ? { source } : {}) });
+    log(level, message, stage = '', source = '', extra = {}) {
+      return write({ type: 'log', level, stage, message, ...(source ? { source } : {}), ...(extra?.code ? { code: extra.code } : {}) });
     },
     result(data) {
       return write({ type: 'result', data });
     },
-    error(message, stage = '') {
-      return write({ type: 'error', stage, message });
+    error(message, stage = '', extra = {}) {
+      return write({ type: 'error', stage, message, ...(extra?.code ? { code: extra.code } : {}), ...(extra?.failure ? { failure: extra.failure } : {}) });
     },
   };
 }
@@ -497,11 +508,16 @@ function startDeployTask(task, runner, emit) {
     },
     async onError(failedTask, error) {
       failedTask.error = error instanceof Error ? error.message : String(error);
-      if (!hasTaskErrorEvent(failedTask)) emit.error(failedTask.error, failedTask.currentStage);
+      if (isSshConnectionError(error)) {
+        failedTask.failureCode = error.code;
+        failedTask.failure = error.toJSON();
+      }
+      if (!hasTaskErrorEvent(failedTask)) emit.error(failedTask.error, failedTask.currentStage, getSshFailureEventExtra(error));
       const failedRecord = error?.deployRecord || null;
       await updatePersistentDeployTask(failedTask.persistentId, {
         status: 'failed',
         error: failedTask.error,
+        failureCode: failedTask.failureCode || '',
         stage: failedTask.currentStage,
         resultRef: failedRecord?.id ? String(failedRecord.id) : '',
         logPath: failedRecord?.logPath || '',
@@ -820,7 +836,8 @@ export async function handleReorderServers(req, res) {
 export async function handleCreateServer(req, res) {
   try {
     validateServerPayload(req.body);
-    res.json({ success: true, data: await createServer(req.body) });
+    // #47：SSH 登录成功后才写库，失败返回 422 + {code, details}。
+    res.json({ success: true, data: await createServerWithVerification(req.body) });
   } catch (error) {
     sendError(res, error, 400);
   }
@@ -832,7 +849,7 @@ export async function handleCreateServer(req, res) {
 export async function handleUpdateServer(req, res) {
   try {
     validateServerPayload({ ...req.body, id: req.params.id });
-    const server = await updateServer(Number(req.params.id), req.body);
+    const server = await updateServerWithVerification(Number(req.params.id), req.body);
     if (!server) return sendError(res, new Error('服务器不存在'), 404);
     res.json({ success: true, data: server });
   } catch (error) {
@@ -860,7 +877,7 @@ export async function handleTestServer(req, res) {
     if (!(await getServerWithCredential(Number(req.params.id)))) {
       return sendError(res, new Error('服务器不存在'), 404);
     }
-    res.json({ success: true, data: await testServer(Number(req.params.id)) });
+    res.json({ success: true, data: await testSavedServerConnection(Number(req.params.id)) });
   } catch (error) {
     sendError(res, error, 400);
   }
@@ -912,6 +929,7 @@ export async function handleDiscoverServerNginx(req, res) {
       success: true,
       data: await discoverServerNginx(Number(req.params.id), {
         useSudo: req.query?.useSudo === undefined ? undefined : String(req.query.useSudo) === '1',
+        binaryPath: req.query?.binaryPath ? String(req.query.binaryPath) : '',
         signal: abortController.signal,
       }),
     });
@@ -2370,7 +2388,7 @@ export async function handleGenerateTargetOpenApi(req, res) {
       gitlabToken: getGitlabTokenFromRequest(req),
       signal: task.controller.signal,
       stage: (stageKey, percent, message, detail) => emit.stage(stageKey, percent, message, detail),
-      log: (level, message, stage, source) => emit.log(level, message, stage, source),
+      log: (level, message, stage, source, extra) => emit.log(level, message, stage, source, extra),
     });
     emit.stage('finish', 100, 'OpenAPI 生成完成', artifact.fileName);
     return artifact;
@@ -2433,7 +2451,7 @@ export async function handleRunBackendServiceAction(req, res) {
     emit.stage(action, 30, `${action} 后端服务`, '执行受控进程操作');
     const result = await runBackendServiceAction(targetId, action, {
       signal: task.controller.signal,
-      log: (level, message, stage, source) => emit.log(level, message, stage, source),
+      log: (level, message, stage, source, extra) => emit.log(level, message, stage, source, extra),
     });
     emit.stage('finish', 100, '服务操作完成', result.status);
     return result;

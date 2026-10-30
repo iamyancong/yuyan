@@ -1,0 +1,110 @@
+.ssh-failure-guide {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid #ffccc7;
+  border-radius: 10px;
+  background: #fff2f0;
+  color: var(--text-color, #1f2329);
+
+  &.is-timeout,
+  &.is-unreachable,
+  &.is-refused,
+  &.is-sudo_unavailable {
+    border-color: #ffe58f;
+    background: #fffbe6;
+
+    .ssh-failure-guide__icon {
+      color: #faad14;
+    }
+  }
+
+  &__header {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  &__icon {
+    margin-top: 2px;
+    color: #ff4d4f;
+    font-size: 18px;
+  }
+
+  &__heading {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+
+    strong {
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 22px;
+    }
+
+    span {
+      color: var(--text-color-secondary, #646a73);
+      font-size: 12px;
+    }
+  }
+
+  &__body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-left: 28px;
+  }
+
+  &__label {
+    color: var(--text-color-secondary, #646a73);
+    font-size: 12px;
+  }
+
+  &__reasons ul {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 20px;
+    margin: 4px 0 0;
+    padding: 0;
+    list-style: none;
+    font-size: 13px;
+    line-height: 20px;
+
+    li {
+      position: relative;
+      padding-left: 12px;
+
+      &::before {
+        position: absolute;
+        top: 8px;
+        left: 0;
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: currentColor;
+        content: '';
+        opacity: 0.45;
+      }
+    }
+  }
+
+  &__fix,
+  &__hint {
+    margin: 0;
+    font-size: 13px;
+    line-height: 20px;
+  }
+
+  &__hint {
+    color: var(--text-color-secondary, #646a73);
+  }
+
+  &__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-left: 28px;
+  }
+}

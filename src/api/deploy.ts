@@ -60,6 +60,26 @@ export interface DeployServer {
   defaultNginxInstanceId: number;
   nginxInstances: NginxInstance[];
   nginxRuntime: NginxRuntime | null;
+  /** SSH 主机指纹（SHA256:...）：首次连接记录，登录成功后发现变化自动更新，只作审计不拦截。 */
+  hostKeySha256?: string;
+  /** 最近一次 SSH 连接结果：ok / unknown / auth_failed / refused / timeout / unreachable。 */
+  connectionStatus?: DeployServerConnectionStatus;
+  connectionCheckedAt?: string;
+  connectionError?: string;
+  /** 保存时的 SSH 校验摘要，仅新增 / 编辑接口返回。 */
+  verification?: DeployServerVerification;
+}
+
+/** 服务器 SSH 连接状态。 */
+export type DeployServerConnectionStatus = 'ok' | 'unknown' | 'auth_failed' | 'refused' | 'timeout' | 'unreachable';
+
+/** 保存服务器时的 SSH 校验摘要。 */
+export interface DeployServerVerification {
+  checked: boolean;
+  account: string;
+  hostKeySha256: string;
+  sudo: { checked: boolean; ok: boolean; message: string };
+  warnings: string[];
 }
 
 /** 部署根目录占用目标摘要 */
@@ -123,7 +143,7 @@ export interface NginxDiscoveryAccessEndpoint {
 
 /** Nginx 扫描结构化诊断。 */
 export interface NginxDiscoveryDiagnostic {
-  code: 'binary_unresolved' | 'command_not_found' | 'permission_denied' | 'sudo_password_required' | 'config_invalid' | 'timeout' | 'no_sites' | 'truncated';
+  code: 'binary_unresolved' | 'binary_inferred' | 'command_not_found' | 'permission_denied' | 'sudo_password_required' | 'sudo_unavailable' | 'config_invalid' | 'timeout' | 'no_sites' | 'truncated';
   severity: 'info' | 'warning' | 'error';
   scope: 'scan' | 'runtime';
   summary: string;
@@ -179,6 +199,8 @@ export interface NginxDiscoveryResult {
   scannedAt: string;
   durationMs: number;
   useSudo: boolean;
+  /** sudo 不可用时降级为 false。 */
+  effectiveUseSudo?: boolean;
   runtimes: NginxDiscoveryRuntime[];
   diagnostics: NginxDiscoveryDiagnostic[];
   warnings: string[];
@@ -450,6 +472,8 @@ export interface DeployLogItem {
   stage?: string;
   /** 日志来源：tool 为 git / pnpm / vite 等工具原始输出；缺省为雨燕系统说明 */
   source?: DeployLogSource;
+  /** SSH 失败日志的错误码（#47），用于发布记录中还原修复引导。 */
+  code?: string;
   timestamp: string;
 }
 
@@ -538,6 +562,8 @@ export interface DeployTargetQuery {
   branch?: string;
   serverId?: number;
   projectType?: string;
+  /** 按 Nginx 实例筛选（#47）。 */
+  nginxInstanceId?: number;
 }
 
 /** 流式发布事件 */
@@ -545,9 +571,19 @@ export type DeployTaskResult = DeployRecord | OpenApiArtifact | BackendServiceRu
 
 export type DeployProgressEvent = (
   | { type: 'stage'; stage: string; percent: number; message: string; detail?: string; timestamp: string }
-  | { type: 'log'; level: DeployLogItem['level']; stage?: string; source?: DeployLogSource; message: string; timestamp: string }
+  | { type: 'log'; level: DeployLogItem['level']; stage?: string; source?: DeployLogSource; code?: string; message: string; timestamp: string }
   | { type: 'result'; data: DeployTaskResult; timestamp: string }
-  | { type: 'error'; stage?: string; message: string; errorSummary?: DeployErrorSummary; timestamp: string }) & { taskId?: number; targetId?: number };
+  | {
+      type: 'error';
+      stage?: string;
+      message: string;
+      errorSummary?: DeployErrorSummary;
+      /** SSH 失败错误码（#47）。 */
+      code?: string;
+      /** SSH 失败详情：原因、修改入口、定位字段等。 */
+      failure?: Record<string, unknown>;
+      timestamp: string;
+    }) & { taskId?: number; targetId?: number };
 
 /** 流式发布配置 */
 export interface DeployProgressOptions {
@@ -582,6 +618,10 @@ export interface DeployProgressSnapshot {
   running: boolean;
   result: DeployTaskResult | null;
   error: string | null;
+  /** SSH 失败错误码（#47），任务失败时由后端写入。 */
+  failureCode?: string;
+  /** SSH 失败详情。 */
+  failure?: Record<string, unknown> | null;
   events: DeployProgressEvent[];
   maxConcurrent: number;
   runningCount: number;
@@ -918,7 +958,8 @@ export const updateDeployServer = (id: number, payload: DeployServerPayload) => 
 export const deleteDeployServer = (id: number, expectedName: string) => client.delete(`/servers/${id}`, { params: { expectedName } });
 
 /** 测试服务器连接 */
-export const testDeployServer = (id: number) => client.post(`/servers/${id}/test`).then(unwrap<{ success: boolean; output: string }>);
+export const testDeployServer = (id: number) =>
+  client.post(`/servers/${id}/test`).then(unwrap<{ success: boolean; output: string; account?: string; sudo?: { checked: boolean; ok: boolean; message: string } }>);
 
 /**
  * 获取服务器前端部署根目录候选。
@@ -938,8 +979,11 @@ export const getDeployRootOptions = (
  * @param signal 取消信号
  * @returns Nginx 运行实例与站点候选
  */
-export const discoverServerNginx = (serverId: number, useSudo: boolean, signal?: AbortSignal) =>
-  client.get(`/servers/${serverId}/nginx-discovery`, { params: { useSudo: useSudo ? 1 : 0 }, signal }).then(unwrap<NginxDiscoveryResult>);
+export const discoverServerNginx = (serverId: number, useSudo: boolean, signal?: AbortSignal, binaryPath = '') =>
+  client.get(`/servers/${serverId}/nginx-discovery`, {
+    params: { useSudo: useSudo ? 1 : 0, ...(binaryPath.trim() ? { binaryPath: binaryPath.trim() } : {}) },
+    signal,
+  }).then(unwrap<NginxDiscoveryResult>);
 
 /** 获取服务器 Nginx 实例列表 */
 export const listNginxInstances = (serverId: number) => client.get(`/servers/${serverId}/nginx-instances`).then(unwrap<NginxInstance[]>);
@@ -1478,9 +1522,13 @@ async function consumeProgressStreamOnce<T extends DeployTaskResult = DeployReco
     const error = new Error(typeof data === 'string' ? data : data?.error || data?.message || '请求失败') as Error & {
       status?: number;
       data?: unknown;
+      code?: string;
+      details?: unknown;
     };
     error.status = response.status;
     error.data = data;
+    if (data && typeof data === 'object' && typeof data.code === 'string') error.code = data.code;
+    if (data && typeof data === 'object' && data.details) error.details = data.details;
     throw error;
   }
 
@@ -1500,7 +1548,13 @@ async function consumeProgressStreamOnce<T extends DeployTaskResult = DeployReco
     const event = JSON.parse(line) as DeployProgressEvent;
     options.onEvent?.(event);
     if (event.type === 'result') result = event.data as T;
-    if (event.type === 'error') throw Object.assign(new Error(event.message || '操作失败'), { code: 'DEPLOY_EXECUTION_FAILED' });
+    if (event.type === 'error') {
+      throw Object.assign(new Error(event.message || '操作失败'), {
+        code: 'DEPLOY_EXECUTION_FAILED',
+        ...(event.failure ? { failure: event.failure } : {}),
+        ...(event.code ? { failureCode: event.code } : {}),
+      });
+    }
   };
 
   while (true) {
@@ -1592,7 +1646,7 @@ export async function generateTargetOpenApiWithProgress(
         const level: 'info' | 'success' | 'warn' | 'error' = ['success', 'warn', 'error'].includes(log.level)
           ? log.level as 'success' | 'warn' | 'error'
           : 'info';
-        options.onEvent?.({ type: 'log', level, stage: log.stage, source: log.source, message: log.message, timestamp: log.timestamp });
+        options.onEvent?.({ type: 'log', level, stage: log.stage, source: log.source, code: log.code, message: log.message, timestamp: log.timestamp });
       }
       emittedLogCount = operation.logs.length;
     },
@@ -1632,7 +1686,7 @@ export async function deployTargetWithProgress(
           const level: 'info' | 'success' | 'warn' | 'error' = ['success', 'warn', 'error'].includes(log.level)
             ? log.level as 'success' | 'warn' | 'error'
             : 'info';
-          options.onEvent?.({ type: 'log', level, stage: log.stage || '', source: log.source, message: log.message, timestamp: log.timestamp });
+          options.onEvent?.({ type: 'log', level, stage: log.stage || '', source: log.source, code: log.code, message: log.message, timestamp: log.timestamp });
         }
         emittedLogCount = current.logs.length;
       },

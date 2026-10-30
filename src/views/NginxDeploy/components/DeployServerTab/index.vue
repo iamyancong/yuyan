@@ -4,8 +4,12 @@ import { YTable } from '@yss-ui/components/lite';
 import { useTableHeight } from '@yss-ui/hooks';
 import type { YTableActionConfig } from '@yss-ui/components/lite';
 import type { DeployServer } from '@/api/deploy';
-import { serverColumns } from '../../constant';
+import { formatDeployDateTime, serverColumns } from '../../constant';
 import DeployServerNginxCell from '../DeployServerNginxCell/index.vue';
+import { getServerConnectionStatusTag as getStatusTag } from '../../sshFailureGuide';
+
+/** 服务器连接状态标签（时间按本地时区展示） */
+const getServerConnectionStatusTag = (server: DeployServer) => getStatusTag(server, { formatTime: formatDeployDateTime });
 
 defineOptions({ name: 'DeployServerTab' });
 
@@ -270,9 +274,18 @@ const handleRowDragEnd = (params: any) => {
         id="nginx-deploy-servers"
         @row-dragend="handleRowDragEnd"
       >
-        <template #nginxRuntime="{ row }">
-          <DeployServerNginxCell :server="row" @click="(server) => emit('manageNginx', server)" />
+      <template #nginxRuntime="{ row }">
+        <DeployServerNginxCell :server="row" @click="(server) => emit('manageNginx', server)" />
+      </template>
+        <template #connectionStatus="{ row }">
+          <a-tooltip>
+            <template #title><span style="white-space: pre-line">{{ getServerConnectionStatusTag(row).tooltip }}</span></template>
+            <a-tag class="server-connection-status" :color="getServerConnectionStatusTag(row).color">
+              {{ getServerConnectionStatusTag(row).text }}
+            </a-tag>
+          </a-tooltip>
         </template>
+       
       </YTable>
     </div>
   </div>

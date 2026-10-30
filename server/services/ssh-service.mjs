@@ -6,6 +6,12 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { Client } from 'ssh2';
+import {
+  describeSshFailure,
+  formatHostKeyFingerprint,
+  normalizeHostKeyFingerprint,
+  toSshConnectionError,
+} from './ssh-errors.mjs';
 
 /**
  * Shell 参数安全转义
@@ -25,16 +31,44 @@ function remoteJoin(...parts) {
   return path.posix.join(...parts.map((item) => String(item || '')));
 }
 
+/** SSH 连接生命周期钩子，由存储层注册，用于记录 / 自动更新主机指纹与回写连接状态。 */
+let sshConnectionHooks = {};
+
+/**
+ * 注册 SSH 连接钩子。
+ * @param {{onHostKeyFirstSeen?: Function, onHostKeyChanged?: Function, onConnectionResult?: Function}} hooks - 钩子
+ */
+export function setSshConnectionHooks(hooks = {}) {
+  sshConnectionHooks = { ...hooks };
+}
+
+/**
+ * 安全执行连接钩子，钩子异常不影响 SSH 主流程。
+ * @param {string} name - 钩子名
+ * @param {...*} args - 参数
+ * @returns {Promise<*>} 钩子返回值
+ */
+async function runSshConnectionHook(name, ...args) {
+  const hook = sshConnectionHooks[name];
+  if (typeof hook !== 'function') return undefined;
+  try {
+    return await hook(...args);
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * 创建 SSH 连接配置
  * @param {Object} server - 服务器配置
+ * @param {{actualFingerprint?: string}} verifyState - 记录本次连接看到的主机指纹
  * @returns {Object} ssh2 连接配置
  */
-function createConnectConfig(server) {
+export function createConnectConfig(server, verifyState = {}) {
   const config = {
-    host: server.host,
+    host: String(server.host || '').trim(),
     port: Number(server.port || 22),
-    username: server.username,
+    username: String(server.username || '').trim(),
     readyTimeout: 15000,
   };
 
@@ -43,39 +77,129 @@ function createConnectConfig(server) {
     if (server.credential?.passphrase) config.passphrase = server.credential.passphrase;
   } else {
     config.password = server.credential?.password || '';
+    // 只开 keyboard-interactive 的服务器（PasswordAuthentication no）需要用同一密码回答提示。
+    config.tryKeyboard = true;
   }
+
+  // 只记录指纹、不拦截：主机密钥变化后只要能登录就照常执行，登录成功后自动更新指纹（#47 改判）。
+  config.hostVerifier = (key) => {
+    verifyState.actualFingerprint = formatHostKeyFingerprint(key);
+    return true;
+  };
 
   return config;
 }
 
 /**
+ * 用保存的密码回答 keyboard-interactive 的全部提示。
+ * @param {Object} server - 服务器配置
+ * @returns {(name: string, instructions: string, lang: string, prompts: Array, finish: Function) => void} 事件处理器
+ */
+export function createKeyboardInteractiveHandler(server) {
+  const password = server.credential?.password || '';
+  return (_name, _instructions, _lang, prompts, finish) => {
+    finish((Array.isArray(prompts) ? prompts : []).map(() => password));
+  };
+}
+
+/**
  * 创建 SSH 连接
  * @param {Object} server - 服务器配置
+ * @param {{persist?: boolean, createClient?: () => Client}} options - 连接选项；persist=false 时不记录指纹、不回写状态
  * @returns {Promise<Client>} SSH 客户端
  */
-export function connectSsh(server) {
+export function connectSsh(server, options = {}) {
+  const verifyState = {};
+  const persist = options.persist !== false && Boolean(server?.id);
   return new Promise((resolve, reject) => {
-    const conn = new Client();
+    const conn = options.createClient ? options.createClient() : new Client();
+    let settled = false;
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      reject(toSshConnectionError(error, server));
+    };
     conn
-      .on('ready', () => resolve(conn))
-      .on('error', reject)
-      .connect(createConnectConfig(server));
-  });
+      .on('ready', () => {
+        if (settled) return;
+        settled = true;
+        conn.hostKeyFingerprint = verifyState.actualFingerprint || '';
+        resolve(conn);
+      })
+      .on('error', fail)
+      .on('close', () => fail(new Error('SSH 连接在登录完成前被服务器关闭')));
+    if (server.authType !== 'privateKey') conn.on('keyboard-interactive', createKeyboardInteractiveHandler(server));
+    try {
+      conn.connect(createConnectConfig(server, verifyState));
+    } catch (error) {
+      fail(error);
+    }
+  }).then(
+    async (conn) => {
+      if (persist && conn.hostKeyFingerprint) {
+        const storedFingerprint = normalizeHostKeyFingerprint(server.hostKeySha256);
+        if (!storedFingerprint) {
+          await runSshConnectionHook('onHostKeyFirstSeen', server, conn.hostKeyFingerprint);
+        } else if (storedFingerprint !== conn.hostKeyFingerprint) {
+          // 已登录成功：服务器重装或换了密钥，自动更新指纹并留审计，不打断当前操作。
+          await runSshConnectionHook('onHostKeyChanged', server, storedFingerprint, conn.hostKeyFingerprint);
+        }
+        server.hostKeySha256 = conn.hostKeyFingerprint;
+      }
+      if (persist) {
+        await runSshConnectionHook('onConnectionResult', server, { ok: true });
+      }
+      return conn;
+    },
+    async (error) => {
+      if (persist) await runSshConnectionHook('onConnectionResult', server, { ok: false, error });
+      throw error;
+    },
+  );
 }
 
 /**
  * 使用 SSH 连接执行任务
  * @param {Object} server - 服务器配置
  * @param {(conn: Client) => Promise<*>} task - 任务函数
+ * @param {{persist?: boolean, createClient?: () => Client}} options - 连接选项
  * @returns {Promise<*>} 任务结果
  */
-export async function withSsh(server, task) {
-  const conn = await connectSsh(server);
+export async function withSsh(server, task, options = {}) {
+  const conn = await connectSsh(server, options);
   try {
     return await task(conn);
   } finally {
     conn.end();
   }
+}
+
+/** 连接探测输出标记。 */
+const PROBE_READY_MARKER = 'yuyan-ops-ready';
+
+/**
+ * 探测服务器 SSH 登录（保存前校验与「检测连接」共用）。
+ * @param {Object} server - 服务器配置（可以是尚未保存的表单）
+ * @param {{useSudo?: boolean, checkLogin?: boolean, persist?: boolean, createClient?: () => Client}} options - 探测选项
+ * @returns {Promise<{account: string, output: string, hostKeySha256: string, sudo: {checked: boolean, ok: boolean, message: string}}>} 探测结果
+ */
+export async function probeServerConnection(server, options = {}) {
+  return withSsh(server, async (conn) => {
+    const result = await execSsh(conn, `echo ${PROBE_READY_MARKER} && whoami`, { label: '连接测试', timeoutMs: 15_000 });
+    const output = String(result.stdout || '').trim();
+    const account = output.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && line !== PROBE_READY_MARKER).pop() || '';
+    const sudo = { checked: false, ok: true, message: '' };
+    if (options.useSudo) {
+      sudo.checked = true;
+      const sudoResult = await execSsh(conn, 'sudo -n true', { label: 'sudo 检查', allowFailure: true, timeoutMs: 10_000 });
+      sudo.ok = sudoResult.code === 0;
+      if (!sudo.ok) {
+        sudo.message = describeSshFailure('sudo_unavailable', { serverName: server.name, host: server.host }).message;
+        sudo.detail = String(sudoResult.stderr || sudoResult.stdout || '').trim().slice(0, 300);
+      }
+    }
+    return { account, output, hostKeySha256: conn.hostKeyFingerprint || '', sudo };
+  }, { persist: options.persist ?? false, createClient: options.createClient });
 }
 
 /**

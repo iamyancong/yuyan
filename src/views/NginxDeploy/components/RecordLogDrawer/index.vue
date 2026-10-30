@@ -5,6 +5,8 @@ import { openExternal } from '@/utils/open';
 import type { DeployRecord } from '@/api/deploy';
 import { useRecordLog } from './hooks/useRecordLog';
 import DeployLogLegend from '../DeployLogLegend/index.vue';
+import SshFailureGuideCard from '../SshFailureGuideCard/index.vue';
+import { extractSshFailureFromLogs } from '../../sshFailureGuide';
 
 defineOptions({ name: 'RecordLogDrawer' });
 
@@ -32,6 +34,9 @@ const {
   jumpToErrorLine,
   handleDrawerAfterOpenChange,
 } = useRecordLog(props);
+
+/** 失败记录中的 SSH 失败引导（#47），只读展示 */
+const sshFailure = computed(() => (props.record?.status === 'failed' ? extractSshFailureFromLogs(props.record?.logs || []) : null));
 
 /** 抽屉打开状态 */
 const drawerOpen = computed({
@@ -61,6 +66,8 @@ const drawerOpen = computed({
             <strong v-else>{{ item.value }}</strong>
           </div>
         </div>
+
+        <SshFailureGuideCard v-if="sshFailure" :failure="sshFailure" readonly class="record-log-ssh-guide" />
 
         <!-- 日志工具栏 -->
         <div class="record-log-toolbar">

@@ -80,8 +80,12 @@ const updateRuntimeInstanceForm = (values: Partial<NginxInstancePayload>) => {
     :form-key="serverState.serverFormKey.value"
     :form="serverState.serverForm"
     @update:form="updateServerForm"
+    :failure="serverState.serverSaveFailure.value"
+    :focus-request="serverState.serverFocusRequest.value"
+    :duplicate="serverState.serverDuplicate.value"
     @form-ref-change="setServerFormRef"
     @save="serverState.saveServer"
+    @view-duplicate="serverState.viewDuplicateServer"
   />
   <NginxRuntimeDrawer
     v-if="runtimeDrawerEverOpened"
@@ -118,6 +122,7 @@ const updateRuntimeInstanceForm = (values: Partial<NginxInstancePayload>) => {
     @edit-instance="serverState.openEditNginxInstance"
     @save-instance="serverState.saveActiveNginxInstance"
     @delete-instance="serverState.deleteActiveNginxInstance"
+    @edit-server="(value: any) => serverState.runtimeServer.value && serverState.openEditServer(serverState.runtimeServer.value, value)"
     @init="serverState.initServerNginxRuntime"
     @action="serverState.runServerNginxRuntimeAction"
     @download-archive="serverState.downloadActiveNginxArchive"

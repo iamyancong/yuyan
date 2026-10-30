@@ -5,6 +5,7 @@ import {
   renderProjectSelectOptionLabel,
   renderTwoLineSelectOption,
 } from './hooks/useDeployProjectOptions';
+import { extractSshFailure } from './sshFailureGuide';
 import type {
   DeployProjectContext,
   DeployTargetProjectDraft,
@@ -93,6 +94,9 @@ export function getServerOrderErrorMessage(error: unknown): string {
  * @returns 中文连接检测失败提示
  */
 export function getServerConnectionErrorMessage(error: unknown, serverName: string): string {
+  // 后端已按错误码给出中文说明（#47），优先使用；旧接口仍按关键字兜底。
+  const failure = extractSshFailure(error);
+  if (failure) return failure.message;
   const rawMessage = getErrorMessage(error).toLowerCase();
   const serverLabel = `服务器“${serverName}”`;
   if (/authentication|permission denied|all configured authentication methods failed|bad password/.test(rawMessage)) {

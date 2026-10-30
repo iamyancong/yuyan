@@ -2,8 +2,11 @@
 import { computed, defineAsyncComponent, ref, unref, watch } from 'vue';
 import { YButton } from '@yss-ui/components/lite';
 import { openExternal } from '@/utils/open';
-import type { DeployTargetPayload } from '@/api/deploy';
+import message from 'ant-design-vue/es/message';
+import type { DeployServer, DeployTargetPayload } from '@/api/deploy';
 import type { FormilyRef } from '../../types';
+import type { SshFailureAction, SshFailureInfo } from '../../sshFailureGuide';
+import SshFailureGuideCard from '../SshFailureGuideCard/index.vue';
 
 defineOptions({ name: 'NginxDeployOverlays' });
 
@@ -41,6 +44,40 @@ const nginxConfigEverOpened = ref(false);
 const recordLogEverOpened = ref(false);
 const backendOverlaysEverOpened = ref(false);
 const conflictDiffModalEverOpened = ref(false);
+
+/** 当前进度对应的服务器 ID：优先使用失败详情，其次发布目标或回滚记录。 */
+const resolveProgressServerId = (failure: SshFailureInfo | null) => {
+  const targetId = props.progressState?.activePublishTarget?.value?.id || props.progressState?.activeRecord?.value?.targetId;
+  const target = props.targetState?.targets?.value?.find((item: any) => item.id === targetId);
+  return Number(failure?.serverId || props.progressState?.activePublishTarget?.value?.serverId || target?.serverId || 0);
+};
+
+/**
+ * 处理 SSH 失败引导按钮：修改类动作打开编辑服务器并聚焦字段，重试沿用上次参数。
+ * @param action 引导动作
+ */
+const handleSshAction = async (action: SshFailureAction) => {
+  const failure = (props.progressState?.progressState?.sshFailure || null) as SshFailureInfo | null;
+  if (action.key === 'retry') {
+    await props.progressState.retryLastOperation();
+    return;
+  }
+  const serverId = resolveProgressServerId(failure);
+  if (!serverId) {
+    message.warning('找不到对应服务器，请到「服务器管理」中处理');
+    return;
+  }
+  let server = props.serverState.servers.value.find((item: DeployServer) => item.id === serverId);
+  if (!server) {
+    await props.serverState.refreshServerList().catch(() => undefined);
+    server = props.serverState.servers.value.find((item: DeployServer) => item.id === serverId);
+  }
+  if (!server) {
+    message.warning('找不到对应服务器，请到「服务器管理」中处理');
+    return;
+  }
+  await props.serverState.openEditServer(server, { focusField: action.focusField, failure });
+};
 
 watch(
   () =>
@@ -228,6 +265,8 @@ const updateTargetForm = (values: Partial<DeployTargetPayload>) => {
     @republish="progressState.republishFromConfirm"
     @stop="progressState.stopCurrentPublish"
     @view-record="handleViewRecord"
+    :ssh-failure="progressState.progressState.sshFailure"
+    @ssh-action="handleSshAction"
   />
 
   <RollbackConfirmModal
@@ -255,7 +294,11 @@ const updateTargetForm = (values: Partial<DeployTargetPayload>) => {
       :detail="progressState.progressState.detail"
       :logs="progressState.progressState.logs"
       :running="progressState.progressState.running"
-    />
+    >
+      <template v-if="!progressState.progressState.running && progressState.progressState.sshFailure" #guide>
+        <SshFailureGuideCard :failure="progressState.progressState.sshFailure" @action="handleSshAction" />
+      </template>
+    </BackendServiceProgressModal>
 
     <a-modal
       v-else
@@ -267,6 +310,12 @@ const updateTargetForm = (values: Partial<DeployTargetPayload>) => {
       :closable="!progressState.progressState.running"
       :maskClosable="!progressState.progressState.running"
     >
+      <SshFailureGuideCard
+        v-if="!progressState.progressState.running && progressState.progressState.sshFailure"
+        style="margin-bottom: 16px"
+        :failure="progressState.progressState.sshFailure"
+        @action="handleSshAction"
+      />
       <ProgressPanel
         :result-unconfirmed="progressState.resultUnconfirmed.value"
         :percent="progressState.progressState.percent"

@@ -158,3 +158,20 @@
     justify-content: flex-start;
   }
 }
+
+.existing-nginx-discovery__binary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-color-secondary);
+  font-size: 12px;
+
+  > span {
+    flex: none;
+  }
+
+  :deep(.ant-input-affix-wrapper) {
+    flex: 1 1 auto;
+    max-width: 360px;
+  }
+}

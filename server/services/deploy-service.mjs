@@ -36,6 +36,7 @@ import {
   withSsh,
   writeRemoteTextWithBackup,
 } from './ssh-service.mjs';
+import { getSshFailureEventExtra, logOperationFailure } from './ssh-errors.mjs';
 import { deployBackendTarget, restoreBackendRecord } from './backend-runtime-service.mjs';
 import {
   applyLowProcessPriority,
@@ -2003,9 +2004,9 @@ export async function deployTarget(targetId, payload, emit) {
   const operator = String(payload.operator || '').trim() || '未知操作人';
   const signal = payload.signal;
   const logs = [];
-  const log = (level, message, stage = '', source = '') => {
-    logs.push({ level, message, stage, ...(source ? { source } : {}), timestamp: new Date().toISOString() });
-    emit?.log(level, message, stage, source);
+  const log = (level, message, stage = '', source = '', extra = {}) => {
+    logs.push({ level, message, stage, ...(source ? { source } : {}), ...(extra?.code ? { code: extra.code } : {}), timestamp: new Date().toISOString() });
+    emit?.log(level, message, stage, source, extra);
   };
   log('info', `操作人 ${operator} 发起发布`, 'audit');
   log('info', `保留子目录：${protectedSubDirs.length ? protectedSubDirs.join('、') : '无'}`, 'validate');
@@ -2452,7 +2453,7 @@ export async function deployTarget(targetId, payload, emit) {
       return stoppedRecord;
     }
 
-    log('error', error instanceof Error ? error.message : String(error), 'error');
+    logOperationFailure(log, error, 'error');
     if (backupCreated && !deployRootRestored) {
       deployRootRestored = await withSsh(server, async (conn) => restoreDeployRootFromBackup(conn, target, backupPath, '恢复失败发布前目录', protectedSubDirs, deployUseSudo)).catch(() => false);
       if (deployRootRestored) {
@@ -2485,7 +2486,7 @@ export async function deployTarget(targetId, payload, emit) {
     if (pruneResult.deletedRecords > 0) {
       failedRecord = await updateRecord(record.id, { logs });
     }
-    emit?.error(error instanceof Error ? error.message : String(error), currentStage);
+    emit?.error(error instanceof Error ? error.message : String(error), currentStage, getSshFailureEventExtra(error));
     throw error;
   } finally {
     await fs.rm(path.join(repoDir, '.yuyan.npmrc'), { force: true }).catch(() => {});
@@ -2563,9 +2564,9 @@ async function restoreRecordVersion(recordId, payload, emit, action) {
   let rollbackRootRestored = false;
   let currentStage = 'rollback';
   const logs = [];
-  const log = (level, message, stage = '', source = '') => {
-    logs.push({ level, message, stage, ...(source ? { source } : {}), timestamp: new Date().toISOString() });
-    emit?.log(level, message, stage, source);
+  const log = (level, message, stage = '', source = '', extra = {}) => {
+    logs.push({ level, message, stage, ...(source ? { source } : {}), ...(extra?.code ? { code: extra.code } : {}), timestamp: new Date().toISOString() });
+    emit?.log(level, message, stage, source, extra);
   };
   log('info', `操作人 ${operator} 发起${meta.operationText}，来源发布记录 #${sourceRecord.id}`, 'audit');
   log('info', `本次恢复目标：#${restoredRecord.id}${restoredRecord.commitSha ? ` ${restoredRecord.commitSha.slice(0, 8)}` : ''}${restoredRecord.commitMessage ? ` ${restoredRecord.commitMessage}` : ''}`, 'validate');
@@ -2633,7 +2634,7 @@ async function restoreRecordVersion(recordId, payload, emit, action) {
     emit?.result(successRecord);
     return successRecord;
   } catch (error) {
-    log('error', error instanceof Error ? error.message : String(error), 'error');
+    logOperationFailure(log, error, 'error');
     if (currentBackup) {
       rollbackRootRestored = await withSsh(server, async (conn) => restoreDeployRootFromBackup(conn, target, currentBackup, '恢复操作前目录', protectedSubDirs, deployUseSudo)).catch(() => false);
       if (rollbackRootRestored) {
@@ -2656,7 +2657,7 @@ async function restoreRecordVersion(recordId, payload, emit, action) {
     if (pruneResult.deletedRecords > 0) {
       failedRecord = await updateRecord(restoreRecord.id, { logs });
     }
-    emit?.error(error instanceof Error ? error.message : String(error), currentStage);
+    emit?.error(error instanceof Error ? error.message : String(error), currentStage, getSshFailureEventExtra(error));
     throw error;
   }
 }

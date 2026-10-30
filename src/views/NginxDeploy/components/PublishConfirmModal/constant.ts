@@ -1,4 +1,5 @@
 import type { DeployProgressEvent, DeployTarget } from '@/api/deploy';
+import type { SshFailureInfo } from '../../sshFailureGuide';
 import { formatDeployDateTime, type PublishStage, type PublishStageStatus } from '../../constant';
 import { cleanLogMessage } from '../RecordLogDrawer/constant';
 import { presentDeployLogMessage, shouldHideLevelTag } from '../../logPresentation';
@@ -43,6 +44,8 @@ export interface PublishConfirmModalProps {
   currentUserName?: string;
   /** 当前用户权限角色 */
   userRole?: string;
+  /** SSH 连接阶段失败详情（#47） */
+  sshFailure?: SshFailureInfo | null;
 }
 
 /** 发布启动选项 */

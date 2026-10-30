@@ -1,6 +1,7 @@
 import { onScopeDispose, ref, watch } from 'vue';
 import { discoverServerNginx, type NginxDiscoveryResult } from '@/api/deploy';
 import { hasDiscoveryCandidateKey } from '../presentationPolicy';
+import { extractSshFailure, formatScanErrorMessage, type SshFailureInfo } from '../../../../../sshFailureGuide';
 
 /** 智能发现 Hook 参数。 */
 interface UseExistingNginxDiscoveryParams {
@@ -15,7 +16,8 @@ interface UseExistingNginxDiscoveryParams {
  * @returns 用户可读错误
  */
 function getDiscoveryErrorMessage(error: any): string {
-  return error?.response?.data?.error || error?.message || 'Nginx 扫描失败，可继续手动填写';
+  // 后端 SSH 失败已给出中文说明；其他英文底层错误统一转为中文兜底（#47）。
+  return formatScanErrorMessage(error, 'Nginx 扫描失败，可重试或继续手动填写');
 }
 
 /**
@@ -27,6 +29,10 @@ export function useExistingNginxDiscovery(params: UseExistingNginxDiscoveryParam
   const loading = ref(false);
   const result = ref<NginxDiscoveryResult | null>(null);
   const errorMessage = ref('');
+  /** SSH 失败详情：用于展示「编辑服务器凭据」等修复入口 */
+  const failure = ref<SshFailureInfo | null>(null);
+  /** 手动指定的 Nginx 可执行文件路径 */
+  const binaryPath = ref('');
   const selectedKey = ref('');
   const staleResult = ref(false);
   let requestSequence = 0;
@@ -55,8 +61,9 @@ export function useExistingNginxDiscovery(params: UseExistingNginxDiscoveryParam
     abortController = new AbortController();
     loading.value = true;
     errorMessage.value = '';
+    failure.value = null;
     try {
-      const response = await discoverServerNginx(serverId, params.useSudo(), abortController.signal);
+      const response = await discoverServerNginx(serverId, params.useSudo(), abortController.signal, binaryPath.value);
       if (sequence !== requestSequence || !params.open()) return;
       const selectedStillExists = hasDiscoveryCandidateKey(response.runtimes, selectedKey.value);
       result.value = response;
@@ -65,6 +72,7 @@ export function useExistingNginxDiscovery(params: UseExistingNginxDiscoveryParam
     } catch (error: any) {
       if (sequence !== requestSequence || error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
       errorMessage.value = getDiscoveryErrorMessage(error);
+      failure.value = extractSshFailure(error);
       staleResult.value = Boolean(result.value);
     } finally {
       if (sequence === requestSequence) loading.value = false;
@@ -78,6 +86,7 @@ export function useExistingNginxDiscovery(params: UseExistingNginxDiscoveryParam
         cancelScan();
         result.value = null;
         errorMessage.value = '';
+        failure.value = null;
         selectedKey.value = '';
         staleResult.value = false;
         return;
@@ -93,7 +102,9 @@ export function useExistingNginxDiscovery(params: UseExistingNginxDiscoveryParam
   onScopeDispose(cancelScan);
 
   return {
+    binaryPath,
     errorMessage,
+    failure,
     loading,
     result,
     scan,

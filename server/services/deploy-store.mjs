@@ -11,7 +11,9 @@ import { execSync } from 'node:child_process';
 import { DEPLOY_DATA_DIR, DEPLOY_DB_PATH, DEPLOY_LOG_DIR, DEPLOY_RECORD_KEEP_PER_PROJECT, DEPLOY_SECRET_KEY, SQLITE_JOURNAL_MODE } from '../config/constants.mjs';
 import { enqueueCommitMetaHydration, hasChineseText, resolveGitlabToken } from './commit-meta-service.mjs';
 import { normalizeBackendConfig, normalizeBackendServiceName, normalizeHealthCheckPath, parseJavaMajorVersion, validateBackendDeployRoot } from './backend-domain.mjs';
-import { getRequestTeamId, SHARED_DEPLOY_WORKSPACE_ID } from './request-context.mjs';
+import { getRequestContext, getRequestTeamId, SHARED_DEPLOY_WORKSPACE_ID } from './request-context.mjs';
+import { isSshConnectionError, normalizeHostKeyFingerprint, SSH_CONNECTION_STATUS_CODES } from './ssh-errors.mjs';
+import { setSshConnectionHooks } from './ssh-service.mjs';
 
 /** 兼容旧调用方：提交元信息查询已迁移到独立服务（带超时、缓存与并发合并） */
 export { fetchGitlabCommitMeta } from './commit-meta-service.mjs';
@@ -634,6 +636,10 @@ function mapServer(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     hasCredential: Boolean(row.encrypted_secret),
+    hostKeySha256: row.host_key_sha256 || '',
+    connectionStatus: row.connection_status || 'unknown',
+    connectionCheckedAt: row.connection_checked_at || '',
+    connectionError: row.connection_error || '',
     defaultNginxInstanceId: Number(row.default_nginx_instance_id || 0),
     nginxInstances: row.nginx_instances || [],
     nginxRuntime: row.nginx_runtime_id
@@ -1378,6 +1384,7 @@ function applyBackendSchemaMigration(db) {
 
   const taskColumns = getTableColumns(db, 'deploy_tasks');
   if (!taskColumns.includes('result_json')) db.exec('ALTER TABLE deploy_tasks ADD COLUMN result_json TEXT');
+  if (!taskColumns.includes('failure_code')) db.exec('ALTER TABLE deploy_tasks ADD COLUMN failure_code TEXT');
 
   const jdkColumns = getTableColumns(db, 'build_jdks');
   if (!jdkColumns.includes('java_version')) db.exec('ALTER TABLE build_jdks ADD COLUMN java_version TEXT');
@@ -1899,6 +1906,32 @@ export async function getDeployDb() {
   if (!serverColumns.includes('sort_order')) {
     dbInstance.exec('ALTER TABLE deploy_servers ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0');
   }
+  // #47：SSH 主机指纹（只记录、变化时自动更新）与连接状态。
+  if (!serverColumns.includes('host_key_sha256')) {
+    dbInstance.exec('ALTER TABLE deploy_servers ADD COLUMN host_key_sha256 TEXT');
+  }
+  if (!serverColumns.includes('connection_status')) {
+    dbInstance.exec("ALTER TABLE deploy_servers ADD COLUMN connection_status TEXT NOT NULL DEFAULT 'unknown'");
+  }
+  if (!serverColumns.includes('connection_checked_at')) {
+    dbInstance.exec('ALTER TABLE deploy_servers ADD COLUMN connection_checked_at TEXT');
+  }
+  if (!serverColumns.includes('connection_error')) {
+    dbInstance.exec('ALTER TABLE deploy_servers ADD COLUMN connection_error TEXT');
+  }
+  dbInstance.exec(`
+    CREATE TABLE IF NOT EXISTS server_host_key_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      team_id TEXT,
+      server_id INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      previous_sha256 TEXT,
+      next_sha256 TEXT,
+      operator TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_server_host_key_events_server ON server_host_key_events(server_id, id DESC);
+  `);
   const targetColumns = getTableColumns(dbInstance, 'deploy_targets');
   if (!targetColumns.includes('project_description')) {
     dbInstance.exec('ALTER TABLE deploy_targets ADD COLUMN project_description TEXT');
@@ -2308,6 +2341,186 @@ export async function reorderServers(serverIds) {
   return listServers();
 }
 
+// 所有 SSH 入口统一经过 ssh-service.connectSsh：首次连接记录指纹，指纹变化（已登录成功）自动更新并留审计，
+// 失败与恢复回写连接状态（#47）。
+setSshConnectionHooks({
+  onHostKeyFirstSeen: (server, fingerprint) => recordServerHostKeyFirstSeen(server.id, fingerprint),
+  onHostKeyChanged: (server, previous, next) => recordServerHostKeyAutoUpdated(server.id, previous, next),
+  onConnectionResult: async (server, result) => {
+    if (result.ok) {
+      await recordServerConnectionResult(server.id, { ok: true });
+      return;
+    }
+    const error = result.error;
+    if (!isSshConnectionError(error) || !SSH_CONNECTION_STATUS_CODES.has(error.code)) return;
+    await recordServerConnectionResult(server.id, { ok: false, code: error.code, message: error.message });
+  },
+});
+
+/**
+ * 规范化服务器凭据：密码与私钥口令去掉首尾空格（#47），私钥原样保存。
+ * @param {Object} payload - 服务器参数
+ * @returns {{password: string, privateKey: string, passphrase: string}} 凭据
+ */
+export function normalizeServerCredentialPayload(payload = {}) {
+  return {
+    password: String(payload.password ?? '').trim(),
+    privateKey: String(payload.privateKey ?? '').trim() ? String(payload.privateKey) : '',
+    passphrase: String(payload.passphrase ?? '').trim(),
+  };
+}
+
+/**
+ * 判断本次保存是否重新填写了登录凭据。
+ * @param {Object} payload - 服务器参数
+ * @returns {boolean} 是否包含新凭据
+ */
+export function hasServerCredentialPayload(payload = {}) {
+  const credential = normalizeServerCredentialPayload(payload);
+  return Boolean(credential.password || credential.privateKey || credential.passphrase);
+}
+
+/**
+ * 写入主机密钥审计事件。
+ * @param {DatabaseSync} db - 数据库
+ * @param {number} serverId - 服务器 ID
+ * @param {'tofu'|'auto_updated'} action - 事件类型：首次记录 / 登录成功后自动更新
+ * @param {string} previousSha256 - 原指纹
+ * @param {string} nextSha256 - 新指纹
+ * @param {string} operator - 操作人（自动更新时为空）
+ */
+function appendServerHostKeyEvent(db, serverId, action, previousSha256, nextSha256, operator = '') {
+  db.prepare(
+    `INSERT INTO server_host_key_events (team_id, server_id, action, previous_sha256, next_sha256, operator, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(getRequestTeamId(), Number(serverId), action, previousSha256 || '', nextSha256 || '', operator || '', now());
+}
+
+/**
+ * 指纹自动更新写中央审计（尽量写，失败不影响 SSH 操作；本机旧上下文没有中央审计链）。
+ * @param {number} serverId - 服务器 ID
+ * @param {string} previousSha256 - 原指纹
+ * @param {string} nextSha256 - 新指纹
+ * @returns {Promise<void>}
+ */
+async function appendHostKeyCentralAudit(serverId, previousSha256, nextSha256) {
+  const context = getRequestContext();
+  if (context?.legacy) return;
+  try {
+    // 动态导入：central-identity-service 静态依赖本模块。
+    const { appendCentralAudit } = await import('./central-identity-service.mjs');
+    await appendCentralAudit(context, {
+      action: 'server_host_key_auto_updated',
+      resourceType: 'server',
+      resourceId: Number(serverId),
+      result: 'auto_updated',
+      previousFingerprint: previousSha256 || '',
+      fingerprint: nextSha256 || '',
+    });
+  } catch {
+    // 中央审计 best effort。
+  }
+}
+
+/**
+ * 保存前校验成功后回写指纹和连接状态。
+ * @param {DatabaseSync} db - 数据库
+ * @param {number} serverId - 服务器 ID
+ * @param {Object} current - 更新前的数据库行
+ * @param {{hostKeySha256?: string, connectionStatus?: string, connectionError?: string, updatedBy?: string}} payload - 校验结果
+ */
+function applyServerVerificationResult(db, serverId, current, payload) {
+  const ts = now();
+  if (payload.hostKeySha256 !== undefined) {
+    const nextFingerprint = normalizeHostKeyFingerprint(payload.hostKeySha256);
+    const previousFingerprint = current.host_key_sha256 || '';
+    if (nextFingerprint && nextFingerprint !== previousFingerprint) {
+      db.prepare('UPDATE deploy_servers SET host_key_sha256 = ? WHERE id = ?').run(nextFingerprint, serverId);
+      appendServerHostKeyEvent(db, serverId, previousFingerprint ? 'auto_updated' : 'tofu', previousFingerprint, nextFingerprint, payload.updatedBy || '');
+      if (previousFingerprint) void appendHostKeyCentralAudit(serverId, previousFingerprint, nextFingerprint);
+    }
+  }
+  if (payload.connectionStatus !== undefined) {
+    db.prepare('UPDATE deploy_servers SET connection_status = ?, connection_checked_at = ?, connection_error = ? WHERE id = ?')
+      .run(String(payload.connectionStatus || 'unknown'), ts, String(payload.connectionError || ''), serverId);
+  }
+}
+
+/**
+ * 回写服务器 SSH 连接状态（保存、检测连接、扫描、发布等任意 SSH 入口）。
+ * @param {number} serverId - 服务器 ID
+ * @param {{ok: boolean, code?: string, message?: string}} result - 连接结果
+ * @param {{force?: boolean}} options - force=false 时成功只在状态变化时写库
+ * @returns {Promise<void>}
+ */
+export async function recordServerConnectionResult(serverId, result, options = {}) {
+  const db = await getDeployDb();
+  const id = Number(serverId);
+  if (!id) return;
+  const current = db.prepare('SELECT connection_status FROM deploy_servers WHERE id = ?').get(id);
+  if (!current) return;
+  if (result.ok) {
+    if (!options.force && current.connection_status === 'ok') return;
+    db.prepare("UPDATE deploy_servers SET connection_status = 'ok', connection_checked_at = ?, connection_error = '' WHERE id = ?").run(now(), id);
+    return;
+  }
+  const code = String(result.code || 'ssh_error');
+  db.prepare('UPDATE deploy_servers SET connection_status = ?, connection_checked_at = ?, connection_error = ? WHERE id = ?')
+    .run(code, now(), String(result.message || '').slice(0, 1000), id);
+}
+
+/**
+ * 首次连接时记录主机指纹（TOFU）。已存在指纹时不覆盖。
+ * @param {number} serverId - 服务器 ID
+ * @param {string} fingerprint - 主机指纹
+ * @returns {Promise<boolean>} 是否写入
+ */
+export async function recordServerHostKeyFirstSeen(serverId, fingerprint) {
+  const db = await getDeployDb();
+  const normalized = normalizeHostKeyFingerprint(fingerprint);
+  if (!normalized || !Number(serverId)) return false;
+  const result = db
+    .prepare("UPDATE deploy_servers SET host_key_sha256 = ? WHERE id = ? AND COALESCE(host_key_sha256, '') = ''")
+    .run(normalized, Number(serverId));
+  if (Number(result.changes || 0) > 0) appendServerHostKeyEvent(db, serverId, 'tofu', '', normalized);
+  return Number(result.changes || 0) > 0;
+}
+
+/**
+ * 登录成功后发现主机指纹变化：自动更新为新指纹，写 auto_updated 审计（本地一定写，中央尽量写）。
+ * @description 只在原指纹仍是 previous 时更新，避免并发连接重复记录。
+ * @param {number} serverId - 服务器 ID
+ * @param {string} previous - 原指纹
+ * @param {string} next - 本次登录看到的新指纹
+ * @returns {Promise<boolean>} 是否更新
+ */
+export async function recordServerHostKeyAutoUpdated(serverId, previous, next) {
+  const db = await getDeployDb();
+  const id = Number(serverId);
+  const normalizedPrevious = normalizeHostKeyFingerprint(previous);
+  const normalizedNext = normalizeHostKeyFingerprint(next);
+  if (!id || !normalizedNext || normalizedNext === normalizedPrevious) return false;
+  const result = db
+    .prepare("UPDATE deploy_servers SET host_key_sha256 = ? WHERE id = ? AND COALESCE(host_key_sha256, '') = ?")
+    .run(normalizedNext, id, normalizedPrevious);
+  if (Number(result.changes || 0) === 0) return false;
+  appendServerHostKeyEvent(db, id, 'auto_updated', normalizedPrevious, normalizedNext);
+  await appendHostKeyCentralAudit(id, normalizedPrevious, normalizedNext);
+  return true;
+}
+
+/**
+ * 列出当前团队所有服务器的查重字段（#47 新增 / 编辑查重用，不含凭据）。
+ * @returns {Promise<Array<{id: number, name: string, host: string, port: number, username: string}>>} 服务器标识
+ */
+export async function listServerIdentities() {
+  const db = await getDeployDb();
+  return db
+    .prepare('SELECT id, name, host, port, username FROM deploy_servers WHERE team_id = ? ORDER BY id')
+    .all(getRequestTeamId())
+    .map((row) => ({ id: Number(row.id), name: row.name || '', host: row.host || '', port: Number(row.port || 22), username: row.username || '' }));
+}
+
 /**
  * 获取带凭据的服务器详情
  * @param {number} id - 服务器 ID
@@ -2335,25 +2548,24 @@ export async function createServer(payload) {
   const sortOrder = Number(
     db.prepare('SELECT COALESCE(MAX(sort_order), 0) + 1 AS value FROM deploy_servers WHERE team_id = ?').get(teamId)?.value || 1
   );
-  const credential = encryptCredential({
-    password: payload.password || '',
-    privateKey: payload.privateKey || '',
-    passphrase: payload.passphrase || '',
-  });
+  const credential = encryptCredential(normalizeServerCredentialPayload(payload));
+  const hostKeySha256 = normalizeHostKeyFingerprint(payload.hostKeySha256);
+  const connectionStatus = String(payload.connectionStatus || 'unknown');
   const result = db
     .prepare(
       `INSERT INTO deploy_servers
        (team_id, sort_order, name, host, port, username, auth_type, encrypted_secret, use_sudo, default_deploy_root, default_backend_root,
-        default_nginx_conf_path, nginx_work_dir, nginx_test_command, nginx_reload_command, remark, created_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        default_nginx_conf_path, nginx_work_dir, nginx_test_command, nginx_reload_command, remark, created_by, created_at, updated_at,
+        host_key_sha256, connection_status, connection_checked_at, connection_error)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       teamId,
       sortOrder,
-      payload.name,
-      payload.host,
+      String(payload.name || '').trim(),
+      String(payload.host || '').trim(),
       Number(payload.port || 22),
-      payload.username,
+      String(payload.username || '').trim(),
       payload.authType || 'password',
       credential,
       payload.useSudo ? 1 : 0,
@@ -2366,9 +2578,14 @@ export async function createServer(payload) {
       payload.remark || '',
       payload.createdBy || '',
       ts,
-      ts
+      ts,
+      hostKeySha256 || null,
+      connectionStatus,
+      payload.connectionCheckedAt || (connectionStatus === 'unknown' ? null : ts),
+      payload.connectionError || ''
     );
   const serverId = Number(result.lastInsertRowid);
+  if (hostKeySha256) appendServerHostKeyEvent(db, serverId, 'tofu', '', hostKeySha256, payload.createdBy || '');
   return hydrateServer(db, db.prepare('SELECT * FROM deploy_servers WHERE id = ?').get(serverId));
 }
 
@@ -2383,13 +2600,10 @@ export async function updateServer(id, payload) {
   const teamId = getRequestTeamId();
   const current = db.prepare('SELECT * FROM deploy_servers WHERE id = ? AND team_id = ?').get(Number(id), teamId);
   if (!current) return null;
-  const shouldUpdateCredential = Boolean(payload.password || payload.privateKey || payload.passphrase);
+  const normalizedCredential = normalizeServerCredentialPayload(payload);
+  const shouldUpdateCredential = hasServerCredentialPayload(payload);
   const credential = shouldUpdateCredential
-    ? encryptCredential({
-        password: payload.password || '',
-        privateKey: payload.privateKey || '',
-        passphrase: payload.passphrase || '',
-      })
+    ? encryptCredential(normalizedCredential)
     : current.encrypted_secret;
   const nextDeployRoot = payload.defaultDeployRoot !== undefined ? String(payload.defaultDeployRoot || '').trim() : (current.default_deploy_root || '');
   const nextBackendRoot = payload.defaultBackendRoot !== undefined ? String(payload.defaultBackendRoot || '').trim() : (current.default_backend_root || '');
@@ -2406,10 +2620,10 @@ export async function updateServer(id, payload) {
          nginx_reload_command = ?, remark = ?, updated_at = ?
      WHERE id = ? AND team_id = ?`
   ).run(
-    payload.name ?? current.name,
-    payload.host ?? current.host,
+    payload.name !== undefined ? String(payload.name || '').trim() : current.name,
+    payload.host !== undefined ? String(payload.host || '').trim() : current.host,
     Number(payload.port ?? current.port ?? 22),
-    payload.username ?? current.username,
+    payload.username !== undefined ? String(payload.username || '').trim() : current.username,
     payload.authType || current.auth_type,
     credential,
     payload.useSudo !== undefined ? (payload.useSudo ? 1 : 0) : current.use_sudo,
@@ -2424,6 +2638,9 @@ export async function updateServer(id, payload) {
     Number(id),
     teamId
   );
+  if (payload.connectionStatus !== undefined || payload.hostKeySha256 !== undefined) {
+    applyServerVerificationResult(db, Number(id), current, payload);
+  }
   const updated = db.prepare('SELECT * FROM deploy_servers WHERE id = ? AND team_id = ?').get(Number(id), teamId);
   const systemInstance = db
     .prepare("SELECT id FROM nginx_instances WHERE server_id = ? AND instance_type = 'external' AND name = ? LIMIT 1")
@@ -4340,6 +4557,7 @@ export async function getPersistentDeployTask(id) {
     resultRef: row.result_ref || '',
     result: row.result_json ? JSON.parse(row.result_json) : null,
     error: row.error || '',
+    failureCode: row.failure_code || '',
     startedAt: row.started_at,
     heartbeatAt: row.heartbeat_at,
     finishedAt: row.finished_at || '',
@@ -4360,7 +4578,7 @@ export async function updatePersistentDeployTask(id, patch) {
   const finishedAt = patch.finishedAt ?? (['success', 'failed', 'stopped', 'interrupted'].includes(status) ? now() : current.finishedAt);
   db.prepare(
     `UPDATE deploy_tasks
-     SET status = ?, stage = ?, percent = ?, log_path = ?, result_ref = ?, result_json = ?, error = ?, heartbeat_at = ?, finished_at = ?
+     SET status = ?, stage = ?, percent = ?, log_path = ?, result_ref = ?, result_json = ?, error = ?, failure_code = ?, heartbeat_at = ?, finished_at = ?
      WHERE id = ?`
   ).run(
     status,
@@ -4370,6 +4588,7 @@ export async function updatePersistentDeployTask(id, patch) {
     patch.resultRef ?? current.resultRef,
     JSON.stringify(patch.result ?? current.result ?? null),
     patch.error ?? current.error,
+    patch.failureCode ?? current.failureCode ?? '',
     now(),
     finishedAt || '',
     Number(id)

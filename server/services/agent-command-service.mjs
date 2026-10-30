@@ -247,7 +247,10 @@ async function deployBackendViaCentral(operation, payload, target, settings, sig
       (await callYuyanApi(`/deploy-api/operations/${centralOperation.id}`, { scope: 'server', signal: readSignal })).data, { signal });
   }
   if (centralOperation.status !== 'succeeded') {
-    throw new AgentError(centralOperation.error?.code || 'central_deploy_failed', centralOperation.error?.message || `中央部署状态：${centralOperation.status}`, { retryable: Boolean(centralOperation.error?.retryable) });
+    throw new AgentError(centralOperation.error?.code || 'central_deploy_failed', centralOperation.error?.message || `中央部署状态：${centralOperation.status}`, {
+      retryable: Boolean(centralOperation.error?.retryable),
+      details: centralOperation.error?.details,
+    });
   }
   return centralOperation.result;
 }

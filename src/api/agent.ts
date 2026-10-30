@@ -39,8 +39,8 @@ export interface AgentOperation {
   progress?: { stage: string; percent: number; message: string };
   actor?: AgentExecutionContext;
   result?: Record<string, unknown> & { executionReport?: AgentExecutionReport };
-  error?: { code: string; message: string; retryable: boolean };
-  logs: Array<{ timestamp: string; level: string; stage?: string; source?: 'system' | 'tool'; message: string }>;
+  error?: { code: string; message: string; retryable: boolean; details?: Record<string, unknown> };
+  logs: Array<{ timestamp: string; level: string; stage?: string; source?: 'system' | 'tool'; code?: string; message: string }>;
   approvalSummary?: Record<string, unknown>;
   approvedBy?: string;
   createdAt: string;
@@ -349,7 +349,13 @@ export async function deployBackendTargetFromDesktop(
     options.onOperation?.(operation);
   }
   if (operation.error?.code === 'central_result_unconfirmed') return operation;
-  if (operation.status !== 'succeeded') throw new Error(operation.error?.message || `后端发布状态：${operation.status}`);
+  if (operation.status !== 'succeeded') {
+    // 保留错误码与详情，SSH 失败可展示统一的修复引导（#47）。
+    throw Object.assign(new Error(operation.error?.message || `后端发布状态：${operation.status}`), {
+      code: operation.error?.code,
+      details: operation.error?.details,
+    });
+  }
   return operation;
 }
 

@@ -20,6 +20,8 @@ import type { DeployTarget } from '@/api/deploy';
 import type { PublishConfirmModalProps, PublishStartOptions } from './constant';
 import { usePublishConfirm } from './hooks/usePublishConfirm';
 import DeployLogLegend from '../DeployLogLegend/index.vue';
+import SshFailureGuideCard from '../SshFailureGuideCard/index.vue';
+import type { SshFailureAction } from '../../sshFailureGuide';
 
 defineOptions({ name: 'PublishConfirmModal' });
 
@@ -32,6 +34,7 @@ const emit = defineEmits<{
   (e: 'stop'): void;
   (e: 'verify-result'): void;
   (e: 'view-record', target: DeployTarget): void;
+  (e: 'ssh-action', action: SshFailureAction): void;
 }>();
 
 /** 是否强制重新安装依赖 */
@@ -207,6 +210,13 @@ watch(
           </div>
         </div>
       </div>
+
+      <SshFailureGuideCard
+        v-if="started && !running && sshFailure"
+        class="publish-ssh-guide"
+        :failure="sshFailure"
+        @action="(action) => emit('ssh-action', action)"
+      />
 
       <section v-if="started" class="publish-log-panel">
         <div class="publish-log-panel__head">

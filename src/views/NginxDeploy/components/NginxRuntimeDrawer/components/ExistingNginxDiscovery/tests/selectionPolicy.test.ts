@@ -63,7 +63,8 @@ test('优先选择包含 index.html 的静态根目录', () => {
 });
 
 test('server_name 不可用时使用监听端口生成实例名', () => {
-  assert.equal(createDiscoveredInstanceName(createSite()), 'Nginx 32088');
+  assert.equal(createDiscoveredInstanceName(createSite()), '已有 Nginx :32088');
+  assert.equal(createDiscoveredInstanceName(createSite(), { prefix: '/home/nginx/' }), '已有 /home/nginx :32088');
 });
 
 test('选择站点后映射现有接入表单字段并保留 sudo 设置', () => {
@@ -74,7 +75,7 @@ test('选择站点后映射现有接入表单字段并保留 sudo 设置', () =>
 
   const selection = createExistingNginxSelection(runtime, site, root);
   assert.deepEqual(selection.formPatch, {
-    name: 'app.example.com Nginx',
+    name: '已有 app.example.com',
     instanceType: 'external',
     runtimeFingerprint: 'a'.repeat(64),
     defaultDeployRoot: '/opt/yuyan/html',

@@ -64,6 +64,8 @@ export type NginxRuntimeDrawerEmits = {
   (e: 'refreshArchiveSites'): void;
   (e: 'confirmArchiveDownload', value: { type: NginxArchiveDownloadType; siteIds: string[]; includeHidden?: boolean }): void;
   (e: 'refresh'): void;
+  /** 扫描时 SSH 失败：打开编辑服务器并聚焦字段（#47） */
+  (e: 'editServer', value: { focusField?: string; failure: unknown }): void;
 };
 
 /** Nginx 运行时路径展示行 */

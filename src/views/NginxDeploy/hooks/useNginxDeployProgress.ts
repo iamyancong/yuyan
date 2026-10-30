@@ -18,6 +18,7 @@ import {
 import { DEPLOY_FAILURE_BRIEF, getDeployProgressActionLabel, getDeployProgressFailureTitle, getDeployProgressStageLabel } from '../constant';
 import type { DeployProgressMode, RefreshActiveTabOptions } from '../types';
 import { getErrorMessage, isAbortError, isDeployConflictError, isNotFoundError } from '../utils';
+import { extractSshFailure, normalizeSshFailure, type SshFailureInfo } from '../sshFailureGuide';
 
 /** 发布停止前允许中断的阶段（包含排队等待阶段与等待构建资源阶段） */
 const STOPPABLE_PUBLISH_STAGE_KEYS = new Set([
@@ -100,7 +101,22 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     stopped: false,
     operator: '',
     startedAt: '',
+    /** SSH 连接阶段失败详情（#47），用于展示修复引导 */
+    sshFailure: null as SshFailureInfo | null,
   });
+  /** 最近一次发布参数，「重试」/「重新发布」沿用 */
+  let lastPublishOptions: StartPublishOptions = {};
+
+  /**
+   * 记录 SSH 失败详情。
+   * @param error 接口错误或流式错误
+   * @returns 是否为 SSH 失败
+   */
+  const captureSshFailure = (error: unknown) => {
+    const failure = extractSshFailure(error);
+    if (failure) progressState.sshFailure = failure;
+    return Boolean(failure);
+  };
 
   /** 执行结果先收口，页面刷新独立恢复，避免成功被刷新错误覆盖。 */
   const scheduleRefreshAfterTask = (options: RefreshActiveTabOptions = {}) => {
@@ -187,6 +203,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       stopped: false,
       operator: '',
       startedAt: '',
+      sshFailure: null,
     });
   };
 
@@ -267,6 +284,9 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
         fallbackStage: snapshot.currentStage,
       });
       progressState.detail = snapshot.action === 'deploy' ? DEPLOY_FAILURE_BRIEF : snapshot.error;
+      const failure = normalizeSshFailure(snapshot.failure || (snapshot.failureCode ? { code: snapshot.failureCode } : null), snapshot.error);
+      progressState.sshFailure = failure;
+      if (failure) progressState.detail = failure.message;
     }
   };
 
@@ -305,7 +325,9 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
           : `${activePublishTarget.value?.projectName || '当前项目'} 发布成功`;
     }
     if (event.type === 'error') {
-      const shouldShowRawError = progressMode.value !== 'deploy';
+      const failure = normalizeSshFailure(event.failure || (event.code ? { code: event.code } : null), event.message);
+      if (failure) progressState.sshFailure = failure;
+      const shouldShowRawError = progressMode.value !== 'deploy' || Boolean(failure);
       progressState.title = getDeployProgressFailureTitle({
         action: progressMode.value,
         events: progressState.logs,
@@ -339,6 +361,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
    */
   const runDeploy = async (target: DeployTarget, options: StartPublishOptions = {}) => {
     if (!ensureCanStartOperation()) return;
+    lastPublishOptions = { ...options };
     progressMode.value = 'deploy';
     const sessionId = ++progressSessionId;
     const abortController = new AbortController();
@@ -354,6 +377,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       stopped: false,
       operator: currentOperator,
       startedAt: currentStartedAt,
+      sshFailure: null,
     });
     try {
       const result = await deployTargetWithProgress(
@@ -430,9 +454,11 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
         return;
       }
       if (sessionId !== progressSessionId) return;
-      if (connection.handleError(error)) return;
+      // SSH 失败（含主机密钥变化的 409 门禁）不是「他人正在发布」，不能进入协同观察。
+      const isSshFailure = captureSshFailure(error);
+      if (!isSshFailure && connection.handleError(error)) return;
       const errorMessage = getErrorMessage(error);
-      if (isDeployConflictError(error)) {
+      if (!isSshFailure && isDeployConflictError(error)) {
         const conflictSnapshot = (error?.response?.data?.data as DeployProgressSnapshot) || undefined;
         const operatorName = conflictSnapshot?.operator ? `「${conflictSnapshot.operator}」` : '其他成员';
         message.warning(`该目标当前正由 ${operatorName} 执行发布，已为您自动切换至协同观察模式`);
@@ -450,7 +476,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
         events: progressState.logs,
         fallbackStage: currentPublishStageKey.value,
       });
-      progressState.detail = DEPLOY_FAILURE_BRIEF;
+      progressState.detail = progressState.sshFailure ? progressState.sshFailure.message : DEPLOY_FAILURE_BRIEF;
       void notifyDeployResult({
         status: 'error',
         projectName: target.projectName,
@@ -556,7 +582,8 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
         rollbackProgressOpen.value = false;
         return;
       }
-      if (connection.handleError(error)) return;
+      const isSshFailure = captureSshFailure(error);
+      if (!isSshFailure && connection.handleError(error)) return;
       const errorMessage = getErrorMessage(error);
       shouldClearRuntime = true;
       appendProgressErrorLog(errorMessage, currentPublishStageKey.value || snapshot.currentStage);
@@ -611,6 +638,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       logs: [],
       running: true,
       stopped: false,
+      sshFailure: null,
     });
     try {
       await runBackendServiceActionWithProgress(target.id, action, {
@@ -623,7 +651,8 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       scheduleRefreshAfterTask({ force: true });
     } catch (error: any) {
       if (isAbortError(error) || abortController.signal.aborted || sessionId !== progressSessionId) return;
-      if (connection.handleError(error)) return;
+      const isSshFailure = captureSshFailure(error);
+      if (!isSshFailure && connection.handleError(error)) return;
       const errorMessage = getErrorMessage(error);
       appendProgressErrorLog(errorMessage, currentPublishStageKey.value || action);
       progressState.title = getDeployProgressFailureTitle({
@@ -678,7 +707,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     deployAbortController = abortController;
     activeRecord.value = record;
     rollbackProgressOpen.value = true;
-    Object.assign(progressState, { percent: 0, title: '准备回滚', detail: '', logs: [], running: true, stopped: false });
+    Object.assign(progressState, { percent: 0, title: '准备回滚', detail: '', logs: [], running: true, stopped: false, sshFailure: null });
     try {
       await rollbackRecordWithProgress(record.id, record.projectType, { operator: userName.value || '' }, {
         signal: abortController.signal,
@@ -690,9 +719,10 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       scheduleRefreshAfterTask({ resetRecordsPage: true, force: true });
     } catch (error: any) {
       if (isAbortError(error) || abortController.signal.aborted || sessionId !== progressSessionId) return;
-      if (connection.handleError(error)) return;
+      const isSshFailure = captureSshFailure(error);
+      if (!isSshFailure && connection.handleError(error)) return;
       const errorMessage = getErrorMessage(error);
-      if (isDeployConflictError(error)) {
+      if (!isSshFailure && isDeployConflictError(error)) {
         message.warning(errorMessage);
         rollbackProgressOpen.value = false;
         resetPublishProgress();
@@ -723,7 +753,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     deployAbortController = abortController;
     activeRecord.value = record;
     rollbackProgressOpen.value = true;
-    Object.assign(progressState, { percent: 0, title: '准备撤销回滚', detail: '', logs: [], running: true, stopped: false });
+    Object.assign(progressState, { percent: 0, title: '准备撤销回滚', detail: '', logs: [], running: true, stopped: false, sshFailure: null });
     try {
       await undoRollbackRecordWithProgress(record.id, record.projectType, { operator: userName.value || '' }, {
         signal: abortController.signal,
@@ -735,9 +765,10 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       scheduleRefreshAfterTask({ resetRecordsPage: true, force: true });
     } catch (error: any) {
       if (isAbortError(error) || abortController.signal.aborted || sessionId !== progressSessionId) return;
-      if (connection.handleError(error)) return;
+      const isSshFailure = captureSshFailure(error);
+      if (!isSshFailure && connection.handleError(error)) return;
       const errorMessage = getErrorMessage(error);
-      if (isDeployConflictError(error)) {
+      if (!isSshFailure && isDeployConflictError(error)) {
         message.warning(errorMessage);
         rollbackProgressOpen.value = false;
         resetPublishProgress();
@@ -869,6 +900,30 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     await runDeploy(target, options);
   };
 
+  /**
+   * SSH 引导中的「重试」：发布沿用上一次发布参数，回滚类操作重新执行同一记录。
+   * @description 主机密钥变化、登录失败不可重试，按钮不会出现。
+   */
+  const retryLastOperation = async () => {
+    if (progressState.sshFailure && !progressState.sshFailure.retryable) return;
+    const mode = progressMode.value;
+    if (mode === 'deploy') {
+      await republishFromConfirm(lastPublishOptions);
+      return;
+    }
+    if (mode === 'rollback' && activeRecord.value) {
+      await runRollback(activeRecord.value);
+      return;
+    }
+    if (mode === 'undoRollback' && activeRecord.value) {
+      await runUndoRollback(activeRecord.value);
+      return;
+    }
+    if (['start', 'stop', 'restart'].includes(mode) && activePublishTarget.value) {
+      await runTargetServiceAction(activePublishTarget.value, mode as 'start' | 'stop' | 'restart');
+    }
+  };
+
   /** 清空发布进度和临时态 */
   const clearProgressData = () => {
     detachPublishProgressStream();
@@ -911,6 +966,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     openPublishConfirm,
     startPublishFromConfirm,
     republishFromConfirm,
+    retryLastOperation,
     stopCurrentPublish,
     openRollbackConfirm,
     confirmRollback,

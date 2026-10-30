@@ -18,6 +18,7 @@ export async function getDeployTaskReconciliation(targetId, taskId) {
     running: isTaskActive,
     result: record || task.result,
     error: ['failed', 'interrupted'].includes(task.status) ? task.error || '服务重启或任务执行中断' : null,
+    failureCode: task.status === 'failed' ? task.failureCode || '' : '',
     events: [],
     maxConcurrent: 1,
     runningCount: isTaskActive ? 1 : 0,

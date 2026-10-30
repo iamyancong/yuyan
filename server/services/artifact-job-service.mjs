@@ -9,6 +9,7 @@ import { deployBackendArtifact } from './backend-runtime-service.mjs';
 import { appendCentralAudit, ensureCentralIdentitySchema } from './central-identity-service.mjs';
 import { getDeployDb, getTarget } from './deploy-store.mjs';
 import { publishDeployEvent } from './deploy-event-service.mjs';
+import { isSshConnectionError } from './ssh-errors.mjs';
 import { getRequestContext, runRequestContext } from './request-context.mjs';
 import {
   abortCentralOperation,
@@ -287,7 +288,12 @@ async function runArtifactDeployment(jobId) {
     const status = cancelled ? 'cancelled' : 'failed';
     const safeError = cancelled
       ? { code: 'cancelled', message: '中央部署已请求安全停止', retryable: true }
-      : { code: error?.code || 'central_deploy_failed', message: String(error?.message || '中央部署失败'), retryable: false };
+      : {
+        code: error?.code || 'central_deploy_failed',
+        message: String(error?.message || '中央部署失败'),
+        retryable: false,
+        ...(isSshConnectionError(error) ? { details: error.toJSON() } : {}),
+      };
     db.prepare('UPDATE artifact_jobs SET status = ?, error_json = ?, updated_at = ? WHERE id = ?').run(status, JSON.stringify(safeError), failedAt, row.id);
     db.prepare('UPDATE central_agent_operations SET status = ?, error_json = ?, updated_at = ? WHERE id = ?')
       .run(status, JSON.stringify(safeError), failedAt, row.operation_id);

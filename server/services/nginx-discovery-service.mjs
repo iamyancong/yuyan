@@ -717,6 +717,53 @@ async function readProcessPaths(conn, processes, context) {
   }
 }
 
+/** 搜索源码编译安装 Nginx 的目录（#47 扩大范围）。 */
+export const NGINX_BINARY_SEARCH_ROOTS = ['/home', '/opt', '/usr/local', '/data', '/app', '/srv'];
+
+/**
+ * 生成查找 sbin/nginx 可执行文件的只读命令：限制深度，跳过 node_modules 与 .git。
+ * @param {boolean} useSudo - 是否使用 sudo
+ * @returns {string} 远程命令
+ */
+export function buildNginxBinaryFindCommand(useSudo) {
+  const roots = NGINX_BINARY_SEARCH_ROOTS.join(' ');
+  return `${useSudo ? 'sudo -n ' : ''}find ${roots} -maxdepth 6 \\( -name node_modules -o -name .git \\) -prune -o -type f -path '*/sbin/nginx' -perm -u+x -print 2>/dev/null || true`;
+}
+
+/**
+ * 相对路径启动（如 `./nginx`、`sbin/nginx`）且读不到 /proc 时，按已发现的安装路径推断二进制，
+ * 避免同一实例出现「无法解析」诊断项和一个未运行的重复候选。
+ * @param {{binary: string, prefix?: string}} process - master 进程线索
+ * @param {string[]} binaries - 已确认可执行的绝对路径
+ * @returns {string} 唯一匹配的绝对路径，无法唯一确定时为空
+ */
+export function inferRelativeNginxProcessBinary(process, binaries = []) {
+  const raw = String(process?.binary || '').trim();
+  if (!raw || raw.startsWith('/')) return '';
+  const baseName = path.posix.basename(raw);
+  const sameName = binaries.filter((item) => item.startsWith('/') && path.posix.basename(item) === baseName);
+  const prefix = String(process?.prefix || '').replace(/\/+$/, '');
+  if (prefix.startsWith('/')) {
+    const underPrefix = sameName.filter((item) => item.startsWith(`${prefix}/`));
+    if (underPrefix.length === 1) return path.posix.normalize(underPrefix[0]);
+  }
+  const suffix = raw.replace(/^(\.\/)+/, '');
+  const matches = suffix.includes('/') ? sameName.filter((item) => item.endsWith(`/${suffix}`)) : sameName;
+  return matches.length === 1 ? path.posix.normalize(matches[0]) : '';
+}
+
+/**
+ * 校验手动指定的 Nginx 可执行文件路径。
+ * @param {string} value - 用户输入
+ * @returns {string} 规范化路径
+ */
+export function normalizeManualNginxBinaryPath(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (!text.startsWith('/') || /[\r\n\0]/.test(text)) throw Object.assign(new Error('Nginx 可执行文件路径必须是服务器上的绝对路径'), { status: 400 });
+  return path.posix.normalize(text);
+}
+
 /**
  * 发现服务器中的 Nginx 二进制与运行进程。
  * @param {Object} conn - SSH 连接
@@ -724,7 +771,9 @@ async function readProcessPaths(conn, processes, context) {
  * @returns {Promise<{candidates: Object[], truncated: boolean}>} 运行实例候选
  */
 async function discoverRuntimeCandidates(conn, context) {
-  const findCommand = `${context.useSudo ? 'sudo -n ' : ''}find /home /opt -maxdepth 6 -type f -path '*/sbin/nginx' -perm -u+x -print 2>/dev/null || true`;
+  const manualBinary = context.manualBinary || '';
+  const binaryList = manualBinary ? [manualBinary, ...COMMON_NGINX_BINARIES.filter((item) => item !== manualBinary)] : COMMON_NGINX_BINARIES;
+  const findCommand = buildNginxBinaryFindCommand(context.useSudo);
   const [processResult, binaryResult] = await Promise.all([
     context.execute(conn, "{ ps -eo pid=,user=,args=ww 2>/dev/null || true; ps -ef 2>/dev/null || true; } | grep 'nginx: master process' | grep -v grep || true", {
       allowFailure: true,
@@ -733,7 +782,7 @@ async function discoverRuntimeCandidates(conn, context) {
       maxOutputBytes: 256 * 1024,
       signal: context.signal,
     }),
-    context.execute(conn, `{ command -v nginx 2>/dev/null || true; command -v openresty 2>/dev/null || true; for p in ${COMMON_NGINX_BINARIES.map(shellQuote).join(' ')}; do [ -x "$p" ] && printf '%s\\n' "$p"; done; ${findCommand}; } | awk 'NF && !seen[$0]++' | head -n ${MAX_RUNTIME_CANDIDATES + 1}`, {
+    context.execute(conn, `{ command -v nginx 2>/dev/null || true; command -v openresty 2>/dev/null || true; for p in ${binaryList.map(shellQuote).join(' ')}; do [ -x "$p" ] && printf '%s\\n' "$p"; done; ${findCommand}; } | awk 'NF && !seen[$0]++' | head -n ${MAX_RUNTIME_CANDIDATES + 1}`, {
       allowFailure: true,
       label: '扫描常见 Nginx 安装路径',
       timeoutMs: 15_000,
@@ -745,8 +794,19 @@ async function discoverRuntimeCandidates(conn, context) {
   const processes = parseNginxMasterProcesses(processResult.stdout);
   const procPaths = await readProcessPaths(conn, processes, context);
   const byKey = new Map();
+  const diagnostics = [];
+  if (manualBinary && !binaries.includes(manualBinary)) {
+    diagnostics.push(createDiagnostic('command_not_found', 'error', 'scan', `指定的 Nginx 可执行文件不存在或不可执行：${manualBinary}`, '', '检查路径是否正确，或使用手动接入'));
+  }
   processes.forEach((process) => {
-    const resolution = resolveNginxProcessBinary(process, procPaths.get(process.pid), binaries);
+    let resolution = resolveNginxProcessBinary(process, procPaths.get(process.pid), binaries);
+    if (resolution.status !== 'resolved') {
+      const inferred = inferRelativeNginxProcessBinary(process, binaries);
+      if (inferred) {
+        resolution = { binary: inferred, status: 'resolved' };
+        diagnostics.push(createDiagnostic('binary_inferred', 'info', 'scan', `Nginx 进程以相对路径「${process.binary}」启动，已按安装路径合并到 ${inferred}`));
+      }
+    }
     const key = `${resolution.binary}|${process.prefix}|${process.configPath}`;
     const current = byKey.get(key) || {
       binary: resolution.binary,
@@ -767,6 +827,7 @@ async function discoverRuntimeCandidates(conn, context) {
   return {
     candidates: allCandidates.slice(0, MAX_RUNTIME_CANDIDATES),
     truncated: allCandidates.length > MAX_RUNTIME_CANDIDATES || binaries.length > MAX_RUNTIME_CANDIDATES,
+    diagnostics,
   };
 }
 
@@ -859,6 +920,7 @@ export async function discoverServerNginx(serverId, options = {}, dependencies =
   const server = await getServer(serverId);
   if (!server) throw new Error('部署服务器不存在');
   const useSudo = options.useSudo === undefined ? Boolean(server.useSudo) : Boolean(options.useSudo);
+  const manualBinary = normalizeManualNginxBinaryPath(options.binaryPath);
   const scanController = new AbortController();
   let budgetExceeded = false;
   const handleExternalAbort = () => scanController.abort(options.signal?.reason);
@@ -877,11 +939,39 @@ export async function discoverServerNginx(serverId, options = {}, dependencies =
 
   try {
     return await withConnection(server, async (conn) => {
-      const context = { execute, useSudo, signal: scanController.signal };
-      let discovery = { candidates: [], truncated: false };
       const diagnostics = [];
+      let effectiveUseSudo = useSudo;
+      if (useSudo) {
+        // #47：sudo 不可用时降级为不用 sudo 继续扫描，避免直接得到 0 个候选。
+        let sudoCheck = null;
+        try {
+          sudoCheck = await execute(conn, 'sudo -n true', {
+            allowFailure: true,
+            label: '检查 sudo',
+            timeoutMs: 10_000,
+            maxOutputBytes: 16 * 1024,
+            signal: scanController.signal,
+          });
+        } catch (error) {
+          if (options.signal?.aborted) throw error;
+        }
+        if (sudoCheck && Number(sudoCheck.code) !== 0) {
+          effectiveUseSudo = false;
+          diagnostics.push(createDiagnostic(
+            'sudo_unavailable',
+            'warning',
+            'scan',
+            '服务器开启了 sudo，但 sudo 不可用或需要密码，已降级为不使用 sudo 扫描',
+            summarizeCommandFailure(sudoCheck),
+            '在「服务器管理」中修改「使用 sudo」设置，或为当前账号配置免密 sudo',
+          ));
+        }
+      }
+      const context = { execute, useSudo: effectiveUseSudo, signal: scanController.signal, manualBinary };
+      let discovery = { candidates: [], truncated: false, diagnostics: [] };
       try {
         discovery = await discoverRuntimeCandidates(conn, context);
+        diagnostics.push(...(discovery.diagnostics || []));
       } catch (error) {
         if (options.signal?.aborted) throw error;
         diagnostics.push(createDiagnostic(
@@ -895,11 +985,11 @@ export async function discoverServerNginx(serverId, options = {}, dependencies =
       }
 
       const inspected = await inspectRuntimePool(discovery.candidates, (candidate) => {
-        if (candidate.binaryResolution !== 'resolved') return Promise.resolve(createUnresolvedRuntime(candidate, useSudo));
+        if (candidate.binaryResolution !== 'resolved') return Promise.resolve(createUnresolvedRuntime(candidate, effectiveUseSudo));
         return inspectNginxRuntime(conn, candidate, {
           execute,
           instances: Array.isArray(server.nginxInstances) ? server.nginxInstances : [],
-          useSudo,
+          useSudo: effectiveUseSudo,
           signal: scanController.signal,
           serverHost: server.host || '',
         });
@@ -911,7 +1001,7 @@ export async function discoverServerNginx(serverId, options = {}, dependencies =
       }
       diagnostics.push(...inspected.diagnostics);
       if (!discovery.candidates.length && !diagnostics.length) {
-        diagnostics.push(createDiagnostic('no_sites', 'info', 'scan', '没有在运行进程、系统 PATH、/home 或 /opt 常见目录中发现 Nginx'));
+        diagnostics.push(createDiagnostic('no_sites', 'info', 'scan', `没有在运行进程、系统 PATH、${NGINX_BINARY_SEARCH_ROOTS.join('、')} 常见目录中发现 Nginx`, '', '可在下方「指定 Nginx 可执行文件」后重新扫描，或手动填写'));
       }
       if (budgetExceeded) diagnostics.push(createDiagnostic('timeout', 'warning', 'scan', '扫描达到 60 秒预算，已返回部分结果', '', '可重新扫描或手动填写'));
 
@@ -935,6 +1025,7 @@ export async function discoverServerNginx(serverId, options = {}, dependencies =
         scannedAt: new Date().toISOString(),
         durationMs: Date.now() - startedAt,
         useSudo,
+        effectiveUseSudo,
         runtimes,
         diagnostics: allDiagnostics,
         warnings: allDiagnostics.map((item) => item.summary),

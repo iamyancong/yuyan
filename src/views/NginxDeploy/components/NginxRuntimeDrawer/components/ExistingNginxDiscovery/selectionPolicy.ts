@@ -28,18 +28,22 @@ export function getPreferredDiscoveryRoot(site: NginxDiscoverySite): NginxDiscov
 
 /**
  * 生成发现站点的实例名称。
+ * @description 统一以「已有」开头，并带上域名或安装目录 + 端口，避免同一服务器上多个「已有 Nginx N」无法区分（#47）。
  * @param site Nginx server 站点
+ * @param runtime 可选的物理 Nginx 运行实例（用于取安装目录）
  * @returns 实例名称建议
  */
-export function createDiscoveredInstanceName(site: NginxDiscoverySite): string {
+export function createDiscoveredInstanceName(site: NginxDiscoverySite, runtime?: Pick<NginxDiscoveryRuntime, 'prefix'> | null): string {
   const serverName = site.serverNames.find((name) => name
     && name !== '_'
     && !name.includes('$')
     && !name.includes('_')
     && !/[~*]/.test(name));
-  if (serverName) return `${serverName} Nginx`;
+  if (serverName) return `已有 ${serverName}`;
   const port = site.listenPorts[0];
-  return port ? `Nginx ${port}` : '已有 Nginx';
+  const prefix = String(runtime?.prefix || '').replace(/\/+$/, '');
+  if (prefix) return port ? `已有 ${prefix} :${port}` : `已有 ${prefix}`;
+  return port ? `已有 Nginx :${port}` : '已有 Nginx';
 }
 
 /**
@@ -63,7 +67,7 @@ export function createExistingNginxSelection(
     siteId: site.id,
     rootPath: root.path,
     formPatch: {
-      name: createDiscoveredInstanceName(site),
+      name: createDiscoveredInstanceName(site, runtime),
       instanceType: 'external',
       runtimeFingerprint: runtime.runtimeFingerprint,
       defaultDeployRoot: root.path,

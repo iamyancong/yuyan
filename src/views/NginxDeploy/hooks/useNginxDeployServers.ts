@@ -12,6 +12,8 @@ import {
 } from '@/api/deploy';
 import type { FormilyRef, RefreshActiveTabOptions } from '../types';
 import { createDefaultServerForm, getErrorMessage, getServerConnectionErrorMessage, getServerOrderErrorMessage } from '../utils';
+import { extractSshFailure, type SshFailureField, type SshFailureInfo } from '../sshFailureGuide';
+import { extractServerDuplicate, findServerDuplicate, type ServerDuplicateInfo } from '../serverDuplicatePolicy';
 import { useNginxDeployContext } from './useNginxDeployContext';
 import { useNginxRuntimeDrawer } from './useNginxRuntimeDrawer';
 
@@ -49,6 +51,12 @@ export function useNginxDeployServers(params?: UseNginxDeployServersParams) {
   const activeServerId = ref<number | null>(null);
   const serverFormRef = ref<FormilyRef | null>(null);
   const serverForm = reactive<DeployServerPayload>(createDefaultServerForm());
+  /** 保存时 SSH 校验失败的详情，抽屉保持打开并展示引导（#47）。 */
+  const serverSaveFailure = ref<SshFailureInfo | null>(null);
+  /** 请求抽屉聚焦某个字段；token 递增以便重复聚焦同一字段。 */
+  const serverFocusRequest = ref<{ field: SshFailureField; token: number } | null>(null);
+  /** 保存时查重失败（地址或名称已存在），抽屉里显示错误和「查看已有服务器」（#47）。 */
+  const serverDuplicate = ref<ServerDuplicateInfo | null>(null);
 
   const fsDrawerOpen = ref(false);
   const fsDrawerServer = ref<DeployServer | null>(null);
@@ -81,6 +89,45 @@ export function useNginxDeployServers(params?: UseNginxDeployServersParams) {
   const resetServerForm = () => {
     Object.assign(serverForm, createDefaultServerForm());
     activeServerId.value = null;
+    serverSaveFailure.value = null;
+    serverDuplicate.value = null;
+    serverFocusRequest.value = null;
+  };
+
+  /** 服务器表单中所有可能被标红的字段 */
+  const SERVER_ERROR_FIELDS: SshFailureField[] = ['name', 'host', 'port', 'username', 'password', 'privateKey', 'passphrase', 'useSudo'];
+
+  /** 清除上一次保存失败留下的字段错误 */
+  const clearServerFieldErrors = () => {
+    SERVER_ERROR_FIELDS.forEach((field) => {
+      if (!field) return;
+      serverFormRef.value?.setFieldState?.(field, (state: any) => {
+        state.selfErrors = [];
+      });
+    });
+  };
+
+  /**
+   * 标红并聚焦字段。
+   * @param field 字段名
+   * @param errorText 字段下方的错误提示
+   */
+  const markServerField = (field: SshFailureField, errorText: string) => {
+    if (!field) return;
+    serverFormRef.value?.setFieldState?.(field, (state: any) => {
+      state.selfErrors = [errorText];
+    });
+    serverFocusRequest.value = { field, token: (serverFocusRequest.value?.token || 0) + 1 };
+  };
+
+  /** 各错误码在字段下方显示的简短提示 */
+  const FIELD_ERROR_TEXT: Record<string, string> = {
+    auth_failed: '登录失败，请检查账号和密码/私钥',
+    refused: 'SSH 端口拒绝连接，请检查端口',
+    timeout: '连接超时，请检查地址并确认已连上内网或 VPN',
+    unreachable: '网络不可达，请检查地址并确认已连上内网或 VPN',
+    sudo_unavailable: 'sudo 不可用或需要密码',
+    ssh_error: '连接失败，请检查服务器地址',
   };
 
   /** 同步服务器表单值到 Formily 内部状态 */
@@ -137,8 +184,11 @@ export function useNginxDeployServers(params?: UseNginxDeployServersParams) {
    * 打开编辑服务器弹窗。
    * @param server 服务器配置
    */
-  const openEditServer = async (server: DeployServer) => {
+  const openEditServer = async (server: DeployServer, options: { focusField?: SshFailureField; failure?: SshFailureInfo | null } = {}) => {
     if (!ensureLoggedIn()) return;
+    serverSaveFailure.value = options.failure || null;
+    serverDuplicate.value = null;
+    serverFocusRequest.value = null;
     activeServerId.value = server.id;
     Object.assign(serverForm, {
       ...createDefaultServerForm(),
@@ -151,29 +201,86 @@ export function useNginxDeployServers(params?: UseNginxDeployServersParams) {
     serverModalOpen.value = true;
     await nextTick();
     syncServerFormValues();
+    if (options.focusField) {
+      await nextTick();
+      markServerField(options.focusField, options.failure ? FIELD_ERROR_TEXT[options.failure.code] || options.failure.message : '请在这里修改后保存，保存时会重新校验 SSH 登录');
+    }
   };
 
   /** 保存服务器 */
   const saveServer = async () => {
     if (!ensureLoggedIn()) return;
     serverSaving.value = true;
+    serverSaveFailure.value = null;
+    serverDuplicate.value = null;
+    clearServerFieldErrors();
     try {
       const values = (serverFormRef.value?.getValues?.() || serverForm) as DeployServerPayload;
       const payload = { ...serverForm, ...values };
-      if (activeServerId.value) {
-        await updateDeployServer(activeServerId.value, payload);
-        message.success('服务器配置已更新');
-      } else {
-        await createDeployServer(payload);
-        message.success('服务器配置已新增');
+      // 先用已加载的列表即时查重，命中就不请求后端；最终以后端 409 为准。
+      const current = activeServerId.value ? servers.value.find((item) => item.id === activeServerId.value) || null : null;
+      const localDuplicate = findServerDuplicate(servers.value, payload, current);
+      if (localDuplicate) {
+        showServerDuplicate(localDuplicate);
+        return;
       }
+      // 保存前后端会先用 SSH 登录一次，登录不成功不会写库（#47）。
+      const saved = activeServerId.value
+        ? await updateDeployServer(activeServerId.value, payload)
+        : await createDeployServer(payload);
+      const account = saved?.verification?.account;
+      const verifiedText = saved?.verification?.checked ? `，SSH 登录校验通过${account ? `（${account}）` : ''}` : '';
+      message.success(`${activeServerId.value ? '服务器配置已更新' : '服务器配置已新增'}${verifiedText}`);
+      (saved?.verification?.warnings || []).forEach((warning) => message.warning(warning));
       serverModalOpen.value = false;
       await refreshActiveTab({ force: true });
     } catch (error: any) {
-      message.error(getErrorMessage(error));
+      const duplicate = extractServerDuplicate(error);
+      const failure = duplicate ? null : extractSshFailure(error);
+      if (duplicate) {
+        showServerDuplicate(duplicate);
+        // 列表可能过期（别人刚新增），刷新一下以便「查看已有服务器」能找到。
+        void refreshServerList().catch(() => undefined);
+      } else if (failure) {
+        // 弹窗保持打开、保留已填内容，标红并聚焦对应字段。
+        serverSaveFailure.value = failure;
+        markServerField(failure.field, FIELD_ERROR_TEXT[failure.code] || failure.message);
+        message.error(failure.message);
+      } else {
+        message.error(getErrorMessage(error));
+      }
     } finally {
       serverSaving.value = false;
     }
+  };
+
+  /**
+   * 在抽屉里显示查重错误并标红对应字段。
+   * @param duplicate 重复详情
+   */
+  const showServerDuplicate = (duplicate: ServerDuplicateInfo) => {
+    serverDuplicate.value = duplicate;
+    markServerField(duplicate.field, duplicate.field === 'host' ? '相同地址、端口和账号的服务器已存在' : '服务器名称已存在');
+    message.error(duplicate.message);
+  };
+
+  /** 「查看已有服务器」：关掉当前弹窗，打开已有服务器的编辑框。 */
+  const viewDuplicateServer = async () => {
+    const targetId = serverDuplicate.value?.existingServerId;
+    if (!targetId) return;
+    let existing = servers.value.find((item) => item.id === targetId);
+    if (!existing) {
+      await refreshServerList().catch(() => undefined);
+      existing = servers.value.find((item) => item.id === targetId);
+    }
+    serverModalOpen.value = false;
+    serverDuplicate.value = null;
+    if (!existing) {
+      message.warning('已有服务器不在当前列表中，请刷新后在「服务器管理」中查看');
+      return;
+    }
+    await nextTick();
+    await openEditServer(existing);
   };
 
   /**
@@ -199,10 +306,13 @@ export function useNginxDeployServers(params?: UseNginxDeployServersParams) {
         .split(/\r?\n/)
         .map((item) => item.trim())
         .filter(Boolean);
-      const account = [...outputLines].reverse().find((item) => item !== 'yuyan-ops-ready');
+      const account = result.account || [...outputLines].reverse().find((item) => item !== 'yuyan-ops-ready');
       message.success(account ? `服务器“${server.name}”连接正常，登录账号：${account}` : `服务器“${server.name}”连接正常`);
+      if (result.sudo?.checked && !result.sudo.ok) message.warning(result.sudo.message);
     } catch (error) {
       message.error(getServerConnectionErrorMessage(error, server.name));
+    } finally {
+      void refreshServerList().catch(() => undefined);
     }
   };
 
@@ -212,6 +322,8 @@ export function useNginxDeployServers(params?: UseNginxDeployServersParams) {
     servers.value = [];
     activeServerId.value = null;
     serverModalOpen.value = false;
+    serverSaveFailure.value = null;
+    serverDuplicate.value = null;
     fsDrawerOpen.value = false;
     fsDrawerServer.value = null;
     fsDrawerSelectCallback = null;
@@ -227,6 +339,10 @@ export function useNginxDeployServers(params?: UseNginxDeployServersParams) {
     activeServerId,
     serverFormRef,
     serverForm,
+    serverSaveFailure,
+    serverDuplicate,
+    viewDuplicateServer,
+    serverFocusRequest,
     fsDrawerOpen,
     fsDrawerServer,
     fsDrawerInitialPath,

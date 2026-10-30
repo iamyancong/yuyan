@@ -31,6 +31,7 @@ import {
   syncBackendWorkspace,
 } from './backend-project-service.mjs';
 import { execSsh, shellQuote, uploadFile, withSsh } from './ssh-service.mjs';
+import { getSshFailureEventExtra, logOperationFailure } from './ssh-errors.mjs';
 import { getOrProbeBackendStatus, invalidateBackendStatus, runWithProbeLimit } from './backend-status-cache.mjs';
 import { getRequestTeamId } from './request-context.mjs';
 import { incrementCounter, measure } from './runtime-metrics.mjs';
@@ -836,10 +837,10 @@ export async function deployBackendTarget(targetId, payload, emit) {
   const operator = String(payload.operator || '').trim() || '未知操作人';
   const signal = payload.signal;
   const logs = [];
-  const log = (level, message, stage = '', source = '') => {
+  const log = (level, message, stage = '', source = '', extra = {}) => {
     const safeMessage = redactDeployLog(message);
-    logs.push({ level, message: safeMessage, stage, ...(source ? { source } : {}), timestamp: new Date().toISOString() });
-    emit?.log(level, safeMessage, stage, source);
+    logs.push({ level, message: safeMessage, stage, ...(source ? { source } : {}), ...(extra?.code ? { code: extra.code } : {}), timestamp: new Date().toISOString() });
+    emit?.log(level, safeMessage, stage, source, extra);
   };
   const stage = (key, percent, message, detail = '') => emit?.stage(key, percent, message, detail);
   const record = await createRecord({
@@ -1003,7 +1004,7 @@ export async function deployBackendTarget(targetId, payload, emit) {
     emit?.result(successRecord);
     return successRecord;
   } catch (error) {
-    log('error', error instanceof Error ? error.message : String(error), 'error');
+    logOperationFailure(log, error, 'error');
     const previousStillOnline = Boolean(previousRelease && (!activationStarted || restoredPrevious));
     await setBackendServiceStatus(target.id, { status: previousStillOnline ? 'online' : 'error', output: error instanceof Error ? error.message : String(error) });
     const failed = await updateRecord(record.id, {
@@ -1018,7 +1019,7 @@ export async function deployBackendTarget(targetId, payload, emit) {
     });
     if (error && typeof error === 'object') error.deployRecord = failed;
     if (signal?.aborted) emit?.result(failed);
-    else emit?.error(error instanceof Error ? error.message : String(error), 'error');
+    else emit?.error(error instanceof Error ? error.message : String(error), 'error', getSshFailureEventExtra(error));
     if (signal?.aborted) return failed;
     throw error;
   }
@@ -1037,10 +1038,10 @@ export async function deployBackendArtifact(targetId, payload, emit) {
   const operator = String(payload.operator || '').trim() || '未知操作人';
   const signal = payload.signal;
   const logs = [];
-  const log = (level, message, stage = '', source = '') => {
+  const log = (level, message, stage = '', source = '', extra = {}) => {
     const safeMessage = redactDeployLog(message);
-    logs.push({ level, message: safeMessage, stage, ...(source ? { source } : {}), timestamp: new Date().toISOString() });
-    emit?.log(level, safeMessage, stage, source);
+    logs.push({ level, message: safeMessage, stage, ...(source ? { source } : {}), ...(extra?.code ? { code: extra.code } : {}), timestamp: new Date().toISOString() });
+    emit?.log(level, safeMessage, stage, source, extra);
   };
   const stage = (key, percent, message, detail = '') => emit?.stage(key, percent, message, detail);
   const localStat = await fsStatSafe(payload.artifactPath);
@@ -1139,7 +1140,7 @@ export async function deployBackendArtifact(targetId, payload, emit) {
     emit?.result(success);
     return success;
   } catch (error) {
-    log('error', error instanceof Error ? error.message : String(error), 'error');
+    logOperationFailure(log, error, 'error');
     const previousStillOnline = Boolean(previousRelease && (!activationStarted || restoredPrevious));
     await setBackendServiceStatus(target.id, { status: previousStillOnline ? 'online' : 'error', output: error instanceof Error ? error.message : String(error) });
     await updateRecord(record.id, {
@@ -1152,7 +1153,7 @@ export async function deployBackendArtifact(targetId, payload, emit) {
       logs,
       finishedAt: new Date().toISOString(),
     });
-    emit?.error(error instanceof Error ? error.message : String(error), 'error');
+    emit?.error(error instanceof Error ? error.message : String(error), 'error', getSshFailureEventExtra(error));
     throw error;
   }
 }
@@ -1364,10 +1365,10 @@ export async function restoreBackendRecord(recordId, payload, emit, action = 'ro
   if (!currentRelease) throw new Error('当前后端版本不存在');
   const operator = String(payload.operator || '').trim() || '未知操作人';
   const logs = [];
-  const log = (level, message, stage = '', source = '') => {
+  const log = (level, message, stage = '', source = '', extra = {}) => {
     const safeMessage = redactDeployLog(message);
-    logs.push({ level, message: safeMessage, stage, ...(source ? { source } : {}), timestamp: new Date().toISOString() });
-    emit?.log(level, safeMessage, stage, source);
+    logs.push({ level, message: safeMessage, stage, ...(source ? { source } : {}), ...(extra?.code ? { code: extra.code } : {}), timestamp: new Date().toISOString() });
+    emit?.log(level, safeMessage, stage, source, extra);
   };
   const record = await createRecord({
     targetId: context.target.id,
@@ -1425,13 +1426,13 @@ export async function restoreBackendRecord(recordId, payload, emit, action = 'ro
     emit?.result(success);
     return success;
   } catch (error) {
-    log('error', error instanceof Error ? error.message : String(error), 'error');
+    logOperationFailure(log, error, 'error');
     await updateRecord(record.id, { status: 'failed', logs, finishedAt: new Date().toISOString() });
     await setBackendServiceStatus(context.target.id, {
       status: !activationStarted || restoredCurrent ? 'online' : 'error',
       output: error instanceof Error ? error.message : String(error),
     });
-    emit?.error(error instanceof Error ? error.message : String(error), 'rollback');
+    emit?.error(error instanceof Error ? error.message : String(error), 'rollback', getSshFailureEventExtra(error));
     throw error;
   }
 }
