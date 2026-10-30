@@ -26,3 +26,15 @@ test('分支、服务器、项目类型精确组合筛选并保持顺序与引�
   assert.deepEqual(filterDeployTargets(targets, { serverId: 2 }).map((item) => item.id), [2, 3]);
   assert.deepEqual(filterDeployTargets(targets, { projectType: 'backend' }).map((item) => item.id), [2]);
 });
+
+test('按 Nginx 实例筛选：同一服务器多个实例时区分（#47）', () => {
+  const withInstances = [
+    { ...targets[0], nginxInstanceId: 11 },
+    { ...targets[2], serverId: 1, nginxInstanceId: 12 },
+    { ...targets[1], serverId: 1, nginxInstanceId: undefined },
+  ];
+  assert.deepEqual(filterDeployTargets(withInstances, { serverId: 1 }).map((item) => item.id), [1, 3, 2]);
+  assert.deepEqual(filterDeployTargets(withInstances, { serverId: 1, nginxInstanceId: 12 }).map((item) => item.id), [3]);
+  assert.deepEqual(filterDeployTargets(withInstances, { nginxInstanceId: 11 }).map((item) => item.id), [1]);
+  assert.equal(filterDeployTargets(withInstances, { nginxInstanceId: 0 }), withInstances);
+});

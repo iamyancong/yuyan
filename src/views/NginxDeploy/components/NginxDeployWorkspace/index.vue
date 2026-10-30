@@ -88,6 +88,7 @@ const handleOpenNginxRuntime = async () => {
             :filter-form="targetState.targetFilterForm"
             :branch-options="targetState.targetBranchFilterOptions.value"
             :server-options="targetState.targetServerFilterOptions.value"
+            :instance-options="targetState.targetInstanceFilterOptions.value"
             :action-config="targetActionConfig"
             @update:filter-form="updateTargetFilterForm"
             @search="targetState.handleTargetFilterSearch"

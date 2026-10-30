@@ -69,6 +69,7 @@ import { normalizeDeployRoot } from './deployRootRecommendationPolicy';
 import { useTargetRuntime } from './useTargetRuntime';
 import { BACKEND_SERVICE_STATUS_CONCURRENCY, mapWithConcurrency } from './targetRuntimePolicy';
 import { filterDeployTargets } from './targetFilterPolicy';
+import { createNginxInstanceFilterOptions, resolveInstanceFilterAfterServerChange } from './targetInstancePolicy';
 import { useTargetNginxConf } from './useTargetNginxConf';
 import {
   findDuplicateDeployTarget,
@@ -214,6 +215,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     projectKeyword: activeProject?.projectName || '',
     branch: undefined,
     serverId: undefined,
+    nginxInstanceId: undefined,
   });
 
   const targetModalOpen = ref(false);
@@ -326,6 +328,21 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
         title: name,
         searchKey: `${name} 代码分支`,
         value: name,
+      };
+    });
+  });
+
+  /** 「Nginx 实例」筛选项：跟随所选服务器，后端项目不参与（#47） */
+  const targetInstanceFilterOptions = computed(() => {
+    const frontendTargets = allTargets.value.filter((target) => target.projectType !== 'backend');
+    return createNginxInstanceFilterOptions(frontendTargets, targetFilterForm.serverId).map((option) => {
+      const title = option.instanceTitle || option.title;
+      const description = option.description || '';
+      return {
+        ...option,
+        label: renderTwoLineSelectOption({ title, description }),
+        title,
+        searchKey: [title, description, option.label].filter(Boolean).join(' '),
       };
     });
   });
@@ -556,6 +573,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     if (projectKeyword) queryParams.projectKeyword = projectKeyword;
     if (targetFilterForm.branch) queryParams.branch = targetFilterForm.branch;
     if (targetFilterForm.serverId) queryParams.serverId = Number(targetFilterForm.serverId);
+    if (targetFilterForm.nginxInstanceId && projectType.value !== 'backend') queryParams.nginxInstanceId = Number(targetFilterForm.nginxInstanceId);
     if (projectType.value && projectType.value !== 'all') {
       queryParams.projectType = projectType.value;
     }
@@ -932,6 +950,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     if (signal?.aborted || refreshSequence !== targetListRefreshSequence) return;
     allTargets.value = completeTargetList;
     ensureTargetServerFilter();
+    targetFilterForm.nginxInstanceId = resolveInstanceFilterAfterServerChange(targetFilterForm.nginxInstanceId, targetInstanceFilterOptions.value);
     const targetList = filterDeployTargets(completeTargetList, getTargetQueryParams());
     targets.value = targetList;
     /** 运行态独立探测，不占用中央列表恢复预算；徽章稍后更新，失败由运行态轮询退避处理。 */
@@ -1496,7 +1515,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
 
   /** 重置部署目标筛选条件 */
   const handleTargetFilterReset = async () => {
-    Object.assign(targetFilterForm, { projectKeyword: '', branch: undefined, serverId: getDefaultTargetServerFilter() });
+    Object.assign(targetFilterForm, { projectKeyword: '', branch: undefined, serverId: getDefaultTargetServerFilter(), nginxInstanceId: undefined });
     await refreshActiveTab({ force: true });
   };
 
@@ -1511,7 +1530,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     allTargets.value = [];
     targetRuntimeSnapshots.value = {};
     targetRuntimeLoading.value = false;
-    Object.assign(targetFilterForm, { projectKeyword: activeProject?.projectName || '', branch: undefined, serverId: undefined });
+    Object.assign(targetFilterForm, { projectKeyword: activeProject?.projectName || '', branch: undefined, serverId: undefined, nginxInstanceId: undefined });
     activeTargetId.value = null;
     nginxTargetId.value = null;
     targetModalOpen.value = false;
@@ -1720,6 +1739,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     targetFilterForm,
     targetBranchFilterOptions,
     targetServerFilterOptions,
+    targetInstanceFilterOptions,
     targetModalOpen,
     activeTargetId,
     nginxTargetId,

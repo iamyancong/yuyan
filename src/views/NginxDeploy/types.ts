@@ -26,6 +26,8 @@ export interface TargetFilterForm {
   projectKeyword: string;
   branch?: string;
   serverId?: number;
+  /** Nginx 实例筛选（#47） */
+  nginxInstanceId?: number;
 }
 
 /** 部署中心 Tab Key */

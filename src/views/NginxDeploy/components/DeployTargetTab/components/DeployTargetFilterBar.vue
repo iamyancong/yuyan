@@ -10,8 +10,11 @@ defineOptions({ name: 'DeployTargetFilterBar' });
  * 下拉选项接口
  */
 interface SelectOption {
-  label: string;
+  label: any;
   value: string | number;
+  /** 悬浮显示的全文，文字过长被省略时可看到 */
+  title?: string;
+  searchKey?: string;
 }
 
 /**
@@ -26,6 +29,10 @@ interface DeployTargetFilterBarProps {
   branchOptions: SelectOption[];
   /** 服务器下拉选项 */
   serverOptions: SelectOption[];
+  /** Nginx 实例下拉选项（跟随所选服务器） */
+  instanceOptions?: SelectOption[];
+  /** 是否展示实例筛选（后端项目隐藏） */
+  showInstanceFilter?: boolean;
 }
 
 const props = defineProps<DeployTargetFilterBarProps>();
@@ -54,7 +61,13 @@ const branch = computed({
 /** 服务器计算属性 */
 const serverId = computed({
   get: () => props.filterForm.serverId,
-  set: (value?: number) => emit('update:filterForm', { ...props.filterForm, serverId: value, branch: undefined }),
+  set: (value?: number) => emit('update:filterForm', { ...props.filterForm, serverId: value, branch: undefined, nginxInstanceId: undefined }),
+});
+
+/** Nginx 实例计算属性 */
+const nginxInstanceId = computed({
+  get: () => props.filterForm.nginxInstanceId,
+  set: (value?: number) => emit('update:filterForm', { ...props.filterForm, nginxInstanceId: value }),
 });
 </script>
 
@@ -115,7 +128,27 @@ const serverId = computed({
             />
           </a-form-item>
         </a-col>
-        <a-col :xs="24" :sm="12" :md="12" :xl="8" class="target-filter-bar__actions">
+        <a-col v-if="showInstanceFilter" :xs="24" :sm="12" :md="12" :xl="4">
+          <a-form-item label="实例" class="target-filter-item">
+            <a-select
+              v-model:value="nginxInstanceId"
+              class="target-filter-bar__instance project-select"
+              :options="instanceOptions || []"
+              placeholder="全部 Nginx 实例"
+              allow-clear
+              show-search
+              option-filter-prop="searchKey"
+              option-label-prop="title"
+              :dropdown-match-select-width="300"
+              :list-height="280"
+              :list-item-height="56"
+              popup-class-name="project-select-dropdown"
+              :not-found-content="'该服务器暂无 Nginx 实例'"
+              @change="emit('search')"
+            />
+          </a-form-item>
+        </a-col>
+        <a-col :xs="24" :sm="12" :md="12" :xl="showInstanceFilter ? 4 : 8" class="target-filter-bar__actions">
           <a-space class="action-space">
             <YButton type="primary" html-type="submit" :loading="loading" @click="emit('search')">
               <template #icon><SearchOutlined /></template>

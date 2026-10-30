@@ -17,8 +17,10 @@ defineOptions({ name: 'DeployTargetTab' });
 
 /** 下拉选项 */
 interface SelectOption {
-  label: string;
+  label: any;
   value: string | number;
+  title?: string;
+  searchKey?: string;
 }
 
 /** 部署目标 Tab 属性 */
@@ -29,6 +31,8 @@ interface DeployTargetTabProps {
   filterForm: TargetFilterForm;
   branchOptions: SelectOption[];
   serverOptions: SelectOption[];
+  /** Nginx 实例筛选项（#47） */
+  instanceOptions?: SelectOption[];
   actionConfig: YTableActionConfig;
 }
 
@@ -97,14 +101,15 @@ const handleFilterFormUpdate = (val: TargetFilterForm) => {
 const { projectType } = useNginxDeployContext();
 
 const activeColumns = computed(() => {
+  const commonExcludedFields = ['nginxInstanceName', 'listenPort', 'nginxServerName'];
   if (projectType.value === 'backend') {
-    const excludedFields = ['siteSummary', 'nginxInstanceName', 'listenPort', 'nginxServerName', 'nginxConfPath', 'uploadStrategy', 'preserveSubDirs', 'projectType'];
+    const excludedFields = [...commonExcludedFields, 'siteSummary', 'nginxConfPath', 'uploadStrategy', 'preserveSubDirs', 'projectType'];
     return targetColumns.filter((col) => !excludedFields.includes(col.field || ''));
   } else if (projectType.value === 'frontend') {
-    const excludedFields = ['projectType', 'nginxInstanceName', 'listenPort', 'nginxServerName'];
+    const excludedFields = [...commonExcludedFields, 'projectType'];
     return targetColumns.filter((col) => !excludedFields.includes(col.field || ''));
   }
-  return targetColumns;
+  return targetColumns.filter((col) => !commonExcludedFields.includes(col.field || ''));
 });
 </script>
 
@@ -115,6 +120,8 @@ const activeColumns = computed(() => {
       :filter-form="filterForm"
       :branch-options="branchOptions"
       :server-options="serverOptions"
+      :instance-options="projectType === 'backend' ? [] : instanceOptions || []"
+      :show-instance-filter="projectType !== 'backend'"
       @update:filter-form="handleFilterFormUpdate"
       @search="emit('search')"
       @reset="emit('reset')"
