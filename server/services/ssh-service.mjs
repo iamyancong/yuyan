@@ -626,43 +626,160 @@ export async function readRemoteText(conn, server, filePath) {
 }
 
 /**
+ * 规范化文本换行符为 LF 以便内容比较。
+ * @param {string} text - 输入文本
+ * @returns {string} 统一 LF 后的文本
+ */
+function normalizeLineEndings(text) {
+  return String(text || '').replace(/\r\n/g, '\n');
+}
+
+/**
+ * 构建按保留数量清理远程文件的 Shell 命令。
+ * @param {Object} options - 清理选项
+ * @param {string} options.dir - 目标目录
+ * @param {string} options.prefix - 字面量文件名前缀
+ * @param {number} [options.keep=10] - 保留数量（默认 10）
+ * @param {boolean} [options.useSudo=false] - 是否使用 sudo
+ * @returns {string} 远程执行的 shell 命令
+ */
+export function buildPruneByCountCommand({ dir, prefix, keep = 10, useSudo = false }) {
+  const parsedKeep = Number(keep);
+  const keepCount = Number.isInteger(parsedKeep) && parsedKeep >= 1 ? parsedKeep : 10;
+  const script = [
+    'if [ -d "$1" ]; then',
+    'dir="$1"; prefix="$2"; keep="$3";',
+    '[ "$keep" -gt 0 ] 2>/dev/null || keep=10;',
+    'old_files=$(export LC_ALL=C; ls -1A "$dir" 2>/dev/null | while IFS= read -r name || [ -n "$name" ]; do',
+    'case "$name" in "$prefix"*)',
+    'if [ -f "$dir/$name" ] && [ ! -L "$dir/$name" ]; then printf \'%s\\n\' "$name"; fi;;',
+    'esac; done | sort -r | tail -n "+$((keep + 1))");',
+    'if [ -n "$old_files" ]; then printf \'%s\\n\' "$old_files" | while IFS= read -r file || [ -n "$file" ]; do',
+    '[ -n "$file" ] && rm -f "$dir/$file"; done; fi;',
+    'fi',
+  ].join(' ');
+  const sudoPrefix = useSudo ? 'sudo -n ' : '';
+  return `${sudoPrefix}sh -c ${shellQuote(script)} sh ${shellQuote(dir)} ${shellQuote(prefix)} ${shellQuote(keepCount)}`;
+}
+
+/**
+ * 清理远程指定目录中符合前缀且超出保留数量的普通文件。
+ * @param {Client} conn - SSH 客户端
+ * @param {Object} options - 选项（参数同 buildPruneByCountCommand）
+ * @returns {Promise<Object>} 执行结果
+ */
+export async function pruneRemoteByCount(conn, options) {
+  const command = buildPruneByCountCommand(options);
+  return execSsh(conn, command, {
+    label: `清理 ${options.dir} 中 ${options.prefix}* 备份文件`,
+    allowFailure: true,
+  });
+}
+
+/**
+ * 解析 Nginx 配置文件备份保留数量。
+ * @param {number|string} [customKeep] - 自定义保留数量
+ * @returns {number} 保留数量（默认 10）
+ */
+export function resolveNginxConfigBackupKeep(customKeep) {
+  if (customKeep !== undefined && customKeep !== null) {
+    const parsedCustom = Number(customKeep);
+    if (Number.isInteger(parsedCustom) && parsedCustom >= 1) return parsedCustom;
+  }
+  const envRaw = Number(process.env.NGINX_CONFIG_BACKUP_KEEP);
+  if (Number.isInteger(envRaw) && envRaw >= 1) return envRaw;
+  return 10;
+}
+
+/**
  * 写入远程文本文件并在写入前备份
  * @param {Client} conn - SSH 客户端
  * @param {Object} server - 服务器配置
  * @param {string} filePath - 文件路径
  * @param {string} content - 文件内容
- * @returns {Promise<{backupPath: string}>} 备份信息
+ * @returns {Promise<{backupPath: string, skipped: boolean}>} 备份信息与是否跳过
  */
 export async function writeRemoteTextWithBackup(conn, server, filePath, content) {
-  const sftp = await getSftp(conn);
-  const timestamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
-  const backupPath = `${filePath}.bak.${timestamp}`;
-  const tempPath = `/tmp/yuyan-nginx-conf-${timestamp}-${Math.random().toString(16).slice(2)}.tmp`;
-  const sudo = server.useSudo ? 'sudo -n ' : '';
+  const useSudo = Boolean(server?.useSudo);
+  const sudo = useSudo ? 'sudo -n ' : '';
 
-  await execSsh(conn, `${sudo}cp ${shellQuote(filePath)} ${shellQuote(backupPath)}`, {
-    label: `备份 ${filePath}`,
+  // 1. 写入前读取远程原文件并区分三种状态：0 -> 存在并读取成功；44 -> 不存在；其他非 0 -> 存在但读不到
+  const probeScript = 'if [ -e "$1" ]; then cat -- "$1"; else exit 44; fi';
+  const probeCmd = `${sudo}sh -c ${shellQuote(probeScript)} sh ${shellQuote(filePath)}`;
+  const readResult = await execSsh(conn, probeCmd, {
+    label: `检查 ${filePath}`,
     allowFailure: true,
   });
 
-  await new Promise((resolve, reject) => {
-    sftp.writeFile(tempPath, content, 'utf8', (error) => {
-      if (error) reject(error);
-      else resolve();
-    });
-  });
-
-  if (server.useSudo) {
-    await execSsh(conn, `sudo -n cp ${shellQuote(tempPath)} ${shellQuote(filePath)} && rm -f ${shellQuote(tempPath)}`, {
-      label: `写入 ${filePath}`,
-    });
+  let shouldBackup = false;
+  if (readResult.code === 0) {
+    if (normalizeLineEndings(readResult.stdout) === normalizeLineEndings(content)) {
+      return { backupPath: '', skipped: true };
+    }
+    shouldBackup = true;
+  } else if (readResult.code === 44) {
+    // 退出码 44：原文件不存在，不备份
+    shouldBackup = false;
   } else {
-    await execSsh(conn, `cp ${shellQuote(tempPath)} ${shellQuote(filePath)} && rm -f ${shellQuote(tempPath)}`, {
-      label: `写入 ${filePath}`,
-    });
+    // 其他非 0 退出码：视为原文件存在但由于权限等原因读不到，不 skip，照常尝试备份
+    shouldBackup = true;
   }
 
-  return { backupPath };
+  // 2. 原文件存在且需要备份：先 cp 备份到同目录 <文件>.bak.<YYYYMMDDHHmmss>
+  const timestamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+  const backupCandidate = `${filePath}.bak.${timestamp}`;
+  let backupPath = '';
+
+  if (shouldBackup) {
+    const backupResult = await execSsh(conn, `${sudo}cp ${shellQuote(filePath)} ${shellQuote(backupCandidate)}`, {
+      label: `备份 ${filePath}`,
+      allowFailure: true,
+    });
+    if (backupResult.code === 0) {
+      backupPath = backupCandidate;
+    } else {
+      console.warn(`[writeRemoteTextWithBackup] 备份远程文件 ${filePath} 失败: ${backupResult.stderr || backupResult.stdout || `退出码 ${backupResult.code}`}`);
+    }
+  }
+
+  // 3. 写入：sftp 写 /tmp/yuyan-nginx-conf-*.tmp → (sudo -n) cp 到目标，finally 里单独 rm -f
+  const tempPath = `/tmp/yuyan-nginx-conf-${timestamp}-${Math.random().toString(16).slice(2)}.tmp`;
+  try {
+    const sftp = await getSftp(conn);
+    await new Promise((resolve, reject) => {
+      sftp.writeFile(tempPath, content, 'utf8', (error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
+
+    await execSsh(conn, `${sudo}cp ${shellQuote(tempPath)} ${shellQuote(filePath)}`, {
+      label: `写入 ${filePath}`,
+    });
+  } finally {
+    await execSsh(conn, `rm -f ${shellQuote(tempPath)}`, {
+      label: `清理临时配置 ${tempPath}`,
+      allowFailure: true,
+    }).catch(() => {});
+  }
+
+  // 4. 写入成功后清理：每个文件只保留最近 N 份备份（默认 10 份）
+  try {
+    const keep = resolveNginxConfigBackupKeep();
+    const pruneResult = await pruneRemoteByCount(conn, {
+      dir: path.posix.dirname(filePath),
+      prefix: `${path.posix.basename(filePath)}.bak.`,
+      keep,
+      useSudo,
+    });
+    if (pruneResult && pruneResult.code !== 0) {
+      console.warn(`[writeRemoteTextWithBackup] 清理旧备份文件告警: ${pruneResult.stderr || pruneResult.stdout || `退出码 ${pruneResult.code}`}`);
+    }
+  } catch (pruneError) {
+    console.warn(`[writeRemoteTextWithBackup] 清理旧备份文件异常:`, pruneError);
+  }
+
+  return { backupPath, skipped: false };
 }
 
 /**

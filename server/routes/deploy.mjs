@@ -51,6 +51,7 @@ import {
   handleListTargetRuntimeSnapshots,
   handleReadNginxConfig,
   handleRollbackRecord,
+  handleRefreshNginxInstanceScript,
   handleRunNginxInstanceAction,
   handleRunNginxRuntimeAction,
   handleSaveNginxConfig,
@@ -170,6 +171,7 @@ router.get('/nginx-instances/:id/archive', handleDownloadNginxInstanceArchive);
 router.post('/nginx-instances/:id/archive-save', handleSaveNginxInstanceArchive);
 router.get('/nginx-instances/:id/status', handleGetNginxInstanceStatus);
 router.post('/nginx-instances/:id/init', handleInitNginxInstance);
+router.post('/nginx-instances/:id/refresh-script', handleRefreshNginxInstanceScript);
 router.post('/nginx-instances/:id/actions/:action', handleRunNginxInstanceAction);
 router.get('/nginx-instances/:id/next-port', handleGetNextNginxInstancePort);
 

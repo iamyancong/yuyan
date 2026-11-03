@@ -336,21 +336,28 @@ export function buildBackendReleaseCompatibilityCommand(paths, releaseDir, jarNa
 }
 
 /**
- * 写入远程文件。
+ * 写入远程文件，临时文件在 finally 中清理（失败也不残留）。
  * @param {Object} conn SSH 连接
  * @param {string} filePath 文件路径
  * @param {string} content 内容
  * @param {{sudo?: boolean, executable?: boolean, mode?: string}} options 选项
  */
-async function writeRemoteContent(conn, filePath, content, options = {}) {
+export async function writeRemoteContent(conn, filePath, content, options = {}) {
   const encoded = Buffer.from(content, 'utf8').toString('base64');
   const tempPath = `/tmp/yuyan-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`;
-  await execSsh(conn, `printf %s ${shellQuote(encoded)} | base64 -d > ${shellQuote(tempPath)}`, { label: `准备 ${path.posix.basename(filePath)}` });
-  const install = options.sudo
-    ? `sudo -n mkdir -p ${shellQuote(path.posix.dirname(filePath))} && sudo -n mv ${shellQuote(tempPath)} ${shellQuote(filePath)}`
-    : `mkdir -p ${shellQuote(path.posix.dirname(filePath))} && mv ${shellQuote(tempPath)} ${shellQuote(filePath)}`;
-  const fileMode = options.executable ? '755' : String(options.mode || '').trim();
-  await execSsh(conn, `${install}${fileMode ? ` && ${options.sudo ? 'sudo -n ' : ''}chmod ${fileMode} ${shellQuote(filePath)}` : ''}`, { label: `写入 ${filePath}` });
+  try {
+    await execSsh(conn, `printf %s ${shellQuote(encoded)} | base64 -d > ${shellQuote(tempPath)}`, { label: `准备 ${path.posix.basename(filePath)}` });
+    const install = options.sudo
+      ? `sudo -n mkdir -p ${shellQuote(path.posix.dirname(filePath))} && sudo -n mv ${shellQuote(tempPath)} ${shellQuote(filePath)}`
+      : `mkdir -p ${shellQuote(path.posix.dirname(filePath))} && mv ${shellQuote(tempPath)} ${shellQuote(filePath)}`;
+    const fileMode = options.executable ? '755' : String(options.mode || '').trim();
+    await execSsh(conn, `${install}${fileMode ? ` && ${options.sudo ? 'sudo -n ' : ''}chmod ${fileMode} ${shellQuote(filePath)}` : ''}`, { label: `写入 ${filePath}` });
+  } finally {
+    await execSsh(conn, `rm -f ${shellQuote(tempPath)}`, {
+      label: `清理临时文件 ${tempPath}`,
+      allowFailure: true,
+    }).catch(() => {});
+  }
 }
 
 /**

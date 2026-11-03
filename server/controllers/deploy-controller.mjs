@@ -66,6 +66,7 @@ import {
   getNginxRuntimeStatus,
   initializeNginxInstanceRuntime,
   initializeNginxRuntime,
+  refreshNginxInstanceScript,
   runNginxInstanceAction,
   runNginxRuntimeAction,
   streamNginxInstanceArchive,
@@ -1155,7 +1156,7 @@ export async function handleInitNginxInstance(req, res) {
       if (!res.writableEnded) res.end();
       return;
     }
-    if (error.statusCode === 409 || error.code === 'NGINX_CONFIG_CONFLICT' || error.code === 'NGINX_INSTANCE_NOT_MANAGED') {
+    if (error.statusCode === 409 || error.code === 'NGINX_CONFIG_CONFLICT' || error.code === 'NGINX_INSTANCE_NOT_MANAGED' || error.code === 'NGINX_INSTANCE_BUSY') {
       res.status(409).json({
         success: false,
         code: error.code || 'NGINX_CONFIG_CONFLICT',
@@ -1171,12 +1172,50 @@ export async function handleInitNginxInstance(req, res) {
 }
 
 /**
+ * 更新 Nginx 实例管理脚本与定时任务
+ */
+export async function handleRefreshNginxInstanceScript(req, res) {
+  const instanceId = Number(req.params.id);
+  try {
+    const data = await refreshNginxInstanceScript(instanceId);
+    console.log(`[nginx-runtime] 成功更新 Nginx 实例 ${instanceId} 的管理脚本与定时任务: script=${JSON.stringify(data.script)}, cron=${data.cron?.status}`);
+    res.json({ success: true, data });
+  } catch (error) {
+    if (error.statusCode === 409 || error.code === 'NGINX_INSTANCE_BUSY' || error.code === 'NGINX_INSTANCE_NOT_MANAGED') {
+      res.status(409).json({
+        success: false,
+        code: error.code || 'CONFLICT',
+        message: error.message,
+        error: error.message,
+        data: error.details || {},
+        details: error.details || {},
+      });
+      return;
+    }
+    if (error.statusCode === 404) {
+      res.status(404).json({ success: false, error: error.message, message: error.message });
+      return;
+    }
+    sendError(res, error, error.statusCode || 400);
+  }
+}
+
+/**
  * 执行 Nginx 实例操作
  */
 export async function handleRunNginxInstanceAction(req, res) {
   try {
     res.json({ success: true, data: await runNginxInstanceAction(Number(req.params.id), String(req.params.action || '')) });
   } catch (error) {
+    if (error.statusCode === 409 || error.code === 'NGINX_INSTANCE_BUSY') {
+      res.status(409).json({
+        success: false,
+        code: error.code || 'NGINX_INSTANCE_BUSY',
+        message: error.message,
+        error: error.message,
+      });
+      return;
+    }
     sendError(res, error, 400);
   }
 }

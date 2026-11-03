@@ -1,11 +1,13 @@
-import { reactive, ref } from 'vue';
+import { h, reactive, ref } from 'vue';
 import message from 'ant-design-vue/es/message';
 import Modal from 'ant-design-vue/es/modal';
+import Typography from 'ant-design-vue/es/typography';
 import {
   createNginxInstance,
   deleteNginxInstance,
   getNginxInstanceStatus,
   initNginxInstanceWithProgress,
+  refreshNginxInstanceScript,
   runNginxInstanceAction,
   updateNginxInstance,
   type DeployProgressEvent,
@@ -42,6 +44,7 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
   const runtimeLoading = ref(false);
   const runtimeInitializing = ref(false);
   const runtimeActionLoading = ref<NginxRuntimeAction | ''>('');
+  const refreshScriptLoading = ref(false);
   const runtimeStatusRequestSeq = ref(0);
   const runtimeInstanceFormOpen = ref(false);
   const runtimeInstanceEditingId = ref<number | null>(null);
@@ -519,6 +522,70 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
   };
 
   /**
+   * 更新托管 Nginx 实例管理脚本与定时任务。
+   */
+  const refreshNginxInstanceScriptAction = async () => {
+    if (!params.ensureLoggedIn()) return;
+    const instance = getActiveInstance();
+    if (!instance || instance.instanceType !== 'managed') return;
+
+    Modal.confirm({
+      title: '更新管理脚本与定时任务',
+      content: '只重新上传 yuyan-nginx.sh 并写入每天日志轮转定时任务，不会重启或重载 Nginx、不改配置和站点。确认继续？',
+      onOk: async () => {
+        refreshScriptLoading.value = true;
+        try {
+          const result = await refreshNginxInstanceScript(instance.id);
+          applyRuntimeStatus(result.status);
+          const scriptText = result.script?.skipped ? '管理脚本已是最新' : '管理脚本已更新';
+          if (result.cron?.status === 'installed' || result.cron?.status === 'unchanged') {
+            const cronText = result.cron?.status === 'installed' ? '定时任务已写入' : '定时任务已存在无需更新';
+            message.success(`${scriptText}，${cronText}`);
+          } else {
+            Modal.warning({
+              title: '定时任务需手动配置',
+              content: () =>
+                h('div', [
+                  h('p', { style: { whiteSpace: 'pre-wrap', marginBottom: '8px' } }, result.cron?.message || ''),
+                  result.cron?.cronLine
+                    ? h(
+                        Typography.Paragraph,
+                        {
+                          copyable: true,
+                          style: {
+                            background: '#f5f5f5',
+                            padding: '8px 12px',
+                            borderRadius: '4px',
+                            fontFamily: 'monospace',
+                            fontSize: '12px',
+                            wordBreak: 'break-all',
+                          },
+                        },
+                        () => result.cron.cronLine
+                      )
+                    : null,
+                ]),
+              width: 560,
+            });
+          }
+          await params.refreshServerList();
+          await params.refreshActiveTab({ force: true });
+        } catch (error: any) {
+          const respData = error?.response?.data || error?.details || error?.data;
+          const isBusy = respData?.code === 'NGINX_INSTANCE_BUSY' || respData?.error?.code === 'NGINX_INSTANCE_BUSY' || error?.code === 'NGINX_INSTANCE_BUSY';
+          if (isBusy) {
+            message.warning(getErrorMessage(error));
+          } else {
+            message.error(getErrorMessage(error));
+          }
+        } finally {
+          refreshScriptLoading.value = false;
+        }
+      },
+    });
+  };
+
+  /**
    * 创建 Nginx 实例。
    * @param instanceType 实例类型
    */
@@ -667,6 +734,7 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
     runtimeLoading,
     runtimeInitializing,
     runtimeActionLoading,
+    refreshScriptLoading,
     runtimeArchiveDownloading,
     archiveSelectionOpen,
     archiveSelectionLoading,
@@ -686,6 +754,7 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
     refreshRuntimeStatus,
     initServerNginxRuntime,
     runServerNginxRuntimeAction,
+    refreshNginxInstanceScriptAction,
     downloadActiveNginxArchive,
     refreshArchiveSites,
     mainConfigConflictModalOpen,

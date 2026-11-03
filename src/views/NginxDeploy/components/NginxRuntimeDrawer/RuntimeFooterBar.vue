@@ -5,6 +5,7 @@ import {
   CloseOutlined,
   PoweroffOutlined,
   ReloadOutlined,
+  ScheduleOutlined,
   SyncOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons-vue';
@@ -20,6 +21,7 @@ interface RuntimeFooterBarProps {
   canManagedOperate: boolean;
   activeInstance: NginxInstance | null;
   actionLoading: NginxRuntimeAction | '';
+  refreshScriptLoading?: boolean;
 }
 
 defineProps<RuntimeFooterBarProps>();
@@ -29,6 +31,7 @@ const emit = defineEmits<{
   (e: 'action', value: NginxRuntimeAction): void;
   (e: 'close'): void;
   (e: 'init'): void;
+  (e: 'refresh-script'): void;
 }>();
 </script>
 
@@ -41,24 +44,33 @@ const emit = defineEmits<{
       </YButton>
       <YButton
         v-if="activeInstance?.instanceType === 'managed'"
-        :disabled="!canOperate"
+        :disabled="!canOperate || refreshScriptLoading"
         :loading="actionLoading === 'test'"
         @click="emit('action', 'test')"
       >
         <template #icon><CheckCircleOutlined /></template>
         校验
       </YButton>
-      <YButton v-if="activeInstance?.instanceType === 'managed'" :disabled="!canManagedOperate" :loading="actionLoading === 'start'" @click="emit('action', 'start')">
+      <YButton v-if="activeInstance?.instanceType === 'managed'" :disabled="!canManagedOperate || refreshScriptLoading" :loading="actionLoading === 'start'" @click="emit('action', 'start')">
         <template #icon><PoweroffOutlined /></template>
         启动
       </YButton>
-      <YButton :disabled="!canOperate" :loading="actionLoading === 'reload'" @click="emit('action', 'reload')">
+      <YButton :disabled="!canOperate || refreshScriptLoading" :loading="actionLoading === 'reload'" @click="emit('action', 'reload')">
         <template #icon><ReloadOutlined /></template>
         重载
       </YButton>
-      <YButton v-if="activeInstance?.instanceType === 'managed'" :disabled="!canManagedOperate" :loading="actionLoading === 'stop'" danger @click="emit('action', 'stop')">
+      <YButton v-if="activeInstance?.instanceType === 'managed'" :disabled="!canManagedOperate || refreshScriptLoading" :loading="actionLoading === 'stop'" danger @click="emit('action', 'stop')">
         <template #icon><CloseOutlined /></template>
         停止
+      </YButton>
+      <YButton
+        v-if="activeInstance?.instanceType === 'managed' && initialized"
+        :disabled="!canOperate || initializing || !!actionLoading"
+        :loading="refreshScriptLoading"
+        @click="emit('refresh-script')"
+      >
+        <template #icon><ScheduleOutlined /></template>
+        更新管理脚本与定时任务
       </YButton>
     </a-space>
 

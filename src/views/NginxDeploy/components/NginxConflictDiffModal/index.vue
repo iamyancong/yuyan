@@ -98,7 +98,7 @@ const {
     </div>
 
     <div class="conflict-footer">
-      <div class="footer-tip">覆盖前平台将自动在服务器生成 <code>.bak.&lt;timestamp&gt;</code> 备份</div>
+      <div class="footer-tip">覆盖前平台将自动在服务器生成 <code>.bak.&lt;timestamp&gt;</code> 备份（每个文件保留最近 10 份）</div>
       <div class="footer-actions">
         <YButton :disabled="loading" @click="handleCancel">取消</YButton>
         <YButton

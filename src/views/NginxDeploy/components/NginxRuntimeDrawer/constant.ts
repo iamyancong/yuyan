@@ -32,6 +32,7 @@ export interface NginxRuntimeDrawerProps {
   loading: boolean;
   initializing: boolean;
   actionLoading: NginxRuntimeAction | '';
+  refreshScriptLoading?: boolean;
   archiveDownloading: boolean;
   archiveSelectionOpen: boolean;
   archiveSelectionLoading: boolean;
@@ -59,6 +60,7 @@ export type NginxRuntimeDrawerEmits = {
   (e: 'deleteInstance'): void;
   (e: 'init'): void;
   (e: 'action', value: NginxRuntimeAction): void;
+  (e: 'refresh-script'): void;
   (e: 'downloadArchive', type: 'all' | 'html' | 'conf'): void;
   (e: 'update:archiveSelectionOpen', value: boolean): void;
   (e: 'refreshArchiveSites'): void;

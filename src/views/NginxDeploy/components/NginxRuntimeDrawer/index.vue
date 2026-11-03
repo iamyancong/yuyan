@@ -173,8 +173,10 @@ const openConnectedNginx = (instanceId: number) => {
         :can-managed-operate="canManagedOperate"
         :active-instance="activeInstance"
         :action-loading="actionLoading"
+        :refresh-script-loading="props.refreshScriptLoading"
         @refresh="emit('refresh')"
         @action="(value) => emit('action', value)"
+        @refresh-script="emit('refresh-script')"
         @close="visible = false"
         @init="emit('init')"
       />

@@ -1947,16 +1947,18 @@ export async function saveNginxConfig(targetId, payload) {
   return withSsh(server, async (conn) => {
     const effectiveUseSudo = Boolean(nginxInstance?.useSudo || server?.useSudo);
     const effectiveServer = { ...server, useSudo: effectiveUseSudo };
-    const { backupPath } = await writeRemoteTextWithBackup(conn, effectiveServer, confPath, payload.content || '');
+    const { backupPath = '', skipped = false } = await writeRemoteTextWithBackup(conn, effectiveServer, confPath, payload.content || '');
     let testResult;
     try {
       testResult = await runNginxTest(conn, server, nginxInstance);
     } catch (error) {
-      const sudo = effectiveUseSudo ? 'sudo -n ' : '';
-      await execSsh(conn, `${sudo}cp ${shellQuote(backupPath)} ${shellQuote(confPath)}`, {
-        allowFailure: true,
-        label: '恢复 Nginx 配置文件备份',
-      });
+      if (backupPath) {
+        const sudo = effectiveUseSudo ? 'sudo -n ' : '';
+        await execSsh(conn, `${sudo}cp ${shellQuote(backupPath)} ${shellQuote(confPath)}`, {
+          allowFailure: true,
+          label: '恢复 Nginx 配置文件备份',
+        });
+      }
       throw error;
     }
     if (payload.reload !== false) {
@@ -1965,6 +1967,7 @@ export async function saveNginxConfig(targetId, payload) {
     return {
       success: true,
       backupPath,
+      skipped,
       testOutput: `${testResult.stdout || ''}${testResult.stderr || ''}`.trim(),
     };
   });

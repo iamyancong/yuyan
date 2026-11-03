@@ -841,6 +841,7 @@ export interface NginxSiteSyncResult {
   success: boolean;
   path: string;
   backupPath: string;
+  skipped?: boolean;
   testOutput: string;
   reloadOutput: string;
 }
@@ -1132,6 +1133,24 @@ export const runNginxRuntimeAction = (serverId: number, action: NginxRuntimeActi
 export const runNginxInstanceAction = (instanceId: number, action: NginxRuntimeAction) =>
   client.post(`/nginx-instances/${instanceId}/actions/${action}`).then(unwrap<NginxRuntimeActionResult>);
 
+/** 更新 Nginx 实例管理脚本与定时任务结果 */
+export interface RefreshNginxInstanceScriptResult {
+  script: {
+    backupPath: string;
+    skipped: boolean;
+  };
+  cron: {
+    status: 'installed' | 'unchanged' | 'no_crontab' | 'read_failed' | 'write_failed';
+    cronLine: string;
+    message: string;
+  };
+  status: NginxRuntimeStatus;
+}
+
+/** 更新托管 Nginx 实例管理脚本与定时任务 */
+export const refreshNginxInstanceScript = (instanceId: number) =>
+  client.post(`/nginx-instances/${instanceId}/refresh-script`).then(unwrap<RefreshNginxInstanceScriptResult>);
+
 /**
  * 构建托管 Nginx 实例运行包浏览器直连下载地址。
  * @param instanceId Nginx 实例 ID
@@ -1277,7 +1296,7 @@ export const readNginxConf = (targetId: number) => client.get(`/targets/${target
 
 /** 保存 Nginx 配置文件 */
 export const saveNginxConf = (targetId: number, content: string, reload = true) =>
-  client.put(`/targets/${targetId}/nginx-conf`, { content, reload }).then(unwrap<{ backupPath: string; testOutput: string }>);
+  client.put(`/targets/${targetId}/nginx-conf`, { content, reload }).then(unwrap<{ backupPath: string; testOutput: string; skipped?: boolean }>);
 
 /** 测试 Nginx 配置文件 */
 export const testNginxConf = (targetId: number) => client.post(`/targets/${targetId}/nginx-test`).then(unwrap<{ output: string }>);

@@ -50,7 +50,13 @@ export function useTargetNginxConf(
     }
     try {
       const result = await saveNginxConf(targetId, content, true);
-      message.success(`Nginx 配置文件已保存，备份：${result.backupPath}`);
+      if (result.skipped) {
+        message.success('Nginx 配置内容未变化，未生成新备份');
+      } else if (result.backupPath) {
+        message.success(`Nginx 配置文件已保存，备份：${result.backupPath}`);
+      } else {
+        message.success('Nginx 配置文件已保存');
+      }
       done?.();
     } catch (error) {
       done?.(error);

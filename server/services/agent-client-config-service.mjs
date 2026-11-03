@@ -47,12 +47,30 @@ const readText = async (filePath) => fs.readFile(filePath, 'utf8').catch((error)
   throw error;
 });
 
+/**
+ * 解析 Agent 客户端配置备份保留数量。
+ * @param {number|string} [customKeep] - 自定义保留数量
+ * @returns {number} 保留数量（默认 5）
+ */
+export function resolveAgentClientConfigBackupKeep(customKeep) {
+  if (customKeep !== undefined && customKeep !== null) {
+    const parsedCustom = Number(customKeep);
+    if (Number.isInteger(parsedCustom) && parsedCustom >= 1) return parsedCustom;
+  }
+  const envRaw = Number(process.env.AGENT_CLIENT_CONFIG_BACKUP_KEEP);
+  if (Number.isInteger(envRaw) && envRaw >= 1) return envRaw;
+  return 5;
+}
+
 /** 原子写入配置并保留备份。 */
-async function atomicWrite(filePath, content, previousContent) {
+export async function atomicWrite(filePath, content, previousContent) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const currentContent = await readText(filePath);
   if (currentContent !== previousContent) {
     throw new AgentError('client_config_changed', `${filePath} 已被其他程序修改，请刷新状态后重试`);
+  }
+  if (currentContent === content) {
+    return '';
   }
   let backupPath = '';
   if (previousContent) {
@@ -63,6 +81,26 @@ async function atomicWrite(filePath, content, previousContent) {
   await fs.writeFile(tempPath, content, { mode: 0o600 });
   await fs.rename(tempPath, filePath);
   await fs.chmod(filePath, 0o600).catch(() => undefined);
+
+  // 清理旧备份：只保留最近 N 份（默认 5 份）
+  try {
+    const keep = resolveAgentClientConfigBackupKeep();
+    const dir = path.dirname(filePath);
+    const baseName = path.basename(filePath);
+    const prefix = `${baseName}.yuyan-backup-`;
+    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+    const matching = entries
+      .filter((entry) => entry.isFile() && entry.name.startsWith(prefix))
+      .map((entry) => entry.name)
+      .sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+    const toDelete = matching.slice(keep);
+    for (const name of toDelete) {
+      await fs.unlink(path.join(dir, name)).catch(() => {});
+    }
+  } catch (pruneError) {
+    console.warn(`[atomicWrite] 清理备份文件失败:`, pruneError);
+  }
+
   return backupPath;
 }
 

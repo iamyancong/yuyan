@@ -837,7 +837,7 @@ export function renderMainNginxConfig(config, explicitInstanceId = null) {
  * 渲染用户级 Nginx 管理脚本。
  * @returns {string} 脚本内容
  */
-function renderRuntimeScript() {
+export function renderRuntimeScript() {
   return [
     '#!/usr/bin/env bash',
     'set -euo pipefail',
@@ -890,12 +890,234 @@ function renderRuntimeScript() {
     '      exit 3',
     '    fi',
     '    ;;',
+    '  rotate-logs)',
+    '    KEEP_DAYS="${2:-14}"',
+    '    if ! [[ "$KEEP_DAYS" =~ ^[1-9][0-9]*$ ]]; then',
+    '      KEEP_DAYS=14',
+    '    fi',
+    '    LOGS_DIR="$BASE_DIR/logs"',
+    '    if [ ! -d "$LOGS_DIR" ]; then',
+    '      exit 0',
+    '    fi',
+    '    if [ -f "$PID" ]; then',
+    '      pid="$(cat "$PID" 2>/dev/null || true)"',
+    '      if [ -n "$pid" ]; then',
+    '        proc_exists=0',
+    '        if [ -d "/proc/$pid" ] 2>/dev/null || kill -0 "$pid" 2>/dev/null; then',
+    '          proc_exists=1',
+    '        fi',
+    '        if [ "$proc_exists" -eq 1 ] && ! kill -0 "$pid" 2>/dev/null; then',
+    '          echo "nginx 进程由其他账号运行，当前账号无法发送 reopen 信号，已跳过本次日志轮转" >&2',
+    '          exit 1',
+    '        fi',
+    '      fi',
+    '    fi',
+    '    TIMESTAMP="$(date +%Y%m%d%H%M%S)"',
+    '    ROTATED_COUNT=0',
+    '    for log_file in "$LOGS_DIR"/*.log; do',
+    '      [ -f "$log_file" ] || continue',
+    '      [ -s "$log_file" ] || continue',
+    '      target_file="${log_file}.${TIMESTAMP}"',
+    '      if [ -e "$target_file" ]; then',
+    '        target_file="${target_file}.$$"',
+    '        suffix=1',
+    '        while [ -e "$target_file" ]; do',
+    '          target_file="${log_file}.${TIMESTAMP}.${suffix}"',
+    '          suffix=$((suffix + 1))',
+    '        done',
+    '      fi',
+    '      mv "$log_file" "$target_file"',
+    '      ROTATED_COUNT=$((ROTATED_COUNT + 1))',
+    '    done',
+    '',
+    '    if [ "$ROTATED_COUNT" -gt 0 ] && is_running; then',
+    '      if ! "$NGINX" -p "$BASE_DIR/" -c "$CONF" -s reopen; then',
+    '        echo "nginx 日志 reopen 信号发送失败，已终止本次轮转，保留未压缩日志以防数据丢失" >&2',
+    '        exit 1',
+    '      fi',
+    '      sleep 1',
+    '    fi',
+    '',
+    '    if command -v gzip >/dev/null 2>&1; then',
+    '      for uncompressed in "$LOGS_DIR"/*.log.*; do',
+    '        [ -f "$uncompressed" ] || continue',
+    '        case "$uncompressed" in',
+    '          *.gz) continue ;;',
+    '        esac',
+    '        gzip -f "$uncompressed" 2>/dev/null || true',
+    '      done',
+    '    fi',
+    '',
+    '    find "$LOGS_DIR" -maxdepth 1 -type f -name \'*.log.*\' -mtime "+$KEEP_DAYS" -exec rm -f {} + 2>/dev/null || true',
+    '    ;;',
     '  help|*)',
-    '    echo "用法: $0 {start|stop|reload|test|status}"',
+    '    echo "用法: $0 {start|stop|reload|test|status|rotate-logs [keep_days]}"',
     '    ;;',
     'esac',
     '',
   ].join('\n');
+}
+
+/** 进程内按 Nginx 实例 ID 的互斥锁映射 */
+const nginxInstanceLocks = new Map();
+
+/**
+ * 获取 Nginx 实例操作锁。
+ * @param {number|string} instanceId - 实例 ID
+ * @param {string} opName - 操作名称
+ */
+export function acquireNginxInstanceLock(instanceId, opName) {
+  const numericId = Number(instanceId);
+  const currentOp = nginxInstanceLocks.get(numericId);
+  if (currentOp) {
+    const error = new Error(`该 Nginx 实例正在执行其他操作（${currentOp}），请稍后再试`);
+    error.statusCode = 409;
+    error.code = 'NGINX_INSTANCE_BUSY';
+    throw error;
+  }
+  nginxInstanceLocks.set(numericId, opName);
+}
+
+/**
+ * 释放 Nginx 实例操作锁。
+ * @param {number|string} instanceId - 实例 ID
+ */
+export function releaseNginxInstanceLock(instanceId) {
+  nginxInstanceLocks.delete(Number(instanceId));
+}
+
+/**
+ * 解析托管 Nginx 日志保留天数。
+ * 优先级：显式参数 > 环境变量 NGINX_LOG_KEEP_DAYS > 14
+ * @param {number|string} [customKeepDays] - 显式传入的保留天数
+ * @returns {number} 保留天数（默认 14）
+ */
+export function resolveNginxLogKeepDays(customKeepDays) {
+  if (customKeepDays !== undefined && customKeepDays !== null) {
+    const parsedCustom = Number(customKeepDays);
+    if (Number.isInteger(parsedCustom) && parsedCustom >= 1) return parsedCustom;
+  }
+  const envRaw = Number(process.env.NGINX_LOG_KEEP_DAYS);
+  if (Number.isInteger(envRaw) && envRaw >= 1) return envRaw;
+  return 14;
+}
+
+/**
+ * 解析日志轮转 crontab 安装结果。
+ * @param {Object} result - SSH 执行结果对象 { code, stdout, stderr }
+ * @param {string} cronLine - 待安装的定时任务行
+ * @param {{ useSudo?: boolean }} [options] - 选项
+ * @returns {{ status: 'installed'|'unchanged'|'no_crontab'|'read_failed'|'write_failed', cronLine: string, message: string }}
+ */
+export function parseLogRotateCronResult(result, cronLine, options = {}) {
+  const useSudo = Boolean(options?.useSudo);
+  const editCmd = useSudo ? 'sudo crontab -e' : 'crontab -e';
+  const stdout = String(result?.stdout || '');
+  const stderr = String(result?.stderr || '');
+  const code = result?.code ?? 1;
+
+  if (code === 0) {
+    if (stdout.includes('yuyan-cron:unchanged')) {
+      return {
+        status: 'unchanged',
+        cronLine,
+        message: '定时任务已存在且无需更新',
+      };
+    }
+    return {
+      status: 'installed',
+      cronLine,
+      message: '定时任务已成功安装',
+    };
+  }
+
+  if (code === 45) {
+    return {
+      status: 'no_crontab',
+      cronLine,
+      message: `服务器未安装 crontab（cron），平台不提供 SSH 兜底轮转，请安装 cron 后重新点击「更新管理脚本与定时任务」，或手动执行 ${editCmd} 添加以下一行：\n${cronLine}`,
+    };
+  }
+
+  if (code === 46) {
+    const detail = stderr.trim() || stdout.trim() || '权限不足或读取失败';
+    return {
+      status: 'read_failed',
+      cronLine,
+      message: `读取服务器定时任务失败（${detail}），未修改现有 crontab。可手动执行 ${editCmd} 添加以下一行：\n${cronLine}`,
+    };
+  }
+
+  // 47 或其他非 0 退出码
+  const detail = stderr.trim() || stdout.trim() || `退出码 ${code}`;
+  return {
+    status: 'write_failed',
+    cronLine,
+    message: `写入服务器定时任务失败（${detail}）。可手动执行 ${editCmd} 添加以下一行：\n${cronLine}`,
+  };
+}
+
+/**
+ * 构建将托管 Nginx 日志轮转任务安装到 crontab 的 Shell 命令。
+ * @param {Object} config - 运行时配置
+ * @param {number} [keepDays] - 保留天数
+ * @returns {{command: string, cronLine: string, marker: string}} 命令及 cron 信息
+ */
+export function buildLogRotateCronInstallCommand(config, keepDays) {
+  const effectiveKeepDays = resolveNginxLogKeepDays(keepDays);
+  const scriptPath = String(config?.scriptPath || '').trim();
+  const scriptSha = crypto.createHash('sha256').update(scriptPath).digest('hex');
+  const markerTag = scriptSha.slice(0, 12);
+  const marker = `# yuyan-nginx-rotate-logs:${markerTag}`;
+  const minute = parseInt(scriptSha.slice(0, 4), 16) % 60;
+  // cron 中 % 会被当作换行符，将命令部分的 % 转义为 \%
+  const commandPart = `${shellQuote(scriptPath)} rotate-logs ${effectiveKeepDays} >/dev/null 2>&1`.replace(/%/g, '\\%');
+  const cronLine = `${minute} 3 * * * ${commandPart} ${marker}`;
+
+  const crontabCmd = config?.useSudo ? 'sudo -n crontab' : 'crontab';
+  const script = [
+    'command -v crontab >/dev/null 2>&1 || exit 45;',
+    'ERR_FILE=$(mktemp 2>/dev/null || echo "/tmp/yuyan-cron-err-$$.tmp");',
+    `EXISTING=$(${crontabCmd} -l 2>"$ERR_FILE");`,
+    'CRON_EXIT=$?;',
+    'CRON_ERR=$(cat "$ERR_FILE" 2>/dev/null || true);',
+    'rm -f "$ERR_FILE";',
+    'if [ "$CRON_EXIT" -eq 0 ]; then',
+    '  :;',
+    'else',
+    // 读取 crontab 失败处理：收紧空 crontab 判定，
+    // 仅匹配 vixie/cronie 的 "no crontab for <user>" 以及 busybox 1.3x 的 "crontab: can't open 'root': No such file or directory"；
+    // 绝不能单独匹配 "No such file"，避免类似 "sudo: crontab: No such file or directory"（命令缺失或环境错误）被误当作空 crontab。
+    '  case "$CRON_ERR" in',
+    '    *"no crontab for "*|*"can\'t open \'"*"No such file or directory"*)',
+    '      EXISTING="";;',
+    '    *)',
+    '      printf "%s\\n" "$CRON_ERR" >&2;',
+    '      exit 46;;',
+    '  esac;',
+    'fi;',
+    `MATCHED=$(printf '%s\\n' "$EXISTING" | grep -F ${shellQuote(marker)} || true);`,
+    `if [ "$MATCHED" = ${shellQuote(cronLine)} ]; then`,
+    '  printf "yuyan-cron:unchanged\\n";',
+    '  exit 0;',
+    'fi;',
+    `FILTERED=$(printf '%s\\n' "$EXISTING" | grep -F -v ${shellQuote(marker)} || true);`,
+    'WRITE_OK=0;',
+    'if [ -n "$FILTERED" ]; then',
+    `  printf '%s\\n%s\\n' "$FILTERED" ${shellQuote(cronLine)} | ${crontabCmd} - && WRITE_OK=1;`,
+    'else',
+    `  printf '%s\\n' ${shellQuote(cronLine)} | ${crontabCmd} - && WRITE_OK=1;`,
+    'fi;',
+    'if [ "$WRITE_OK" -eq 1 ]; then',
+    '  printf "yuyan-cron:installed\\n";',
+    '  exit 0;',
+    'else',
+    '  exit 47;',
+    'fi',
+  ].join(' ');
+
+  const command = `sh -c ${shellQuote(script)}`;
+  return { command, cronLine, marker };
 }
 
 /**
@@ -1395,6 +1617,56 @@ export async function initializeNginxRuntime(serverId, payload = {}, emit = {}) 
 }
 
 /**
+ * 安装托管 Nginx 管理脚本 yuyan-nginx.sh 与配置日志轮转定时任务。
+ * @param {Object} conn - SSH 连接
+ * @param {Object} sshServer - SSH 服务器配置
+ * @param {Object} config - 运行时配置
+ * @param {Object} [emit] - 进度回调对象
+ * @returns {Promise<{ script: { backupPath: string, skipped: boolean }, cron: { status: string, cronLine: string, message: string } }>}
+ */
+export async function installManagedScriptAndLogRotateCron(conn, sshServer, config, emit = {}) {
+  // 1. 写入管理脚本并设置可执行权限
+  const scriptContent = renderRuntimeScript();
+  const scriptBackup = await writeRemoteTextWithBackup(
+    conn,
+    { ...sshServer, useSudo: config.useSudo },
+    config.scriptPath,
+    scriptContent
+  );
+  await execSsh(conn, `${config.useSudo ? 'sudo -n ' : ''}chmod +x ${shellQuote(config.scriptPath)}`, {
+    label: '设置管理脚本权限',
+  });
+
+  const script = {
+    backupPath: scriptBackup?.backupPath || '',
+    skipped: Boolean(scriptBackup?.skipped),
+  };
+
+  // 2. 安装日志轮转定时任务
+  const { command: cronCommand, cronLine } = buildLogRotateCronInstallCommand(config);
+  let cron;
+  try {
+    const cronResult = await execSsh(conn, cronCommand, {
+      label: '配置日志轮转定时任务',
+      allowFailure: true,
+    });
+    cron = parseLogRotateCronResult(cronResult, cronLine, { useSudo: config.useSudo });
+    if (cron.status === 'installed') {
+      emit.log?.('success', '已配置托管 Nginx 每天自动日志轮转定时任务', 'configure');
+    } else if (cron.status === 'unchanged') {
+      emit.log?.('info', '托管 Nginx 每天自动日志轮转定时任务已存在，保持不变', 'configure');
+    } else {
+      emit.log?.('warn', `配置日志轮转定时任务未完成：${cron.message}`, 'configure');
+    }
+  } catch (cronError) {
+    cron = parseLogRotateCronResult({ code: 1, stderr: cronError.message }, cronLine, { useSudo: config.useSudo });
+    emit.log?.('warn', `配置日志轮转定时任务异常（${cronError.message}）`, 'configure');
+  }
+
+  return { script, cron };
+}
+
+/**
  * 初始化指定托管 Nginx 实例。
  * @param {number} instanceId - Nginx 实例 ID
  * @param {Object} payload - 初始化参数
@@ -1424,158 +1696,219 @@ export async function initializeNginxInstanceRuntime(instanceId, payload = {}, e
     throw notManagedError;
   }
 
-  const { instanceType: _ignored, force: _f, expectedSha256: _e, ...safePayload } = payload;
-  const effectiveBaseRoot = safePayload.baseRoot || instance.baseRoot;
-  const derivedPaths = deriveRuntimePaths(effectiveBaseRoot);
-  const effectiveInstance = {
-    ...instance,
-    ...safePayload,
-    baseRoot: effectiveBaseRoot,
-    nginxRoot: safePayload.nginxRoot || (safePayload.baseRoot ? derivedPaths.installRoot : instance.nginxRoot),
-    htmlRoot: safePayload.htmlRoot || (safePayload.baseRoot ? derivedPaths.webRoot : instance.htmlRoot),
-    sitesDir: safePayload.sitesDir || (safePayload.baseRoot ? derivedPaths.sitesDir : instance.sitesDir),
-    logsDir: safePayload.logsDir || (safePayload.baseRoot ? derivedPaths.logsDir : instance.logsDir),
-    scriptPath: safePayload.scriptPath || (safePayload.baseRoot ? derivedPaths.scriptPath : instance.scriptPath),
-  };
-  const activeServer = server;
-  const config = resolveRuntimeConfig(effectiveInstance);
-  let activeInstance = effectiveInstance;
+  acquireNginxInstanceLock(instanceId, '初始化运行时');
+  try {
+    const { instanceType: _ignored, force: _f, expectedSha256: _e, ...safePayload } = payload;
+    const effectiveBaseRoot = safePayload.baseRoot || instance.baseRoot;
+    const derivedPaths = deriveRuntimePaths(effectiveBaseRoot);
+    const effectiveInstance = {
+      ...instance,
+      ...safePayload,
+      baseRoot: effectiveBaseRoot,
+      nginxRoot: safePayload.nginxRoot || (safePayload.baseRoot ? derivedPaths.installRoot : instance.nginxRoot),
+      htmlRoot: safePayload.htmlRoot || (safePayload.baseRoot ? derivedPaths.webRoot : instance.htmlRoot),
+      sitesDir: safePayload.sitesDir || (safePayload.baseRoot ? derivedPaths.sitesDir : instance.sitesDir),
+      logsDir: safePayload.logsDir || (safePayload.baseRoot ? derivedPaths.logsDir : instance.logsDir),
+      scriptPath: safePayload.scriptPath || (safePayload.baseRoot ? derivedPaths.scriptPath : instance.scriptPath),
+    };
+    const activeServer = server;
+    const config = resolveRuntimeConfig(effectiveInstance);
+    let activeInstance = effectiveInstance;
 
-  await withSsh(activeServer, async (conn) => {
-    // ── 阶段 1：校验平台 ──
-    emit.stage?.('validate', 5, '校验服务器平台', '');
-    const platform = await assertRemotePlatform(conn);
-    emit.log?.('success', `服务器架构校验通过：${platform}`, 'validate');
+    await withSsh(activeServer, async (conn) => {
+      // ── 阶段 1：校验平台 ──
+      emit.stage?.('validate', 5, '校验服务器平台', '');
+      const platform = await assertRemotePlatform(conn);
+      emit.log?.('success', `服务器架构校验通过：${platform}`, 'validate');
 
-    // ── 阶段 2：探测运行时环境 ──
-    emit.stage?.('detect', 10, '探测服务器运行时环境', '');
-    const { glibcVersion, hasXcrypt, summary } = await detectRemoteEnvironment(conn);
-    emit.log?.('info', `服务器环境：${summary}`, 'detect');
+      // ── 阶段 2：探测运行时环境 ──
+      emit.stage?.('detect', 10, '探测服务器运行时环境', '');
+      const { glibcVersion, hasXcrypt, summary } = await detectRemoteEnvironment(conn);
+      emit.log?.('info', `服务器环境：${summary}`, 'detect');
 
-    // ── 前置主配置安全性与防篡改检查（在上传解压前预检）──
-    emit.stage?.('precheck', 12, '检查主配置安全性', config.mainConfPath);
-    const sudo = config.useSudo ? 'sudo -n ' : '';
-    const generatedBody = renderMainNginxConfigBody(config);
-    const mainConfigContent = attachManagedInstanceHeader(generatedBody, effectiveInstance.id);
-    const existingResult = await execSsh(conn, `${sudo}test -f ${shellQuote(config.mainConfPath)}`, {
-      label: '检查主配置是否存在',
-      allowFailure: true,
-    });
-    let fileExists = false;
-    if (existingResult.code === 0) {
-      fileExists = true;
-    } else if (existingResult.code === 1) {
-      fileExists = false;
-    } else {
-      const errorMsg = (existingResult.stderr || existingResult.stdout || '').trim() || '未知命令执行错误';
-      throw new Error(`检查主配置文件是否存在失败（退出码 ${existingResult.code}）：${errorMsg}`);
-    }
-
-    if (fileExists) {
-      const existingContent = await readRemoteText(conn, { ...activeServer, useSudo: config.useSudo }, config.mainConfPath);
-      const inspection = inspectMainNginxConfigManagedState(existingContent, effectiveInstance, generatedBody);
-      if (!inspection.canAutoOverwrite && !force) {
-        const conflictError = new Error(inspection.reason || '主配置文件存在手工修改或未被平台接管，需确认覆盖接管');
-        conflictError.statusCode = 409;
-        conflictError.code = 'NGINX_CONFIG_CONFLICT';
-        conflictError.details = {
-          instanceId: effectiveInstance.id,
-          path: config.mainConfPath,
-          currentContent: existingContent,
-          generatedContent: mainConfigContent,
-          currentSha256: inspection.currentSha256 || computeConfigBodySha256(existingContent),
-          reason: inspection.reason,
-        };
-        throw conflictError;
+      // ── 前置主配置安全性与防篡改检查（在上传解压前预检）──
+      emit.stage?.('precheck', 12, '检查主配置安全性', config.mainConfPath);
+      const sudo = config.useSudo ? 'sudo -n ' : '';
+      const generatedBody = renderMainNginxConfigBody(config);
+      const mainConfigContent = attachManagedInstanceHeader(generatedBody, effectiveInstance.id);
+      const existingResult = await execSsh(conn, `${sudo}test -f ${shellQuote(config.mainConfPath)}`, {
+        label: '检查主配置是否存在',
+        allowFailure: true,
+      });
+      let fileExists = false;
+      if (existingResult.code === 0) {
+        fileExists = true;
+      } else if (existingResult.code === 1) {
+        fileExists = false;
+      } else {
+        const errorMsg = (existingResult.stderr || existingResult.stdout || '').trim() || '未知命令执行错误';
+        throw new Error(`检查主配置文件是否存在失败（退出码 ${existingResult.code}）：${errorMsg}`);
       }
-      if (force) {
-        const actualSha = computeConfigBodySha256(existingContent);
-        if (actualSha !== expectedSha256) {
-          const raceError = new Error('远程主配置文件在预览后已被修改，请重新对比差异后再接管覆盖');
-          raceError.statusCode = 409;
-          raceError.code = 'NGINX_CONFIG_CONFLICT';
-          raceError.details = {
+
+      if (fileExists) {
+        const existingContent = await readRemoteText(conn, { ...activeServer, useSudo: config.useSudo }, config.mainConfPath);
+        const inspection = inspectMainNginxConfigManagedState(existingContent, effectiveInstance, generatedBody);
+        if (!inspection.canAutoOverwrite && !force) {
+          const conflictError = new Error(inspection.reason || '主配置文件存在手工修改或未被平台接管，需确认覆盖接管');
+          conflictError.statusCode = 409;
+          conflictError.code = 'NGINX_CONFIG_CONFLICT';
+          conflictError.details = {
             instanceId: effectiveInstance.id,
             path: config.mainConfPath,
             currentContent: existingContent,
             generatedContent: mainConfigContent,
-            currentSha256: actualSha,
-            reason: '远程主配置文件已发生并发改动',
+            currentSha256: inspection.currentSha256 || computeConfigBodySha256(existingContent),
+            reason: inspection.reason,
           };
-          throw raceError;
+          throw conflictError;
+        }
+        if (force) {
+          const actualSha = computeConfigBodySha256(existingContent);
+          if (actualSha !== expectedSha256) {
+            const raceError = new Error('远程主配置文件在预览后已被修改，请重新对比差异后再接管覆盖');
+            raceError.statusCode = 409;
+            raceError.code = 'NGINX_CONFIG_CONFLICT';
+            raceError.details = {
+              instanceId: effectiveInstance.id,
+              path: config.mainConfPath,
+              currentContent: existingContent,
+              generatedContent: mainConfigContent,
+              currentSha256: actualSha,
+              reason: '远程主配置文件已发生并发改动',
+            };
+            throw raceError;
+          }
         }
       }
-    }
 
-    // 预检全部通过，即将开始上传解压与覆盖写入，此时持久化更新数据库实例配置
-    if (Object.keys(safePayload).length > 0) {
-      activeInstance = await updateNginxInstance(instanceId, safePayload);
-    }
+      // 预检全部通过，即将开始上传解压与覆盖写入，此时持久化更新数据库实例配置
+      if (Object.keys(safePayload).length > 0) {
+        activeInstance = await updateNginxInstance(instanceId, safePayload);
+      }
 
-    // ── 阶段 3：选择运行时变体 ──
-    emit.stage?.('select', 15, '选择运行时变体', '');
-    const registry = await readRuntimeRegistry();
-    const variant = selectRuntimeVariant(registry, glibcVersion, hasXcrypt);
-    emit.log?.('success', `选中运行时变体：${variant.label}（${variant.id}）`, 'select');
+      // ── 阶段 3：选择运行时变体 ──
+      emit.stage?.('select', 15, '选择运行时变体', '');
+      const registry = await readRuntimeRegistry();
+      const variant = selectRuntimeVariant(registry, glibcVersion, hasXcrypt);
+      emit.log?.('success', `选中运行时变体：${variant.label}（${variant.id}）`, 'select');
 
-    // ── 阶段 4：校验运行时包 ──
-    emit.stage?.('validate', 20, '校验运行时包', `${variant.id}`);
-    const manifest = await validateVariantPackage(variant);
-    const { packagePath } = resolveVariantPaths(variant);
-    const remotePackagePath = `/tmp/yuyan-nginx-runtime-${manifest.sha256.slice(0, 12)}.tar.gz`;
-    emit.log?.('success', `运行时包校验通过：nginx ${manifest.version} ${variant.id}`, 'validate');
+      // ── 阶段 4：校验运行时包 ──
+      emit.stage?.('validate', 20, '校验运行时包', `${variant.id}`);
+      const manifest = await validateVariantPackage(variant);
+      const { packagePath } = resolveVariantPaths(variant);
+      const remotePackagePath = `/tmp/yuyan-nginx-runtime-${manifest.sha256.slice(0, 12)}.tar.gz`;
+      emit.log?.('success', `运行时包校验通过：nginx ${manifest.version} ${variant.id}`, 'validate');
 
-    // ── 阶段 5：上传 ──
-    emit.stage?.('upload', 30, '上传运行时包', remotePackagePath);
-    await uploadFile(conn, packagePath, remotePackagePath);
+      try {
+        // ── 阶段 5：上传 ──
+        emit.stage?.('upload', 30, '上传运行时包', remotePackagePath);
+        await uploadFile(conn, packagePath, remotePackagePath);
 
-    // ── 阶段 6：解压 ──
-    emit.stage?.('unpack', 50, '解压运行时包', config.installRoot);
-    await execSsh(
-      conn,
-      [
-        `${config.useSudo ? 'sudo -n ' : ''}mkdir -p ${shellQuote(config.installRoot)} ${shellQuote(config.sitesDir)} ${shellQuote(config.webRoot)}`,
-        `${config.useSudo ? 'sudo -n ' : ''}tar -xzf ${shellQuote(remotePackagePath)} -C ${shellQuote(config.installRoot)}`,
-        `${config.useSudo ? 'sudo -n ' : ''}mkdir -p ${shellQuote(config.installRoot)}/logs ${shellQuote(config.installRoot)}/run ${shellQuote(config.installRoot)}/client_body_temp ${shellQuote(config.installRoot)}/proxy_temp`,
-        `${config.useSudo ? 'sudo -n ' : ''}chmod +x ${shellQuote(config.nginxPath)}`,
-        `rm -f ${shellQuote(remotePackagePath)}`,
-      ].join(' && '),
-      { label: '解压托管 Nginx 运行时' }
-    );
+        // ── 阶段 6：解压 ──
+        emit.stage?.('unpack', 50, '解压运行时包', config.installRoot);
+        await execSsh(
+          conn,
+          [
+            `${config.useSudo ? 'sudo -n ' : ''}mkdir -p ${shellQuote(config.installRoot)} ${shellQuote(config.sitesDir)} ${shellQuote(config.webRoot)}`,
+            `${config.useSudo ? 'sudo -n ' : ''}tar -xzf ${shellQuote(remotePackagePath)} -C ${shellQuote(config.installRoot)}`,
+            `${config.useSudo ? 'sudo -n ' : ''}mkdir -p ${shellQuote(config.installRoot)}/logs ${shellQuote(config.installRoot)}/run ${shellQuote(config.installRoot)}/client_body_temp ${shellQuote(config.installRoot)}/proxy_temp`,
+            `${config.useSudo ? 'sudo -n ' : ''}chmod +x ${shellQuote(config.nginxPath)}`,
+          ].join(' && '),
+          { label: '解压托管 Nginx 运行时' }
+        );
+      } finally {
+        await execSsh(conn, `rm -f ${shellQuote(remotePackagePath)}`, {
+          label: '清理托管 Nginx 运行时包',
+          allowFailure: true,
+        }).catch(() => {});
+      }
 
-    // ── 阶段 7：配置 ──
-    emit.stage?.('configure', 70, '生成 Nginx 主配置和管理脚本', config.mainConfPath);
-    await execSsh(conn, `${config.useSudo ? 'sudo -n ' : ''}mkdir -p ${shellQuote(config.sitesDir)} ${shellQuote(config.webRoot)}`, {
-      label: '创建托管 Nginx 目录',
+      // ── 阶段 7：配置 ──
+      emit.stage?.('configure', 70, '生成 Nginx 主配置和管理脚本', config.mainConfPath);
+      await execSsh(conn, `${config.useSudo ? 'sudo -n ' : ''}mkdir -p ${shellQuote(config.sitesDir)} ${shellQuote(config.webRoot)}`, {
+        label: '创建托管 Nginx 目录',
+      });
+      await writeRemoteTextWithBackup(conn, { ...activeServer, useSudo: config.useSudo }, config.mainConfPath, mainConfigContent);
+      await installManagedScriptAndLogRotateCron(conn, activeServer, config, emit);
+
+      // ── 阶段 8：校验配置 ──
+      emit.stage?.('test', 85, '校验 Nginx 配置', config.scriptPath);
+      const testResult = await execRuntimeScript(conn, activeInstance, 'test');
+      emit.log?.('success', `${testResult.stderr || testResult.stdout}`.trim() || 'nginx -t 校验通过', 'test');
+
+      // ── 阶段 9：启动 ──
+      emit.stage?.('start', 95, '启动托管 Nginx', config.scriptPath);
+      const statusResult = await execRuntimeScript(conn, activeInstance, 'status');
+      const action = statusResult.code === 0 ? 'reload' : 'start';
+      const startResult = await execRuntimeScript(conn, activeInstance, action);
+      emit.log?.('success', `${startResult.stdout || startResult.stderr}`.trim() || `托管 Nginx 已${action === 'reload' ? '重载' : '启动'}`, 'start');
+
+      // ── 更新 DB 状态（包含变体信息）──
+      await updateNginxInstanceState(activeInstance.id, {
+        runtimeVersion: manifest.version,
+        packageSha256: manifest.sha256,
+        packageVariant: variant.id,
+        status: 'running',
+        initializedAt: new Date().toISOString(),
+      });
     });
-    await writeRemoteTextWithBackup(conn, { ...activeServer, useSudo: config.useSudo }, config.mainConfPath, mainConfigContent);
-    await writeRemoteTextWithBackup(conn, { ...activeServer, useSudo: config.useSudo }, config.scriptPath, renderRuntimeScript());
-    await execSsh(conn, `${config.useSudo ? 'sudo -n ' : ''}chmod +x ${shellQuote(config.scriptPath)}`, { label: '设置管理脚本权限' });
 
-    // ── 阶段 8：校验配置 ──
-    emit.stage?.('test', 85, '校验 Nginx 配置', config.scriptPath);
-    const testResult = await execRuntimeScript(conn, activeInstance, 'test');
-    emit.log?.('success', `${testResult.stderr || testResult.stdout}`.trim() || 'nginx -t 校验通过', 'test');
+    emit.stage?.('finish', 100, '初始化完成', config.installRoot);
+    return getNginxInstanceStatus(activeInstance.id);
+  } finally {
+    releaseNginxInstanceLock(instanceId);
+  }
+}
 
-    // ── 阶段 9：启动 ──
-    emit.stage?.('start', 95, '启动托管 Nginx', config.scriptPath);
-    const statusResult = await execRuntimeScript(conn, activeInstance, 'status');
-    const action = statusResult.code === 0 ? 'reload' : 'start';
-    const startResult = await execRuntimeScript(conn, activeInstance, action);
-    emit.log?.('success', `${startResult.stdout || startResult.stderr}`.trim() || `托管 Nginx 已${action === 'reload' ? '重载' : '启动'}`, 'start');
+/**
+ * 更新托管 Nginx 实例的管理脚本与定时任务。
+ * @param {number} instanceId - Nginx 实例 ID
+ * @param {Object} [emit] - 进度回调
+ * @returns {Promise<{ script: { backupPath: string, skipped: boolean }, cron: { status: string, cronLine: string, message: string }, status: Object }>}
+ */
+export async function refreshNginxInstanceScript(instanceId, emit = {}) {
+  const { instance, server } = await getNginxInstanceContext(instanceId);
+  if (!instance) {
+    const notFoundError = new Error('Nginx 实例不存在');
+    notFoundError.statusCode = 404;
+    throw notFoundError;
+  }
+  if (instance.instanceType !== 'managed') {
+    const notManagedError = new Error('只有托管 Nginx 实例支持更新管理脚本与定时任务');
+    notManagedError.statusCode = 409;
+    notManagedError.code = 'NGINX_INSTANCE_NOT_MANAGED';
+    throw notManagedError;
+  }
 
-    // ── 更新 DB 状态（包含变体信息）──
-    await updateNginxInstanceState(activeInstance.id, {
-      runtimeVersion: manifest.version,
-      packageSha256: manifest.sha256,
-      packageVariant: variant.id,
-      status: 'running',
-      initializedAt: new Date().toISOString(),
+  acquireNginxInstanceLock(instanceId, '更新管理脚本与定时任务');
+  try {
+    const effectiveUseSudo = Boolean(instance.useSudo || server.useSudo);
+    const effectiveInstance = { ...instance, useSudo: effectiveUseSudo };
+    const config = resolveRuntimeConfig(effectiveInstance);
+    const result = await withSsh(server, async (conn) => {
+      const sudo = config.useSudo ? 'sudo -n ' : '';
+      const checkCmd = `${sudo}test -d ${shellQuote(config.installRoot)} && ${sudo}test -x ${shellQuote(config.nginxPath)}`;
+      const checkResult = await execSsh(conn, checkCmd, {
+        label: '检查托管 Nginx 实例是否已初始化',
+        allowFailure: true,
+      });
+      if (checkResult.code !== 0) {
+        const notInitError = new Error('实例尚未初始化，请先初始化');
+        notInitError.statusCode = 400;
+        throw notInitError;
+      }
+
+      return installManagedScriptAndLogRotateCron(conn, server, config, emit);
     });
-  });
 
-  emit.stage?.('finish', 100, '初始化完成', config.installRoot);
-  return getNginxInstanceStatus(activeInstance.id);
+    return {
+      script: result.script,
+      cron: result.cron,
+      status: await getNginxInstanceStatus(instanceId),
+    };
+  } finally {
+    releaseNginxInstanceLock(instanceId);
+  }
 }
 
 // ──────────────────────────────────────────────
@@ -1616,32 +1949,47 @@ export async function runNginxRuntimeAction(serverId, action) {
  * @returns {Promise<Object>} 操作结果
  */
 export async function runNginxInstanceAction(instanceId, action) {
-  const { instance, server } = await getNginxInstanceContext(instanceId);
-  const effectiveUseSudo = Boolean(instance.useSudo || server.useSudo);
-  const effectiveInstance = { ...instance, useSudo: effectiveUseSudo };
-  return withSsh(server, async (conn) => {
-    const result = instance.instanceType === 'managed'
-      ? await execRuntimeScript(conn, effectiveInstance, action)
-      : await execExternalInstanceAction(conn, effectiveInstance, action);
-    const status =
-      action === 'stop' && result.code === 0
-        ? 'stopped'
-        : action === 'start' || action === 'reload'
-          ? 'running'
-          : result.code === 0
+  const shouldLock = ['start', 'stop', 'reload'].includes(action);
+  const actionLabels = {
+    start: '启动',
+    stop: '停止',
+    reload: '重载',
+  };
+  if (shouldLock) {
+    acquireNginxInstanceLock(instanceId, actionLabels[action] || action);
+  }
+  try {
+    const { instance, server } = await getNginxInstanceContext(instanceId);
+    const effectiveUseSudo = Boolean(instance.useSudo || server.useSudo);
+    const effectiveInstance = { ...instance, useSudo: effectiveUseSudo };
+    return await withSsh(server, async (conn) => {
+      const result = instance.instanceType === 'managed'
+        ? await execRuntimeScript(conn, effectiveInstance, action)
+        : await execExternalInstanceAction(conn, effectiveInstance, action);
+      const status =
+        action === 'stop' && result.code === 0
+          ? 'stopped'
+          : action === 'start' || action === 'reload'
             ? 'running'
-            : 'error';
-    await updateNginxInstanceState(instance.id, {
-      status,
-      statusOutput: `${result.stdout || ''}${result.stderr || ''}`.trim(),
+            : result.code === 0
+              ? 'running'
+              : 'error';
+      await updateNginxInstanceState(instance.id, {
+        status,
+        statusOutput: `${result.stdout || ''}${result.stderr || ''}`.trim(),
+      });
+      return {
+        success: result.code === 0,
+        action,
+        output: `${result.stdout || ''}${result.stderr || ''}`.trim(),
+        status: await getNginxInstanceStatus(instance.id),
+      };
     });
-    return {
-      success: result.code === 0,
-      action,
-      output: `${result.stdout || ''}${result.stderr || ''}`.trim(),
-      status: await getNginxInstanceStatus(instance.id),
-    };
-  });
+  } finally {
+    if (shouldLock) {
+      releaseNginxInstanceLock(instanceId);
+    }
+  }
 }
 
 /**
@@ -2112,6 +2460,7 @@ export async function syncTargetNginxSite(targetId, options = {}) {
         requireDiffConfirm: false,
         path: sitePath,
         backupPath: '',
+        skipped: false,
         testOutput: `${testResult.stdout || ''}${testResult.stderr || ''}`.trim(),
         reloadOutput: `${reloadResult.stdout || ''}${reloadResult.stderr || ''}`.trim(),
       };
@@ -2169,7 +2518,7 @@ export async function syncTargetNginxSite(targetId, options = {}) {
     await execSsh(conn, `${sudo}mkdir -p ${shellQuote(path.posix.dirname(sitePath))} ${shellQuote(target.deployRoot)}`, {
       label: '创建站点目录',
     });
-    const { backupPath } = await writeRemoteTextWithBackup(conn, effectiveServer, sitePath, siteConfig);
+    const { backupPath = '', skipped = false } = await writeRemoteTextWithBackup(conn, effectiveServer, sitePath, siteConfig);
     try {
       const testResult = instance.instanceType === 'managed' ? await execRuntimeScript(conn, effectiveInstance, 'test') : await execExternalInstanceAction(conn, effectiveInstance, 'test');
       const reloadResult = instance.instanceType === 'managed' ? await execRuntimeScript(conn, effectiveInstance, 'reload') : await execExternalInstanceAction(conn, effectiveInstance, 'reload');
@@ -2178,20 +2527,23 @@ export async function syncTargetNginxSite(targetId, options = {}) {
         requireDiffConfirm: false,
         path: sitePath,
         backupPath: fileExists ? backupPath : '',
+        skipped,
         testOutput: `${testResult.stdout || ''}${testResult.stderr || ''}`.trim(),
         reloadOutput: `${reloadResult.stdout || ''}${reloadResult.stderr || ''}`.trim(),
       };
     } catch (error) {
-      if (fileExists) {
+      if (fileExists && backupPath) {
         await execSsh(conn, `${sudo}cp ${shellQuote(backupPath)} ${shellQuote(sitePath)}`, {
           label: '恢复站点配置备份',
           allowFailure: true,
         });
-      } else {
+      } else if (!fileExists) {
         await execSsh(conn, `${sudo}rm -f ${shellQuote(sitePath)}`, {
           label: '清理失败站点配置',
           allowFailure: true,
         });
+      } else {
+        console.warn('[syncTargetNginxSite] 站点配置回滚跳过：原文件存在但备份路径为空，不执行覆盖恢复或删除');
       }
       throw error;
     }
