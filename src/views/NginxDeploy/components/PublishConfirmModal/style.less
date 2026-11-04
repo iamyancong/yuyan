@@ -727,3 +727,141 @@
   border-color: var(--primary-color-light) !important;
   color: var(--primary-color) !important;
 }
+
+.publish-cleanup-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  border-radius: 8px;
+  background: var(--bg-color-container);
+  border: 1px solid var(--border-color-split, rgba(0, 0, 0, 0.08));
+
+  &__head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  &__title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-color);
+  }
+}
+
+.publish-cleanup-loading {
+  padding: 24px;
+  text-align: center;
+}
+
+.publish-cleanup-notice {
+  margin-bottom: 10px;
+}
+
+.publish-cleanup-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.publish-cleanup-group {
+  padding: 12px 14px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.02);
+  border: 1px solid var(--border-color-split, rgba(0, 0, 0, 0.06));
+
+  &__title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 8px;
+
+    .group-icon {
+      font-size: 14px;
+    }
+
+    strong {
+      font-size: 13px;
+      color: var(--text-color);
+    }
+
+    .group-desc {
+      font-size: 12px;
+      color: var(--text-color-secondary);
+    }
+  }
+
+  &.is-replace {
+    border-left: 3px solid #ff4d4f;
+  }
+
+  &.is-protected {
+    border-left: 3px solid #52c41a;
+  }
+
+  &.is-unknown {
+    border-left: 3px solid #faad14;
+  }
+}
+
+.publish-cleanup-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.publish-cleanup-empty {
+  font-size: 12px;
+  color: var(--text-color-secondary);
+  padding: 4px 0;
+}
+
+.publish-cleanup-unknown-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.publish-unknown-checkbox-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.publish-unknown-item {
+  margin-right: 0 !important;
+}
+
+.publish-cleanup-reserved-note {
+  font-size: 12px;
+  color: var(--text-color-secondary);
+  padding-top: 4px;
+}
+
+.publish-secondary-confirm-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border-radius: 6px;
+  background: rgba(250, 173, 20, 0.12);
+  border: 1px solid #faad14;
+
+  &__label {
+    font-weight: 600;
+    color: var(--text-color);
+  }
+
+  &__hint {
+    font-size: 12px;
+    color: #d46b08;
+    margin-left: 24px;
+  }
+}

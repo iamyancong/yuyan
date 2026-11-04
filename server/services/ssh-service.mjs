@@ -651,7 +651,7 @@ export function buildPruneByCountCommand({ dir, prefix, keep = 10, useSudo = fal
     'dir="$1"; prefix="$2"; keep="$3";',
     '[ "$keep" -gt 0 ] 2>/dev/null || keep=10;',
     'old_files=$(export LC_ALL=C; ls -1A "$dir" 2>/dev/null | while IFS= read -r name || [ -n "$name" ]; do',
-    'case "$name" in "$prefix"*)',
+    'case "$name" in ("$prefix"*)',
     'if [ -f "$dir/$name" ] && [ ! -L "$dir/$name" ]; then printf \'%s\\n\' "$name"; fi;;',
     'esac; done | sort -r | tail -n "+$((keep + 1))");',
     'if [ -n "$old_files" ]; then printf \'%s\\n\' "$old_files" | while IFS= read -r file || [ -n "$file" ]; do',

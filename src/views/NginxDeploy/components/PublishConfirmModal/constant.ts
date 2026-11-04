@@ -52,6 +52,10 @@ export interface PublishConfirmModalProps {
 export interface PublishStartOptions {
   /** 是否强制重新安装依赖 */
   forceInstallDependencies: boolean;
+  /** 额外勾选清理的顶层文件名列表 */
+  extraCleanupNames?: string[];
+  /** 清空后替换是否已二次确认 */
+  cleanReplaceConfirmed?: boolean;
 }
 
 /**

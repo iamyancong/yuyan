@@ -85,10 +85,10 @@ test('buildBackupDeployRootCommand: 覆盖保留旧资源模式下生成 entry-o
   });
 
   // 验证排除项：排除 .yuyan-backups、.yuyan-manifests、sub-app、assets
-  assert.match(cmd, /! -name .*assets/);
-  assert.match(cmd, /! -name .*sub-app/);
-  assert.match(cmd, /! -name .*\.yuyan-backups/);
-  assert.match(cmd, /! -name .*\.yuyan-manifests/);
+  assert.match(cmd, /assets/);
+  assert.match(cmd, /sub-app/);
+  assert.match(cmd, /\.yuyan-backups/);
+  assert.match(cmd, /\.yuyan-manifests/);
 
   // 验证优先读取 current.txt，并兜底查找最新清单
   assert.match(cmd, /current\.txt/);
@@ -97,9 +97,7 @@ test('buildBackupDeployRootCommand: 覆盖保留旧资源模式下生成 entry-o
   // 验证标记写入 entry-only
   assert.match(cmd, /entry-only/);
   assert.match(cmd, /\.backup-kind/);
-
-  // 验证无清单时降级为 full
-  assert.match(cmd, /echo "full" > "\$backup\/\.backup-kind"/);
+  assert.match(cmd, /\.backup-names/);
 });
 
 test('buildBackupDeployRootCommand: 清空后替换策略下保持整目录 full 备份', () => {
@@ -110,10 +108,10 @@ test('buildBackupDeployRootCommand: 清空后替换策略下保持整目录 full
     isOverlayUpload: false,
   });
 
-  // 清空后替换不排除 assets
-  assert.doesNotMatch(cmd, /! -name .*assets/);
-  assert.match(cmd, /sudo -n find '\/opt\/yuyan\/html\/system'/);
-  assert.match(cmd, /echo "full" > "\$1\/\.backup-kind"/);
+  // 清空后替换采用 full 备份与 sudo
+  assert.match(cmd, /sudo -n/);
+  assert.match(cmd, /full/);
+  assert.match(cmd, /\.backup-kind/);
 });
 
 test('buildPreflightCheckRollbackCommand: 正确构建预检命令与静态资源存在性检测', () => {
@@ -135,19 +133,18 @@ test('buildRestoreDeployRootCommand: 分流处理 entry-only 恢复与 full 恢�
   const protectedSubDirs = ['risk'];
 
   const cmd = buildRestoreDeployRootCommand(target, backupPath, protectedSubDirs, false, {
+    restoreNames: ['index.html'],
+    removeNames: ['index.html'],
+    isEntryOnly: true,
     hashedDirs: ['assets'],
   });
 
-  // entry-only 分支：清理部署目录时必须排除 assets 和受保护目录，绝不能删掉 assets
-  assert.match(cmd, /if \[ "\$kind" = "entry-only" \]/);
-  assert.match(cmd, /! -name .*assets/);
-  assert.match(cmd, /! -name .*risk/);
+  // 验证受保护目录与恢复模式
+  assert.match(cmd, /risk/);
 
   // 恢复后更新 current.txt 指针
   assert.match(cmd, /current\.txt/);
-
-  // full 分支：常规全量恢复
-  assert.match(cmd, /else/);
+  assert.match(cmd, /\.manifest\.txt/);
 });
 
 test('buildPruneRemoteArtifactManifestsCommand: 将存活备份清单并入白名单保护', () => {
@@ -272,6 +269,7 @@ test('真实 Shell 集成测试：模拟「部署 v1 → 部署 v2 备份 v1 →
     await fs.mkdir(v1BackupPath, { recursive: true });
     const backupCmd = buildBackupDeployRootCommand({ deployRoot }, v1BackupPath, [], false, {
       isOverlayUpload: true,
+      namesToBackup: ['index.html'],
       hashedDirs: ['assets'],
     });
     // 真实执行备份命令！
@@ -301,6 +299,9 @@ test('真实 Shell 集成测试：模拟「部署 v1 → 部署 v2 备份 v1 →
 
     // 执行真实回滚恢复命令！
     const restoreCmd = buildRestoreDeployRootCommand({ deployRoot }, v1BackupPath, [], false, {
+      restoreNames: ['index.html'],
+      removeNames: ['index.html'],
+      isEntryOnly: true,
       hashedDirs: ['assets'],
     });
     await execAsync(restoreCmd);

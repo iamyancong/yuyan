@@ -1,5 +1,6 @@
-import { computed, nextTick, reactive, ref, watch, type Ref } from 'vue';
-import message from 'ant-design-vue/es/message';
+import { computed, h, nextTick, reactive, ref, watch, type Ref } from 'vue';
+import { Modal, message } from 'ant-design-vue';
+import { ExclamationCircleOutlined } from '@ant-design/icons-vue';
 import {
   createDeployTarget,
   deleteDeployTarget,
@@ -64,6 +65,7 @@ import {
   isMainDeployProject,
   syncSelectFieldState,
 } from '../utils';
+import { isSharedDeployRoot } from '../components/PublishConfirmModal/cleanupPreviewPolicy';
 import { useNginxDeployContext } from './useNginxDeployContext';
 import { normalizeDeployRoot } from './deployRootRecommendationPolicy';
 import { useTargetRuntime } from './useTargetRuntime';
@@ -550,9 +552,27 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     });
   };
 
+  /** 同步上传策略共享根提示文案 */
+  const syncUploadStrategySharedNotice = () => {
+    if (targetForm.projectType === 'backend') return;
+    const server = servers.value.find((item) => item.id === Number(targetForm.serverId));
+    const instance = getSelectedNginxInstance(server);
+    const isShared = isSharedDeployRoot({
+      target: targetForm,
+      allServerTargets: allTargets.value.filter((t) => Number(t.serverId) === Number(targetForm.serverId)),
+      nginxInstance: instance,
+    });
+    targetFormRef.value?.setFieldState?.('uploadStrategy', (state: any) => {
+      state.description = isShared
+        ? '检测到当前部署根可能是共享目录，默认推荐覆盖上传，避免误删子应用或同目录文件'
+        : undefined;
+    });
+  };
+
   /** 同步部署目标表单值到 Formily 内部状态 */
   const syncTargetFormValues = () => {
     targetFormRef.value?.setValues?.({ ...targetForm });
+    syncUploadStrategySharedNotice();
   };
 
   /**
@@ -701,6 +721,18 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     }
     if (!isEditMode && nginxInstance?.instanceType !== 'managed') {
       targetForm.listenPort = 0;
+    }
+
+    // 新建目标时：如果判断为共享根，上传策略默认推荐并选中「覆盖上传（保留旧资源）」
+    if (!isEditMode && targetForm.projectType !== 'backend') {
+      const isShared = isSharedDeployRoot({
+        target: targetForm,
+        allServerTargets: allTargets.value.filter((t) => Number(t.serverId) === Number(targetForm.serverId)),
+        nginxInstance,
+      });
+      if (isShared) {
+        targetForm.uploadStrategy = 'overlayKeepAssets';
+      }
     }
   };
 
@@ -1171,6 +1203,28 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       return;
     }
     targetSaving.value = true;
+    let payload: DeployTargetPayload = { ...targetForm, ...submittedValues };
+    let editing = Boolean(activeTargetId.value);
+
+    const finishSaveSuccess = async (savedTarget: DeployTarget, payloadToUse: DeployTargetPayload, isEditing: boolean) => {
+      activeTargetId.value = savedTarget.id;
+      targetModalOpen.value = false;
+      let refreshError: unknown;
+      try {
+        await refreshActiveTab({ force: true });
+      } catch (error) {
+        refreshError = error;
+      }
+      const isManagedTarget = Boolean(payloadToUse.projectType !== 'backend' && payloadToUse.nginxSiteManaged);
+      const hint = isManagedTarget ? '，点击更新站点配置使其生效' : '';
+      const persistedLabel = isEditing ? `部署目标已更新${hint}` : `部署目标已新增${hint}`;
+      if (refreshError) {
+        message.warning(`${persistedLabel}，但列表刷新失败：${getErrorMessage(refreshError)}。请手动刷新查看最新配置`);
+      } else {
+        message.success(persistedLabel);
+      }
+    };
+
     try {
       const values = submittedValues;
       const installCommand = normalizeCommandText(values.installCommand ?? targetForm.installCommand);
@@ -1180,7 +1234,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
         initialBuildMemoryMb: initialEditBuildMemoryMb.value,
         currentBuildMemoryMb: values.buildMemoryMb ?? targetForm.buildMemoryMb,
       });
-      const payload = {
+      payload = {
         ...targetForm,
         ...values,
         projectSource: normalizeProjectSource(values.projectSource || targetForm.projectSource),
@@ -1335,26 +1389,12 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
           '保存配置'
         ))) return;
       }
-      const editing = Boolean(activeTargetId.value);
+
+      editing = Boolean(activeTargetId.value);
       const savedTarget = activeTargetId.value
         ? await updateDeployTarget(activeTargetId.value, payload)
         : await createDeployTarget(payload);
-      activeTargetId.value = savedTarget.id;
-      targetModalOpen.value = false;
-      let refreshError: unknown;
-      try {
-        await refreshActiveTab({ force: true });
-      } catch (error) {
-        refreshError = error;
-      }
-      const isManagedTarget = Boolean(payload.projectType !== 'backend' && payload.nginxSiteManaged);
-      const hint = isManagedTarget ? '，点击更新站点配置使其生效' : '';
-      const persistedLabel = editing ? `部署目标已更新${hint}` : `部署目标已新增${hint}`;
-      if (refreshError) {
-        message.warning(`${persistedLabel}，但列表刷新失败：${getErrorMessage(refreshError)}。请手动刷新查看最新配置`);
-      } else {
-        message.success(persistedLabel);
-      }
+      await finishSaveSuccess(savedTarget, payload, editing);
     } catch (error: any) {
       if (!activeTargetId.value && isDuplicateDeployTargetError(error)) {
         const conflictTargetId = getDuplicateDeployTargetId(error);
@@ -1376,6 +1416,38 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
         message.warning(conflictTargetId
           ? `部署目标 #${conflictTargetId} 已存在，请刷新列表后编辑该目标`
           : '部署目标已经存在，请刷新列表并编辑已有目标');
+        return;
+      }
+      if (
+        error?.response?.data?.code === 'DEPLOY_ROOT_RISK_CONFIRM_REQUIRED' ||
+        error?.code === 'DEPLOY_ROOT_RISK_CONFIRM_REQUIRED'
+      ) {
+        const reason =
+          error?.response?.data?.error ||
+          error?.response?.data?.message ||
+          error?.message ||
+          '该部署根目录属于较浅路径，可能存在安全风险。';
+        Modal.confirm({
+          title: '部署目录风险提示',
+          icon: h(ExclamationCircleOutlined),
+          content: h('div', { style: 'white-space: pre-wrap' }, `${reason}\n\n是否已知晓风险并继续保存？`),
+          okText: '已知晓风险，继续保存',
+          cancelText: '取消',
+          onOk: async () => {
+            targetSaving.value = true;
+            try {
+              const retryPayload = { ...payload, deployRootRiskConfirmed: true };
+              const savedTarget = activeTargetId.value
+                ? await updateDeployTarget(activeTargetId.value, retryPayload)
+                : await createDeployTarget(retryPayload);
+              await finishSaveSuccess(savedTarget, retryPayload, editing);
+            } catch (retryError: any) {
+              message.error(getErrorMessage(retryError));
+            } finally {
+              targetSaving.value = false;
+            }
+          },
+        });
         return;
       }
       message.error(getErrorMessage(error));
@@ -1726,6 +1798,63 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       targetForm.serverPort = templateValues.serverPort;
       targetForm.healthCheckPath = templateValues.healthCheckPath;
       syncTargetFormValues();
+    }
+  );
+
+  watch(
+    () => targetForm.deployRoot,
+    () => {
+      if (initializingTargetForm.value || !targetModalOpen.value || targetForm.projectType === 'backend') return;
+      if (!activeTargetId.value) {
+        const server = servers.value.find((item) => item.id === Number(targetForm.serverId));
+        const instance = getSelectedNginxInstance(server);
+        const isShared = isSharedDeployRoot({
+          target: targetForm,
+          allServerTargets: allTargets.value.filter((t) => Number(t.serverId) === Number(targetForm.serverId)),
+          nginxInstance: instance,
+        });
+        if (isShared && targetForm.uploadStrategy !== 'overlayKeepAssets') {
+          const previousStrategy = targetForm.uploadStrategy;
+          targetForm.uploadStrategy = 'overlayKeepAssets';
+          syncTargetFormValues();
+          if (previousStrategy === 'cleanReplace') {
+            message.info('检测到共享目录，已自动推荐切换为覆盖上传（保留旧资源）');
+          }
+        }
+      }
+      syncUploadStrategySharedNotice();
+    }
+  );
+
+  watch(
+    () => targetForm.uploadStrategy,
+    (newVal, oldVal) => {
+      if (initializingTargetForm.value || !targetModalOpen.value || targetForm.projectType === 'backend') return;
+      if (newVal === 'cleanReplace' && oldVal === 'overlayKeepAssets') {
+        const server = servers.value.find((item) => item.id === Number(targetForm.serverId));
+        const instance = getSelectedNginxInstance(server);
+        const isShared = isSharedDeployRoot({
+          target: targetForm,
+          allServerTargets: allTargets.value.filter((t) => Number(t.serverId) === Number(targetForm.serverId)),
+          nginxInstance: instance,
+        });
+        if (isShared) {
+          Modal.confirm({
+            title: '切换上传策略提示',
+            icon: h(ExclamationCircleOutlined),
+            content: '此目录可能是共享根，清空后替换可能会影响同目录其他内容，确定要切换吗？',
+            okText: '确定切换',
+            cancelText: '取消',
+            onOk: () => {
+              // 用户已确认切换
+            },
+            onCancel: () => {
+              targetForm.uploadStrategy = 'overlayKeepAssets';
+              syncTargetFormValues();
+            },
+          });
+        }
+      }
     }
   );
 

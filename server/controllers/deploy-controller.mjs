@@ -9,6 +9,7 @@ import {
   deleteNginxInstance,
   deleteServer,
   deleteTarget,
+  getNginxInstance,
   getNginxInstanceContext,
   getRecord,
   getServerWithCredential,
@@ -57,7 +58,20 @@ import {
   saveNginxConfig,
   testTargetNginx,
   undoRollbackRecord,
+  getTargetContext,
+  resolveEffectiveDeploySudo,
+  detectDeployRoot,
+  resolveProtectedEntriesWithDetails,
+  resolveNginxPaths,
 } from '../services/deploy-service.mjs';
+import { withSsh } from '../services/ssh-service.mjs';
+import {
+  normalizeDeployRootPath,
+  classifyDeployRootRisk,
+  manifestTopNames,
+  isSharedDeployRoot,
+  RESERVED_DEPLOY_ENTRIES,
+} from '../services/deploy-cleanup-policy.mjs';
 import {
   getNextNginxRuntimePort,
   getNextNginxInstancePort,
@@ -750,7 +764,7 @@ function validateNginxInstancePayload(body = {}) {
  * 校验部署目标参数
  * @param {Object} body - 请求体
  */
-async function validateTargetPayload(body) {
+export async function validateTargetPayload(body) {
   if (body?.projectSource && !['ops', 'gitlab'].includes(String(body.projectSource))) throw new Error('项目来源不合法');
   if (body?.projectType && !['frontend', 'backend'].includes(String(body.projectType))) throw new Error('项目类型不合法');
   if (!body?.projectId) throw new Error('项目 ID 必填');
@@ -763,9 +777,31 @@ async function validateTargetPayload(body) {
     if (!body?.nginxInstanceId) throw new Error('Nginx 实例必填');
     if (!String(body?.nginxConfPath || '').trim()) throw new Error('Nginx 配置文件路径必填');
     if (!String(body.nginxConfPath).trim().startsWith('/')) throw new Error('Nginx 配置文件路径必须使用服务器绝对路径');
+
+    if (!String(body?.deployRoot || '').trim()) throw new Error('部署根目录必填');
+    try {
+      body.deployRoot = normalizeDeployRootPath(body.deployRoot);
+    } catch (err) {
+      throw new Error(`部署根目录不合法：${err.message}`);
+    }
+
+    const nginxInstance = await getNginxInstance(Number(body.nginxInstanceId));
+    const nginxPaths = resolveNginxPaths(nginxInstance, body);
+    const risk = classifyDeployRootRisk(body.deployRoot, { ...nginxPaths, nginxPaths });
+    if (risk.level === 'block') {
+      throw new Error(risk.reason);
+    }
+    if (risk.level === 'warn' && body.deployRootRiskConfirmed !== true) {
+      const warnErr = new Error(risk.reason);
+      warnErr.code = 'DEPLOY_ROOT_RISK_CONFIRM_REQUIRED';
+      warnErr.status = 400;
+      warnErr.details = { riskLevel: 'warn', reason: risk.reason };
+      throw warnErr;
+    }
+  } else {
+    if (!String(body?.deployRoot || '').trim()) throw new Error('部署根目录必填');
+    if (!String(body.deployRoot).trim().startsWith('/')) throw new Error('部署根目录必须使用服务器绝对路径');
   }
-  if (!String(body?.deployRoot || '').trim()) throw new Error('部署根目录必填');
-  if (!String(body.deployRoot).trim().startsWith('/')) throw new Error('部署根目录必须使用服务器绝对路径');
   if (String(body.defaultBranch || '').includes('\n')) throw new Error('部署分支不能包含换行');
   if (String(body.artifactDir || '').includes('\n')) throw new Error('产物目录不能包含换行');
   if (String(body.preserveSubDirs || '').includes('\n')) throw new Error('保留子目录请使用逗号分隔，不能包含换行');
@@ -1550,6 +1586,104 @@ export async function handleDeleteTarget(req, res) {
     res.json({ success: true, data: result });
   } catch (error) {
     sendError(res, error);
+  }
+}
+
+/**
+ * 获取部署目标的清理预览数据。
+ */
+export async function handleGetTargetCleanupPreview(req, res) {
+  try {
+    const targetId = Number(req.params.id);
+    const { target, server, nginxInstance } = await getTargetContext(targetId);
+    if (!target) return sendError(res, new Error('部署目标不存在'), 404);
+    if (target.projectType === 'backend') {
+      return res.json({
+        success: true,
+        data: {
+          realRoot: target.deployRoot,
+          configuredRoot: target.deployRoot,
+          riskLevel: 'ok',
+          riskReason: '',
+          manifestFound: false,
+          willReplaceOrClean: [],
+          protected: [],
+          reserved: [],
+          unknown: [],
+          isSharedRoot: false,
+        },
+      });
+    }
+
+    const deployUseSudo = resolveEffectiveDeploySudo(server, nginxInstance);
+    const probe = await withSsh(server, async (conn) => {
+      return detectDeployRoot(conn, target.deployRoot, deployUseSudo, { ensureDir: false });
+    });
+
+    const realRoot = probe.realRoot || target.deployRoot;
+    const nginxPaths = resolveNginxPaths(nginxInstance, target);
+    const risk = classifyDeployRootRisk(realRoot, { ...nginxPaths, nginxPaths });
+
+    const allServerTargets = await listTargets({ serverId: target.serverId });
+    const isSharedRoot = isSharedDeployRoot({ target, allServerTargets, nginxInstance });
+
+    const protectedDetails = await resolveProtectedEntriesWithDetails(target);
+    const protectedSet = new Set(protectedDetails.allProtected);
+    const reservedSet = new Set(RESERVED_DEPLOY_ENTRIES);
+
+    if (probe.exists === false) {
+      return res.json({
+        success: true,
+        data: {
+          realRoot,
+          configuredRoot: target.deployRoot,
+          riskLevel: risk.level,
+          riskReason: risk.reason,
+          manifestFound: false,
+          willReplaceOrClean: [],
+          protected: protectedDetails.protectedList,
+          reserved: [],
+          unknown: [],
+          isSharedRoot,
+        },
+      });
+    }
+
+    const existingNames = probe.existingNames || [];
+    const manifestTopList = manifestTopNames(probe.manifestText);
+    const manifestFound = Boolean(probe.manifestText && probe.manifestText.trim());
+
+    // willReplaceOrClean = 上次清单里的顶层名 ∩ 已存在 − 保护
+    const willReplaceOrClean = manifestTopList.filter(
+      (name) => existingNames.includes(name) && !protectedSet.has(name) && !reservedSet.has(name)
+    );
+    const replaceOrCleanSet = new Set(willReplaceOrClean);
+
+    // reserved = 系统保留项
+    const reserved = existingNames.filter((name) => reservedSet.has(name));
+
+    // unknown = 未识别项：existing − protected − reserved − willReplaceOrClean
+    const unknown = existingNames.filter(
+      (name) => !protectedSet.has(name) && !reservedSet.has(name) && !replaceOrCleanSet.has(name)
+    );
+
+    res.json({
+      success: true,
+      data: {
+        realRoot,
+        configuredRoot: target.deployRoot,
+        riskLevel: risk.level,
+        riskReason: risk.reason,
+        manifestFound,
+        willReplaceOrClean,
+        protected: protectedDetails.protectedList,
+        reserved,
+        unknown,
+        isSharedRoot,
+      },
+    });
+  } catch (error) {
+    sendError(res, error, 400);
   }
 }
 

@@ -330,6 +330,8 @@ export interface DeployTargetPayload {
   artifactDir: string;
   preserveSubDirs?: string;
   uploadStrategy?: DeployUploadStrategy;
+  /** 用户已知晓浅层或特殊目录风险并二次确认保存 */
+  deployRootRiskConfirmed?: boolean;
   visitUrl?: string;
   remark?: string;
   projectType?: 'frontend' | 'backend';
@@ -856,6 +858,31 @@ export interface DeployTargetPublishPayload {
   operator?: string;
   /** 是否强制重新安装依赖 */
   forceInstallDependencies?: boolean;
+  /** 额外清理的顶层文件名列表（用户在二次确认弹窗中主动勾选的未识别文件） */
+  extraCleanupNames?: string[];
+  /** 清空后替换风险是否已由用户手动二次确认 */
+  cleanReplaceConfirmed?: boolean;
+}
+
+/** 部署目标清理受保护项详情 */
+export interface DeployTargetCleanupProtectedItem {
+  name: string;
+  source: 'nested' | 'manual';
+  reason?: string;
+}
+
+/** 部署目标清空后替换清理预览数据 */
+export interface DeployTargetCleanupPreview {
+  realRoot: string;
+  configuredRoot: string;
+  riskLevel: 'ok' | 'warn' | 'block';
+  riskReason: string;
+  manifestFound: boolean;
+  willReplaceOrClean: string[];
+  protected: DeployTargetCleanupProtectedItem[];
+  reserved: string[];
+  unknown: string[];
+  isSharedRoot: boolean;
 }
 
 import { getApiBase, isTauri } from '@/utils/env';
@@ -1275,6 +1302,10 @@ export const createDeployTarget = (payload: DeployTargetPayload) => client.post(
 
 /** 更新部署目标 */
 export const updateDeployTarget = (id: number, payload: DeployTargetPayload) => client.put(`/targets/${id}`, payload).then(unwrap<DeployTarget>);
+
+/** 获取部署目标的目录清理预览（用于清空后替换发布前的二次确认） */
+export const getTargetCleanupPreview = (targetId: number) =>
+  client.get(`/targets/${targetId}/cleanup-preview`).then(unwrap<DeployTargetCleanupPreview>);
 
 /** 删除部署目标 */
 export const deleteDeployTarget = (id: number, expectedName: string) => client.delete(`/targets/${id}`, { params: { expectedName } });

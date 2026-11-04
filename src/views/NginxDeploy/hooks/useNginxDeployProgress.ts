@@ -50,9 +50,13 @@ interface UseNginxDeployProgressParams {
 }
 
 /** 发布启动选项 */
-interface StartPublishOptions {
+export interface StartPublishOptions {
   /** 是否强制重新安装依赖 */
   forceInstallDependencies?: boolean;
+  /** 额外勾选清理的顶层文件名列表 */
+  extraCleanupNames?: string[];
+  /** 清空后替换是否已二次确认 */
+  cleanReplaceConfirmed?: boolean;
 }
 
 /**
@@ -388,6 +392,8 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
           gitlabToken: authState.value.token || '',
           operator: userName.value || '',
           forceInstallDependencies: Boolean(options.forceInstallDependencies),
+          extraCleanupNames: options.extraCleanupNames,
+          cleanReplaceConfirmed: options.cleanReplaceConfirmed,
         },
         {
           signal: abortController.signal,
@@ -908,7 +914,11 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     if (progressState.sshFailure && !progressState.sshFailure.retryable) return;
     const mode = progressMode.value;
     if (mode === 'deploy') {
-      await republishFromConfirm(lastPublishOptions);
+      const retryOptions: StartPublishOptions = {
+        ...lastPublishOptions,
+        extraCleanupNames: [],
+      };
+      await republishFromConfirm(retryOptions);
       return;
     }
     if (mode === 'rollback' && activeRecord.value) {

@@ -20,6 +20,7 @@ import {
   handleDeleteNginxInstance,
   handleDeleteServer,
   handleDeleteTarget,
+  handleGetTargetCleanupPreview,
   handleDeployTarget,
   handleDownloadNginxInstanceArchive,
   handleListNginxInstanceArchiveSites,
@@ -181,6 +182,7 @@ router.get('/events', handleDeployEvents);
 router.post('/targets', handleCreateTarget);
 router.put('/targets/:id', handleUpdateTarget);
 router.delete('/targets/:id', handleDeleteTarget);
+router.get('/targets/:id/cleanup-preview', handleGetTargetCleanupPreview);
 router.post('/targets/:id/nginx-site/sync', handleSyncTargetNginxSite);
 router.get('/targets/:id/nginx-conf', handleReadNginxConfig);
 router.put('/targets/:id/nginx-conf', handleSaveNginxConfig);

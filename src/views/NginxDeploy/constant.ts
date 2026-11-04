@@ -69,8 +69,8 @@ export const DEFAULT_UPLOAD_STRATEGY: DeployUploadStrategy = 'overlayKeepAssets'
 
 /** 静态资源上传策略选项 */
 export const UPLOAD_STRATEGY_OPTIONS: Array<{ label: string; value: DeployUploadStrategy }> = [
-  { label: '覆盖上传并保留旧资源（默认）', value: 'overlayKeepAssets' },
-  { label: '清空后替换（可能中断已打开页面）', value: 'cleanReplace' },
+  { label: '覆盖上传并保留旧资源（默认推荐）', value: 'overlayKeepAssets' },
+  { label: '清空后替换（仅清理雨燕已知项）', value: 'cleanReplace' },
 ];
 
 /** 静态资源上传策略展示文案 */
@@ -1024,15 +1024,15 @@ export const targetFormSchema = {
             },
             preserveSubDirs: {
               type: 'string',
-              title: '保留子目录',
+              title: '保留子目录/文件',
               required: false,
               'x-decorator': 'FormItem',
               'x-decorator-props': {
                 tooltip:
-                  '默认会自动识别同一服务器下部署根目录位于当前目录内的部署目标，并在发布、失败恢复 and 回滚时保留这些顶层目录。这里可手动补充目录名，多个用逗号分隔，例如 insurance-risk, masterData。',
+                  '雨燕会自动保护同一台服务器上部署在当前目录里面的其他应用。这里可以再手动补充要保留的目录或文件名，多个用逗号分隔，例如 insurance-risk, masterData, packages.tar.gz。',
               },
               'x-component': 'Input',
-              'x-component-props': { placeholder: '自动识别；手动补充示例：insurance-risk, masterData' },
+              'x-component-props': { placeholder: '自动保护已登记子应用；手动补充目录或文件名，多个用逗号隔开' },
               'x-reactions': {
                 dependencies: ['projectType'],
                 fulfill: { state: { visible: '{{$deps[0] !== "backend"}}' } },
@@ -1067,7 +1067,7 @@ export const targetFormSchema = {
               'x-decorator-props': {
                 gridSpan: 2,
                 tooltip:
-                  '覆盖上传并保留旧资源适合微应用平滑发布，会先发布静态资源、最后发布入口文件，并按最近发布次数自动清理旧 hash。清空后替换会删除旧资源，可能导致已打开页面切换路由失败。',
+                  '覆盖上传并保留旧资源（推荐）：先传新文件、最后换入口页，旧的静态资源先留着，已打开的页面不会因为找不到旧文件而报错。适合微应用和多个应用共用的目录。清空后替换：只删除雨燕以前发布过的文件和目录，不认识的文件默认保留；如果这个目录是多个应用共用的，发布前要在确认弹窗里看删除预览并勾选确认。',
               },
               'x-component': 'Select',
               'x-reactions': {

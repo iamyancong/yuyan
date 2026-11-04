@@ -14,6 +14,7 @@ import { normalizeBackendConfig, normalizeBackendServiceName, normalizeHealthChe
 import { getRequestContext, getRequestTeamId, SHARED_DEPLOY_WORKSPACE_ID } from './request-context.mjs';
 import { isSshConnectionError, normalizeHostKeyFingerprint, SSH_CONNECTION_STATUS_CODES } from './ssh-errors.mjs';
 import { setSshConnectionHooks } from './ssh-service.mjs';
+import { normalizeDeployRootPath } from './deploy-cleanup-policy.mjs';
 
 /** 兼容旧调用方：提交元信息查询已迁移到独立服务（带超时、缓存与并发合并） */
 export { fetchGitlabCommitMeta } from './commit-meta-service.mjs';
@@ -2243,6 +2244,59 @@ function getDuplicateTarget(db, payload, excludeId = 0) {
 }
 
 /**
+ * 校验前端部署目标的部署根目录是否已被同服务器下的其他前端目标占用。
+ * 规范化后 deployRoot 相同的（不分项目、不分环境）一律拒绝。
+ * @param {DatabaseSync} db - 数据库实例
+ * @param {Object} payload - 部署目标参数
+ * @param {number} [excludeId=0] - 排除的目标 ID
+ * @returns {void}
+ * @throws {Error} 若已被占用抛出 409 冲突错误
+ */
+function assertFrontendDeployRootAvailable(db, payload, excludeId = 0) {
+  if (payload.projectType === 'backend') return;
+  const teamId = getRequestTeamId();
+  const serverId = Number(payload.serverId);
+  let targetNormalized = '';
+  try {
+    targetNormalized = normalizeDeployRootPath(payload.deployRoot);
+  } catch {
+    targetNormalized = String(payload.deployRoot || '').trim();
+  }
+  if (!targetNormalized) return;
+
+  const sql = `
+    SELECT id, project_name, deploy_root
+    FROM deploy_targets
+    WHERE team_id = ?
+      AND server_id = ?
+      AND (project_type != 'backend' OR project_type IS NULL)
+      ${excludeId ? 'AND id != ?' : ''}
+  `;
+  const queryParams = [teamId, serverId];
+  if (excludeId) queryParams.push(Number(excludeId));
+
+  const rows = db.prepare(sql).all(...queryParams);
+  for (const row of rows) {
+    let rowNormalized = '';
+    try {
+      rowNormalized = normalizeDeployRootPath(row.deploy_root);
+    } catch {
+      rowNormalized = String(row.deploy_root || '').trim();
+    }
+    if (rowNormalized === targetNormalized) {
+      const error = new Error(`当前服务器的部署根目录 ${targetNormalized} 已被项目「${row.project_name}」占用，请更换独立的部署根目录`);
+      error.code = 'deploy_root_occupied';
+      error.status = 409;
+      error.details = {
+        occupiedTargetId: Number(row.id),
+        occupiedProjectName: row.project_name,
+      };
+      throw error;
+    }
+  }
+}
+
+/**
  * 获取重复监听端口的托管站点。
  * @param {DatabaseSync} db - 数据库实例
  * @param {Object} payload - 部署目标参数
@@ -3482,6 +3536,13 @@ export async function createTarget(payload) {
     };
     throw error;
   }
+
+  if (!isBackend) {
+    try {
+      safePayload.deployRoot = normalizeDeployRootPath(safePayload.deployRoot);
+    } catch {}
+    assertFrontendDeployRootAvailable(db, safePayload, 0);
+  }
   if (!isBackend && getDuplicateListenPortTarget(db, safePayload)) {
     throw new Error(`当前服务器已存在监听端口 ${safePayload.listenPort} 的托管站点，请更换端口`);
   }
@@ -3568,6 +3629,13 @@ export async function updateTarget(id, payload) {
 
   if (getDuplicateTarget(db, safePayload, Number(id))) {
     throw new Error('该项目在当前服务器和部署根目录下已存在部署目标，请编辑已有目标或更换部署根目录');
+  }
+
+  if (!isBackend) {
+    try {
+      safePayload.deployRoot = normalizeDeployRootPath(safePayload.deployRoot);
+    } catch {}
+    assertFrontendDeployRootAvailable(db, safePayload, Number(id));
   }
   if (!isBackend && getDuplicateListenPortTarget(db, safePayload, Number(id))) {
     throw new Error(`当前服务器已存在监听端口 ${safePayload.listenPort} 的托管站点，请更换端口`);
