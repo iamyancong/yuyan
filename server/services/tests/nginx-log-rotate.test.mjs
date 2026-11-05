@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync, execSync, spawnSync } from 'node:child_process';
+import { execFileSync, execSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -10,6 +10,16 @@ import {
   renderRuntimeScript,
   resolveNginxLogKeepDays,
 } from '../nginx-runtime-service.mjs';
+
+function startFakeMaster(baseDir) {
+  const label = `nginx: master process ${baseDir}/sbin/nginx -p ${baseDir}/`;
+  const child = spawn('bash', ['-c', `exec -a ${JSON.stringify(label)} sleep 600`], {
+    detached: true,
+    stdio: 'ignore',
+  });
+  child.unref();
+  return child.pid;
+}
 
 test('resolveNginxLogKeepDays: 显式参数 > 环境变量 > 默认值 14', () => {
   assert.equal(resolveNginxLogKeepDays(7), 7);
@@ -27,7 +37,7 @@ test('resolveNginxLogKeepDays: 显式参数 > 环境变量 > 默认值 14', () =
   }
 });
 
-test('yuyan-nginx.sh: rotate-logs 轮转、gzip 压缩、reopen 信号、过期清理与未运行安全退出', () => {
+test('yuyan-nginx.sh: rotate-logs 轮转、gzip 压缩、reopen 信号、过期清理与未运行安全退出', (t) => {
   const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuyan-logrotate-test-'));
 
   try {
@@ -50,9 +60,11 @@ test('yuyan-nginx.sh: rotate-logs 轮转、gzip 压缩、reopen 信号、过期�
     );
 
     // 2. 配置文件与存活的 PID
-    fs.writeFileSync(path.join(confDir, 'nginx.conf'), '# dummy nginx conf');
+    fs.writeFileSync(path.join(confDir, 'nginx.conf'), 'pid run/nginx.pid;\n');
     const pidFile = path.join(runDir, 'nginx.pid');
-    fs.writeFileSync(pidFile, String(process.pid));
+    const fakePid = startFakeMaster(baseDir);
+    fs.writeFileSync(pidFile, String(fakePid));
+    t.after(() => { try { process.kill(fakePid); } catch {} });
 
     // 3. 日志文件：非空 access.log、空 error.log、20 天前和 3 天前的历史轮转日志
     const accessLog = path.join(logsDir, 'access.log');
@@ -95,8 +107,14 @@ test('yuyan-nginx.sh: rotate-logs 轮转、gzip 压缩、reopen 信号、过期�
     assert.equal(fs.existsSync(oldLog20), false, '20 天前的轮转文件应被删除');
     assert.equal(fs.existsSync(oldLog3), true, '3 天前的轮转文件应保留');
 
-    // 6. 测试 Nginx 未运行（PID 不存在）时的行为：退出码 0 且不调用 reopen
+    // 6. 测试 Nginx 未运行（无进程且无 pid）时的行为：退出码 0 且不调用 reopen
     fs.rmSync(pidFile, { force: true });
+    try { process.kill(fakePid); } catch {}
+    // 等进程退出，避免 cmdline 扫描仍命中
+    for (let i = 0; i < 20; i += 1) {
+      try { process.kill(fakePid, 0); } catch { break; }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
     fs.writeFileSync(nginxArgsLog, '');
     fs.writeFileSync(accessLog, 'new content while nginx stopped');
 
@@ -107,7 +125,9 @@ test('yuyan-nginx.sh: rotate-logs 轮转、gzip 压缩、reopen 信号、过期�
     assert.doesNotMatch(nginxStoppedArgs, /-s reopen/, '未运行时不应调用 -s reopen');
 
     // 7. 测试 -s reopen 失败时的行为：退出码 1，输出错误，且没有生成 .gz
-    fs.writeFileSync(pidFile, String(process.pid));
+    const fakePid2 = startFakeMaster(baseDir);
+    fs.writeFileSync(pidFile, String(fakePid2));
+    t.after(() => { try { process.kill(fakePid2); } catch {} });
     fs.writeFileSync(accessLog, 'content before reopen fails');
     // 清理已有的 .gz 文件
     for (const f of fs.readdirSync(logsDir)) {

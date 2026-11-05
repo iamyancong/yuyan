@@ -93,3 +93,20 @@ test('兜底非结构化未知错误', () => {
   assert.equal(result.line, null);
   assert.equal(result.reason, '网络连接异常超时 (ETIMEDOUT)');
 });
+
+test('本实例占用端口时不再提示其他服务', async () => {
+  const { parseNginxError } = await import('../utils/nginxErrorParser.ts');
+  const raw =
+    'pid_repaired: 1\nnginx: [emerg] bind() to 0.0.0.0:8050 failed (98: Address already in use)';
+  const result = parseNginxError(raw);
+  assert.equal(result.title, '实例进程未被识别');
+  assert.match(result.reason, /本实例/);
+  assert.match(result.suggestion, /自动修复|更新管理脚本/);
+});
+
+test('其他服务占用端口仍提示修改 listen', () => {
+  const raw = 'nginx: [emerg] bind() to 0.0.0.0:80 failed (98: Address already in use)';
+  const result = parseNginxError(raw);
+  assert.equal(result.title, '监听端口已被占用');
+  assert.match(result.suggestion, /修改 listen/);
+});

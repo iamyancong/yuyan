@@ -28,6 +28,15 @@ import {
   upsertNginxRuntime,
 } from './deploy-store.mjs';
 export { getNginxInstanceContext } from './deploy-store.mjs';
+export {
+  YUYAN_NGINX_SCRIPT_VERSION,
+  formatNginxVersionDisplay,
+  parseNginxPidDirective,
+  parseRemoteScriptVersion,
+  parseRuntimeScriptStatusOutput,
+  pathBelongsToBase,
+  normalizePosixPath,
+} from './nginx-runtime-detect.mjs';
 import {
   execSsh,
   readRemoteText,
@@ -43,6 +52,23 @@ import {
   resolveNginxArchiveSelection,
   resolveNginxArchiveWhitelist,
 } from './nginx-archive-selection.mjs';
+import {
+  YUYAN_NGINX_SCRIPT_VERSION,
+  YUYAN_NGINX_SCRIPT_VERSION_MARKER,
+  formatNginxVersionDisplay,
+  normalizePosixPath,
+  parseNginxPidDirective,
+  parseRemoteScriptVersion,
+  parseRuntimeScriptStatusOutput,
+  pathBelongsToBase,
+} from './nginx-runtime-detect.mjs';
+import {
+  extractNginxBinaryFromCommand,
+  parseNginxVersionOutput,
+  splitShellWords,
+} from './nginx-discovery-service.mjs';
+import { getTestHooks } from './test-hooks.mjs';
+
 
 /** 托管运行时支持的系统 */
 const SUPPORTED_PLATFORM = 'Linux';
@@ -51,7 +77,7 @@ const SUPPORTED_PLATFORM = 'Linux';
 const SUPPORTED_ARCHES = new Set(['x86_64', 'amd64']);
 
 /** Nginx 运行时操作 */
-const RUNTIME_ACTIONS = new Set(['test', 'start', 'stop', 'reload', 'status']);
+const RUNTIME_ACTIONS = new Set(['test', 'start', 'stop', 'reload', 'status', 'upgrade']);
 
 /** 运行包导出时排除的 Nginx 运行态目录 */
 const ARCHIVE_EXCLUDE_DIRS = ['logs', 'run', 'client_body_temp', 'proxy_temp'];
@@ -834,61 +860,470 @@ export function renderMainNginxConfig(config, explicitInstanceId = null) {
 }
 
 /**
- * 渲染用户级 Nginx 管理脚本。
+ * 渲染用户级 Nginx 管理脚本（协议版本见 YUYAN_NGINX_SCRIPT_VERSION）。
  * @returns {string} 脚本内容
  */
 export function renderRuntimeScript() {
   return [
     '#!/usr/bin/env bash',
+    '# yuyan-nginx-script-version: 2',
     'set -euo pipefail',
     '',
     'ACTION="${1:-help}"',
     'BASE_DIR="$(cd "$(dirname "$0")" && pwd)"',
+    'BASE_DIR="${BASE_DIR%/}"',
     'NGINX="$BASE_DIR/sbin/nginx"',
     'CONF="$BASE_DIR/conf/nginx.conf"',
-    'PID="$BASE_DIR/run/nginx.pid"',
+    'BASE_SLASH="${BASE_DIR}/"',
+    'KILL_BIN="/bin/kill"',
+    'if [ ! -x "$KILL_BIN" ]; then KILL_BIN="kill"; fi',
+    'PID_REPAIRED=0',
+    'NEEDS_SUDO=0',
+    'PRIMARY_PID_FILE=""',
+    'PID_CANDIDATES=""',
+    '',
+    'normalize_path() {',
+    '  local p="${1:-}"',
+    '  p="${p%/}"',
+    '  [ -n "$p" ] || { echo ""; return; }',
+    '  echo "$p"',
+    '}',
+    '',
+    '# 判断文本是否归属本实例根（禁止 /opt/yuyan/nginx 误匹配 /opt/yuyan/nginx2）',
+    'belongs_to_base() {',
+    '  local text="${1:-}"',
+    '  case "$text" in',
+    '    "$BASE_DIR"|"$BASE_SLASH"*|"$BASE_DIR "*) return 0 ;;',
+    '  esac',
+    '  # cmdline 中 -p /base/ 或 -c /base/conf',
+    '  case "$text" in',
+    '    *"$BASE_SLASH"*) ',
+    '      # 排除 base 后紧跟字母数字（nginx2）',
+    '      local rest="${text#*"$BASE_DIR"}"',
+    '      case "$rest" in',
+    '        ""|/*|[[:space:]]*) return 0 ;;',
+    '        *) return 1 ;;',
+    '      esac',
+    '      ;;',
+    '  esac',
+    '  return 1',
+    '}',
+    '',
+    'read_pid_candidates() {',
+    '  PID_CANDIDATES=""',
+    '  local directive=""',
+    '  if [ -f "$CONF" ]; then',
+    '    while IFS= read -r line || [ -n "$line" ]; do',
+    '      line="${line%%#*}"',
+    '      line="$(echo "$line" | sed \'s/^[[:space:]]*//;s/[[:space:]]*$//\')"',
+    '      case "$line" in',
+    '        [Pp][Ii][Dd][[:space:]]*)',
+    '          directive="${line#*[Pp][Ii][Dd]}"',
+    '          directive="$(echo "$directive" | sed \'s/^[[:space:]]*//;s/[[:space:]]*;[[:space:]]*$//;s/^["\'\\\'\']//;s/["\'\\\'\']$//\')"',
+    '          break',
+    '          ;;',
+    '      esac',
+    '    done < "$CONF"',
+    '  fi',
+    '  add_cand() {',
+    '    local rel="$1" abs=""',
+    '    [ -n "$rel" ] || return 0',
+    '    case "$rel" in',
+    '      /*) abs="$(normalize_path "$rel")" ;;',
+    '      *) abs="$(normalize_path "$BASE_DIR/$rel")" ;;',
+    '    esac',
+    '    case " $PID_CANDIDATES " in',
+    '      *" $abs "*) ;;',
+    '      *) PID_CANDIDATES="$PID_CANDIDATES $abs" ;;',
+    '    esac',
+    '  }',
+    '  add_cand "$directive"',
+    '  add_cand "run/nginx.pid"',
+    '  add_cand "logs/nginx.pid"',
+    '  PID_CANDIDATES="$(echo "$PID_CANDIDATES" | sed \'s/^[[:space:]]*//\')"',
+    '  PRIMARY_PID_FILE=""',
+    '  if [ -n "$directive" ]; then',
+    '    case "$directive" in',
+    '      /*) PRIMARY_PID_FILE="$(normalize_path "$directive")" ;;',
+    '      *) PRIMARY_PID_FILE="$(normalize_path "$BASE_DIR/$directive")" ;;',
+    '    esac',
+    '  else',
+    '    PRIMARY_PID_FILE="$BASE_DIR/run/nginx.pid"',
+    '  fi',
+    '}',
+    '',
+    'proc_cmdline() {',
+    '  local pid="$1"',
+    '  if [ -r "/proc/$pid/cmdline" ]; then',
+    '    tr \'\\0\' \' \' < "/proc/$pid/cmdline" 2>/dev/null || true',
+    '  fi',
+    '}',
+    '',
+    'proc_belongs() {',
+    '  local pid="$1"',
+    '  local cmd exe',
+    '  cmd="$(proc_cmdline "$pid")"',
+    '  if belongs_to_base "$cmd"; then return 0; fi',
+    '  if [ -L "/proc/$pid/exe" ] || [ -e "/proc/$pid/exe" ]; then',
+    '    exe="$(readlink -f "/proc/$pid/exe" 2>/dev/null || readlink "/proc/$pid/exe" 2>/dev/null || true)"',
+    '    # (deleted) 后缀',
+    '    exe="${exe% (deleted)}"',
+    '    if belongs_to_base "$exe"; then return 0; fi',
+    '  fi',
+    '  return 1',
+    '}',
+    '',
+    'pid_signal_check() {',
+    '  # 0=存活可信号；1=不存在；2=EPERM/需要更高权限',
+    '  local pid="$1"',
+    '  if [ ! -d "/proc/$pid" ]; then return 1; fi',
+    '  if "$KILL_BIN" -0 "$pid" 2>/dev/null; then return 0; fi',
+    '  # 进程目录在但 kill -0 失败 → 多半 EPERM',
+    '  return 2',
+    '}',
+    '',
+    'validate_pid_file() {',
+    '  local file="$1"',
+    '  [ -f "$file" ] || return 1',
+    '  local pid',
+    '  pid="$(tr -d \'[:space:]\' < "$file" 2>/dev/null || true)"',
+    '  case "$pid" in',
+    "    ''|*[!0-9]*) return 1 ;;",
+    '  esac',
+    '  local rc=0',
+    '  pid_signal_check "$pid" || rc=$?',
+    '  if [ "$rc" -eq 1 ]; then return 1; fi',
+    '  if [ "$rc" -eq 2 ]; then',
+    '    echo "needs_sudo: 1"',
+    '    echo "running: $pid"',
+    '    echo "permission_denied: 1"',
+    '    return 2',
+    '  fi',
+    '  if proc_belongs "$pid"; then',
+    '    # 只向 stdout 输出纯数字 pid；路径写入全局，避免命令替换吞多行',
+    '    PRIMARY_PID_FILE="$file"',
+    '    echo "$pid"',
+    '    return 0',
+    '  fi',
+    '  return 1',
+    '}',
+    '',
+    'find_master_by_proc() {',
+    '  local pid cmd',
+    '  for pid_dir in /proc/[0-9]*; do',
+    '    pid="${pid_dir#/proc/}"',
+    '    cmd="$(proc_cmdline "$pid")"',
+    '    case "$cmd" in',
+    "      *'nginx: master process'*)",
+    '        if belongs_to_base "$cmd"; then',
+    '          echo "$pid"',
+    '          return 0',
+    '        fi',
+    '        # 有些构建 cmdline 只是二进制路径，再看 args 中的 -p/-c',
+    '        if belongs_to_base "$cmd" || { case "$cmd" in *"-p ${BASE_DIR}"*|*" -p ${BASE_SLASH}"*|*" -c ${BASE_SLASH}"*|*" -c ${CONF}"*) true ;; *) false ;; esac; }; then',
+    '          echo "$pid"',
+    '          return 0',
+    '        fi',
+    '        ;;',
+    '      *"$NGINX"*|*"${BASE_SLASH}sbin/nginx"*)',
+    '        # worker 通常含 "worker process"；master 含 master 或启动参数 -p',
+    '        case "$cmd" in',
+    "          *'worker process'*|*'cache manager'*|*'cache loader'*) continue ;;",
+    '        esac',
+    '        if belongs_to_base "$cmd"; then',
+    '          case "$cmd" in',
+    '            *\'master process\'*|*-p[[:space:]]*|*-c[[:space:]]*) echo "$pid"; return 0 ;;',
+    '          esac',
+    '        fi',
+    '        ;;',
+    '    esac',
+    '  done',
+    '  return 1',
+    '}',
+    '',
+    'repair_pid_file() {',
+    '  local pid="$1"',
+    '  local target="${PRIMARY_PID_FILE:-$BASE_DIR/run/nginx.pid}"',
+    '  mkdir -p "$(dirname "$target")" 2>/dev/null || true',
+    '  if printf \'%s\\n\' "$pid" > "$target" 2>/dev/null; then',
+    '    echo "pid_repaired: 1"',
+    '    echo "pid_path: $target"',
+    '    return 0',
+    '  fi',
+    '  # 写失败不致命',
+    '  echo "pid_path: $target"',
+    '  return 0',
+    '}',
+    '',
+    '# 输出 master pid 到 stdout 最后一行数字；副作用打印元数据到 stdout',
+    'resolve_master_pid() {',
+    '  NEEDS_SUDO=0',
+    '  PID_REPAIRED=0',
+    '  read_pid_candidates',
+    '  local cand pid found="" rc',
+    '  for cand in $PID_CANDIDATES; do',
+    '    set +e',
+    '    pid="$(validate_pid_file "$cand")"',
+    '    rc=$?',
+    '    set -e',
+    '    if [ "$rc" -eq 2 ]; then',
+    '      NEEDS_SUDO=1',
+    '      # validate 已在 stdout 打出 needs_sudo/running/permission_denied；原样透传数字外的元数据',
+    '      echo "$pid" | grep -E \'^(needs_sudo|running|permission_denied|pid_path):\' || true',
+    '      echo "needs_sudo: 1"',
+    '      return 2',
+    '    fi',
+    '    if [ "$rc" -eq 0 ] && [ -n "$pid" ]; then',
+    '      found="$pid"',
+    '      PRIMARY_PID_FILE="$cand"',
+    '      break',
+    '    fi',
+    '  done',
+    '  if [ -z "$found" ]; then',
+    '    set +e',
+    '    found="$(find_master_by_proc)"',
+    '    set -e',
+    '    if [ -n "$found" ]; then',
+    '      PID_REPAIRED=1',
+    '      repair_pid_file "$found"',
+    '    fi',
+    '  fi',
+    '  if [ -n "$found" ]; then',
+    '    set +e',
+    '    pid_signal_check "$found"',
+    '    sig_rc=$?',
+    '    set -e',
+    '    if [ "$sig_rc" -eq 2 ]; then',
+    '      echo "needs_sudo: 1"',
+    '      echo "running: $found"',
+    '      echo "permission_denied: 1"',
+    '      return 2',
+    '    fi',
+    '    if [ "$sig_rc" -eq 1 ]; then',
+    '      # 刚找到却瞬间退出',
+    '      return 1',
+    '    fi',
+    '    echo "$found"',
+    '    return 0',
+    '  fi',
+    '  return 1',
+    '}',
     '',
     'is_running() {',
-    '  [ -f "$PID" ] && kill -0 "$(cat "$PID")" 2>/dev/null',
+    '  local pid',
+    '  set +e',
+    '  pid="$(resolve_master_pid 2>/dev/null | awk \'/^[0-9]+$/{print; exit}\')"',
+    '  local rc=$?',
+    '  set -e',
+    '  [ -n "$pid" ]',
+    '}',
+    '',
+    'read_version_from_bin() {',
+    '  local bin="$1"',
+    '  case "$bin" in',
+    "    *'(deleted)'*) echo \"\"; return 0 ;;",
+    '  esac',
+    '  if [ ! -e "$bin" ] && [ ! -L "$bin" ]; then',
+    '    echo ""',
+    '    return 0',
+    '  fi',
+    '  # nginx -v 写在 stderr；/proc/pid/exe 在 (deleted) 时仍可执行',
+    '  local out',
+    '  out="$("$bin" -v 2>&1 || true)"',
+    '  echo "$out" | sed -n -e "s/.*[Nn]ginx version:[[:space:]]*\\([^[:space:]]*\\).*/\\1/p" -e "s/.*[Tt]engine version:[[:space:]]*\\([^[:space:]]*\\).*/\\1/p" | head -n 1',
+    '}',
+    '',
+    'emit_status_details() {',
+    '  local pid="$1"',
+    '  local running_exe="" disk_exe="$NGINX" running_ver="" disk_ver="" pending=0 ver_bin=""',
+    '  if [ -e "/proc/$pid/exe" ] || [ -L "/proc/$pid/exe" ]; then',
+    '    running_exe="$(readlink "/proc/$pid/exe" 2>/dev/null || true)"',
+    '    if [ -z "$running_exe" ]; then',
+    '      running_exe="/proc/$pid/exe"',
+    '    fi',
+    '  fi',
+    '  # 原地替换后 readlink 带 " (deleted)"，路径不可直接执行；改走 /proc/pid/exe',
+    '  ver_bin="${running_exe:-/proc/$pid/exe}"',
+    "  case \"$ver_bin\" in",
+    "    *'(deleted)'*) ver_bin=\"/proc/$pid/exe\" ;;",
+    '  esac',
+    '  running_ver="$(read_version_from_bin "$ver_bin")"',
+    '  disk_ver="$(read_version_from_bin "$disk_exe")"',
+    '  if [ -n "$running_ver" ] && [ -n "$disk_ver" ] && [ "$running_ver" != "$disk_ver" ]; then',
+    '    pending=1',
+    '  fi',
+    '  case "$running_exe" in',
+    "    *'(deleted)'*) pending=1 ;;",
+    '  esac',
+    '  echo "running: $pid"',
+    '  echo "pid_path: ${PRIMARY_PID_FILE:-$BASE_DIR/run/nginx.pid}"',
+    '  if [ "${PID_REPAIRED:-0}" = "1" ]; then echo "pid_repaired: 1"; fi',
+    '  echo "running_exe: ${running_exe:-}"',
+    '  echo "disk_exe: $disk_exe"',
+    '  echo "running_version: ${running_ver:-}"',
+    '  echo "disk_version: ${disk_ver:-}"',
+    '  echo "upgrade_pending: $pending"',
+    '  return 0',
+    '}',
+    '',
+    'do_test() {',
+    '  "$NGINX" -p "$BASE_DIR/" -c "$CONF" -t',
     '}',
     '',
     'case "$ACTION" in',
     '  start)',
-    '    if is_running; then',
-    '      echo "yuyan nginx already running: $(cat "$PID")"',
+    '    set +e',
+    '    MASTER="$(resolve_master_pid 2>/dev/null | awk \'/^[0-9]+$/{print; exit}\')"',
+    '    rc=$?',
+    '    set -e',
+    '    if [ "$rc" -eq 2 ]; then',
+    '      echo "needs_sudo: 1" >&2',
+    '      echo "实例进程可能在跑但当前账号无信号权限，请开启免密 sudo 后重试" >&2',
+    '      exit 4',
+    '    fi',
+    '    if [ -n "${MASTER:-}" ]; then',
+    '      echo "yuyan nginx already running: $MASTER"',
     '      exit 0',
     '    fi',
+    '    do_test',
     '    "$NGINX" -p "$BASE_DIR/" -c "$CONF"',
     '    echo "yuyan nginx started"',
     '    ;;',
     '  stop)',
-    '    if is_running; then',
-    '      "$NGINX" -p "$BASE_DIR/" -c "$CONF" -s quit',
+    '    set +e',
+    '    MASTER="$(resolve_master_pid 2>/dev/null | awk \'/^[0-9]+$/{print; exit}\')"',
+    '    rc=$?',
+    '    set -e',
+    '    if [ "$rc" -eq 2 ]; then',
+    '      echo "needs_sudo: 1" >&2',
+    '      exit 4',
+    '    fi',
+    '    if [ -n "${MASTER:-}" ]; then',
+    '      "$KILL_BIN" -QUIT "$MASTER" 2>/dev/null || "$NGINX" -p "$BASE_DIR/" -c "$CONF" -s quit',
     '      echo "yuyan nginx stopped"',
     '    else',
     '      echo "yuyan nginx not running"',
     '    fi',
     '    ;;',
     '  reload)',
-    '    "$NGINX" -p "$BASE_DIR/" -c "$CONF" -t',
-    '    if is_running; then',
-    '      "$NGINX" -p "$BASE_DIR/" -c "$CONF" -s reload',
+    '    set +e',
+    '    MASTER="$(resolve_master_pid 2>/dev/null | awk \'/^[0-9]+$/{print; exit}\')"',
+    '    rc=$?',
+    '    set -e',
+    '    if [ "$rc" -eq 2 ]; then',
+    '      echo "needs_sudo: 1" >&2',
+    '      echo "实例进程可能在跑但当前账号无信号权限，请开启免密 sudo 后重试" >&2',
+    '      exit 4',
+    '    fi',
+    '    do_test',
+    '    if [ -n "${MASTER:-}" ]; then',
+    '      "$KILL_BIN" -HUP "$MASTER" 2>/dev/null || "$NGINX" -p "$BASE_DIR/" -c "$CONF" -s reload',
     '      echo "yuyan nginx reloaded"',
+    '      if [ "${PID_REPAIRED:-0}" = "1" ]; then echo "pid_repaired: 1"; fi',
     '    else',
+    '      # 确认无本实例进程才允许 start；不再在「认不到」时盲目 start',
+    '      echo "yuyan nginx not running; starting after confirmed absence" >&2',
     '      "$NGINX" -p "$BASE_DIR/" -c "$CONF"',
     '      echo "yuyan nginx started"',
     '    fi',
     '    ;;',
     '  test)',
-    '    "$NGINX" -p "$BASE_DIR/" -c "$CONF" -t',
+    '    do_test',
     '    ;;',
     '  status)',
-    '    if is_running; then',
-    '      echo "running: $(cat "$PID")"',
-    '    else',
-    '      echo "stopped"',
-    '      exit 3',
+    '    PID_REPAIRED=0',
+    '    set +e',
+    '    # resolve_master_pid 会打印元数据行 + 最终 pid；因命令替换在子 shell，需从输出回填全局变量',
+    '    STATUS_OUT="$(resolve_master_pid 2>&1)"',
+    '    rc=$?',
+    '    set -e',
+    '    if [ "$rc" -eq 2 ] || echo "$STATUS_OUT" | grep -q \'needs_sudo: 1\'; then',
+    '      echo "needs_sudo: 1"',
+    '      echo "$STATUS_OUT" | grep -E \'^(running|pid_path|pid_repaired|permission_denied):\' || true',
+    '      # 进程在跑但无信号权限：绝不能标 stopped，也不能 start',
+    '      exit 4',
     '    fi',
+    '    MASTER="$(echo "$STATUS_OUT" | awk \'/^[0-9]+$/{print; exit}\')"',
+    '    PARSED_PID_PATH="$(echo "$STATUS_OUT" | awk -F\': \' \'/^pid_path:/{print $2; exit}\')"',
+    '    if [ -n "$PARSED_PID_PATH" ]; then PRIMARY_PID_FILE="$PARSED_PID_PATH"; fi',
+    '    if echo "$STATUS_OUT" | grep -q \'pid_repaired: 1\'; then PID_REPAIRED=1; fi',
+    '    # 若未打印 pid_path（命中已有正确 pid 文件），从候选回填',
+    '    if [ -z "${PRIMARY_PID_FILE:-}" ]; then',
+    '      read_pid_candidates',
+    '    fi',
+    '    echo "$STATUS_OUT" | grep -E \'^(pid_repaired|pid_path|needs_sudo):\' || true',
+    '    if [ -n "${MASTER:-}" ]; then',
+    '      emit_status_details "$MASTER"',
+    '      exit 0',
+    '    fi',
+    '    echo "stopped"',
+    '    disk_ver="$(read_version_from_bin "$NGINX")"',
+    '    echo "disk_version: ${disk_ver:-}"',
+    '    echo "disk_exe: $NGINX"',
+    '    exit 3',
+    '    ;;',
+    '  upgrade)',
+    '    # 平滑热升级：USR2 拉起新 master，再 QUIT 旧 master',
+    '    set +e',
+    '    OLD_MASTER="$(resolve_master_pid 2>/dev/null | awk \'/^[0-9]+$/{print; exit}\')"',
+    '    rc=$?',
+    '    set -e',
+    '    if [ "$rc" -eq 2 ]; then',
+    '      echo "needs_sudo: 1" >&2',
+    '      echo "实例进程可能在跑但当前账号无信号权限，请开启免密 sudo 后重试" >&2',
+    '      exit 4',
+    '    fi',
+    '    do_test',
+    '    if [ -z "${OLD_MASTER:-}" ]; then',
+    '      echo "yuyan nginx not running; nothing to upgrade" >&2',
+    '      exit 1',
+    '    fi',
+    '    read_pid_candidates',
+    '    OLD_PID_FILE="${PRIMARY_PID_FILE:-$BASE_DIR/run/nginx.pid}"',
+    '    OLDBIN_FILE="${OLD_PID_FILE}.oldbin"',
+    '    "$KILL_BIN" -USR2 "$OLD_MASTER"',
+    '    # 等待新 master',
+    '    NEW_MASTER=""',
+    '    i=0',
+    '    while [ "$i" -lt 50 ]; do',
+    '      sleep 0.2',
+    '      if [ -f "$OLD_PID_FILE" ]; then',
+    '        cand="$(tr -d \'[:space:]\' < "$OLD_PID_FILE" 2>/dev/null || true)"',
+    '        if [ -n "$cand" ] && [ "$cand" != "$OLD_MASTER" ] && [ -d "/proc/$cand" ]; then',
+    '          NEW_MASTER="$cand"',
+    '          break',
+    '        fi',
+    '      fi',
+    '      i=$((i + 1))',
+    '    done',
+    '    if [ -z "$NEW_MASTER" ]; then',
+    '      echo "hot upgrade failed: new master not ready" >&2',
+    '      exit 1',
+    '    fi',
+    '    # QUIT 旧 master（oldbin）',
+    '    if [ -f "$OLDBIN_FILE" ]; then',
+    '      OLD_FROM_FILE="$(tr -d \'[:space:]\' < "$OLDBIN_FILE" 2>/dev/null || true)"',
+    '      [ -n "$OLD_FROM_FILE" ] && OLD_MASTER="$OLD_FROM_FILE"',
+    '    fi',
+    '    if [ -d "/proc/$OLD_MASTER" ]; then',
+    '      "$KILL_BIN" -QUIT "$OLD_MASTER" 2>/dev/null || true',
+    '    fi',
+    '    # 确认旧进程退出',
+    '    j=0',
+    '    while [ "$j" -lt 50 ]; do',
+    '      if [ ! -d "/proc/$OLD_MASTER" ]; then break; fi',
+    '      sleep 0.2',
+    '      j=$((j + 1))',
+    '    done',
+    '    if [ -d "/proc/$OLD_MASTER" ]; then',
+    '      echo "hot upgrade warning: old master $OLD_MASTER still alive" >&2',
+    '      # 失败回滚：QUIT 新进程',
+    '      "$KILL_BIN" -QUIT "$NEW_MASTER" 2>/dev/null || true',
+    '      exit 1',
+    '    fi',
+    '    echo "yuyan nginx upgraded"',
+    '    echo "running: $NEW_MASTER"',
+    '    emit_status_details "$NEW_MASTER"',
     '    ;;',
     '  rotate-logs)',
     '    KEEP_DAYS="${2:-14}"',
@@ -899,18 +1334,13 @@ export function renderRuntimeScript() {
     '    if [ ! -d "$LOGS_DIR" ]; then',
     '      exit 0',
     '    fi',
-    '    if [ -f "$PID" ]; then',
-    '      pid="$(cat "$PID" 2>/dev/null || true)"',
-    '      if [ -n "$pid" ]; then',
-    '        proc_exists=0',
-    '        if [ -d "/proc/$pid" ] 2>/dev/null || kill -0 "$pid" 2>/dev/null; then',
-    '          proc_exists=1',
-    '        fi',
-    '        if [ "$proc_exists" -eq 1 ] && ! kill -0 "$pid" 2>/dev/null; then',
-    '          echo "nginx 进程由其他账号运行，当前账号无法发送 reopen 信号，已跳过本次日志轮转" >&2',
-    '          exit 1',
-    '        fi',
-    '      fi',
+    '    set +e',
+    '    MASTER="$(resolve_master_pid 2>/dev/null | awk \'/^[0-9]+$/{print; exit}\')"',
+    '    rc=$?',
+    '    set -e',
+    '    if [ "$rc" -eq 2 ]; then',
+    '      echo "nginx 进程由其他账号运行，当前账号无法发送 reopen 信号，已跳过本次日志轮转" >&2',
+    '      exit 1',
     '    fi',
     '    TIMESTAMP="$(date +%Y%m%d%H%M%S)"',
     '    ROTATED_COUNT=0',
@@ -930,7 +1360,7 @@ export function renderRuntimeScript() {
     '      ROTATED_COUNT=$((ROTATED_COUNT + 1))',
     '    done',
     '',
-    '    if [ "$ROTATED_COUNT" -gt 0 ] && is_running; then',
+    '    if [ "$ROTATED_COUNT" -gt 0 ] && [ -n "${MASTER:-}" ]; then',
     '      if ! "$NGINX" -p "$BASE_DIR/" -c "$CONF" -s reopen; then',
     '        echo "nginx 日志 reopen 信号发送失败，已终止本次轮转，保留未压缩日志以防数据丢失" >&2',
     '        exit 1',
@@ -951,7 +1381,7 @@ export function renderRuntimeScript() {
     '    find "$LOGS_DIR" -maxdepth 1 -type f -name \'*.log.*\' -mtime "+$KEEP_DAYS" -exec rm -f {} + 2>/dev/null || true',
     '    ;;',
     '  help|*)',
-    '    echo "用法: $0 {start|stop|reload|test|status|rotate-logs [keep_days]}"',
+    '    echo "用法: $0 {start|stop|reload|test|status|upgrade|rotate-logs [keep_days]}"',
     '    ;;',
     'esac',
     '',
@@ -1475,7 +1905,25 @@ async function execExternalInstanceAction(conn, instance, action) {
  * @returns {Object} 状态响应
  */
 function createRuntimeStatusResponse(params) {
-  const { instance, initialized, running, status, statusOutput, platform, manifest, manifests, config } = params;
+  const {
+    instance,
+    initialized,
+    running,
+    status,
+    statusOutput,
+    platform,
+    manifest,
+    manifests,
+    config,
+    runningVersion = '',
+    diskVersion = '',
+    upgradePending = false,
+    pidRepaired = false,
+    masterPid = 0,
+    versionDetectError = '',
+    scriptRefreshed = false,
+  } = params;
+  const version = runningVersion || diskVersion || instance?.runtimeVersion || '';
   return {
     runtime: instance || null,
     initialized,
@@ -1485,7 +1933,14 @@ function createRuntimeStatusResponse(params) {
     platform: platform || '',
     manifest,
     manifests,
-    version: instance?.runtimeVersion || '',
+    version,
+    runningVersion: runningVersion || '',
+    diskVersion: diskVersion || version,
+    upgradePending: Boolean(upgradePending),
+    pidRepaired: Boolean(pidRepaired),
+    masterPid: Number(masterPid) || 0,
+    versionDetectError: versionDetectError || '',
+    scriptRefreshed: Boolean(scriptRefreshed),
     packageVariant: instance?.packageVariant || '',
     baseRoot: config.baseRoot,
     installRoot: config.installRoot,
@@ -1502,24 +1957,172 @@ function createRuntimeStatusResponse(params) {
  * @param {number} instanceId - Nginx 实例 ID
  * @returns {Promise<Object>} 状态
  */
+/**
+ * 若远端 yuyan-nginx.sh 协议版本低于当前，则自动刷新管理脚本与定时任务。
+ * @param {Object} conn - SSH 连接
+ * @param {Object} server - 服务器
+ * @param {Object} config - 运行时配置
+ * @returns {Promise<{ refreshed: boolean, remoteVersion: number }>}
+ */
+async function ensureManagedScriptCurrent(conn, server, config) {
+  const sudo = config.useSudo ? 'sudo -n ' : '';
+  const quotedPath = shellQuote(config.scriptPath);
+  // 脚本尚不存在时不要在 status/reload 路径里偷偷安装（留给初始化），避免干扰站点保存的 skipped 备份语义。
+  const existsResult = await execSsh(conn, `${sudo}test -f ${quotedPath}`, {
+    label: '检查管理脚本是否存在',
+    allowFailure: true,
+  });
+  if (existsResult.code !== 0) {
+    return { refreshed: false, remoteVersion: 0 };
+  }
+  const headResult = await execSsh(conn, `${sudo}sed -n '1,40p' ${quotedPath}`, {
+    label: '检查管理脚本协议版本',
+    allowFailure: true,
+  });
+  const head = String(headResult.stdout || '');
+  // 读不到内容时不自动安装，避免 SSH 桩/空文件场景误触发 write backup（污染站点保存的 skipped 语义）。
+  if (!head.trim()) {
+    return { refreshed: false, remoteVersion: 0 };
+  }
+  const remoteVersion = parseRemoteScriptVersion(head);
+  if (remoteVersion >= YUYAN_NGINX_SCRIPT_VERSION) {
+    return { refreshed: false, remoteVersion };
+  }
+  await installManagedScriptAndLogRotateCron(conn, server, config, {});
+  return { refreshed: true, remoteVersion };
+}
+
+/**
+ * 对指定二进制执行 nginx -v 并解析版本（合并 stderr/stdout）。
+ * @param {Object} conn - SSH 连接
+ * @param {string} binary - 绝对路径
+ * @param {boolean} useSudo - 是否 sudo
+ * @returns {Promise<{ version: string, output: string }>}
+ */
+async function probeNginxBinaryVersion(conn, binary, useSudo) {
+  if (!binary) return { version: '', output: '' };
+  const sudo = useSudo ? 'sudo -n ' : '';
+  const result = await execSsh(conn, `${sudo}${shellQuote(binary)} -v`, {
+    label: '探测 Nginx 版本',
+    allowFailure: true,
+  });
+  const output = `${result.stderr || ''}\n${result.stdout || ''}`;
+  return { version: parseNginxVersionOutput(output).version || '', output };
+}
+
+/**
+ * 探测接入已有 Nginx 的运行/磁盘版本。
+ * @param {Object} conn - SSH 连接
+ * @param {Object} instance - 实例
+ * @param {boolean} useSudo - 是否 sudo
+ * @returns {Promise<{ version: string, runningVersion: string, diskVersion: string, versionDetectError: string, upgradePending: boolean }>}
+ */
+async function probeExternalInstanceVersion(conn, instance, useSudo) {
+  const sudo = useSudo ? 'sudo -n ' : '';
+  const binary = extractNginxBinaryFromCommand(instance?.nginxTestCommand || instance?.nginxReloadCommand || '');
+  const workDir = String(instance?.nginxWorkDir || '').replace(/\/+$/, '');
+  let runningVersion = '';
+  let diskVersion = '';
+  let versionDetectError = '';
+  const baseHint = workDir || (binary ? binary.replace(/\/sbin\/nginx$/, '').replace(/\/nginx$/, '') : '');
+  if (baseHint) {
+    const safeBase = String(baseHint).replace(/"/g, '');
+    const findScript = [
+      'for d in /proc/[0-9]*; do',
+      '  pid=${d#/proc/};',
+      '  cmd=$(tr "\\0" " " < "$d/cmdline" 2>/dev/null || true);',
+      '  case "$cmd" in',
+      '    *"nginx: master process"*)',
+      `      case "$cmd" in *"${safeBase}"*|*"${safeBase}/"*) echo "$pid"; exit 0;; esac;;`,
+      '  esac;',
+      'done;',
+      'exit 1',
+    ].join(' ');
+    const found = await execSsh(conn, `${sudo}sh -c ${shellQuote(findScript)}`, {
+      label: '查找已有 Nginx master',
+      allowFailure: true,
+    });
+    const pid = String(found.stdout || '').trim().split(/\s+/)[0] || '';
+    if (found.code === 0 && /^\d+$/.test(pid)) {
+      const exeScript = `exe=$(readlink /proc/${pid}/exe 2>/dev/null || echo /proc/${pid}/exe); "$exe" -v`;
+      const exeProbe = await execSsh(conn, `${sudo}sh -c ${shellQuote(exeScript)}`, {
+        label: '读取运行中 Nginx 版本',
+        allowFailure: true,
+      });
+      runningVersion = parseNginxVersionOutput(`${exeProbe.stderr || ''}\n${exeProbe.stdout || ''}`).version || '';
+    }
+  }
+  if (binary) {
+    diskVersion = (await probeNginxBinaryVersion(conn, binary, useSudo)).version;
+  } else if (!runningVersion) {
+    versionDetectError = '无法从校验命令安全提取 Nginx 二进制路径';
+  }
+  if (!runningVersion && !diskVersion && !versionDetectError) {
+    versionDetectError = '执行 nginx -v 失败或无输出';
+  }
+  const version = runningVersion || diskVersion;
+  const upgradePending = Boolean(runningVersion && diskVersion && runningVersion !== diskVersion);
+  return { version, runningVersion, diskVersion, versionDetectError, upgradePending };
+}
+
+/**
+ * 追加托管 Nginx 中央审计（无 central 上下文时静默跳过）。
+ * @param {string} action - 审计动作
+ * @param {Object} body - 审计正文
+ */
+async function appendNginxRuntimeCentralAudit(action, body = {}) {
+  const hooks = getTestHooks();
+  if (hooks?.onNginxAudit) {
+    try {
+      await hooks.onNginxAudit(action, body);
+    } catch {
+      // 测试钩子失败不阻断主流程
+    }
+  }
+  try {
+    const { getRequestContext } = await import('./request-context.mjs');
+    const context = getRequestContext();
+    if (!context || context.legacy) return;
+    const { appendCentralAudit } = await import('./central-identity-service.mjs');
+    await appendCentralAudit(context, { action, ...body });
+  } catch {
+    // 桌面端/无身份上下文时忽略
+  }
+}
+
 export async function getNginxInstanceStatus(instanceId) {
   const { instance, server } = await getNginxInstanceContext(instanceId);
   const manifests = await listAvailableManifests();
   const manifest = manifests[0] || null;
-  const config = resolveRuntimeConfig(instance);
+  const effectiveUseSudo = Boolean(instance.useSudo || server.useSudo);
+  const effectiveInstance = { ...instance, useSudo: effectiveUseSudo };
+  const config = resolveRuntimeConfig(effectiveInstance);
+
   if (instance.instanceType !== 'managed') {
-    return createRuntimeStatusResponse({
-      instance,
-      initialized: true,
-      running: instance.status === 'running',
-      status: instance.status || 'unknown',
-      statusOutput: instance.statusOutput || '',
-      platform: '',
-      manifest,
-      manifests,
-      config,
+    return withSsh(server, async (conn) => {
+      const probed = await probeExternalInstanceVersion(conn, effectiveInstance, effectiveUseSudo);
+      if (probed.version) {
+        await updateNginxInstanceState(instance.id, { runtimeVersion: probed.version });
+      }
+      const running = Boolean(probed.runningVersion) || instance.status === 'running';
+      return createRuntimeStatusResponse({
+        instance: { ...instance, runtimeVersion: probed.version || instance.runtimeVersion || '' },
+        initialized: true,
+        running,
+        status: running ? 'running' : (instance.status || 'unknown'),
+        statusOutput: instance.statusOutput || '',
+        platform: '',
+        manifest,
+        manifests,
+        config,
+        runningVersion: probed.runningVersion,
+        diskVersion: probed.diskVersion,
+        upgradePending: probed.upgradePending,
+        versionDetectError: probed.versionDetectError,
+      });
     });
   }
+
   return withSsh(server, async (conn) => {
     const platformResult = await execSsh(conn, 'uname -s && uname -m', {
       label: '检查服务器系统架构',
@@ -1534,41 +2137,71 @@ export async function getNginxInstanceStatus(instanceId) {
       ].join(' && '),
       { label: '检查托管 Nginx 文件', allowFailure: true }
     );
-    const statusResult = await execRuntimeScript(conn, instance, 'status').catch((error) => ({
+    const fileText = fileResult.stdout || '';
+    const initialized = fileText.includes('nginx=1') && fileText.includes('script=1') && fileText.includes('conf=1');
+    let scriptRefreshed = false;
+    if (initialized) {
+      const ensured = await ensureManagedScriptCurrent(conn, server, config);
+      scriptRefreshed = ensured.refreshed;
+    }
+    const statusResult = await execRuntimeScript(conn, effectiveInstance, 'status').catch((error) => ({
       stdout: '',
       stderr: error instanceof Error ? error.message : String(error),
       code: 1,
     }));
-    const fileText = fileResult.stdout || '';
-    const initialized = fileText.includes('nginx=1') && fileText.includes('script=1') && fileText.includes('conf=1');
-    const status = initialized ? (statusResult.code === 0 ? 'running' : 'stopped') : 'uninitialized';
+    const combined = `${statusResult.stdout || ''}${statusResult.stderr || ''}`;
+    const parsed = parseRuntimeScriptStatusOutput(combined);
+    const needsSudo = parsed.needsSudo || statusResult.code === 4;
+    // 新脚本成功时会输出 running: <pid>；兼容旧脚本/测试桩仅返回 exit 0 的情况。
+    // needs_sudo 时若已解析到 pid，仍视为「在跑但缺权限」，绝不能标 stopped。
+    const running =
+      parsed.running ||
+      (statusResult.code === 0 && !parsed.stopped && !needsSudo && !/\bstopped\b/.test(combined));
+    let status = 'stopped';
+    if (!initialized) status = 'uninitialized';
+    else if (needsSudo) status = running ? 'error' : 'error';
+    else status = running ? 'running' : 'stopped';
+    if (parsed.pidRepaired) {
+      await appendNginxRuntimeCentralAudit('nginx_pid_auto_repaired', {
+        resourceType: 'nginx_instance',
+        resourceId: Number(instance.id),
+        result: 'repaired',
+        pid: parsed.pid,
+        pidPath: parsed.pidPath,
+      });
+    }
+    const runtimeVersion = parsed.runningVersion || parsed.diskVersion || instance.runtimeVersion || '';
     await updateNginxInstanceState(instance.id, {
-      status,
-      statusOutput: `${statusResult.stdout || ''}${statusResult.stderr || ''}`.trim(),
+      status: needsSudo ? 'error' : status,
+      statusOutput: combined.trim(),
+      runtimeVersion: runtimeVersion || null,
     });
     return createRuntimeStatusResponse({
-      instance: { ...instance, status, statusOutput: `${statusResult.stdout || ''}${statusResult.stderr || ''}`.trim() },
+      instance: {
+        ...instance,
+        status,
+        statusOutput: combined.trim(),
+        runtimeVersion,
+      },
       initialized,
-      running: statusResult.code === 0,
-      status,
-      statusOutput: `${statusResult.stdout || ''}${statusResult.stderr || ''}`.trim(),
+      running,
+      status: needsSudo ? 'error' : status,
+      statusOutput: `${combined.trim()}${needsSudo ? '\n需要免密 sudo 才能识别/信号 root 进程' : ''}`,
       platform: platformResult.stdout.trim().replace(/\s+/g, ' '),
       manifest,
       manifests,
       config,
+      runningVersion: parsed.runningVersion,
+      diskVersion: parsed.diskVersion || runtimeVersion,
+      upgradePending: parsed.upgradePending,
+      pidRepaired: parsed.pidRepaired,
+      masterPid: parsed.pid,
+      versionDetectError: parsed.running || parsed.diskVersion ? '' : '未能从运行进程或磁盘二进制探测到版本',
+      scriptRefreshed,
     });
   });
 }
 
-// ──────────────────────────────────────────────
-// 导出：状态查询
-// ──────────────────────────────────────────────
-
-/**
- * 获取服务器托管 Nginx 运行时状态。
- * @param {number} serverId - 服务器 ID
- * @returns {Promise<Object>} 状态
- */
 export async function getNginxRuntimeStatus(serverId) {
   const instance = (await getManagedNginxInstanceByServerId(serverId)) || (await getDefaultNginxInstanceByServerId(serverId));
   if (!instance || instance.instanceType !== 'managed') {
@@ -1949,11 +2582,12 @@ export async function runNginxRuntimeAction(serverId, action) {
  * @returns {Promise<Object>} 操作结果
  */
 export async function runNginxInstanceAction(instanceId, action) {
-  const shouldLock = ['start', 'stop', 'reload'].includes(action);
+  const shouldLock = ['start', 'stop', 'reload', 'upgrade'].includes(action);
   const actionLabels = {
     start: '启动',
     stop: '停止',
     reload: '重载',
+    upgrade: '平滑升级',
   };
   if (shouldLock) {
     acquireNginxInstanceLock(instanceId, actionLabels[action] || action);
@@ -1963,6 +2597,10 @@ export async function runNginxInstanceAction(instanceId, action) {
     const effectiveUseSudo = Boolean(instance.useSudo || server.useSudo);
     const effectiveInstance = { ...instance, useSudo: effectiveUseSudo };
     return await withSsh(server, async (conn) => {
+      if (instance.instanceType === 'managed' && ['reload', 'start', 'stop', 'status', 'upgrade', 'test'].includes(action)) {
+        const config = resolveRuntimeConfig(effectiveInstance);
+        await ensureManagedScriptCurrent(conn, server, config);
+      }
       const result = instance.instanceType === 'managed'
         ? await execRuntimeScript(conn, effectiveInstance, action)
         : await execExternalInstanceAction(conn, effectiveInstance, action);
@@ -1974,6 +2612,14 @@ export async function runNginxInstanceAction(instanceId, action) {
             : result.code === 0
               ? 'running'
               : 'error';
+      if (action === 'upgrade') {
+        await appendNginxRuntimeCentralAudit('nginx_binary_hot_upgrade', {
+          resourceType: 'nginx_instance',
+          resourceId: Number(instance.id),
+          result: result.code === 0 ? 'success' : 'failed',
+          output: `${result.stdout || ''}${result.stderr || ''}`.trim().slice(0, 2000),
+        });
+      }
       await updateNginxInstanceState(instance.id, {
         status,
         statusOutput: `${result.stdout || ''}${result.stderr || ''}`.trim(),
@@ -2453,6 +3099,9 @@ export async function syncTargetNginxSite(targetId, options = {}) {
       await execSsh(conn, `${sudo}mkdir -p ${shellQuote(target.deployRoot)}`, {
         label: '创建主应用部署目录',
       });
+      if (instance.instanceType === 'managed') {
+        await ensureManagedScriptCurrent(conn, server, resolveRuntimeConfig(effectiveInstance));
+      }
       const testResult = instance.instanceType === 'managed' ? await execRuntimeScript(conn, effectiveInstance, 'test') : await execExternalInstanceAction(conn, effectiveInstance, 'test');
       const reloadResult = instance.instanceType === 'managed' ? await execRuntimeScript(conn, effectiveInstance, 'reload') : await execExternalInstanceAction(conn, effectiveInstance, 'reload');
       return {
@@ -2520,6 +3169,9 @@ export async function syncTargetNginxSite(targetId, options = {}) {
     });
     const { backupPath = '', skipped = false } = await writeRemoteTextWithBackup(conn, effectiveServer, sitePath, siteConfig);
     try {
+      if (instance.instanceType === 'managed') {
+        await ensureManagedScriptCurrent(conn, server, resolveRuntimeConfig(effectiveInstance));
+      }
       const testResult = instance.instanceType === 'managed' ? await execRuntimeScript(conn, effectiveInstance, 'test') : await execExternalInstanceAction(conn, effectiveInstance, 'test');
       const reloadResult = instance.instanceType === 'managed' ? await execRuntimeScript(conn, effectiveInstance, 'reload') : await execExternalInstanceAction(conn, effectiveInstance, 'reload');
       return {

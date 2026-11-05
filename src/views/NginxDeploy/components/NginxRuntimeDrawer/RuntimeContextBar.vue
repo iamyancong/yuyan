@@ -16,6 +16,8 @@ interface RuntimeContextBarProps {
   statusLabel: string;
   statusColor: string;
   versionLabel: string;
+  versionTooltip?: string;
+  upgradePending?: boolean;
 }
 
 defineProps<RuntimeContextBarProps>();
@@ -72,7 +74,9 @@ const emit = defineEmits<{
       </div>
       <div class="nginx-runtime-context__version">
         <span>版本</span>
-        <strong>{{ versionLabel }}</strong>
+        <a-tooltip :title="versionTooltip || versionLabel">
+          <strong :class="{ 'nginx-runtime-context__version--pending': upgradePending }">{{ versionLabel }}</strong>
+        </a-tooltip>
       </div>
     </template>
   </section>

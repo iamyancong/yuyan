@@ -33,7 +33,12 @@ function cleanPath(path: string): string {
  * @param rawError 原始错误文本或 Error 对象
  * @returns 结构化诊断结果
  */
-export function parseNginxError(rawError: unknown): ParsedNginxError {
+export interface ParseNginxErrorHints {
+  /** 端口占用者为本托管实例（pid 曾自动修复或 status 标记） */
+  selfInstanceBind?: boolean;
+}
+
+export function parseNginxError(rawError: unknown, hints: ParseNginxErrorHints = {}): ParsedNginxError {
   const errorText =
     typeof rawError === 'string'
       ? rawError
@@ -133,9 +138,20 @@ export function parseNginxError(rawError: unknown): ParsedNginxError {
   else if (/Address already in use/i.test(coreMessage) || /bind\(\).*failed/i.test(coreMessage)) {
     const portMatch = coreMessage.match(/bind\(\)\s*to\s*([^\s]+)\s*failed/i);
     const addr = portMatch ? portMatch[1] : '目标端口';
-    title = '监听端口已被占用';
-    reason = `地址 ${addr} 绑定失败，端口已被系统中的其他服务占用`;
-    suggestion = '请修改 listen 监听端口，或排查服务器上占用该端口的其他进程。';
+    const selfBind =
+      Boolean(hints.selfInstanceBind) ||
+      /pid_repaired:\s*1/i.test(errorText) ||
+      /实例进程未被识别/i.test(errorText) ||
+      /yuyan nginx already running/i.test(errorText);
+    if (selfBind) {
+      title = '实例进程未被识别';
+      reason = `地址 ${addr} 绑定失败，占用者是本实例进程（管理脚本此前未识别）`;
+      suggestion = '平台已尝试自动修复 pid；请重试保存/重载。若仍失败，请点击「更新管理脚本与定时任务」后再试。';
+    } else {
+      title = '监听端口已被占用';
+      reason = `地址 ${addr} 绑定失败，端口已被系统中的其他服务占用`;
+      suggestion = '请修改 listen 监听端口，或排查服务器上占用该端口的其他进程。';
+    }
   }
   // 规则 9：文件或 SSL 证书不存在 cannot load certificate / No such file or directory
   else if (/No such file or directory/i.test(coreMessage)) {
@@ -177,4 +193,16 @@ export function formatShortNginxErrorMessage(parsed: ParsedNginxError): string {
     return `Nginx 校验未通过（第 ${parsed.line} 行）：${parsed.reason}`;
   }
   return `Nginx 校验未通过：${parsed.reason}`;
+}
+
+
+/**
+ * 判断错误文本是否像「本实例占用端口」。
+ */
+export function isSelfInstanceBindError(rawError: unknown): boolean {
+  const text =
+    typeof rawError === 'string'
+      ? rawError
+      : String((rawError as any)?.message || rawError || '');
+  return /pid_repaired:\s*1/i.test(text) || /yuyan nginx already running/i.test(text);
 }

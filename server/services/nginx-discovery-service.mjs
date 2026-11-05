@@ -132,9 +132,51 @@ export function parseNginxMasterProcesses(output) {
  * @param {string} output - nginx -V 输出
  * @returns {{version: string, prefix: string, configPath: string}} 编译信息
  */
+
+/**
+ * 从用户配置的 Nginx 校验/重载命令中安全提取二进制绝对路径。
+ * 处理引号、sudo / sudo -n、env VAR=val 前缀；含壳层元字符时返回 null（禁止整段执行）。
+ * @param {string} commandText - 校验或重载命令
+ * @returns {string|null} 绝对路径二进制，或 null
+ */
+export function extractNginxBinaryFromCommand(commandText) {
+  const raw = String(commandText || '').trim();
+  if (!raw) return null;
+  // 拒绝壳层元字符与命令替换，避免把用户串整段丢给 shell
+  if (/[;|&`$<>]/.test(raw) || /\$\(|\$\{/.test(raw)) return null;
+  const words = splitShellWords(raw);
+  if (!words.length) return null;
+  let i = 0;
+  while (i < words.length) {
+    const w = words[i];
+    if (w === 'sudo') {
+      i += 1;
+      if (words[i] === '-n' || words[i] === '-E' || words[i] === '-H') i += 1;
+      continue;
+    }
+    if (w === 'env') {
+      i += 1;
+      while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i += 1;
+      continue;
+    }
+    if (w === 'command' && words[i + 1] === '-v') return null;
+    break;
+  }
+  const binary = words[i] || '';
+  if (!binary.startsWith('/')) return null;
+  // 拒绝路径内的元字符残留
+  if (/[;|&`$<>]/.test(binary) || binary.includes('\0')) return null;
+  return binary;
+}
+
 export function parseNginxVersionOutput(output) {
   const text = String(output || '');
-  const version = text.match(/nginx version:\s*([^\s]+)/i)?.[1] || '';
+  // nginx / openresty 输出 "nginx version: nginx/1.x" 或 "nginx version: openresty/1.x"；
+  // 部分 Tengine 构建同样走 nginx version: 前缀，也兼容独立的 "Tengine version:" 行。
+  const version =
+    text.match(/nginx version:\s*([^\s]+)/i)?.[1] ||
+    text.match(/tengine version:\s*([^\s]+)/i)?.[1] ||
+    '';
   const configureArgs = text.match(/configure arguments:\s*(.+)$/im)?.[1] || '';
   const args = splitShellWords(configureArgs);
   const readConfigureOption = (name) => {

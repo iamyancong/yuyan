@@ -1460,7 +1460,7 @@ function resolveEditableNginxConfPath(target, nginxInstance) {
  */
 export function buildNginxCommand(server, nginxInstance, type) {
   if (nginxInstance?.instanceType === 'managed') {
-    const sudo = nginxInstance.useSudo ? 'sudo -n ' : '';
+    const sudo = resolveEffectiveDeploySudo(server, nginxInstance) ? 'sudo -n ' : '';
     const scriptPath = nginxInstance.scriptPath || '/opt/yuyan/nginx/yuyan-nginx.sh';
     return `${sudo}${shellQuote(scriptPath)} ${type}`;
   }

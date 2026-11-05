@@ -762,6 +762,18 @@ export interface NginxRuntimeStatus {
   manifest: Record<string, unknown> | null;
   manifests?: Record<string, unknown>[];
   version: string;
+  /** 运行中二进制版本 */
+  runningVersion?: string;
+  /** 磁盘二进制版本 */
+  diskVersion?: string;
+  /** 运行与磁盘版本不一致，待平滑升级 */
+  upgradePending?: boolean;
+  /** 本次状态探测是否自动修复了 pid 文件 */
+  pidRepaired?: boolean;
+  masterPid?: number;
+  /** 版本探测失败原因（供 tooltip） */
+  versionDetectError?: string;
+  scriptRefreshed?: boolean;
   packageVariant: string;
   baseRoot: string;
   installRoot: string;
@@ -773,7 +785,7 @@ export interface NginxRuntimeStatus {
 }
 
 /** 托管 Nginx 操作 */
-export type NginxRuntimeAction = 'test' | 'start' | 'stop' | 'reload' | 'status';
+export type NginxRuntimeAction = 'test' | 'start' | 'stop' | 'reload' | 'status' | 'upgrade';
 
 /** 托管 Nginx 运行包下载类型 */
 export type NginxArchiveDownloadType = 'all' | 'html' | 'conf';

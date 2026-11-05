@@ -48,6 +48,8 @@ const {
   statusLabel,
   title,
   versionLabel,
+  versionTooltip,
+  upgradePending,
   visible,
 } = useNginxRuntimeDrawerView(props, emit);
 
@@ -112,6 +114,8 @@ const openConnectedNginx = (instanceId: number) => {
           :status-label="statusLabel"
           :status-color="statusColor"
           :version-label="versionLabel"
+          :version-tooltip="versionTooltip"
+          :upgrade-pending="upgradePending"
           @change-server="(value) => emit('changeServer', value)"
           @select-instance="(value) => emit('selectInstance', value)"
         />
@@ -174,6 +178,7 @@ const openConnectedNginx = (instanceId: number) => {
         :active-instance="activeInstance"
         :action-loading="actionLoading"
         :refresh-script-loading="props.refreshScriptLoading"
+        :upgrade-pending="upgradePending"
         @refresh="emit('refresh')"
         @action="(value) => emit('action', value)"
         @refresh-script="emit('refresh-script')"

@@ -11,6 +11,7 @@ import {
   type NginxRuntimeDrawerProps,
   type RuntimePathRow,
 } from '../constant';
+import { resolveNginxVersionDisplay } from '../utils/versionDisplay';
 import { renderTwoLineSelectOption } from '../../../hooks/useDeployProjectOptions';
 
 /**
@@ -61,7 +62,18 @@ export function useNginxRuntimeDrawerView(props: Readonly<NginxRuntimeDrawerProp
     if (isManagedInstance.value) return NGINX_RUNTIME_STATUS_COLOR[statusKey.value] || 'default';
     return statusKey.value === 'error' ? 'error' : activeInstance.value ? 'success' : 'default';
   });
-  const versionLabel = computed(() => props.status?.version || props.status?.runtime?.runtimeVersion || '-');
+  const versionDisplay = computed(() =>
+    resolveNginxVersionDisplay({
+      version: props.status?.version || props.status?.runtime?.runtimeVersion || '',
+      runningVersion: props.status?.runningVersion,
+      diskVersion: props.status?.diskVersion,
+      upgradePending: props.status?.upgradePending,
+      versionDetectError: props.status?.versionDetectError,
+    })
+  );
+  const versionLabel = computed(() => versionDisplay.value.label);
+  const versionTooltip = computed(() => versionDisplay.value.tooltip);
+  const upgradePending = computed(() => versionDisplay.value.upgradePending);
   const pathRows = computed<RuntimePathRow[]>(() => {
     if (!activeInstance.value || activeInstance.value.instanceType === 'managed') {
       return getRuntimePathRows(props.status, props.form);
@@ -170,6 +182,8 @@ export function useNginxRuntimeDrawerView(props: Readonly<NginxRuntimeDrawerProp
     statusLabel,
     title,
     versionLabel,
+    versionTooltip,
+    upgradePending,
     visible,
   };
 }

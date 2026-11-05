@@ -22,6 +22,7 @@ interface RuntimeFooterBarProps {
   activeInstance: NginxInstance | null;
   actionLoading: NginxRuntimeAction | '';
   refreshScriptLoading?: boolean;
+  upgradePending?: boolean;
 }
 
 defineProps<RuntimeFooterBarProps>();
@@ -58,6 +59,17 @@ const emit = defineEmits<{
       <YButton :disabled="!canOperate || refreshScriptLoading" :loading="actionLoading === 'reload'" @click="emit('action', 'reload')">
         <template #icon><ReloadOutlined /></template>
         重载
+      </YButton>
+      <YButton
+        v-if="activeInstance?.instanceType === 'managed' && upgradePending"
+        type="primary"
+        ghost
+        :disabled="!canManagedOperate || refreshScriptLoading"
+        :loading="actionLoading === 'upgrade'"
+        @click="emit('action', 'upgrade')"
+      >
+        <template #icon><ThunderboltOutlined /></template>
+        平滑切换
       </YButton>
       <YButton v-if="activeInstance?.instanceType === 'managed'" :disabled="!canManagedOperate || refreshScriptLoading" :loading="actionLoading === 'stop'" danger @click="emit('action', 'stop')">
         <template #icon><CloseOutlined /></template>
