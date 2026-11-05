@@ -86,6 +86,16 @@ test('buildNginxCommand managed 使用 server.useSudo 兜底', async () => {
   assert.equal(cmd, "sudo -n '/opt/yuyan/nginx/yuyan-nginx.sh' reload");
 });
 
+// worker 用户取当前运行测试的账号，避免绑死某台机器上才有的用户名（CI runner 没有 box 用户）
+const WORKER_USER = os.userInfo().username;
+const WORKER_GROUP = (() => {
+  try {
+    return execFileSync('id', ['-gn'], { encoding: 'utf8' }).trim() || WORKER_USER;
+  } catch {
+    return WORKER_USER;
+  }
+})();
+
 function setupPrefix(baseDir, { pidDirective = 'pid run/nginx.pid;', listen = 18080 } = {}) {
   for (const dir of ['sbin', 'conf', 'conf/conf.d', 'logs', 'run', 'html']) {
     fs.mkdirSync(path.join(baseDir, dir), { recursive: true });
@@ -96,7 +106,7 @@ function setupPrefix(baseDir, { pidDirective = 'pid run/nginx.pid;', listen = 18
     path.join(baseDir, 'conf/nginx.conf'),
     [
       'worker_processes 1;',
-      'user box box;',
+      `user ${WORKER_USER} ${WORKER_GROUP};`,
       pidDirective,
       'error_log logs/error.log warn;',
       'events { worker_connections 64; }',
