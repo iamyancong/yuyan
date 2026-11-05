@@ -41,3 +41,12 @@ test('运行时描述文件优先使用显式路径', () => {
   if (previous === undefined) delete process.env.YUYAN_RUNTIME_DESCRIPTOR;
   else process.env.YUYAN_RUNTIME_DESCRIPTOR = previous;
 });
+
+test('yuyan_deploy_target 输入严格拒绝 cleanReplaceConfirmed 与 confirmedFingerprint', () => {
+  const deployTool = YUYAN_TOOL_DEFINITIONS.find((item) => item.name === 'yuyan_deploy_target');
+  assert.ok(deployTool, 'MCP 工具列表中必须定义 yuyan_deploy_target');
+  const validArgs = { workspacePath: '/tmp/repo', targetId: 101, idempotencyKey: 'idemp-001' };
+  assert.equal(deployTool.schema.safeParse(validArgs).success, true);
+  assert.equal(deployTool.schema.safeParse({ ...validArgs, cleanReplaceConfirmed: true }).success, false);
+  assert.equal(deployTool.schema.safeParse({ ...validArgs, confirmedFingerprint: 'hack-fp' }).success, false);
+});

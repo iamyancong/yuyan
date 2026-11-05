@@ -1096,22 +1096,8 @@ test('controller：服务器新增未识别项后预览返回 matchesConfirmed �
 // 6. MCP 场景独立验证
 // -----------------------------------------------------------------------------
 
-test('MCP Schema：yuyan_deploy_target 输入定义严格拒绝 cleanReplaceConfirmed 与 confirmedFingerprint', async () => {
-  const { YUYAN_TOOL_DEFINITIONS } = await import('../../../mcp/dist/tool-registry.js');
-  const deployTool = YUYAN_TOOL_DEFINITIONS.find((t) => t.name === 'yuyan_deploy_target');
-  assert.ok(deployTool, 'MCP 工具列表中必须定义 yuyan_deploy_target');
-
-  // 断言 schema 允许的合法输入
-  const validArgs = { workspacePath: '/tmp/repo', targetId: 101, idempotencyKey: 'idemp-001' };
-  assert.equal(deployTool.schema.safeParse(validArgs).success, true);
-
-  // 严格模式断言：任何尝试注入 cleanReplaceConfirmed 或 confirmedFingerprint 的调用都被 reject
-  const hackConfirmed = { ...validArgs, cleanReplaceConfirmed: true };
-  assert.equal(deployTool.schema.safeParse(hackConfirmed).success, false, 'MCP 工具 schema 绝不允许 cleanReplaceConfirmed 字段');
-
-  const hackFp = { ...validArgs, confirmedFingerprint: 'hack-fp' };
-  assert.equal(deployTool.schema.safeParse(hackFp).success, false, 'MCP 工具 schema 绝不允许 confirmedFingerprint 字段');
-
+// schema 的 safeParse 断言依赖 mcp/dist，已移到 mcp/tests/tool-registry.test.mjs（test:mcp 先构建再测试）
+test('MCP 源码：yuyan_deploy_target 定义中不包含 cleanReplaceConfirmed 与 confirmedFingerprint', async () => {
   // 读取 mcp/src/tool-registry.ts 源码断言 schema 定义严格性
   const tsSource = await fs.readFile(new URL('../../../mcp/src/tool-registry.ts', import.meta.url), 'utf8');
   assert.ok(
