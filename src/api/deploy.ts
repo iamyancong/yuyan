@@ -862,6 +862,8 @@ export interface DeployTargetPublishPayload {
   extraCleanupNames?: string[];
   /** 清空后替换风险是否已由用户手动二次确认 */
   cleanReplaceConfirmed?: boolean;
+  /** 用户确认的目录清理范围指纹 */
+  confirmedFingerprint?: string;
 }
 
 /** 部署目标清理受保护项详情 */
@@ -869,6 +871,14 @@ export interface DeployTargetCleanupProtectedItem {
   name: string;
   source: 'nested' | 'manual';
   reason?: string;
+}
+
+/** 部署清理范围差异对比结果 */
+export interface DeployCleanupScopeDiff {
+  addedProtected: string[];
+  addedUnknown: string[];
+  removedItems: string[];
+  hasChanges: boolean;
 }
 
 /** 部署目标清空后替换清理预览数据 */
@@ -883,6 +893,11 @@ export interface DeployTargetCleanupPreview {
   reserved: string[];
   unknown: string[];
   isSharedRoot: boolean;
+  scopeFingerprint?: string;
+  matchesConfirmed?: boolean;
+  lastConfirmedAt?: string;
+  lastConfirmedBy?: string;
+  scopeDiff?: DeployCleanupScopeDiff;
 }
 
 import { getApiBase, isTauri } from '@/utils/env';

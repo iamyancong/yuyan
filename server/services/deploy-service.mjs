@@ -22,6 +22,7 @@ import {
   updateRecord,
   updateTargetBuildMemoryMb,
   updateTargetBuildPeakMb,
+  updateTargetCleanupConfirmed,
   getManagedNginxInstanceByServerId,
   getJdk,
 } from './deploy-store.mjs';
@@ -33,6 +34,8 @@ import {
   classifyDeployRootRisk,
   manifestTopNames,
   computeCleanupPlan,
+  computeCleanupScopeFingerprint,
+  verifyPublishCleanupGate,
   isSharedDeployRoot,
   planRestore,
   isValidEntryName,
@@ -47,6 +50,9 @@ import {
   withSsh,
   writeRemoteTextWithBackup,
 } from './ssh-service.mjs';
+import { getTestHooks, __setTestHooks, __resetTestHooks } from './test-hooks.mjs';
+
+export { __setTestHooks, __resetTestHooks };
 import { getSshFailureEventExtra, logOperationFailure } from './ssh-errors.mjs';
 import { deployBackendTarget, restoreBackendRecord } from './backend-runtime-service.mjs';
 import {
@@ -2715,6 +2721,8 @@ export async function deployTarget(targetId, payload, emit) {
   const uploadStrategy = normalizeUploadStrategy(target.uploadStrategy);
   const isOverlayUpload = uploadStrategy === DEPLOY_UPLOAD_STRATEGIES.overlayKeepAssets;
   const deployUseSudo = resolveEffectiveDeploySudo(server, nginxInstance);
+  const testHooks = getTestHooks();
+  const effectiveWithSsh = testHooks?.withSsh || withSsh;
   const branch = payload.branch || target.defaultBranch || 'dev';
   const operator = String(payload.operator || '').trim() || '未知操作人';
   const signal = payload.signal;
@@ -2782,35 +2790,50 @@ export async function deployTarget(targetId, payload, emit) {
     if (uploadStrategy === DEPLOY_UPLOAD_STRATEGIES.cleanReplace) {
       const allServerTargets = await listTargets({ serverId: target.serverId });
       const isSharedRoot = isSharedDeployRoot({ target, allServerTargets, nginxInstance });
-      if (isSharedRoot && payload.cleanReplaceConfirmed !== true) {
-        throw new Error('这个目录是多个应用共用的，清空后替换前需要先在发布确认里查看删除预览并确认');
+      const hasExtraCleanup = Array.isArray(payload.extraCleanupNames) && payload.extraCleanupNames.length > 0;
+      if (hasExtraCleanup && payload.cleanReplaceConfirmed !== true) {
+        throw new Error('额外清理项需要二次确认后才能发布');
+      }
+      if (isSharedRoot) {
+        if (!target.cleanupConfirmedFingerprint && payload.cleanReplaceConfirmed !== true) {
+          throw new Error('该共享根目录此前未确认过清理范围或服务器目录已有变化，请先前往界面确认发布一次');
+        }
       }
     }
 
     await fs.mkdir(workspaceRoot, { recursive: true });
-    deployAccess = await withSsh(server, async (conn) => resolveDeployRootAccess(conn, server, target, deployUseSudo, log));
+    deployAccess = await effectiveWithSsh(server, async (conn) => resolveDeployRootAccess(conn, server, target, deployUseSudo, log));
 
-    throwIfDeployStopped(signal);
-    stage('clone', 15, '拉取代码', `正在拉取 ${target.projectName}#${branch}`);
-    const cloneUrl = resolveCloneUrl(target.repositoryUrl, payload.gitlabToken || '');
-    await syncDeployWorkspace({
-      target,
-      branch,
-      cloneUrl,
-      repoDir,
-      signal,
-      log,
-    });
-    const rev = await runLocalCommand('git rev-parse HEAD', { cwd: repoDir, label: '获取 commit', signal });
-    commitSha = rev.stdout.trim();
-    const commitMessageResult = await runLocalCommand('git log -1 --pretty=%s', { cwd: repoDir, label: '获取 commit 信息', signal });
-    commitMessage = commitMessageResult.stdout.trim();
-    const commitAuthorResult = await runLocalCommand('git log -1 --pretty=%an', { cwd: repoDir, label: '获取 commit 提交人', signal });
-    commitAuthor = commitAuthorResult.stdout.trim();
-    const gitlabCommitMeta = await fetchGitlabCommitMeta(target.projectId, commitSha, payload.gitlabToken || '', resolveGitlabHost(target.repositoryUrl)).catch(() => null);
-    commitMessage = gitlabCommitMeta?.message || commitMessage;
-    commitAuthor = gitlabCommitMeta?.author || commitAuthor;
-    log('success', `代码拉取完成：${commitSha.slice(0, 8)}${commitMessage ? ` ${commitMessage}` : ''}`, 'clone');
+    if (testHooks?.skipBuild) {
+      commitSha = 'test-sha-123456';
+      commitMessage = 'test commit message';
+      commitAuthor = 'test-author';
+      if (typeof testHooks.prepareArtifacts === 'function') {
+        await testHooks.prepareArtifacts({ workspaceRoot, repoDir, target, releaseName });
+      }
+    } else {
+      throwIfDeployStopped(signal);
+      stage('clone', 15, '拉取代码', `正在拉取 ${target.projectName}#${branch}`);
+      const cloneUrl = resolveCloneUrl(target.repositoryUrl, payload.gitlabToken || '');
+      await syncDeployWorkspace({
+        target,
+        branch,
+        cloneUrl,
+        repoDir,
+        signal,
+        log,
+      });
+      const rev = await runLocalCommand('git rev-parse HEAD', { cwd: repoDir, label: '获取 commit', signal });
+      commitSha = rev.stdout.trim();
+      const commitMessageResult = await runLocalCommand('git log -1 --pretty=%s', { cwd: repoDir, label: '获取 commit 信息', signal });
+      commitMessage = commitMessageResult.stdout.trim();
+      const commitAuthorResult = await runLocalCommand('git log -1 --pretty=%an', { cwd: repoDir, label: '获取 commit 提交人', signal });
+      commitAuthor = commitAuthorResult.stdout.trim();
+      const gitlabCommitMeta = await fetchGitlabCommitMeta(target.projectId, commitSha, payload.gitlabToken || '', resolveGitlabHost(target.repositoryUrl)).catch(() => null);
+      commitMessage = gitlabCommitMeta?.message || commitMessage;
+      commitAuthor = gitlabCommitMeta?.author || commitAuthor;
+      log('success', `代码拉取完成：${commitSha.slice(0, 8)}${commitMessage ? ` ${commitMessage}` : ''}`, 'clone');
+    }
     const isBackend = target.projectType === 'backend';
     const jdkEnv = {};
     if (isBackend && target.jdkId) {
@@ -2859,7 +2882,8 @@ export async function deployTarget(targetId, payload, emit) {
           targetBuildPeakMb: target.buildPeakMb,
         });
 
-    await executeBuildWithOomRetry({
+    if (!testHooks?.skipBuild) {
+      await executeBuildWithOomRetry({
       initialHeapMb,
       initialReserveMb,
       enableOomRetry: !isBackend,
@@ -2988,6 +3012,7 @@ export async function deployTarget(targetId, payload, emit) {
         }
       },
     });
+    }
 
     let localJarPath = '';
     let jarFileName = '';
@@ -3031,7 +3056,7 @@ export async function deployTarget(targetId, payload, emit) {
     throwIfDeployStopped(signal);
     uploadStarted = true;
     stage('upload', 66, '上传产物', isBackend ? `上传 Jar 包到 ${server.name}:${target.deployRoot}` : `上传到 ${server.name}:${target.deployRoot}`);
-    await withSsh(server, async (conn) => {
+    await effectiveWithSsh(server, async (conn) => {
       await execSsh(conn, buildRemoteMkdirCommand(target.deployRoot, deployUseSudo), {
         label: '创建部署目录',
       });
@@ -3082,8 +3107,34 @@ export async function deployTarget(targetId, payload, emit) {
           log('info', '没有找到上次发布清单，本次只清理产物里出现的顶层项', 'upload');
         }
 
-        // 3. 计算清理计划与审计日志
+        // 3. 计算清理范围指纹与门禁判定
         const extraCleanupNames = isOverlayUpload ? [] : (Array.isArray(payload.extraCleanupNames) ? payload.extraCleanupNames : []);
+        const replaceOrCleanItems = lastManifestTops.filter(
+          (name) => existingNames.includes(name) && !protectedSet.has(name) && !reservedSet.has(name)
+        );
+        const replaceOrCleanSet = new Set(replaceOrCleanItems);
+        const currentUnknown = existingNames.filter(
+          (name) => !protectedSet.has(name) && !reservedSet.has(name) && !replaceOrCleanSet.has(name)
+        );
+        const currentFingerprint = computeCleanupScopeFingerprint(realRoot, protectedSubDirs, currentUnknown);
+
+        const allServerTargets = await listTargets({ serverId: target.serverId });
+        const isSharedRoot = isSharedDeployRoot({ target, allServerTargets, nginxInstance });
+
+        const publishGateResult = verifyPublishCleanupGate({
+          isCleanReplace: uploadStrategy === DEPLOY_UPLOAD_STRATEGIES.cleanReplace,
+          isSharedRoot,
+          currentFingerprint,
+          confirmedFingerprint: payload.confirmedFingerprint || '',
+          savedFingerprint: target.cleanupConfirmedFingerprint || '',
+          cleanReplaceConfirmed: payload.cleanReplaceConfirmed === true,
+          extraCleanupNames,
+        });
+
+        if (!publishGateResult.allowed) {
+          throw new Error(publishGateResult.reason || '清理范围门禁校验未通过，已中止发布');
+        }
+
         const cleanupPlan = computeCleanupPlan({
           existingNames,
           artifactTopNames: filteredArtifactTopNames,
@@ -3170,6 +3221,22 @@ export async function deployTarget(targetId, payload, emit) {
             await execSsh(conn, buildClearDeployRootCommand(realRoot, cleanupPlan.deleteNames, deployUseSudo), {
               label: '清空旧版本条目',
             });
+          }
+          if (isSharedRoot && payload.cleanReplaceConfirmed === true && publishGateResult.requireSaveConfirmation) {
+            try {
+              await updateTargetCleanupConfirmed(target.id, {
+                fingerprint: currentFingerprint,
+                at: new Date().toISOString(),
+                by: payload.operator || target.createdBy || 'unknown',
+                scope: {
+                  protected: [...protectedSubDirs].sort(),
+                  unknown: [...currentUnknown].sort(),
+                },
+              });
+              log('info', `已更新共享根目录清理确认指纹（${currentFingerprint.slice(0, 8)}）与审计记录`, 'cleanup');
+            } catch (confirmError) {
+              log('warn', `保存清理确认指纹失败：${confirmError.message || confirmError}`, 'cleanup');
+            }
           }
         } else {
           log('info', '覆盖上传模式已跳过清空部署目录，旧 hash 静态资源将暂时保留', 'upload');
@@ -3316,7 +3383,7 @@ export async function deployTarget(targetId, payload, emit) {
 
     logOperationFailure(log, error, 'error');
     if (backupCreated && !deployRootRestored) {
-      deployRootRestored = await withSsh(server, async (conn) =>
+      deployRootRestored = await effectiveWithSsh(server, async (conn) =>
         restoreDeployRootFromBackup(conn, { ...target, deployRoot: realRoot || target.deployRoot }, backupPath, '恢复失败发布前目录', protectedSubDirs, deployUseSudo, { extraRemoveNames: filteredArtifactTopNames, realRoot, log })
       ).catch(() => false);
       if (deployRootRestored) {
@@ -3327,7 +3394,7 @@ export async function deployTarget(targetId, payload, emit) {
     }
     if (backupPath) {
       if (!backupCreated || deployRootRestored) {
-        await withSsh(server, async (conn) => {
+        await effectiveWithSsh(server, async (conn) => {
           await removeRemotePath(conn, server, backupPath, '清理失败发布备份目录', deployUseSudo);
         }).catch(() => {});
         log('warn', `发布失败，已触发失败备份清理：${backupPath}`, 'cleanup');
@@ -3466,7 +3533,7 @@ async function restoreRecordVersion(recordId, payload, emit, action) {
   try {
     currentStage = 'rollback';
     emit?.stage('rollback', 40, meta.progressTitle, `恢复目录备份 ${sourceRecord.backupPath}`);
-    await withSsh(server, async (conn) => {
+    await effectiveWithSsh(server, async (conn) => {
       await ensureDeployRootOperable(conn, server, target, deployUseSudo);
       const probe = await detectDeployRoot(conn, target.deployRoot, deployUseSudo);
       realRoot = probe.realRoot || target.deployRoot;
@@ -3573,7 +3640,7 @@ async function restoreRecordVersion(recordId, payload, emit, action) {
       ).catch(() => false);
       if (rollbackRootRestored) {
         log('warn', `${meta.operationText}失败，已恢复部署目录到操作前状态：${currentBackup}`, 'cleanup');
-        await withSsh(server, async (conn) => {
+        await effectiveWithSsh(server, async (conn) => {
           await removeRemotePath(conn, server, currentBackup, `清理失败${meta.operationText}备份目录`, deployUseSudo);
         }).catch(() => {});
         log('warn', `${meta.operationText}失败，已触发失败备份清理：${currentBackup}`, 'cleanup');
@@ -3582,7 +3649,7 @@ async function restoreRecordVersion(recordId, payload, emit, action) {
       }
     } else {
       if (currentBackup) {
-        await withSsh(server, async (conn) => {
+        await effectiveWithSsh(server, async (conn) => {
           await removeRemotePath(conn, server, currentBackup, `清理未创建完成的${meta.operationText}备份目录`, deployUseSudo);
         }).catch(() => {});
       }

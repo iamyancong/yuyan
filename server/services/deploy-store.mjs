@@ -891,6 +891,10 @@ function mapTarget(row) {
     serviceStatusOutput: row.last_status_output || '',
     serviceStatusAt: row.last_status_at || '',
     directUrl: serverHost && backendPort ? `http://${serverHost}:${backendPort}` : '',
+    cleanupConfirmedFingerprint: row.cleanup_confirmed_fingerprint || '',
+    cleanupConfirmedAt: row.cleanup_confirmed_at || '',
+    cleanupConfirmedBy: row.cleanup_confirmed_by || '',
+    cleanupConfirmedScope: row.cleanup_confirmed_scope || '',
   };
 }
 
@@ -1853,6 +1857,10 @@ export async function getDeployDb() {
       stop_command TEXT,
       start_command TEXT,
       health_check_url TEXT,
+      cleanup_confirmed_fingerprint TEXT,
+      cleanup_confirmed_at TEXT,
+      cleanup_confirmed_by TEXT,
+      cleanup_confirmed_scope TEXT,
       FOREIGN KEY(server_id) REFERENCES deploy_servers(id)
     );
 
@@ -1990,6 +1998,18 @@ export async function getDeployDb() {
   }
   if (!targetColumns.includes('build_peak_mb')) {
     dbInstance.exec('ALTER TABLE deploy_targets ADD COLUMN build_peak_mb INTEGER NOT NULL DEFAULT 0');
+  }
+  if (!targetColumns.includes('cleanup_confirmed_fingerprint')) {
+    dbInstance.exec('ALTER TABLE deploy_targets ADD COLUMN cleanup_confirmed_fingerprint TEXT');
+  }
+  if (!targetColumns.includes('cleanup_confirmed_at')) {
+    dbInstance.exec('ALTER TABLE deploy_targets ADD COLUMN cleanup_confirmed_at TEXT');
+  }
+  if (!targetColumns.includes('cleanup_confirmed_by')) {
+    dbInstance.exec('ALTER TABLE deploy_targets ADD COLUMN cleanup_confirmed_by TEXT');
+  }
+  if (!targetColumns.includes('cleanup_confirmed_scope')) {
+    dbInstance.exec('ALTER TABLE deploy_targets ADD COLUMN cleanup_confirmed_scope TEXT');
   }
   const runtimeColumns = getTableColumns(dbInstance, 'nginx_runtimes');
   if (!runtimeColumns.includes('package_variant')) {
@@ -3610,7 +3630,7 @@ export async function createTarget(payload) {
 export async function updateTarget(id, payload) {
   const db = await getDeployDb();
   const teamId = getRequestTeamId();
-  const currentTargetRow = db.prepare('SELECT id, build_memory_mb FROM deploy_targets WHERE id = ? AND team_id = ?').get(Number(id), teamId);
+  const currentTargetRow = db.prepare('SELECT id, build_memory_mb, deploy_root, upload_strategy, cleanup_confirmed_fingerprint, cleanup_confirmed_at, cleanup_confirmed_by, cleanup_confirmed_scope FROM deploy_targets WHERE id = ? AND team_id = ?').get(Number(id), teamId);
   if (!currentTargetRow) return null;
   if (!hasServer(db, payload.serverId)) {
     throw new Error('部署服务器不存在，请先新增独立服务器');
@@ -3648,13 +3668,24 @@ export async function updateTarget(id, payload) {
   const nextBuildMemoryMb = payload.buildMemoryMb !== undefined
     ? Math.min(Math.max(0, Math.floor(Number(payload.buildMemoryMb || 0) || 0)), 65536)
     : Math.min(Math.max(0, Math.floor(Number(currentTargetRow.build_memory_mb || 0) || 0)), 65536);
+
+  // 部署根目录或上传策略被修改时清空已确认的清理指纹与历史名单
+  const isRootChanged = currentTargetRow.deploy_root !== safePayload.deployRoot;
+  const isStrategyChanged = (currentTargetRow.upload_strategy || 'overlayKeepAssets') !== (safePayload.uploadStrategy || 'overlayKeepAssets');
+  const shouldClearConfirmed = isRootChanged || isStrategyChanged;
+  const nextConfirmedFingerprint = shouldClearConfirmed ? null : (currentTargetRow.cleanup_confirmed_fingerprint || null);
+  const nextConfirmedAt = shouldClearConfirmed ? null : (currentTargetRow.cleanup_confirmed_at || null);
+  const nextConfirmedBy = shouldClearConfirmed ? null : (currentTargetRow.cleanup_confirmed_by || null);
+  const nextConfirmedScope = shouldClearConfirmed ? null : (currentTargetRow.cleanup_confirmed_scope || null);
+
   db.prepare(
     `UPDATE deploy_targets
      SET project_id = ?, project_source = ?, project_name = ?, project_description = ?, project_path = ?, repository_url = ?, default_branch = ?, env_name = ?,
          server_id = ?, nginx_instance_id = ?, deploy_root = ?, nginx_conf_path = ?, nginx_site_managed = ?, listen_port = ?, server_name = ?,
          enable_nginx_test = ?, enable_nginx_reload = ?, install_command = ?, build_command = ?, build_memory_mb = ?,
          artifact_dir = ?, preserve_sub_dirs = ?, upload_strategy = ?, visit_url = ?, remark = ?, updated_at = ?,
-         project_type = ?, jdk_id = ?, stop_command = ?, start_command = ?, health_check_url = ?
+         project_type = ?, jdk_id = ?, stop_command = ?, start_command = ?, health_check_url = ?,
+         cleanup_confirmed_fingerprint = ?, cleanup_confirmed_at = ?, cleanup_confirmed_by = ?, cleanup_confirmed_scope = ?
      WHERE id = ? AND team_id = ?`
   ).run(
     Number(safePayload.projectId),
@@ -3688,11 +3719,69 @@ export async function updateTarget(id, payload) {
     payload.stopCommand || '',
     payload.startCommand || '',
     payload.healthCheckUrl || '',
+    nextConfirmedFingerprint,
+    nextConfirmedAt,
+    nextConfirmedBy,
+    nextConfirmedScope,
     Number(id),
     teamId
   );
   upsertBackendTargetConfig(db, Number(id), payload);
   return getTarget(id);
+}
+
+/**
+ * 记录部署目录清理确认指纹中央审计日志。
+ * @param {number} targetId - 部署目标 ID
+ * @param {string} fingerprint - 确认指纹
+ * @param {string} operator - 操作人
+ * @returns {Promise<void>}
+ */
+async function appendCleanupConfirmedCentralAudit(targetId, fingerprint, operator) {
+  const context = getRequestContext();
+  if (context?.legacy) return;
+  try {
+    const { appendCentralAudit } = await import('./central-identity-service.mjs');
+    await appendCentralAudit(context, {
+      action: 'target_cleanup_scope_confirmed',
+      resourceType: 'target',
+      resourceId: Number(targetId),
+      result: 'confirmed',
+      fingerprint: fingerprint || '',
+      operator: operator || '',
+    });
+  } catch {}
+}
+
+/**
+ * 更新部署目标的清理确认指纹与名单。
+ * 仅在用户显式确认且清理步骤执行成功后调用。
+ *
+ * @param {number} id - 部署目标 ID
+ * @param {Object} data - 确认数据
+ * @param {string} data.fingerprint - 清理范围指纹
+ * @param {string} data.at - 确认时间
+ * @param {string} data.by - 确认操作人
+ * @param {Object|string} data.scope - 确认时受保护与未识别名单
+ * @returns {Promise<Object|null>} 更新后的部署目标
+ */
+export async function updateTargetCleanupConfirmed(id, { fingerprint, at, by, scope }) {
+  const db = await getDeployDb();
+  const numericId = Number(id);
+  const teamId = getRequestTeamId();
+  const scopeJson = typeof scope === 'string' ? scope : JSON.stringify(scope || { protected: [], unknown: [] });
+  const result = db.prepare(
+    `UPDATE deploy_targets
+     SET cleanup_confirmed_fingerprint = ?,
+         cleanup_confirmed_at = ?,
+         cleanup_confirmed_by = ?,
+         cleanup_confirmed_scope = ?
+     WHERE id = ? AND team_id = ?`
+  ).run(fingerprint || null, at || null, by || null, scopeJson || null, numericId, teamId);
+  if (result.changes > 0) {
+    await appendCleanupConfirmedCentralAudit(numericId, fingerprint, by);
+  }
+  return getTarget(numericId);
 }
 
 /**

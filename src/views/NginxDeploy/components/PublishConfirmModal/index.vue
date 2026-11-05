@@ -20,7 +20,19 @@ import { computed, h, ref, watch } from 'vue';
 import { getTargetCleanupPreview, type DeployTarget, type DeployTargetCleanupPreview } from '@/api/deploy';
 import type { PublishConfirmModalProps, PublishStartOptions } from './constant';
 import { usePublishConfirm } from './hooks/usePublishConfirm';
-import { groupCleanupPreviewItems, canStartPublishWithCleanup, isSharedDeployRoot } from './cleanupPreviewPolicy';
+import {
+  groupCleanupPreviewItems,
+  canStartPublishWithCleanup,
+  isSharedDeployRoot,
+  formatShortCleanupSummary,
+  formatCleanupSummaryTooltip,
+  getPublishConfirmPopupTitle,
+  formatPublishConfirmPopupBody,
+  needsPublishConfirmation,
+  canDirectlyPublish,
+  resolvePublishGate,
+  buildPublishStartPayload,
+} from './cleanupPreviewPolicy';
 import DeployLogLegend from '../DeployLogLegend/index.vue';
 import SshFailureGuideCard from '../SshFailureGuideCard/index.vue';
 import type { SshFailureAction } from '../../sshFailureGuide';
@@ -72,9 +84,72 @@ const groupedPreview = computed(() => groupCleanupPreviewItems(previewData.value
 /** 用户是否勾选了额外清理项 */
 const hasSelectedExtra = computed(() => extraCleanupNames.value.length > 0);
 
-/** 是否需要展示二次确认复选框（共享根或勾选了额外清理项时） */
-const needSecondaryConfirm = computed(() =>
-  Boolean(isCleanReplace.value && (isSharedRoot.value || hasSelectedExtra.value))
+/** 明细折叠是否展开，默认收起 */
+const detailExpanded = ref(false);
+
+/** 确认气泡显隐控制 */
+const startConfirmOpen = ref(false);
+const republishConfirmOpen = ref(false);
+
+/** 是否与上次确认一致（加载失败时按不一致处理） */
+const isMatchesConfirmed = computed(() => {
+  if (previewError.value) return false;
+  return Boolean(previewData.value?.matchesConfirmed);
+});
+
+/** 摘要短文本：清空后替换 · 替换 N 项（一致时显示：清空后替换 · 替换 N 项 · 与上次确认一致） */
+const shortCleanupSummaryText = computed(() =>
+  formatShortCleanupSummary({
+    replaceCount: groupedPreview.value.replaceOrCleanItems.length,
+    matchesConfirmed: isMatchesConfirmed.value,
+  })
+);
+
+/** 摘要 ⓘ 完整说明 Tooltip */
+const cleanupSummaryTooltipText = computed(() => {
+  const nestedCount = groupedPreview.value.protectedItems.filter((i) => i.source === 'nested').length;
+  const manualCount = groupedPreview.value.protectedItems.filter((i) => i.source === 'manual').length;
+  return formatCleanupSummaryTooltip({
+    isSharedRoot: isSharedRoot.value,
+    replaceCount: groupedPreview.value.replaceOrCleanItems.length,
+    nestedCount,
+    manualCount,
+    unknownCount: groupedPreview.value.unknownItems.length,
+    extraCleanupCount: extraCleanupNames.value.length,
+    matchesConfirmed: isMatchesConfirmed.value,
+    lastConfirmedAt: previewData.value?.lastConfirmedAt,
+    lastConfirmedBy: previewData.value?.lastConfirmedBy,
+  });
+});
+
+/** 气泡标题与正文 */
+const confirmPopupTitle = computed(() =>
+  getPublishConfirmPopupTitle({
+    isSharedRoot: isSharedRoot.value,
+    hasSelectedExtra: hasSelectedExtra.value,
+  })
+);
+
+const confirmPopupBody = computed(() => {
+  const nestedCount = groupedPreview.value.protectedItems.filter((i) => i.source === 'nested').length;
+  const manualCount = groupedPreview.value.protectedItems.filter((i) => i.source === 'manual').length;
+  return formatPublishConfirmPopupBody({
+    isSharedRoot: isSharedRoot.value,
+    replaceCount: groupedPreview.value.replaceOrCleanItems.length,
+    nestedCount,
+    manualCount,
+    unknownCount: groupedPreview.value.unknownItems.length,
+    extraCleanupCount: extraCleanupNames.value.length,
+    scopeDiff: previewData.value?.scopeDiff,
+  });
+});
+
+/** 明细三组是否均为空 */
+const allGroupsEmpty = computed(
+  () =>
+    groupedPreview.value.replaceOrCleanItems.length === 0 &&
+    groupedPreview.value.protectedItems.length === 0 &&
+    groupedPreview.value.unknownItems.length === 0
 );
 
 const normalizeDeployPath = (rawPath?: string | null): string => {
@@ -109,18 +184,14 @@ const loadPreview = async () => {
   }
 };
 
-/** 开始发布按钮是否可用 */
-const canStartPublish = computed(() => {
+/** 开始发布按钮是否允许点击 */
+const canClickStartButton = computed(() => {
   if (!props.target || props.centralUnavailable || props.resultUnconfirmed) return false;
-  return canStartPublishWithCleanup({
-    isCleanReplace: isCleanReplace.value,
-    isSharedRoot: isSharedRoot.value,
-    cleanReplaceConfirmed: cleanReplaceConfirmed.value,
-    hasSelectedExtra: hasSelectedExtra.value,
-    previewLoading: previewLoading.value,
-    previewError: Boolean(previewError.value),
-    riskLevel: previewData.value?.riskLevel || 'ok',
-  });
+  if (!isCleanReplace.value) return true;
+  if (previewData.value?.riskLevel === 'block') return false;
+  if (previewLoading.value) return false;
+  if (previewError.value && isSharedRoot.value) return false;
+  return true;
 });
 
 /** 业务逻辑 Hook */
@@ -169,23 +240,118 @@ const visible = computed({
   set: (value: boolean) => emit('update:open', value),
 });
 
-/** 开始发布 */
-const handleStart = () => {
-  emit('start', {
-    forceInstallDependencies: forceInstallDependencies.value,
-    extraCleanupNames: extraCleanupNames.value,
-    cleanReplaceConfirmed: cleanReplaceConfirmed.value,
+/** 点击「开始发布」按钮触发门禁判定 */
+const onStartButtonClick = () => {
+  const gate = resolvePublishGate({
+    isCleanReplace: isCleanReplace.value,
+    isSharedRoot: isSharedRoot.value,
+    hasSelectedExtra: hasSelectedExtra.value,
+    matchesConfirmed: isMatchesConfirmed.value,
+    confirmed: false,
   });
+
+  if (!gate.needConfirm) {
+    handleStart();
+    return;
+  }
+  startConfirmOpen.value = true;
 };
 
-/** 重新发布 */
-const handleRepublish = () => {
-  extraCleanupNames.value = [];
-  emit('republish', {
-    forceInstallDependencies: forceInstallDependencies.value,
-    extraCleanupNames: [],
-    cleanReplaceConfirmed: cleanReplaceConfirmed.value,
+/** 点击「重新发布」按钮触发门禁判定 */
+const onRepublishButtonClick = () => {
+  const gate = resolvePublishGate({
+    isCleanReplace: isCleanReplace.value,
+    isSharedRoot: isSharedRoot.value,
+    hasSelectedExtra: hasSelectedExtra.value,
+    matchesConfirmed: isMatchesConfirmed.value,
+    confirmed: false,
   });
+
+  if (!gate.needConfirm) {
+    handleRepublish();
+    return;
+  }
+  republishConfirmOpen.value = true;
+};
+
+/** 气泡内点击「查看明细」：展开明细并关闭气泡 */
+const handleConfirmViewDetail = () => {
+  detailExpanded.value = true;
+  startConfirmOpen.value = false;
+  republishConfirmOpen.value = false;
+};
+
+/** 气泡内点击「确认发布」 */
+const handleConfirmPublish = () => {
+  startConfirmOpen.value = false;
+  handleStart({ confirmed: true });
+};
+
+/** 气泡内点击「确认重新发布」 */
+const handleConfirmRepublish = () => {
+  republishConfirmOpen.value = false;
+  handleRepublish({ confirmed: true });
+};
+
+/**
+ * 真正执行开始发布。
+ * 必须经过 resolvePublishGate 守门，若需要确认但未 confirmed 则不可绕过，强制阻断并弹气泡。
+ */
+const handleStart = (options?: { confirmed?: boolean } | MouseEvent) => {
+  const confirmed = options && 'confirmed' in options ? Boolean(options.confirmed) : false;
+  const gate = resolvePublishGate({
+    isCleanReplace: isCleanReplace.value,
+    isSharedRoot: isSharedRoot.value,
+    hasSelectedExtra: hasSelectedExtra.value,
+    matchesConfirmed: isMatchesConfirmed.value,
+    confirmed,
+  });
+
+  if (!gate.canPublish) {
+    startConfirmOpen.value = true;
+    return;
+  }
+
+  emit(
+    'start',
+    buildPublishStartPayload({
+      forceInstallDependencies: forceInstallDependencies.value,
+      extraCleanupNames: extraCleanupNames.value,
+      scopeFingerprint: previewData.value?.scopeFingerprint,
+      confirmed,
+    })
+  );
+};
+
+/**
+ * 真正执行重新发布。
+ * 必须经过 resolvePublishGate 守门，若需要确认但未 confirmed 则不可绕过，强制阻断并弹气泡。
+ */
+const handleRepublish = (options?: { confirmed?: boolean } | MouseEvent) => {
+  const confirmed = options && 'confirmed' in options ? Boolean(options.confirmed) : false;
+  const gate = resolvePublishGate({
+    isCleanReplace: isCleanReplace.value,
+    isSharedRoot: isSharedRoot.value,
+    hasSelectedExtra: hasSelectedExtra.value,
+    matchesConfirmed: isMatchesConfirmed.value,
+    confirmed,
+  });
+
+  if (!gate.canPublish) {
+    republishConfirmOpen.value = true;
+    return;
+  }
+
+  extraCleanupNames.value = [];
+  emit(
+    'republish',
+    buildPublishStartPayload({
+      forceInstallDependencies: forceInstallDependencies.value,
+      extraCleanupNames: [],
+      scopeFingerprint: previewData.value?.scopeFingerprint,
+      confirmed,
+    })
+  );
 };
 
 /** 处理停止发布或管理员强制停止点击 */
@@ -212,6 +378,9 @@ watch(
       forceInstallDependencies.value = false;
       extraCleanupNames.value = [];
       cleanReplaceConfirmed.value = false;
+      detailExpanded.value = false;
+      startConfirmOpen.value = false;
+      republishConfirmOpen.value = false;
       if (isCleanReplace.value) {
         void loadPreview();
       } else {
@@ -275,123 +444,108 @@ watch(
         </div>
       </div>
 
-      <!-- 清空后替换目录清理安全预览 -->
-      <section v-if="!started && isCleanReplace" class="publish-cleanup-section">
-        <div class="publish-cleanup-section__head">
-          <div class="publish-cleanup-section__title">
-            <DeleteOutlined />
-            <span>清空后替换：目录清理预览</span>
-          </div>
-          <a-button
-            size="small"
-            type="link"
-            :loading="previewLoading"
-            @click="loadPreview"
-          >
-            <template #icon><SyncOutlined /></template>
-            刷新预览
+      <!-- 软链接与高危风险安全提示 -->
+      <template v-if="!started && isCleanReplace && previewData">
+        <a-alert
+          v-if="isSymlinkRoot"
+          type="info"
+          show-icon
+          class="publish-cleanup-notice"
+          :message="`部署目录是软链接，实际操作的目录是 ${previewData.realRoot}`"
+        />
+        <a-alert
+          v-if="previewData.riskLevel === 'block'"
+          type="error"
+          show-icon
+          class="publish-cleanup-notice"
+          message="部署根目录属于系统高危路径，发布已被禁止"
+          :description="previewData.riskReason"
+        />
+        <a-alert
+          v-else-if="previewData.riskLevel === 'warn'"
+          type="warning"
+          show-icon
+          class="publish-cleanup-notice"
+          message="部署根目录安全提示"
+          :description="previewData.riskReason || '该部署根属于常见浅层目录，请格外仔细核对下方列表。'"
+        />
+      </template>
+
+      <!-- 精简后的清空后替换目录清理预览行 -->
+      <section v-if="!started && isCleanReplace" class="publish-cleanup-bar">
+        <!-- 1. 加载中（简洁一行） -->
+        <div v-if="previewLoading" class="publish-cleanup-bar__loading">
+          <SyncOutlined spin class="publish-cleanup-bar__loading-icon" />
+          <span>正在读取服务器目录清理预览…</span>
+        </div>
+
+        <!-- 2. 出错状态（简洁一行） -->
+        <div v-else-if="previewError" class="publish-cleanup-bar__error">
+          <CloseCircleOutlined class="publish-cleanup-bar__error-icon" />
+          <span class="publish-cleanup-bar__error-text">{{ previewError }}</span>
+          <a-button type="link" size="small" class="publish-cleanup-bar__retry-btn" @click="loadPreview">
+            重试
           </a-button>
         </div>
 
-        <div v-if="previewLoading" class="publish-cleanup-loading">
-          <a-spin tip="正在读取服务器上的目录和上次发布清单…" />
-        </div>
+        <!-- 3. 数据就绪状态（简洁一行：文本 + ⓘ + 明细链接 + 刷新图标） -->
+        <div v-else-if="previewData" class="publish-cleanup-bar__content">
+          <div class="publish-cleanup-bar__summary">
+            <span class="publish-cleanup-bar__text">{{ shortCleanupSummaryText }}</span>
+            <a-tooltip :title="cleanupSummaryTooltipText">
+              <InfoCircleOutlined class="publish-cleanup-bar__info-icon" />
+            </a-tooltip>
+            <a-button
+              type="link"
+              size="small"
+              class="publish-cleanup-bar__detail-btn"
+              @click="detailExpanded = !detailExpanded"
+            >
+              {{ detailExpanded ? '收起明细' : '明细' }}
+            </a-button>
+            <a-tooltip title="刷新预览">
+              <a-button
+                type="text"
+                size="small"
+                class="publish-cleanup-bar__refresh-btn"
+                :loading="previewLoading"
+                @click="loadPreview"
+              >
+                <template #icon><SyncOutlined /></template>
+              </a-button>
+            </a-tooltip>
+          </div>
 
-        <div v-else-if="previewError" class="publish-cleanup-error">
-          <a-alert
-            :type="isSharedRoot ? 'error' : 'warning'"
-            show-icon
-            :message="isSharedRoot ? '获取删除预览失败' : '无法获取远程目录清理预览'"
-          >
-            <template #description>
-              <div>{{ previewError }}</div>
-              <div v-if="isSharedRoot" class="publish-cleanup-error__hint">
-                这个目录是多个应用共用的，必须先看到删除预览才能发布。请检查服务器连接后重试。
-              </div>
-              <div v-else class="publish-cleanup-error__hint">
-                拿不到预览也可以发布，发布时只会删除本次产物里的同名项和上次发布过的项。
-              </div>
-              <div style="margin-top: 8px">
-                <a-button size="small" type="primary" ghost @click="loadPreview">重试探测</a-button>
-              </div>
-            </template>
-          </a-alert>
-        </div>
-
-        <div v-else-if="previewData" class="publish-cleanup-content">
-          <!-- 软链接路径提示 -->
-          <a-alert
-            v-if="isSymlinkRoot"
-            type="info"
-            show-icon
-            class="publish-cleanup-notice"
-            :message="`部署目录是软链接，实际操作的目录是 ${previewData.realRoot}`"
-          />
-
-          <!-- 风险警告提示 -->
-          <a-alert
-            v-if="previewData.riskLevel === 'block'"
-            type="error"
-            show-icon
-            class="publish-cleanup-notice"
-            message="部署根目录属于系统高危路径，发布已被禁止"
-            :description="previewData.riskReason"
-          />
-          <a-alert
-            v-else-if="previewData.riskLevel === 'warn'"
-            type="warning"
-            show-icon
-            class="publish-cleanup-notice"
-            message="部署根目录安全提示"
-            :description="previewData.riskReason || '该部署根属于常见浅层目录，请格外仔细核对下方列表。'"
-          />
-
-          <!-- 共享根目录风险提示 -->
-          <a-alert
-            v-if="previewData.isSharedRoot"
-            type="warning"
-            show-icon
-            class="publish-cleanup-notice"
-            message="检测到共享根目录"
-            description="当前目录由多个部署目标或应用共用。清空操作仅清理雨燕记录的已知文件，不会删除未在清单中的其他应用或手放文件。"
-          />
-
-          <!-- 没有找到上次发布清单提示 -->
-          <a-alert
-            v-if="!previewData.manifestFound"
-            type="info"
-            show-icon
-            class="publish-cleanup-notice"
-            message="没找到上次发布清单（老目标第一次按新规则发布时常见）。这次只替换产物里出现的同名项，其余全部保留。"
-          />
-
-          <!-- 三组分类清晰展示 -->
-          <div class="publish-cleanup-groups">
-            <!-- 1. 待替换/清理项 -->
-            <div class="publish-cleanup-group is-replace">
-              <div class="publish-cleanup-group__title">
+          <!-- 明细折叠面板（某组为 0 时不显示该组） -->
+          <div v-if="detailExpanded" class="publish-cleanup-detail">
+            <!-- 1. 待替换/清理项（为 0 时不显示） -->
+            <div
+              v-if="groupedPreview.replaceOrCleanItems.length > 0"
+              class="publish-cleanup-detail__group is-replace"
+            >
+              <div class="publish-cleanup-detail__group-head">
                 <DeleteOutlined class="group-icon text-danger" />
                 <strong>待替换/清理项 ({{ groupedPreview.replaceOrCleanItems.length }})</strong>
-                <span class="group-desc">本次发布将替换或删除这些雨燕此前发布过的文件/目录</span>
+                <span class="group-desc">本次发布将替换这些文件/目录</span>
               </div>
-              <div v-if="groupedPreview.replaceOrCleanItems.length" class="publish-cleanup-tags">
+              <div class="publish-cleanup-detail__tags">
                 <a-tag v-for="item in groupedPreview.replaceOrCleanItems" :key="item" color="red">
                   {{ item }}
                 </a-tag>
               </div>
-              <div v-else class="publish-cleanup-empty">
-                {{ previewData.manifestFound ? '当前部署根下无上次发布的残留条目' : '没有找到上次发布清单，本次仅清理产物里出现的同名项' }}
-              </div>
             </div>
 
-            <!-- 2. 受保护项 -->
-            <div class="publish-cleanup-group is-protected">
-              <div class="publish-cleanup-group__title">
+            <!-- 2. 受保护项（为 0 时不显示） -->
+            <div
+              v-if="groupedPreview.protectedItems.length > 0"
+              class="publish-cleanup-detail__group is-protected"
+            >
+              <div class="publish-cleanup-detail__group-head">
                 <CheckCircleOutlined class="group-icon text-success" />
                 <strong>受保护项 ({{ groupedPreview.protectedItems.length }})</strong>
-                <span class="group-desc">同服务器已登记的子应用与手动配置的保留项，本次发布将完整保留</span>
+                <span class="group-desc">同服务器已登记的子应用与保留项，本次发布完整保留</span>
               </div>
-              <div v-if="groupedPreview.protectedItems.length" class="publish-cleanup-tags">
+              <div class="publish-cleanup-detail__tags">
                 <a-tooltip
                   v-for="item in groupedPreview.protectedItems"
                   :key="item.name"
@@ -402,17 +556,19 @@ watch(
                   </a-tag>
                 </a-tooltip>
               </div>
-              <div v-else class="publish-cleanup-empty">暂无受保护项</div>
             </div>
 
-            <!-- 3. 未识别项 -->
-            <div class="publish-cleanup-group is-unknown">
-              <div class="publish-cleanup-group__title">
+            <!-- 3. 未识别项（为 0 时不显示） -->
+            <div
+              v-if="groupedPreview.unknownItems.length > 0"
+              class="publish-cleanup-detail__group is-unknown"
+            >
+              <div class="publish-cleanup-detail__group-head">
                 <InfoCircleOutlined class="group-icon text-warning" />
                 <strong>未识别项 ({{ groupedPreview.unknownItems.length }})</strong>
-                <span class="group-desc">这些不在雨燕上次发布的清单里，默认保留。注意：如果本次构建产物里有同名的顶层文件或目录，它们会被新版本替换。</span>
+                <span class="group-desc">默认保留。勾选可加入本次额外清理：</span>
               </div>
-              <div v-if="groupedPreview.unknownItems.length" class="publish-cleanup-unknown-list">
+              <div class="publish-cleanup-detail__unknown-list">
                 <a-checkbox-group v-model:value="extraCleanupNames" class="publish-unknown-checkbox-group">
                   <a-checkbox
                     v-for="item in groupedPreview.unknownItems"
@@ -424,12 +580,11 @@ watch(
                   </a-checkbox>
                 </a-checkbox-group>
               </div>
-              <div v-else class="publish-cleanup-empty">没有检测到未识别文件</div>
             </div>
 
-            <!-- 系统保留项弱化提示 -->
-            <div class="publish-cleanup-reserved-note">
-              <span class="text-secondary">提示：系统目录 .yuyan-backups、.yuyan-manifests 永远不会被删除。</span>
+            <!-- 三组均为空兜底 -->
+            <div v-if="allGroupsEmpty" class="publish-cleanup-detail__empty">
+              当前没有待替换、受保护或未识别的文件项
             </div>
           </div>
         </div>
@@ -526,26 +681,21 @@ watch(
 
     <template #footer>
       <footer class="publish-workbench__footer">
-        <div v-if="!running && !started && needSecondaryConfirm" class="publish-secondary-confirm-bar">
-          <a-checkbox v-model:checked="cleanReplaceConfirmed">
-            <span class="publish-secondary-confirm-bar__label">
-              我已核对上述待清理和保留列表，确认执行清空后替换
-            </span>
+        <div v-if="!running" class="publish-footer-left">
+          <a-checkbox v-model:checked="forceInstallDependencies">
+            本次重新安装依赖
           </a-checkbox>
-          <div v-if="isSharedRoot" class="publish-secondary-confirm-bar__hint">
-            当前目录是多应用共用的共享根目录，必须核对列表并勾选确认后方可发布。
-          </div>
-          <div v-else-if="hasSelectedExtra" class="publish-secondary-confirm-bar__hint">
-            您勾选了额外清理项，必须勾选确认后方可执行发布。
-          </div>
+          <a-tooltip title="依赖缓存异常时使用，会清理旧 node_modules 后重新安装。">
+            <InfoCircleOutlined class="publish-footer-hint-icon" />
+          </a-tooltip>
         </div>
-        <div v-if="!running" class="publish-cache-option">
-          <a-checkbox v-model:checked="forceInstallDependencies">本次重新安装依赖</a-checkbox>
-          <span>依赖缓存异常时使用，会清理旧 node_modules 后重新安装。</span>
-        </div>
+        <div v-else class="publish-footer-left" />
+
         <div class="publish-workbench__actions">
           <span v-if="centralUnavailable">中央服务恢复后可继续发布</span>
-          <YButton v-if="resultUnconfirmed && canVerifyResult" :loading="verifyingResult" @click="emit('verify-result')">核实任务结果</YButton>
+          <YButton v-if="resultUnconfirmed && canVerifyResult" :loading="verifyingResult" @click="emit('verify-result')">
+            核实任务结果
+          </YButton>
           <template v-if="isSuccessFinished">
             <YButton @click="visible = false">关闭</YButton>
             <YButton v-if="hasValidVisitUrl" @click="copySiteUrl">
@@ -578,14 +728,86 @@ watch(
                 {{ stopButtonText }}
               </YButton>
             </a-tooltip>
-            <YButton v-if="!started" type="primary" :disabled="!canStartPublish" @click="handleStart">
-              <template #icon><RocketOutlined /></template>
-              开始发布
-            </YButton>
-            <YButton v-if="started && !running" type="primary" :disabled="!canStartPublish" @click="handleRepublish">
-              <template #icon><SyncOutlined /></template>
-              重新发布
-            </YButton>
+
+            <!-- 开始发布 Popover 气泡确认 -->
+            <a-popover
+              v-if="!started"
+              v-model:open="startConfirmOpen"
+              trigger="click"
+              placement="topRight"
+              overlayClassName="publish-confirm-popover"
+            >
+              <template #title>
+                <div class="publish-confirm-popover__title">
+                  <ExclamationCircleOutlined class="publish-confirm-popover__icon" />
+                  <span>{{ confirmPopupTitle }}</span>
+                </div>
+              </template>
+              <template #content>
+                <div class="publish-confirm-popover__content">
+                  <p class="publish-confirm-popover__body">{{ confirmPopupBody }}</p>
+                  <div class="publish-confirm-popover__actions">
+                    <a-button size="small" class="publish-confirm-popover__btn" @click="handleConfirmViewDetail">
+                      查看明细
+                    </a-button>
+                    <a-button size="small" class="publish-confirm-popover__btn" @click="startConfirmOpen = false">
+                      取消
+                    </a-button>
+                    <a-button size="small" type="primary" class="publish-confirm-popover__btn" @click="handleConfirmPublish">
+                      确认发布
+                    </a-button>
+                  </div>
+                </div>
+              </template>
+              <YButton
+                type="primary"
+                :disabled="!canClickStartButton"
+                @click="onStartButtonClick"
+              >
+                <template #icon><RocketOutlined /></template>
+                开始发布
+              </YButton>
+            </a-popover>
+
+            <!-- 重新发布 Popover 气泡确认 -->
+            <a-popover
+              v-if="started && !running"
+              v-model:open="republishConfirmOpen"
+              trigger="click"
+              placement="topRight"
+              overlayClassName="publish-confirm-popover"
+            >
+              <template #title>
+                <div class="publish-confirm-popover__title">
+                  <ExclamationCircleOutlined class="publish-confirm-popover__icon" />
+                  <span>{{ confirmPopupTitle }}</span>
+                </div>
+              </template>
+              <template #content>
+                <div class="publish-confirm-popover__content">
+                  <p class="publish-confirm-popover__body">{{ confirmPopupBody }}</p>
+                  <div class="publish-confirm-popover__actions">
+                    <a-button size="small" class="publish-confirm-popover__btn" @click="handleConfirmViewDetail">
+                      查看明细
+                    </a-button>
+                    <a-button size="small" class="publish-confirm-popover__btn" @click="republishConfirmOpen = false">
+                      取消
+                    </a-button>
+                    <a-button size="small" type="primary" class="publish-confirm-popover__btn" @click="handleConfirmRepublish">
+                      确认发布
+                    </a-button>
+                  </div>
+                </div>
+              </template>
+              <YButton
+                type="primary"
+                :disabled="!canClickStartButton"
+                @click="onRepublishButtonClick"
+              >
+                <template #icon><SyncOutlined /></template>
+                重新发布
+              </YButton>
+            </a-popover>
           </template>
         </div>
       </footer>

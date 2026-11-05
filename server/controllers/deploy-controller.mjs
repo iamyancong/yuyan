@@ -65,11 +65,16 @@ import {
   resolveNginxPaths,
 } from '../services/deploy-service.mjs';
 import { withSsh } from '../services/ssh-service.mjs';
+import { getTestHooks, __setTestHooks, __resetTestHooks } from '../services/test-hooks.mjs';
+
+export { __setTestHooks, __resetTestHooks };
 import {
   normalizeDeployRootPath,
   classifyDeployRootRisk,
   manifestTopNames,
   isSharedDeployRoot,
+  computeCleanupScopeFingerprint,
+  diffCleanupScope,
   RESERVED_DEPLOY_ENTRIES,
 } from '../services/deploy-cleanup-policy.mjs';
 import {
@@ -1611,12 +1616,24 @@ export async function handleGetTargetCleanupPreview(req, res) {
           reserved: [],
           unknown: [],
           isSharedRoot: false,
+          scopeFingerprint: '',
+          matchesConfirmed: false,
+          lastConfirmedAt: '',
+          lastConfirmedBy: '',
+          scopeDiff: {
+            addedProtected: [],
+            addedUnknown: [],
+            removedItems: [],
+            hasChanges: false,
+          },
         },
       });
     }
 
     const deployUseSudo = resolveEffectiveDeploySudo(server, nginxInstance);
-    const probe = await withSsh(server, async (conn) => {
+    const testHooks = getTestHooks();
+    const effectiveWithSsh = testHooks?.withSsh || withSsh;
+    const probe = await effectiveWithSsh(server, async (conn) => {
       return detectDeployRoot(conn, target.deployRoot, deployUseSudo, { ensureDir: false });
     });
 
@@ -1645,6 +1662,16 @@ export async function handleGetTargetCleanupPreview(req, res) {
           reserved: [],
           unknown: [],
           isSharedRoot,
+          scopeFingerprint: '',
+          matchesConfirmed: false,
+          lastConfirmedAt: target.cleanupConfirmedAt || '',
+          lastConfirmedBy: target.cleanupConfirmedBy || '',
+          scopeDiff: {
+            addedProtected: [],
+            addedUnknown: [],
+            removedItems: [],
+            hasChanges: false,
+          },
         },
       });
     }
@@ -1667,6 +1694,24 @@ export async function handleGetTargetCleanupPreview(req, res) {
       (name) => !protectedSet.has(name) && !reservedSet.has(name) && !replaceOrCleanSet.has(name)
     );
 
+    const currentScope = {
+      protected: protectedDetails.allProtected,
+      unknown,
+    };
+    const scopeFingerprint = computeCleanupScopeFingerprint(realRoot, protectedDetails.allProtected, unknown);
+
+    let lastConfirmedScope = null;
+    if (target.cleanupConfirmedScope) {
+      try {
+        lastConfirmedScope = typeof target.cleanupConfirmedScope === 'string'
+          ? JSON.parse(target.cleanupConfirmedScope)
+          : target.cleanupConfirmedScope;
+      } catch {}
+    }
+
+    const matchesConfirmed = Boolean(target.cleanupConfirmedFingerprint && target.cleanupConfirmedFingerprint === scopeFingerprint);
+    const scopeDiff = diffCleanupScope(currentScope, lastConfirmedScope);
+
     res.json({
       success: true,
       data: {
@@ -1680,6 +1725,11 @@ export async function handleGetTargetCleanupPreview(req, res) {
         reserved,
         unknown,
         isSharedRoot,
+        scopeFingerprint,
+        matchesConfirmed,
+        lastConfirmedAt: target.cleanupConfirmedAt || '',
+        lastConfirmedBy: target.cleanupConfirmedBy || '',
+        scopeDiff,
       },
     });
   } catch (error) {

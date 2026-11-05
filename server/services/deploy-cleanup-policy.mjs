@@ -4,6 +4,8 @@
  * 提供部署根目录规范化、风险分级、清单解析与清理规划等纯函数逻辑。
  */
 
+import crypto from 'node:crypto';
+
 export const RESERVED_DEPLOY_ENTRIES = Object.freeze(['.yuyan-backups', '.yuyan-manifests']);
 
 /**
@@ -726,5 +728,189 @@ export function computeCleanupPlan(params = {}) {
     keptUnknown: keptUnknown.sort(),
     keptReserved: keptReserved.sort(),
     rejectedExtra: [...new Set(rejectedExtra)].sort(),
+  };
+}
+
+/**
+ * 计算部署清理范围指纹（SHA-256）。
+ * 遵循指纹规范：
+ * scopeFingerprint = sha256(规范化 deployRoot + 排序后的受保护项名 + 排序后的未识别项名)
+ * 注意：待替换项（willReplaceOrClean）不进入指纹。
+ *
+ * @param {string} deployRoot - 远程部署根目录
+ * @param {string[]} [protectedNames=[]] - 受保护的子目录/文件名
+ * @param {string[]} [unknownNames=[]] - 未识别的顶层条目名
+ * @returns {string} 64 位十六进制 SHA-256 指纹
+ */
+export function computeCleanupScopeFingerprint(deployRoot, protectedNames = [], unknownNames = []) {
+  const normRoot = normalizeDeployRootPath(deployRoot);
+  const sortedProtected = [...new Set((protectedNames || []).filter(isValidEntryName))].sort();
+  const sortedUnknown = [...new Set((unknownNames || []).filter(isValidEntryName))].sort();
+  const content = [
+    normRoot,
+    sortedProtected.join(','),
+    sortedUnknown.join(','),
+  ].join('\n');
+  return crypto.createHash('sha256').update(content).digest('hex');
+}
+
+/**
+ * 计算当前清理范围与上次确认名单的差异（新增受保护/新增未识别/减少项）。
+ *
+ * @param {Object} [currentScope={}] - 当前清理范围
+ * @param {string[]} [currentScope.protected=[]] - 当前受保护条目
+ * @param {string[]} [currentScope.unknown=[]] - 当前未识别条目
+ * @param {Object|null} [lastScope=null] - 上次已确认的范围名单
+ * @returns {{
+ *   addedProtected: string[],
+ *   addedUnknown: string[],
+ *   removedItems: string[],
+ *   hasChanges: boolean
+ * }} 差异对比结果
+ */
+export function diffCleanupScope(currentScope = {}, lastScope = null) {
+  const curProtected = new Set((currentScope?.protected || []).filter(isValidEntryName));
+  const curUnknown = new Set((currentScope?.unknown || []).filter(isValidEntryName));
+
+  if (!lastScope || typeof lastScope !== 'object') {
+    return {
+      addedProtected: [],
+      addedUnknown: [],
+      removedItems: [],
+      hasChanges: false,
+    };
+  }
+
+  const lastProtected = new Set((lastScope.protected || []).filter(isValidEntryName));
+  const lastUnknown = new Set((lastScope.unknown || []).filter(isValidEntryName));
+
+  const addedProtected = [...curProtected].filter((name) => !lastProtected.has(name)).sort();
+  const addedUnknown = [...curUnknown].filter((name) => !lastUnknown.has(name)).sort();
+
+  const removedItems = [
+    ...[...lastProtected].filter((name) => !curProtected.has(name)),
+    ...[...lastUnknown].filter((name) => !curUnknown.has(name)),
+  ].sort();
+
+  const hasChanges = addedProtected.length > 0 || addedUnknown.length > 0 || removedItems.length > 0;
+
+  return {
+    addedProtected,
+    addedUnknown,
+    removedItems,
+    hasChanges,
+  };
+}
+
+/**
+ * 校验清空后替换发布清理门禁。
+ *
+ * 通过条件：
+ * 1. 非 cleanReplace 或非共享根且无额外清理：直接放行；
+ * 2. 额外清理项永远需要显式确认（cleanReplaceConfirmed === true）；
+ * 3. 共享根且 cleanReplace：
+ *    - 条件 A: cleanReplaceConfirmed === true 且 confirmedFingerprint === currentFingerprint（放行并要求持久化确认）；
+ *    - 条件 B: currentFingerprint === savedFingerprint 且本次没有 extraCleanupNames（免确认放行）；
+ *    - 其它情况一律拒绝并给出中文提示。
+ *
+ * @param {Object} params - 校验参数
+ * @param {boolean} [params.isCleanReplace=false] - 是否清空后替换策略
+ * @param {boolean} [params.isSharedRoot=false] - 是否共享根目录
+ * @param {string} [params.currentFingerprint=''] - 后端当前计算出的指纹
+ * @param {string} [params.confirmedFingerprint=''] - 前端传来的确认指纹
+ * @param {string} [params.savedFingerprint=''] - 数据库中已持久化的指纹
+ * @param {boolean} [params.cleanReplaceConfirmed=false] - 用户是否显式进行了确认
+ * @param {string[]} [params.extraCleanupNames=[]] - 本次勾选的额外清理项
+ * @returns {{
+ *   allowed: boolean,
+ *   code?: string,
+ *   reason?: string,
+ *   requireSaveConfirmation?: boolean
+ * }} 校验结果
+ */
+export function verifyPublishCleanupGate(params = {}) {
+  const {
+    isCleanReplace = false,
+    isSharedRoot = false,
+    currentFingerprint = '',
+    confirmedFingerprint = '',
+    savedFingerprint = '',
+    cleanReplaceConfirmed = false,
+    extraCleanupNames = [],
+  } = params;
+
+  const hasExtraCleanup = Array.isArray(extraCleanupNames) && extraCleanupNames.length > 0;
+
+  // 1. 非清空后替换模式
+  if (!isCleanReplace) {
+    return { allowed: true, requireSaveConfirmation: false };
+  }
+
+  // 2. 非共享根模式：仅在勾选额外清理时需要显式确认
+  if (!isSharedRoot) {
+    if (hasExtraCleanup && !cleanReplaceConfirmed) {
+      return {
+        allowed: false,
+        code: 'extra_cleanup_confirmation_required',
+        reason: '额外清理项需要二次确认后才能发布',
+      };
+    }
+    return { allowed: true, requireSaveConfirmation: false };
+  }
+
+  // 3. 共享根目录且 cleanReplace 模式
+  // 3.1 勾选了额外清理项：必须显式确认，且前端确认指纹必须与后端一致
+  if (hasExtraCleanup) {
+    if (!cleanReplaceConfirmed) {
+      return {
+        allowed: false,
+        code: 'extra_cleanup_confirmation_required',
+        reason: '额外清理项需要二次确认后才能发布',
+      };
+    }
+    // 显式确认必须带上前端确认时看到的指纹，且与后端当前指纹完全一致；缺失也视为不一致
+    if (!confirmedFingerprint || !currentFingerprint || confirmedFingerprint !== currentFingerprint) {
+      return {
+        allowed: false,
+        code: 'fingerprint_mismatch',
+        reason: '服务器目录有变化，请重新预览后确认',
+      };
+    }
+    return { allowed: true, requireSaveConfirmation: true };
+  }
+
+  // 3.2 未勾选额外清理项：
+  // 检查是否满足条件 B：当前指纹 === 已存指纹
+  const matchesSavedFingerprint = Boolean(savedFingerprint && currentFingerprint && currentFingerprint === savedFingerprint);
+  if (matchesSavedFingerprint && !cleanReplaceConfirmed) {
+    return { allowed: true, requireSaveConfirmation: false };
+  }
+
+  // 用户显式确认（条件 A）
+  if (cleanReplaceConfirmed) {
+    // 显式确认必须带上前端确认时看到的指纹，且与后端当前指纹完全一致；缺失也视为不一致
+    if (!confirmedFingerprint || !currentFingerprint || confirmedFingerprint !== currentFingerprint) {
+      return {
+        allowed: false,
+        code: 'fingerprint_mismatch',
+        reason: '服务器目录有变化，请重新预览后确认',
+      };
+    }
+    return { allowed: true, requireSaveConfirmation: true };
+  }
+
+  // 未显式确认且指纹未匹配
+  if (!savedFingerprint) {
+    return {
+      allowed: false,
+      code: 'first_confirmation_required',
+      reason: '该共享根目录此前未确认过清理范围或服务器目录已有变化，请先前往界面确认发布一次',
+    };
+  }
+
+  return {
+    allowed: false,
+    code: 'scope_changed_confirmation_required',
+    reason: '服务器目录有变化，请重新预览后确认',
   };
 }

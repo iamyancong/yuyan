@@ -57,6 +57,8 @@ export interface StartPublishOptions {
   extraCleanupNames?: string[];
   /** 清空后替换是否已二次确认 */
   cleanReplaceConfirmed?: boolean;
+  /** 用户确认的目录清理范围指纹 */
+  confirmedFingerprint?: string;
 }
 
 /**
@@ -394,6 +396,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
           forceInstallDependencies: Boolean(options.forceInstallDependencies),
           extraCleanupNames: options.extraCleanupNames,
           cleanReplaceConfirmed: options.cleanReplaceConfirmed,
+          confirmedFingerprint: options.confirmedFingerprint,
         },
         {
           signal: abortController.signal,

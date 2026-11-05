@@ -56,6 +56,8 @@ export interface PublishStartOptions {
   extraCleanupNames?: string[];
   /** 清空后替换是否已二次确认 */
   cleanReplaceConfirmed?: boolean;
+  /** 用户确认的目录清理范围指纹 */
+  confirmedFingerprint?: string;
 }
 
 /**

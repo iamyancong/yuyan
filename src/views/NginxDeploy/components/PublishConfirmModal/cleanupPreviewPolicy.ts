@@ -247,3 +247,332 @@ export function resolveDefaultUploadStrategy(params: {
 
   return target?.uploadStrategy || 'overlayKeepAssets';
 }
+
+/**
+ * 格式化精简版发布信息下方摘要文案（微应用与共享根统一格式）。
+ * 格式为「清空后替换 · 替换 N 项」，若与上次确认一致则为「清空后替换 · 替换 N 项 · 与上次确认一致」。
+ *
+ * @param replaceCountOrParams 待替换数量或统计参数对象
+ * @param maybeMatchesConfirmed 是否与上次确认一致
+ * @returns 摘要文本
+ */
+export function formatShortCleanupSummary(
+  replaceCountOrParams: number | { replaceCount?: number; matchesConfirmed?: boolean },
+  maybeMatchesConfirmed?: boolean
+): string {
+  let replaceCount = 0;
+  let matchesConfirmed = false;
+  if (typeof replaceCountOrParams === 'object' && replaceCountOrParams !== null) {
+    replaceCount = Math.max(0, replaceCountOrParams.replaceCount || 0);
+    matchesConfirmed = Boolean(replaceCountOrParams.matchesConfirmed);
+  } else {
+    replaceCount = Math.max(0, Number(replaceCountOrParams) || 0);
+    matchesConfirmed = Boolean(maybeMatchesConfirmed);
+  }
+  const base = `清空后替换 · 替换 ${replaceCount} 项`;
+  return matchesConfirmed ? `${base} · 与上次确认一致` : base;
+}
+
+/**
+ * 格式化发布信息下方 ⓘ 图标的完整说明 Tooltip。
+ * matchesConfirmed 一致时：写上次确认人和时间；
+ * 微应用：“将替换 N 项雨燕旧文件，其他内容不受影响”；
+ * 共享根：输出动态保留说明，如“只替换 11 项雨燕旧文件，保留 4 个子应用和 5 个其他目录”。
+ *
+ * @param params 参数集合
+ * @returns 提示文案
+ */
+export function formatCleanupSummaryTooltip(params: {
+  isSharedRoot: boolean;
+  replaceCount?: number;
+  nestedCount?: number;
+  manualCount?: number;
+  unknownCount?: number;
+  extraCleanupCount?: number;
+  matchesConfirmed?: boolean;
+  lastConfirmedAt?: string;
+  lastConfirmedBy?: string;
+}): string {
+  if (params.matchesConfirmed && (params.lastConfirmedBy || params.lastConfirmedAt)) {
+    const by = params.lastConfirmedBy || '-';
+    const at = params.lastConfirmedAt || '-';
+    return `上次确认人：${by}，确认时间：${at}`;
+  }
+  const replaceCount = Math.max(0, params.replaceCount || 0);
+  if (params.isSharedRoot) {
+    const full = formatSharedRootCleanupSummary(params);
+    return full.replace(/^共享根目录：/, '');
+  }
+  return `将替换 ${replaceCount} 项雨燕旧文件，其他内容不受影响`;
+}
+
+/**
+ * 获取开始发布前确认气泡的标题。
+ *
+ * @param options 判断条件
+ * @returns 气泡标题
+ */
+export function getPublishConfirmPopupTitle(options: {
+  isSharedRoot: boolean;
+  hasSelectedExtra?: boolean;
+}): string {
+  if (options.isSharedRoot) {
+    return '共享根目录，确认清空发布？';
+  }
+  if (options.hasSelectedExtra) {
+    return '存在额外清理，确认清空发布？';
+  }
+  return '确认清空后替换发布？';
+}
+
+/**
+ * 格式化开始发布前确认气泡的正文内容。
+ * 共享根场景输出「只替换 N 项雨燕旧文件，保留 X 个子应用和 Y 个其他目录」（0 的部分省略）。
+ * 不一致且有变更记录时追加变化说明（如「和上次相比新增未识别：x、y」）。
+ * 额外清理场景输出对应清理项提示。
+ *
+ * @param params 统计参数
+ * @returns 气泡正文
+ */
+export function formatPublishConfirmPopupBody(
+  params: SharedRootCleanupSummaryParams & {
+    isSharedRoot: boolean;
+    scopeDiff?: {
+      addedProtected?: string[];
+      addedUnknown?: string[];
+      removedItems?: string[];
+      hasChanges?: boolean;
+    } | null;
+  }
+): string {
+  let baseText = '';
+  if (params.isSharedRoot) {
+    const full = formatSharedRootCleanupSummary(params);
+    baseText = full.replace(/^共享根目录：/, '');
+  } else {
+    const extraCount = Math.max(0, params.extraCleanupCount || 0);
+    baseText = `本次发布将额外清理勾选的 ${extraCount} 项未识别文件`;
+  }
+
+  const diff = params.scopeDiff;
+  if (diff && diff.hasChanges) {
+    const changes: string[] = [];
+    if (diff.addedUnknown && diff.addedUnknown.length > 0) {
+      changes.push(`新增未识别：${diff.addedUnknown.join('、')}`);
+    }
+    if (diff.addedProtected && diff.addedProtected.length > 0) {
+      changes.push(`新增受保护：${diff.addedProtected.join('、')}`);
+    }
+    if (diff.removedItems && diff.removedItems.length > 0) {
+      changes.push(`减少项：${diff.removedItems.join('、')}`);
+    }
+    if (changes.length > 0) {
+      baseText = `${baseText}。和上次相比${changes.join('，')}`;
+    }
+  }
+
+  return baseText;
+}
+
+/**
+ * 判断当前发布是否需要通过气泡进行二次确认。
+ * 规则：
+ * 1. 非清空后替换模式不需要确认；
+ * 2. 勾选了额外清理项必须确认；
+ * 3. 共享根目录且 matchesConfirmed 时免确认放行；不一致或未确认时必须确认；
+ * 4. 普通微应用且无额外清理直接发布，不需要弹气泡。
+ *
+ * @param options 校验参数
+ * @returns 是否需要气泡确认
+ */
+export function needsPublishConfirmation(options: {
+  isCleanReplace: boolean;
+  isSharedRoot: boolean;
+  hasSelectedExtra: boolean;
+  matchesConfirmed?: boolean;
+}): boolean {
+  if (!options.isCleanReplace) return false;
+  if (options.hasSelectedExtra) return true;
+  if (options.isSharedRoot) {
+    return !options.matchesConfirmed;
+  }
+  return false;
+}
+
+/**
+ * 判断当前发布是否能够直接发布（无需气泡确认）。
+ *
+ * @param options 校验参数
+ * @returns 是否可直接发布
+ */
+export function canDirectlyPublish(options: {
+  isCleanReplace: boolean;
+  isSharedRoot: boolean;
+  hasSelectedExtra: boolean;
+  matchesConfirmed?: boolean;
+}): boolean {
+  return !needsPublishConfirmation(options);
+}
+
+/**
+ * 发布门禁判定纯函数。
+ * handleStart / handleRepublish 必须经过此函数校验，确保未确认的共享根或额外清理发布无法绕过气泡。
+ *
+ * @param options 门禁参数
+ * @returns 判定结果：canPublish 是否允许真正发布；needConfirm 是否需要阻断并弹气泡
+ */
+export function resolvePublishGate(options: {
+  isCleanReplace: boolean;
+  isSharedRoot: boolean;
+  hasSelectedExtra: boolean;
+  matchesConfirmed?: boolean;
+  confirmed?: boolean;
+}): { canPublish: boolean; needConfirm: boolean } {
+  const needConfirm = needsPublishConfirmation(options);
+  if (!needConfirm) {
+    return { canPublish: true, needConfirm: false };
+  }
+  return {
+    canPublish: Boolean(options.confirmed),
+    needConfirm: true,
+  };
+}
+
+export interface SharedRootCleanupSummaryParams {
+  /** 待替换/清理的雨燕旧文件数量 */
+  replaceCount?: number;
+  /** 受保护的已登记子应用数量 */
+  nestedCount?: number;
+  /** 手填保留项数量 */
+  manualCount?: number;
+  /** 未识别项数量 */
+  unknownCount?: number;
+  /** 用户勾选的额外清理项数量 */
+  extraCleanupCount?: number;
+}
+
+/**
+ * 格式化非共享根/微应用的清空后替换摘要文案。
+ * @param replaceCount 待替换/清理项数量
+ * @returns 摘要文案，如「清空后替换：将替换 7 项旧文件，其他内容不受影响」
+ */
+export function formatMicroDeployCleanupSummary(replaceCount: number): string {
+  const count = Math.max(0, replaceCount || 0);
+  if (count === 0) {
+    return '清空后替换：暂无待替换旧文件，其他内容不受影响';
+  }
+  return `清空后替换：将替换 ${count} 项旧文件，其他内容不受影响`;
+}
+
+/**
+ * 格式化主应用/共享根目录的清空后替换摘要文案。
+ * 遵循平实中文，数字动态，为 0 的部分省略。
+ * 如「共享根目录：只替换 11 项雨燕旧文件，保留 4 个子应用和 5 个其他目录」。
+ *
+ * @param params 统计参数
+ * @returns 格式化后的文案
+ */
+export function formatSharedRootCleanupSummary(params: SharedRootCleanupSummaryParams): string {
+  const replaceCount = Math.max(0, params.replaceCount || 0);
+  const nestedCount = Math.max(0, params.nestedCount || 0);
+  const manualCount = Math.max(0, params.manualCount || 0);
+  const unknownCount = Math.max(0, params.unknownCount || 0);
+  const extraCleanupCount = Math.max(0, params.extraCleanupCount || 0);
+
+  const remainingUnknownCount = Math.max(0, unknownCount - extraCleanupCount);
+  const segments: string[] = [];
+
+  // 1. 雨燕旧文件替换
+  if (replaceCount > 0) {
+    segments.push(`只替换 ${replaceCount} 项雨燕旧文件`);
+  }
+
+  // 2. 额外清理项
+  if (extraCleanupCount > 0) {
+    segments.push(`额外清理 ${extraCleanupCount} 项`);
+  }
+
+  // 3. 保留项列表（子应用、手填保留项、其他目录）
+  const keepItems: string[] = [];
+  if (nestedCount > 0) {
+    keepItems.push(`${nestedCount} 个子应用`);
+  }
+  if (manualCount > 0) {
+    keepItems.push(`${manualCount} 个手填保留项`);
+  }
+  if (remainingUnknownCount > 0) {
+    keepItems.push(`${remainingUnknownCount} 个其他目录`);
+  }
+
+  if (keepItems.length > 0) {
+    let keepText = '';
+    if (keepItems.length === 1) {
+      keepText = keepItems[0];
+    } else if (keepItems.length === 2) {
+      keepText = `${keepItems[0]}和 ${keepItems[1]}`;
+    } else {
+      keepText = `${keepItems.slice(0, -1).join('、')} 和 ${keepItems[keepItems.length - 1]}`;
+    }
+    segments.push(`保留 ${keepText}`);
+  }
+
+  if (segments.length === 0) {
+    return '共享根目录：无待替换或保留项';
+  }
+
+  return `共享根目录：${segments.join('，')}`;
+}
+
+/**
+ * 格式化清空后替换开始发布二次确认文案。
+ *
+ * @param params 确认参数
+ * @returns 二次确认复选框文案
+ */
+export function formatCleanupSecondaryConfirmText(params: {
+  isSharedRoot: boolean;
+  replaceCount?: number;
+  nestedCount?: number;
+  manualCount?: number;
+  unknownCount?: number;
+  extraCleanupCount?: number;
+}): string {
+  if (params.isSharedRoot) {
+    return formatSharedRootCleanupSummary(params);
+  }
+  if ((params.extraCleanupCount || 0) > 0) {
+    return `确认额外清理勾选的 ${params.extraCleanupCount} 项未识别文件`;
+  }
+  return '我已核对清理预览，确认执行清空后替换';
+}
+
+/** 构造发布启动参数纯函数输入选项 */
+export interface BuildPublishStartPayloadOptions {
+  /** 是否强制重新安装依赖 */
+  forceInstallDependencies: boolean;
+  /** 额外勾选清理的顶层文件名列表 */
+  extraCleanupNames?: string[];
+  /** 预览中当前清理范围指纹 */
+  scopeFingerprint?: string;
+  /** 是否在气泡中显式确认 */
+  confirmed?: boolean;
+}
+
+/**
+ * 组装发布/重新发布的参数对象。
+ * cleanReplaceConfirmed 仅在用户显式确认（confirmed === true）时为 true；
+ * 仅在 confirmed === true 时附带 confirmedFingerprint。
+ *
+ * @param options 组装选项
+ * @returns 最终发布参数载荷
+ */
+export function buildPublishStartPayload(options: BuildPublishStartPayloadOptions) {
+  const isConfirmed = options.confirmed === true;
+  return {
+    forceInstallDependencies: Boolean(options.forceInstallDependencies),
+    extraCleanupNames: Array.isArray(options.extraCleanupNames) ? [...options.extraCleanupNames] : [],
+    cleanReplaceConfirmed: isConfirmed,
+    confirmedFingerprint: isConfirmed && options.scopeFingerprint ? options.scopeFingerprint : undefined,
+  };
+}
+
