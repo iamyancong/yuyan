@@ -13,6 +13,7 @@ const emit = defineEmits<{
   'update:modelValue': [value: string];
   'toggleExplorer': [];
   'update:occupiedMap': [value: Record<string, string>];
+  'detectedKind': [value: 'main' | 'micro' | ''];
 }>();
 
 const context = useNginxDeployContext();

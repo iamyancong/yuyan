@@ -46,3 +46,23 @@ test('未关联实例或空目标不带提示', () => {
   assert.equal(getSiteReadinessStatus(createTarget({ nginxInstanceId: 0 })).portMismatchHint, '');
   assert.equal(getSiteReadinessStatus(null).portMismatchHint, '');
 });
+
+test('微应用且非平台托管站点时 portMismatchHint 为空', () => {
+  const meta = getSiteReadinessStatus(createTarget({
+    applicationKind: 'micro',
+    nginxSiteManaged: false,
+    listenPort: 9999,
+    visitUrl: 'http://192.168.165.60:8050',
+  }));
+  assert.equal(meta.portMismatchHint, '');
+});
+
+test('微应用且开启平台托管站点时 portMismatchHint 照常提示', () => {
+  const meta = getSiteReadinessStatus(createTarget({
+    applicationKind: 'micro',
+    nginxSiteManaged: true,
+    listenPort: 9999,
+    visitUrl: 'http://192.168.165.60:8050',
+  }));
+  assert.ok(meta.portMismatchHint.startsWith('访问地址端口为 8050，监听端口为 9999'));
+});

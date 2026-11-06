@@ -1,6 +1,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { getDeployRootOptions, type DeployRootOptionsResult } from '@/api/deploy';
-import { getFileContentIfExists } from '@/api/gitlab';
+import { getFileContentIfExists, listRepositoryDirectory } from '@/api/gitlab';
+import { createTreeAwareRepositoryReader } from './repositoryTreeReader';
 import { detectDeployApplication, type DeployApplicationDetection } from './deployRootProjectDetector';
 import {
   createDeployRootSelectOptions,
@@ -31,6 +32,7 @@ export interface DeployRootRecommendationProps {
 /** 部署根目录推荐器事件。 */
 export interface DeployRootRecommendationEmit {
   (event: 'update:modelValue', value: string): void;
+  (event: 'detectedKind', value: 'main' | 'micro' | ''): void;
 }
 
 /** 从未知异常中提取适合表单展示的短消息。 */
@@ -89,15 +91,19 @@ export function useDeployRootRecommendation(
     ].join('|');
     const cached = detectionCache.get(cacheKey);
     if (cached) return cached;
+    const reader = createTreeAwareRepositoryReader({
+      listDirectory: (dir) => listRepositoryDirectory(projectId, dir, defaultBranch),
+      readFile: async (filePath) => {
+        const result = await getFileContentIfExists(projectId, filePath, defaultBranch);
+        return result?.content ?? null;
+      },
+    });
     const request = detectDeployApplication({
       buildCommand,
       artifactDir,
       projectName,
       projectDescription,
-      readFile: async (filePath) => {
-        const result = await getFileContentIfExists(projectId, filePath, defaultBranch);
-        return result?.content ?? null;
-      },
+      readFile: reader,
     }).catch((error) => {
       detectionCache.delete(cacheKey);
       throw error;
@@ -142,6 +148,7 @@ export function useDeployRootRecommendation(
       options.value = [];
       recommendation.value = '';
       hint.value = '';
+      emit('detectedKind', '');
       return;
     }
     if (!props.projectId || !props.defaultBranch || !props.serverId) {
@@ -149,6 +156,7 @@ export function useDeployRootRecommendation(
       options.value = [];
       recommendation.value = '';
       hint.value = '请选择项目、分支和服务器以智能识别部署目录';
+      emit('detectedKind', '');
       return;
     }
 
@@ -159,6 +167,13 @@ export function useDeployRootRecommendation(
     loading.value = false;
     const detection = detectionResult.status === 'fulfilled' ? detectionResult.value : null;
     const server = serverResult.status === 'fulfilled' ? serverResult.value : null;
+
+    if (detection?.status === 'resolved' && (detection.kind === 'main' || detection.kind === 'micro')) {
+      emit('detectedKind', detection.kind);
+    } else {
+      emit('detectedKind', '');
+    }
+
     const nextRecommendation = createRecommendedDeployRoot(server?.configuredRoot || '', detection);
     recommendation.value = nextRecommendation;
     options.value = createDeployRootSelectOptions(server, nextRecommendation, detection);
@@ -200,6 +215,7 @@ export function useDeployRootRecommendation(
   const scheduleRefresh = () => {
     /** 依赖一变化就让在途响应失效，不能等待防抖结束后再递增代次。 */
     refreshSequence += 1;
+    emit('detectedKind', '');
     if (refreshTimer) clearTimeout(refreshTimer);
 
     // 若当前环境非前端项目，或者尚未满足项目、分支、服务器基础条件，不启动网络定时器，立即清空状态

@@ -1,5 +1,6 @@
-/** 仓库文件读取函数；文件不存在时返回 null。 */
-export type RepositoryFileReader = (filePath: string) => Promise<string | null>;
+import type { RepositoryFileReader } from './repositoryTreeReader';
+
+export type { RepositoryFileReader };
 
 /** 前端部署应用识别结果。 */
 export interface DeployApplicationDetection {
@@ -334,8 +335,10 @@ export async function detectDeployApplication(options: DetectDeployApplicationOp
   const directories = getCandidateDirectories(context, options.artifactDir);
   const viteMatches: Array<{ appName: string; sourcePath: string }> = [];
   if (context.framework !== 'vue-cli') {
-    for (const directory of directories) {
-      const match = await readViteAppName(directory, context.mode || 'production', options.readFile);
+    const results = await Promise.all(
+      directories.map((directory) => readViteAppName(directory, context.mode || 'production', options.readFile))
+    );
+    for (const match of results) {
       if (match) viteMatches.push(match);
     }
   }
@@ -360,11 +363,16 @@ export async function detectDeployApplication(options: DetectDeployApplicationOp
 
   const vue2Matches: Array<{ appName: string; sourcePath: string }> = [];
   if (context.framework !== 'vite') {
-    for (const directory of directories) {
-      const filePath = joinRepositoryPath(directory, 'public/index.html') || 'public/index.html';
-      const content = await options.readFile(filePath);
-      if (!content) continue;
-      parseVue2AppIds(content).forEach((appName) => vue2Matches.push({ appName, sourcePath: filePath }));
+    const results = await Promise.all(
+      directories.map(async (directory) => {
+        const filePath = joinRepositoryPath(directory, 'public/index.html') || 'public/index.html';
+        const content = await options.readFile(filePath);
+        if (!content) return [];
+        return parseVue2AppIds(content).map((appName) => ({ appName, sourcePath: filePath }));
+      })
+    );
+    for (const group of results) {
+      vue2Matches.push(...group);
     }
   }
   const vue2Names = Array.from(new Set(vue2Matches.map((item) => item.appName)));

@@ -44,6 +44,7 @@ import {
   detectBackendTemplateKey,
   type BackendTemplateKey,
 } from '../constant';
+import { normalizeApplicationKind, shouldShowListenPort } from './applicationKindPolicy';
 import {
   PROJECT_SELECT_DROPDOWN_CLASS,
   normalizeProjectSource,
@@ -115,6 +116,7 @@ const createDefaultTargetForm = (project: DeployProjectContext): DeployTargetPay
   repositoryUrl: project.repositoryUrl,
   defaultBranch: project.defaultBranch,
   envName: TEST_ENV_NAME,
+  applicationKind: '',
   serverId: undefined,
   nginxInstanceId: 0,
   deployRoot: '',
@@ -659,9 +661,14 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     targetFormRef.value?.setFieldState?.('visitUrl', (state: any) => {
       state.display = isFrontend ? 'visible' : 'none';
     });
-    // 监听端口是 Nginx 实际 listen 的端口，和访问地址一样对所有前端目标可见（已有实例也能修改）
+    // 监听端口按应用类型和托管状态决定显隐：微应用（非托管站点）隐藏，后端隐藏，其余显示
+    const showListenPortField = shouldShowListenPort({
+      projectType: targetForm.projectType,
+      applicationKind: targetForm.applicationKind,
+      nginxSiteManaged: targetForm.nginxSiteManaged,
+    });
     targetFormRef.value?.setFieldState?.('listenPort', (state: any) => {
-      state.display = isFrontend ? 'visible' : 'none';
+      state.display = showListenPortField ? 'visible' : 'none';
     });
     // server_name 仅在托管实例且开启托管时显示作为配置参数
     const showNginxConfigFields = Boolean(isManagedSite && targetForm.nginxSiteManaged);
@@ -897,6 +904,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       projectPath: draft.projectPath,
       repositoryUrl: draft.repositoryUrl,
       defaultBranch: draft.defaultBranch || 'dev',
+      applicationKind: '',
     });
   };
 
@@ -925,6 +933,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       repositoryUrl: selectedProject?.repositoryUrl || '',
       defaultBranch: selectedProject?.defaultBranch || 'dev',
       envName: TEST_ENV_NAME,
+      applicationKind: '',
       serverId: undefined,
       nginxInstanceId: 0,
       deployRoot: '',
@@ -1233,7 +1242,12 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     );
     initializingTargetForm.value = true;
     const targetSource = normalizeProjectSource(target.projectSource);
-    Object.assign(targetForm, { ...target, projectSource: targetSource, serverName: target.nginxServerName || '_' });
+    Object.assign(targetForm, {
+      ...target,
+      projectSource: targetSource,
+      serverName: target.nginxServerName || '_',
+      applicationKind: normalizeApplicationKind(target.applicationKind),
+    });
     activeProjectSource.value = targetSource;
     targetModalOpen.value = true;
     targetFormLoading.value = true;
@@ -1276,7 +1290,12 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
         return;
       }
 
-      Object.assign(targetForm, { ...target, projectSource: targetSource, serverName: target.nginxServerName || '_' });
+      Object.assign(targetForm, {
+        ...target,
+        projectSource: targetSource,
+        serverName: target.nginxServerName || '_',
+        applicationKind: normalizeApplicationKind(target.applicationKind),
+      });
       if (targetForm.projectType === 'backend') {
         targetForm.requiredJdkAlias = parseMajorVersionFromAlias(targetForm.requiredJdkAlias);
         targetForm.backendTemplate = target.backendTemplate || detectBackendTemplateKey({
@@ -1406,11 +1425,16 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
         initialBuildMemoryMb: initialEditBuildMemoryMb.value,
         currentBuildMemoryMb: values.buildMemoryMb ?? targetForm.buildMemoryMb,
       });
+      const isBackend = (values.projectType || targetForm.projectType) === 'backend';
+      const resolvedApplicationKind = isBackend
+        ? ''
+        : normalizeApplicationKind(values.applicationKind ?? targetForm.applicationKind);
       payload = {
         ...targetForm,
         ...values,
         projectSource: normalizeProjectSource(values.projectSource || targetForm.projectSource),
         envName: TEST_ENV_NAME,
+        applicationKind: resolvedApplicationKind,
         enableNginxTest: Boolean(values.enableNginxTest ?? targetForm.enableNginxTest),
         enableNginxReload: Boolean(values.enableNginxReload ?? targetForm.enableNginxReload),
         uploadStrategy: values.uploadStrategy || targetForm.uploadStrategy || DEFAULT_UPLOAD_STRATEGY,
@@ -1429,7 +1453,6 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
         message.warning('请选择部署分支');
         return;
       }
-      const isBackend = payload.projectType === 'backend';
       if (!isBackend && !payload.installCommand) {
         message.warning('请填写安装命令');
         return;
@@ -1862,6 +1885,13 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
 
   watch(
     () => targetForm.nginxSiteManaged,
+    () => {
+      if (targetModalOpen.value) syncTargetNginxSiteManagedState();
+    }
+  );
+
+  watch(
+    () => targetForm.applicationKind,
     () => {
       if (targetModalOpen.value) syncTargetNginxSiteManagedState();
     }

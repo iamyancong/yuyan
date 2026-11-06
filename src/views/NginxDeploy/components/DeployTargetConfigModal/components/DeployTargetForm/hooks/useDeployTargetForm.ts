@@ -20,6 +20,11 @@ import {
   parseNginxListenPorts,
   resolveListenPortSuggestion,
 } from '../../../../../hooks/nginxListenSyncPolicy.ts';
+import {
+  normalizeApplicationKind,
+  resolveApplicationKind,
+  shouldShowListenPort,
+} from '../../../../../hooks/applicationKindPolicy.ts';
 import { confirmListenPortSync } from '../../../../../hooks/listenPortSyncPrompt';
 import type { DeployTargetFormEmits, DeployTargetFormProps } from '../constant.ts';
 
@@ -36,6 +41,10 @@ export function useDeployTargetForm(
   const formRef = ref<FormilyRef | null>(null);
   const isExplorerOpen = ref(false);
   const occupiedMap = ref<Record<string, string>>({});
+
+  /** 表单挂载时（该组件随弹窗 v-if 挂载）或 targetId 切换时捕获的已保存 applicationKind */
+  const baselineKind = ref(normalizeApplicationKind(props.form.applicationKind));
+  const detectedKind = ref<'main' | 'micro' | ''>('');
 
   /** 全局服务器列表上下文 */
   const { servers } = useNginxDeployContext();
@@ -92,9 +101,60 @@ export function useDeployTargetForm(
     occupiedMap.value = map || {};
   };
 
-  /** 访问地址端口与监听端口的不一致检测（后端目标不展示监听端口，也不提示） */
+  /** 将识别或已保存的 applicationKind 写回 formModel（值未变时不写，避免循环） */
+  const updateResolvedKind = () => {
+    const resolved = resolveApplicationKind({
+      detected: detectedKind.value,
+      saved: baselineKind.value,
+    });
+    if ((formModel.value.applicationKind || '') !== resolved) {
+      formModel.value = {
+        ...formModel.value,
+        applicationKind: resolved,
+      };
+    }
+  };
+
+  /** 响应子组件回流的探测应用类型 */
+  const handleDetectedKind = (kind: 'main' | 'micro' | '') => {
+    detectedKind.value = normalizeApplicationKind(kind);
+    updateResolvedKind();
+  };
+
+  let lastTargetId = props.targetId;
+
+  watch(
+    () => props.targetId,
+    () => {
+      baselineKind.value = normalizeApplicationKind(props.form.applicationKind);
+      updateResolvedKind();
+      queueMicrotask(() => {
+        lastTargetId = props.targetId;
+      });
+    }
+  );
+
+  watch(
+    () => props.form.projectId,
+    () => {
+      if (props.targetId !== lastTargetId) {
+        return;
+      }
+      baselineKind.value = '';
+      detectedKind.value = '';
+      updateResolvedKind();
+    }
+  );
+
+  /** 访问地址端口与监听端口的不一致检测（后端目标或微应用隐藏端口时返回 null，不展示提示） */
   const listenPortMismatch = computed(() => {
-    if (formModel.value.projectType === 'backend') return null;
+    if (!shouldShowListenPort({
+      projectType: formModel.value.projectType,
+      applicationKind: formModel.value.applicationKind,
+      nginxSiteManaged: formModel.value.nginxSiteManaged,
+    })) {
+      return null;
+    }
     return getVisitUrlPortMismatch(formModel.value.visitUrl, formModel.value.listenPort);
   });
 
@@ -189,6 +249,7 @@ export function useDeployTargetForm(
     closeExplorer,
     handleSelectPath,
     handleUpdateOccupiedMap,
+    handleDetectedKind,
     listenPortSyncHint,
     listenPortSyncValue,
     listenPortPlaceholder,

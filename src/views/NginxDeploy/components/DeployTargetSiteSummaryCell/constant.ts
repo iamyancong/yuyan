@@ -91,7 +91,9 @@ export function getSiteReadinessStatus(target?: DeployTarget | null): TargetSite
   const instanceName = matchedPort && Number(matchedPort[2]) === listenPort ? matchedPort[1] : rawInstanceName;
   // 列表仍以监听端口为准；只有记录了监听端口且和访问地址端口对不上时才给轻量提示，
   // 未记录监听端口的历史目标（多为已有实例下的微应用）不提示，避免满屏标记。
-  const portMismatch = listenPort ? getVisitUrlPortMismatch(target.visitUrl, listenPort) : null;
+  // 已记录为微应用且非平台托管站点的目标，portMismatchHint 置空（与编辑表单一致，不再提示同步端口）。
+  const isMicroWithoutManagedSite = target.applicationKind === 'micro' && !target.nginxSiteManaged;
+  const portMismatch = (!isMicroWithoutManagedSite && listenPort) ? getVisitUrlPortMismatch(target.visitUrl, listenPort) : null;
   const portMismatchHint = portMismatch ? formatSummaryPortMismatchHint(portMismatch) : '';
 
   // 2. 可访问优先判定：只看 visitUrl 是否有效，彻底解耦端口和域名要求

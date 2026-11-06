@@ -834,6 +834,7 @@ function mapTarget(row) {
     nginxInstanceId: Number(row.nginx_instance_id || 0),
     nginxInstanceName: row.nginx_instance_name || '',
     nginxInstanceType: row.nginx_instance_type || '',
+    applicationKind: row.application_kind === 'main' || row.application_kind === 'micro' ? row.application_kind : '',
     listenPort: Number(row.listen_port || 0),
     nginxServerName: row.server_name || '',
     enableNginxTest: Boolean(row.enable_nginx_test),
@@ -1831,6 +1832,7 @@ export async function getDeployDb() {
       repository_url TEXT NOT NULL,
       default_branch TEXT NOT NULL DEFAULT 'dev',
       env_name TEXT NOT NULL,
+      application_kind TEXT NOT NULL DEFAULT '',
       server_id INTEGER NOT NULL,
       nginx_instance_id INTEGER,
       deploy_root TEXT NOT NULL,
@@ -1959,6 +1961,9 @@ export async function getDeployDb() {
   }
   if (!targetColumns.includes('preserve_sub_dirs')) {
     dbInstance.exec("ALTER TABLE deploy_targets ADD COLUMN preserve_sub_dirs TEXT NOT NULL DEFAULT ''");
+  }
+  if (!targetColumns.includes('application_kind')) {
+    dbInstance.exec("ALTER TABLE deploy_targets ADD COLUMN application_kind TEXT NOT NULL DEFAULT ''");
   }
   if (!targetColumns.includes('upload_strategy')) {
     dbInstance.exec("ALTER TABLE deploy_targets ADD COLUMN upload_strategy TEXT NOT NULL DEFAULT 'overlayKeepAssets'");
@@ -3572,14 +3577,17 @@ export async function createTarget(payload) {
   const duplicateBackendPort = getDuplicateBackendPort(db, safePayload);
   if (duplicateBackendPort) throw new Error(`端口 ${safePayload.serverPort} 已被后端项目 ${duplicateBackendPort.project_name} 占用`);
   const ts = now();
+  const nextApplicationKind = !isBackend && (payload.applicationKind === 'main' || payload.applicationKind === 'micro')
+    ? payload.applicationKind
+    : '';
   const result = db
     .prepare(
       `INSERT INTO deploy_targets
-       (project_id, project_source, project_name, project_description, project_path, repository_url, default_branch, env_name, server_id, deploy_root,
+       (project_id, project_source, project_name, project_description, project_path, repository_url, default_branch, env_name, application_kind, server_id, deploy_root,
         nginx_instance_id, nginx_conf_path, nginx_site_managed, listen_port, server_name, enable_nginx_test, enable_nginx_reload, install_command, build_command, build_memory_mb, artifact_dir,
         preserve_sub_dirs, upload_strategy, visit_url, remark, created_by, created_at, updated_at,
         project_type, jdk_id, stop_command, start_command, health_check_url)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       Number(safePayload.projectId),
@@ -3590,6 +3598,7 @@ export async function createTarget(payload) {
       safePayload.repositoryUrl,
       safePayload.defaultBranch || 'dev',
       safePayload.envName,
+      nextApplicationKind,
       Number(safePayload.serverId),
       safePayload.deployRoot,
       safePayload.nginxInstanceId ? Number(safePayload.nginxInstanceId) : null,
@@ -3630,7 +3639,7 @@ export async function createTarget(payload) {
 export async function updateTarget(id, payload) {
   const db = await getDeployDb();
   const teamId = getRequestTeamId();
-  const currentTargetRow = db.prepare('SELECT id, build_memory_mb, deploy_root, upload_strategy, cleanup_confirmed_fingerprint, cleanup_confirmed_at, cleanup_confirmed_by, cleanup_confirmed_scope FROM deploy_targets WHERE id = ? AND team_id = ?').get(Number(id), teamId);
+  const currentTargetRow = db.prepare('SELECT id, build_memory_mb, deploy_root, upload_strategy, cleanup_confirmed_fingerprint, cleanup_confirmed_at, cleanup_confirmed_by, cleanup_confirmed_scope, application_kind FROM deploy_targets WHERE id = ? AND team_id = ?').get(Number(id), teamId);
   if (!currentTargetRow) return null;
   if (!hasServer(db, payload.serverId)) {
     throw new Error('部署服务器不存在，请先新增独立服务器');
@@ -3669,6 +3678,13 @@ export async function updateTarget(id, payload) {
     ? Math.min(Math.max(0, Math.floor(Number(payload.buildMemoryMb || 0) || 0)), 65536)
     : Math.min(Math.max(0, Math.floor(Number(currentTargetRow.build_memory_mb || 0) || 0)), 65536);
 
+  const normalizeKind = (k) => (k === 'main' || k === 'micro' ? k : '');
+  const nextApplicationKind = isBackend
+    ? ''
+    : (payload.applicationKind !== undefined
+      ? normalizeKind(payload.applicationKind)
+      : normalizeKind(currentTargetRow.application_kind));
+
   // 部署根目录或上传策略被修改时清空已确认的清理指纹与历史名单
   const isRootChanged = currentTargetRow.deploy_root !== safePayload.deployRoot;
   const isStrategyChanged = (currentTargetRow.upload_strategy || 'overlayKeepAssets') !== (safePayload.uploadStrategy || 'overlayKeepAssets');
@@ -3680,7 +3696,7 @@ export async function updateTarget(id, payload) {
 
   db.prepare(
     `UPDATE deploy_targets
-     SET project_id = ?, project_source = ?, project_name = ?, project_description = ?, project_path = ?, repository_url = ?, default_branch = ?, env_name = ?,
+     SET project_id = ?, project_source = ?, project_name = ?, project_description = ?, project_path = ?, repository_url = ?, default_branch = ?, env_name = ?, application_kind = ?,
          server_id = ?, nginx_instance_id = ?, deploy_root = ?, nginx_conf_path = ?, nginx_site_managed = ?, listen_port = ?, server_name = ?,
          enable_nginx_test = ?, enable_nginx_reload = ?, install_command = ?, build_command = ?, build_memory_mb = ?,
          artifact_dir = ?, preserve_sub_dirs = ?, upload_strategy = ?, visit_url = ?, remark = ?, updated_at = ?,
@@ -3696,6 +3712,7 @@ export async function updateTarget(id, payload) {
     safePayload.repositoryUrl,
     safePayload.defaultBranch || 'dev',
     safePayload.envName,
+    nextApplicationKind,
     Number(safePayload.serverId),
     safePayload.nginxInstanceId ? Number(safePayload.nginxInstanceId) : null,
     safePayload.deployRoot,

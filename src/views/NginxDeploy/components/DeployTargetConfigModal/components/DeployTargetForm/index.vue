@@ -26,6 +26,7 @@ const {
   closeExplorer,
   handleSelectPath,
   handleUpdateOccupiedMap,
+  handleDetectedKind,
   listenPortSyncHint,
   listenPortSyncValue,
   listenPortPlaceholder,
@@ -135,6 +136,7 @@ const {
             @update:model-value="onChange"
             @toggle-explorer="toggleExplorer"
             @update:occupied-map="handleUpdateOccupiedMap"
+            @detected-kind="handleDetectedKind"
           />
         </template>
         <template #fsExplorerSlot>

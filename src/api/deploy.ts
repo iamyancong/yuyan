@@ -227,6 +227,8 @@ export interface DeployServerPayload {
   remark?: string;
 }
 
+export type DeployApplicationKind = 'main' | 'micro' | '';
+
 /** 部署配置 */
 export interface DeployTarget {
   id: number;
@@ -238,6 +240,7 @@ export interface DeployTarget {
   repositoryUrl: string;
   defaultBranch: string;
   envName: string;
+  applicationKind?: DeployApplicationKind;
   serverId: number;
   serverName: string;
   serverHost: string;
@@ -314,6 +317,7 @@ export interface DeployTargetPayload {
   repositoryUrl: string;
   defaultBranch: string;
   envName: string;
+  applicationKind?: DeployApplicationKind;
   serverId?: number;
   nginxInstanceId: number;
   deployRoot: string;

@@ -917,6 +917,69 @@ export const getRepoTree = async (
 };
 
 /**
+ * 列取仓库指定目录的直接子条目（非递归）；目录不存在时安静返回 null。
+ * @param projectId GitLab 项目 ID
+ * @param pathParam 目录相对路径（根目录传空字符串）
+ * @param ref 分支或 Commit
+ * @returns 目录条目列表，目录不存在时返回 null
+ */
+export const listRepositoryDirectory = async (
+  projectId: number,
+  pathParam: string,
+  ref: string
+): Promise<RepoTreeItem[] | null> => {
+  const normalizedPath = String(pathParam || '').trim().replace(/^\/+|\/+$/g, '');
+  const MAX_PAGES = 20;
+  const PER_PAGE = 100;
+  const items: RepoTreeItem[] = [];
+  let currentPage = 1;
+
+  try {
+    while (currentPage <= MAX_PAGES) {
+      const params: Record<string, any> = {
+        ref,
+        recursive: false,
+        page: currentPage,
+        per_page: PER_PAGE,
+      };
+      if (normalizedPath) {
+        params.path = normalizedPath;
+      }
+
+      const response = await gitlabClient.get<RepoTreeItem[]>(`/projects/${projectId}/repository/tree`, {
+        params,
+      });
+
+      const data = response.data;
+      if (Array.isArray(data)) {
+        items.push(...data);
+      }
+
+      const nextPageHeader = response.headers?.['x-next-page'];
+      if (nextPageHeader) {
+        const parsedNext = parseInt(String(nextPageHeader), 10);
+        if (parsedNext && parsedNext > currentPage) {
+          currentPage = parsedNext;
+          continue;
+        }
+        break;
+      }
+
+      if (!Array.isArray(data) || data.length < PER_PAGE) {
+        break;
+      }
+      currentPage += 1;
+    }
+    return items;
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+};
+
+/**
  * 读取文件内容（自动 base64 解码）
  */
 // 以 UTF-8 正确解码 base64，避免中文乱码
