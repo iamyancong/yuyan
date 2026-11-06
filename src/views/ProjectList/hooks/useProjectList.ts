@@ -1,8 +1,8 @@
 import { ref, reactive, watch } from 'vue';
 import message from 'ant-design-vue/es/message';
 import type { YTableColumn } from '@yss-ui/components/lite';
-import { useAuth } from '@/composables/useAuth';
-import { getProjects, type GitLabProject, type GroupTreeNode, type ProjectSearchParams } from '@/api/gitlab';
+import { useAuth, waitForAuthReady } from '@/composables/useAuth';
+import { getProjectsWithTotal, type GitLabProject, type GroupTreeNode, type ProjectSearchParams } from '@/api/gitlab';
 
 export const useProjectList = () => {
   // 认证
@@ -52,12 +52,15 @@ export const useProjectList = () => {
   });
 
   // 行为
+  /** 请求序号：快速连搜/翻页时丢弃过期响应，防止旧数据覆盖新结果。 */
+  let searchSeq = 0;
   const handleSearch = async (resetCurrent = true) => {
     if (!isLoggedIn.value) {
       window.dispatchEvent(new CustomEvent('show-login-modal'));
       return;
     }
 
+    const seq = ++searchSeq;
     loading.value = true;
     if (resetCurrent) pagination.current = 1;
 
@@ -87,7 +90,8 @@ export const useProjectList = () => {
         params.search = (params.search ? params.search + ' ' : '') + creator;
       }
 
-      const projects = await getProjects(params);
+      const { items: projects, total: headerTotal } = await getProjectsWithTotal(params);
+      if (seq !== searchSeq) return; // 已有更新的请求发出，丢弃本次过期响应
 
       let filtered = projects;
       if (searchForm.id) {
@@ -105,17 +109,22 @@ export const useProjectList = () => {
       }
 
       dataSource.value = filtered;
-      pagination.total = filtered.length; // 简化：真实项目可从响应头读取
+      // 总数取自 GitLab x-total 响应头；存在客户端二次过滤（id 精确匹配 / tagList）时退化为本页数量，
+      // 否则 total 会按未过滤口径高估（GitLab 列表接口不支持 id 精确过滤参数）
+      const hasClientSideFilter =
+        Boolean(searchForm.id) || Boolean((searchForm as any).tagList && String((searchForm as any).tagList).trim());
+      pagination.total = hasClientSideFilter ? filtered.length : headerTotal;
 
       if (filtered.length === 0) {
         message.info('未找到符合条件的项目');
-      } else {
-        message.success(`找到 ${filtered.length} 个项目`);
       }
     } catch (error: any) {
+      if (seq !== searchSeq) return;
       message.error(error?.response?.data?.message || error?.message || '搜索失败');
     } finally {
-      loading.value = false;
+      if (seq === searchSeq) {
+        loading.value = false;
+      }
     }
   };
 
@@ -135,6 +144,8 @@ export const useProjectList = () => {
 
   /** 清空当前项目列表数据 */
   const clearData = () => {
+    searchSeq++;
+    loading.value = false;
     dataSource.value = [];
     expandedRowKeys.value = [];
     pagination.total = 0;
@@ -186,14 +197,8 @@ export const useProjectList = () => {
   };
 
   const initAuthCheck = async () => {
-    if (authLoading.value) {
-      let attempts = 0;
-      const maxAttempts = 50;
-      while (authLoading.value && attempts < maxAttempts) {
-        await new Promise((r) => setTimeout(r, 100));
-        attempts += 1;
-      }
-    }
+    // 等待认证初始化完成（watch 驱动，替代原先的 100ms 忙等轮询）
+    await waitForAuthReady();
     authReady = true;
     return isLoggedIn.value;
   };

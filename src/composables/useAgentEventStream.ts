@@ -8,7 +8,7 @@ import {
   type AgentPendingApproval,
 } from '@/api/agent';
 import { isTauri } from '@/utils/env';
-import { getAgentReconnectDelay } from '@/api/agentStream';
+import { getAgentReconnectDelay, waitForReconnect } from '@/api/agentStream';
 
 const pendingApprovalsState = ref<AgentPendingApproval[]>([]);
 const eventSequenceState = ref(0);
@@ -20,21 +20,6 @@ let streamGeneration = 0;
 let streamAbortController: AbortController | null = null;
 let pendingRefreshPromise: Promise<boolean> | null = null;
 let pendingRefreshGeneration = -1;
-
-/** 等待下一次重连，Abort 后提前结束。 */
-function waitForReconnect(delayMs: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) {
-      resolve();
-      return;
-    }
-    const timer = window.setTimeout(resolve, delayMs);
-    signal.addEventListener('abort', () => {
-      window.clearTimeout(timer);
-      resolve();
-    }, { once: true });
-  });
-}
 
 /** 静默刷新轻量待审批任务，并合并并发刷新请求。 */
 export async function refreshAgentPendingApprovals(generation = streamGeneration): Promise<boolean> {

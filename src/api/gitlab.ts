@@ -1,4 +1,5 @@
 import axios, { type AxiosResponse } from 'axios';
+import { resolveProjectsPageTotal } from './gitlabPaging';
 
 // GitLab 用户接口定义
 export interface GitLabUser {
@@ -418,6 +419,32 @@ export const getProjects = async (params: ProjectSearchParams = {}): Promise<Git
   try {
     const response = await gitlabClient.get<GitLabProject[]>('/projects', { params });
     return response.data;
+  } catch (error) {
+    console.error('获取项目列表失败:', error);
+    throw error;
+  }
+};
+
+/**
+ * 获取项目列表及 GitLab 分页总数（读取 x-total / x-next-page 响应头）。
+ * @param params 搜索参数
+ * @returns 项目列表与全量匹配总数
+ */
+export const getProjectsWithTotal = async (
+  params: ProjectSearchParams = {}
+): Promise<{ items: GitLabProject[]; total: number }> => {
+  try {
+    const response = await gitlabClient.get<GitLabProject[]>('/projects', { params });
+    return {
+      items: response.data,
+      total: resolveProjectsPageTotal({
+        rawTotal: response.headers?.['x-total'],
+        rawNextPage: response.headers?.['x-next-page'],
+        page: params.page,
+        perPage: params.per_page,
+        itemsOnPage: response.data.length,
+      }),
+    };
   } catch (error) {
     console.error('获取项目列表失败:', error);
     throw error;

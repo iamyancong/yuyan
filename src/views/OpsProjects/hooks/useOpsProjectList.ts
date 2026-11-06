@@ -1,8 +1,8 @@
 import { ref, reactive, watch } from 'vue';
 import message from 'ant-design-vue/es/message';
 import type { YTableColumn } from '@yss-ui/components/lite';
-import { useAuth } from '@/composables/useAuth';
-import { getProjects, type GitLabProject, type GroupTreeNode, type ProjectSearchParams } from '@/api/gitlab';
+import { useAuth, waitForAuthReady } from '@/composables/useAuth';
+import { getProjectsWithTotal, type GitLabProject, type GroupTreeNode, type ProjectSearchParams } from '@/api/gitlab';
 
 const CREATED_TOPIC = 'yuyan-ops';
 
@@ -57,19 +57,22 @@ export const useOpsProjectList = () => {
   });
 
   // 行为
+  /** 请求序号：快速连搜/翻页时丢弃过期响应，防止旧数据覆盖新结果。 */
+  let searchSeq = 0;
   const handleSearch = async (resetCurrent = true) => {
     if (!isLoggedIn.value) {
       window.dispatchEvent(new CustomEvent('show-login-modal'));
       return;
     }
 
+    const seq = ++searchSeq;
     loading.value = true;
     if (resetCurrent) pagination.current = 1;
 
     try {
       const params: ProjectSearchParams & { membership?: boolean; topic?: string } = {
         page: pagination.current,
-        per_page: Math.max(20, pagination.pageSize || 20),
+        per_page: pagination.pageSize,
         order_by: searchForm.order_by || 'last_activity_at',
         sort: searchForm.sort || 'desc',
       };
@@ -82,7 +85,8 @@ export const useOpsProjectList = () => {
       if (typeof (searchForm as any).membership !== 'undefined') params.membership = (searchForm as any).membership;
       if ((searchForm as any).topic) (params as any).topic = (searchForm as any).topic;
 
-      const projects = await getProjects(params);
+      const { items: projects, total: headerTotal } = await getProjectsWithTotal(params);
+      if (seq !== searchSeq) return; // 已有更新的请求发出，丢弃本次过期响应
 
       // 只保留带有 yuyan-ops 主题/标签 的项目
       let filtered = projects.filter(
@@ -96,17 +100,22 @@ export const useOpsProjectList = () => {
       }
 
       dataSource.value = filtered;
-      pagination.total = filtered.length;
+      // 总数取自 GitLab x-total 响应头（topic 已随请求下推到服务端）；
+      // 但 id 精确过滤只在客户端生效（GitLab 列表接口不支持 id 参数），
+      // topic 被清空时 CREATED_TOPIC 兜底过滤也只在客户端生效，两种场景退化为本页数量
+      const hasClientSideFilter = Boolean(searchForm.id) || (searchForm as any).topic !== CREATED_TOPIC;
+      pagination.total = hasClientSideFilter ? filtered.length : headerTotal;
 
       if (filtered.length === 0) {
         message.info('暂无由平台创建的项目');
-      } else {
-        message.success(`共 ${filtered.length} 个平台创建项目`);
       }
     } catch (error: any) {
+      if (seq !== searchSeq) return;
       message.error(error?.response?.data?.message || error?.message || '搜索失败');
     } finally {
-      loading.value = false;
+      if (seq === searchSeq) {
+        loading.value = false;
+      }
     }
   };
 
@@ -126,6 +135,8 @@ export const useOpsProjectList = () => {
 
   /** 清空当前平台应用列表数据 */
   const clearData = () => {
+    searchSeq++;
+    loading.value = false;
     dataSource.value = [];
     expandedRowKeys.value = [];
     pagination.total = 0;
@@ -156,14 +167,8 @@ export const useOpsProjectList = () => {
   };
 
   const initAuthCheck = async () => {
-    if (authLoading.value) {
-      let attempts = 0;
-      const maxAttempts = 50;
-      while (authLoading.value && attempts < maxAttempts) {
-        await new Promise((r) => setTimeout(r, 100));
-        attempts += 1;
-      }
-    }
+    // watch 驱动等待认证初始化完成，替代原先的忙等轮询
+    await waitForAuthReady();
     authReady = true;
     return isLoggedIn.value;
   };

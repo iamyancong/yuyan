@@ -277,24 +277,12 @@ export function useScaffold() {
 
   // 当认证状态改变时，自动填充token和host
   const updateAuthFields = async () => {
-    console.log('更新认证字段，当前认证状态:', {
-      isLoggedIn: isLoggedIn.value,
-      hasToken: !!authState.value.token,
-      hasHost: !!authState.value.host,
-      isAuthenticated: isAuthenticated.value,
-    });
-
     if (isAuthenticated.value) {
       const newToken = authState.value.token || '';
       const newHost = authState.value.host || form.gitlabHost;
 
       // 只有当值真正发生变化时才更新，避免不必要的响应式触发
       if (form.gitlabToken !== newToken || form.gitlabHost !== newHost) {
-        console.log('更新表单 GitLab 认证字段:', {
-          hostChanged: form.gitlabHost !== newHost,
-          tokenChanged: form.gitlabToken !== newToken,
-          hasToken: Boolean(newToken),
-        });
         form.gitlabToken = newToken;
         form.gitlabHost = newHost;
 
@@ -304,7 +292,6 @@ export function useScaffold() {
     } else {
       // 未登录状态下，清空token但保留host
       if (form.gitlabToken !== '') {
-        console.log('清空认证Token');
         form.gitlabToken = '';
         await nextTick();
       }
@@ -312,35 +299,14 @@ export function useScaffold() {
   };
 
   onMounted(async () => {
-    console.log('组件挂载，初始化认证字段');
     await updateAuthFields();
   });
 
-  // 监听认证状态变化 - 使用更精确的监听
+  // 登录态、Token、Host 任一变化时同步认证字段。
+  // 合并为单一组合 watch：登录瞬间三者会同时变化，分开监听会让 updateAuthFields 重复执行多次。
   watch(
-    () => isLoggedIn.value,
-    async (newLoggedIn, oldLoggedIn) => {
-      console.log('登录状态变化:', { oldLoggedIn, newLoggedIn });
-      await updateAuthFields();
-    }
-  );
-
-  // 监听认证状态的token和host变化
-  watch(
-    () => authState.value.token,
-    async (newToken, oldToken) => {
-      console.log('认证 Token 状态变化:', {
-        hadToken: Boolean(oldToken),
-        hasToken: Boolean(newToken),
-      });
-      await updateAuthFields();
-    }
-  );
-
-  watch(
-    () => authState.value.host,
-    async (newHost, oldHost) => {
-      console.log('认证Host变化:', { oldHost, newHost });
+    () => [isLoggedIn.value, authState.value.token, authState.value.host] as const,
+    async () => {
       await updateAuthFields();
     }
   );
@@ -357,8 +323,7 @@ export function useScaffold() {
   );
 
   // 监听全局认证状态变化事件
-  const handleAuthChange = async (event: CustomEvent) => {
-    console.log('收到全局认证状态变化事件:', event.detail);
+  const handleAuthChange = async () => {
     await nextTick();
     await updateAuthFields();
   };

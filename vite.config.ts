@@ -25,7 +25,15 @@ const createYssHeavyComponentsIsolationPlugin = (): Plugin => {
     },
     load(id) {
       if (id === YSS_HEAVY_COMPONENTS_RESOLVED_ID) {
-        return `export { YMonaco, YMonacoDiff } from '@yss-ui/components';`;
+        // 语言支持包与自定义高亮随本虚拟模块（即首个 Monaco 消费者）按需加载，
+        // 避免 Monaco 被打进入口 chunk。原先在 main.ts 中的静态引入已迁移至此。
+        return `
+          import 'monaco-editor/esm/vs/language/json/monaco.contribution';
+          import 'monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution';
+          import { configureMonacoJsonHighlight } from '@/utils/monacoJsonHighlight';
+          configureMonacoJsonHighlight();
+          export { YMonaco, YMonacoDiff } from '@yss-ui/components';
+        `;
       }
       return null;
     },

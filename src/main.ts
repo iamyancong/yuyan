@@ -3,18 +3,15 @@ import App from './App.vue';
 import router from './router';
 import { configureGlobalMessage } from '@/utils/globalMessage';
 import { configureGlobalNotification } from '@/utils/globalNotification';
-import { configureMonacoJsonHighlight } from '@/utils/monacoJsonHighlight';
 import { configureGlobalInputBehavior } from '@/utils/configureGlobalInputBehavior';
 import 'ant-design-vue/dist/reset.css';
 import '@yss-ui/components/dist/style.css';
 
-// 导入 Monaco Editor 的语言支持包以启用语法高亮（防止被 Rollup 摇树优化摇掉）
-import 'monaco-editor/esm/vs/language/json/monaco.contribution';
-import 'monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution';
+// Monaco 及其语言支持包（json/yaml）不再随入口加载，改由 virtual:yss-heavy-components
+// 在首个 Monaco 消费者（配置/日志/对比抽屉）加载时按需注册，见 vite.config.ts。
 
 configureGlobalMessage();
 configureGlobalNotification();
-configureMonacoJsonHighlight();
 configureGlobalInputBehavior();
 const app = createApp(App);
 app.use(router);

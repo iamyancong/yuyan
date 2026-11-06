@@ -17,6 +17,14 @@ import {
   type SecureAccountState,
 } from '@/services/secureAuth';
 import { isTauri } from '@/utils/env';
+import { waitForCondition } from '@/utils/waitForCondition';
+import {
+  classifyGitlabUserError,
+  decideCheckAuthRemoteAction,
+  shouldAbortAuthGeneration,
+  type RemoteUserKind,
+  type CheckAuthRemoteDecision,
+} from './authCheckPolicy';
 
 /** 雨燕展示用户。 */
 export interface User {
@@ -289,8 +297,24 @@ const login = async (token: string, host: string, rememberMe = false): Promise<b
   }
 };
 
+let authGeneration = 0;
+
+/** 获取远程 GitLab 用户信息并对异常分类。 */
+const fetchRemoteUser = async (): Promise<
+  | { kind: 'ok'; user: User }
+  | { kind: 'unauthorized' }
+  | { kind: 'unavailable' }
+> => {
+  try {
+    return { kind: 'ok', user: mapGitlabUser(await getGitLabCurrentUser()) };
+  } catch (error) {
+    return { kind: classifyGitlabUserError(error) };
+  }
+};
+
 /** 登出并清除中央会话、Agent 内存凭据和平台安全存储账号状态。 */
 const logout = async (silent = false) => {
+  ++authGeneration;
   const secureState = await loadActiveSecureAccount().catch(() => null);
   if (secureState) await logoutCentralSession(secureState).catch(() => undefined);
   await clearActiveSecureAccount().catch(() => undefined);
@@ -310,6 +334,8 @@ const logout = async (silent = false) => {
     accessExpiresAt: '',
     centralSessionReady: false,
   };
+  // 再加一代，丢掉登出过程中新启动、但仍拿着旧存储快照的 checkAuth
+  ++authGeneration;
   await syncAgentIdentity();
   await nextTick();
   if (!silent) message.info('已退出登录');
@@ -317,21 +343,39 @@ const logout = async (silent = false) => {
 
 /** 从平台安全存储恢复当前设备的活动账号。 */
 const checkAuth = async () => {
+  const gen = ++authGeneration;
   authState.value.loading = true;
-  const stored = await loadActiveSecureAccount(true).catch(() => null);
-  if (!stored) {
-    authState.value.loading = false;
-    return false;
+  try {
+    const stored = await loadActiveSecureAccount(true).catch(() => null);
+    if (shouldAbortAuthGeneration(gen, authGeneration)) return false;
+    if (!stored) return false;
+
+    setGitLabToken(stored.gitlabToken);
+    setGitLabHost(stored.gitlabHost);
+    updateGitLabClient(stored.gitlabHost);
+
+    const refreshed = await refreshSecureSessionIfNeeded(stored);
+    if (shouldAbortAuthGeneration(gen, authGeneration)) return false;
+
+    const remote = await fetchRemoteUser();
+    if (shouldAbortAuthGeneration(gen, authGeneration)) return false;
+
+    const decision = decideCheckAuthRemoteAction(remote.kind);
+    if (decision.action === 'logout') {
+      await logout(true);
+      return false;
+    }
+
+    // apply-remote → 用远程用户；apply-cached → 省略远程用户做离线恢复
+    applySecureState(refreshed, decision.action === 'apply-remote' && remote.kind === 'ok' ? remote.user : null);
+    await syncAgentIdentity();
+    await nextTick();
+    return true;
+  } finally {
+    if (!shouldAbortAuthGeneration(gen, authGeneration)) {
+      authState.value.loading = false;
+    }
   }
-  setGitLabToken(stored.gitlabToken);
-  setGitLabHost(stored.gitlabHost);
-  updateGitLabClient(stored.gitlabHost);
-  const refreshed = await refreshSecureSessionIfNeeded(stored);
-  const remoteUser = await getCurrentUser();
-  applySecureState(refreshed, remoteUser);
-  await syncAgentIdentity();
-  await nextTick();
-  return true;
 };
 
 /** 只初始化一次安全认证。 */
@@ -402,4 +446,24 @@ export const useAuth = () => {
     initAuth,
     getCurrentUser,
   };
+};
+
+/**
+ * 等待首次认证初始化完成。
+ * @description watch 驱动，替代各页面自行实现的「最多 5 秒、100ms 步进」忙等轮询。
+ * 带超时兜底：中央服务 refresh 走裸 fetch 无超时，若服务端挂起，无限等待会把页面卡死——
+ * 超时后按「未登录」降级继续（与旧忙等实现的 5s 上限语义一致，上限放宽至覆盖 GitLab 15s 请求超时）。
+ * @param timeoutMs 超时毫秒数，默认 15s
+ * @returns 初始化完成（或超时降级）后 resolve
+ */
+export const waitForAuthReady = async (timeoutMs = 15_000): Promise<void> => {
+  await waitForCondition(() => !authState.value.loading, timeoutMs);
+};
+
+export {
+  classifyGitlabUserError,
+  decideCheckAuthRemoteAction,
+  shouldAbortAuthGeneration,
+  type RemoteUserKind,
+  type CheckAuthRemoteDecision,
 };

@@ -1,5 +1,5 @@
 import { computed } from 'vue';
-import { useAuth } from '@/composables/useAuth';
+import { useAuth, waitForAuthReady } from '@/composables/useAuth';
 
 /**
  * 管理部署中心认证检查与登录弹窗兜底。
@@ -20,14 +20,8 @@ export function useNginxDeployAuth() {
    * @returns 当前是否已登录
    */
   const initAuthCheck = async () => {
-    if (authLoading.value) {
-      let attempts = 0;
-      const maxAttempts = 50;
-      while (authLoading.value && attempts < maxAttempts) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        attempts += 1;
-      }
-    }
+    // watch 驱动等待认证初始化完成，替代原先的忙等轮询
+    await waitForAuthReady();
     authReady = true;
     return isLoggedIn.value;
   };

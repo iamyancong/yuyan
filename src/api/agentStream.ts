@@ -77,3 +77,28 @@ export function createSseFrameParser(onFrame: (frame: SseFrame) => void): SseFra
     },
   };
 }
+
+/**
+ * 等待下一次重连，Abort 后提前结束。
+ * @description 两条结束路径（正常超时 / 外部中止）都会移除 abort 监听，
+ * 避免在同一 lifetimeController 上随重连次数堆积闭包。
+ * @param delayMs 等待时长（毫秒）
+ * @param signal 中止信号
+ */
+export function waitForReconnect(delayMs: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, delayMs);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}

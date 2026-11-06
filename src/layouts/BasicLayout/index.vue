@@ -81,7 +81,6 @@ const handleShowContactModal = () => {
 
 /** 打开独立 AI 控制中心并确保平台设置抽屉关闭。 */
 const handleOpenAiIntegration = () => {
-  console.log('[BasicLayout] 打开 AI 控制中心抽屉');
   openDrawer.value = false;
   openAiDrawer.value = true;
 };
@@ -90,11 +89,9 @@ const handleOpenAiIntegration = () => {
  * 登录成功后的回调函数，用于确保刷新全局用户状态与 UI
  */
 const handleLoginSuccess = async () => {
-  console.log('用户登录成功，刷新认证状态');
   await nextTick();
-  
+
   if (!isLoggedIn.value || !currentUser.value) {
-    console.log('认证状态未正确更新，手动刷新');
     await checkAuth();
   }
   
