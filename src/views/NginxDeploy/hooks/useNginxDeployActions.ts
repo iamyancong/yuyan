@@ -1,10 +1,9 @@
-import { computed, type Ref, ref, onActivated, onDeactivated, onMounted, onUnmounted } from 'vue';
+import { computed, type Ref } from 'vue';
 import type { YTableActionConfig } from '@yss-ui/components/lite';
 import type { DeployProgressSnapshot, DeployRecord, DeployServer, DeployTarget } from '@/api/deploy';
 import { useNginxDeployContext } from './useNginxDeployContext';
 import { isTauri } from '@/utils/env';
 import message from 'ant-design-vue/es/message';
-import axios from 'axios';
 
 /** 部署中心表格操作 Hook 参数 */
 interface UseNginxDeployActionsParams {
@@ -57,44 +56,6 @@ export function useNginxDeployActions(params?: UseNginxDeployActionsParams) {
   const openNginxRuntime = params?.openNginxRuntime;
   const openEditServer = params?.openEditServer;
   const deleteServer = params?.deleteServer;
-
-  const isLocalHelperOnline = ref(true);
-  let heartbeatTimer: number | null = null;
-
-  /** 检查本机辅助服务是否在线 */
-  const checkHeartbeat = async () => {
-    if (isTauri()) {
-      isLocalHelperOnline.value = true;
-      return;
-    }
-    try {
-      await axios.get('http://127.0.0.1:3100/health', { timeout: 1000 });
-      isLocalHelperOnline.value = true;
-    } catch {
-      isLocalHelperOnline.value = false;
-    }
-  };
-
-  /** 启动本机辅助服务心跳 */
-  const startHeartbeat = () => {
-    if (heartbeatTimer !== null) return;
-    void checkHeartbeat();
-    heartbeatTimer = window.setInterval(() => {
-      void checkHeartbeat();
-    }, 5000);
-  };
-
-  /** 停止本机辅助服务心跳 */
-  const stopHeartbeat = () => {
-    if (heartbeatTimer === null) return;
-    window.clearInterval(heartbeatTimer);
-    heartbeatTimer = null;
-  };
-
-  onMounted(startHeartbeat);
-  onActivated(startHeartbeat);
-  onDeactivated(stopHeartbeat);
-  onUnmounted(stopHeartbeat);
 
   const openPublishConfirm = params?.openPublishConfirm;
   const openOpenApi = params?.openOpenApi;

@@ -60,7 +60,9 @@ export function useDeployRecordTab(options: UseDeployRecordTabOptions) {
           activeTimer = null;
         }, 220);
       }
-    }
+    },
+    // 非激活 Tab 已被销毁，重新挂载时 active 已为 true，需要立即执行一次延迟重算
+    { immediate: true }
   );
 
   onBeforeUnmount(() => {

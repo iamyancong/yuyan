@@ -2,6 +2,7 @@ import { computed, onActivated, onDeactivated, onScopeDispose, ref, watch, type 
 import { registerCentralDataRefreshHandler } from '@/services/centralDataRefresh';
 import type { NginxDeployTabKey, RefreshActiveTabOptions } from '../types';
 import { getErrorMessage } from '../utils';
+import { decideTabRefresh } from './tabRefreshPolicy';
 
 import { useCentralRefreshRecovery } from './useCentralRefreshRecovery';
 import { useNginxDeployContext } from './useNginxDeployContext';
@@ -77,6 +78,8 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
     records: false,
   });
   const snapshotKeys = ref<Partial<Record<NginxDeployTabKey, string>>>({});
+  /** 各 Tab 最近一次成功加载时间；0 表示被其他 Tab 的强制刷新（通常是写操作）标记为过期，切回时需后台静默刷新。 */
+  let tabLoadedAt: Partial<Record<NginxDeployTabKey, number>> = {};
   const queryKey = () => `${activeTabKey.value}:${params?.getRefreshKey?.() || ''}`;
   const hasSnapshot = computed(() => snapshotKeys.value[activeTabKey.value] !== undefined);
   const loading = computed(() => ['loading', 'recovering'].includes(recovery.status.value) && showLoading.value && !refreshError.value);
@@ -103,6 +106,7 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
     refreshOnActivation = false;
     showLoading.value = false;
     snapshotKeys.value = {};
+    tabLoadedAt = {};
     tabLoadedFlags.value = {
       targets: false,
       servers: false,
@@ -140,6 +144,13 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
         signal.throwIfAborted();
         tabLoadedFlags.value[tabKey] = true;
         snapshotKeys.value[tabKey] = queryKey();
+        if (options.force) {
+          /** 强制刷新多由写操作触发，其他 Tab 的缓存可能已过时：保留数据，但切回时后台静默刷新一次。 */
+          (Object.keys(tabLoadedAt) as NginxDeployTabKey[]).forEach((key) => {
+            if (key !== tabKey) tabLoadedAt[key] = 0;
+          });
+        }
+        tabLoadedAt[tabKey] = Date.now();
       }, { quiet: Boolean(options.silent) });
     } catch (error) {
       if (options.propagateError) throw error;
@@ -151,7 +162,8 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
   /**
    * 切换页面 Tab。
    * 1. 立即更新 activeTabKey，驱动 Tab 标签高亮与底部指示线以 60fps 满帧极速滑动；
-   * 2. 延迟 180ms（待 Tab 切换动效完全平稳落定）后再触发表格 loading 与后端数据拉取，
+   * 2. 已加载且筛选条件未变的 Tab 直接复用缓存，不再展示 loading；缓存较旧时仅后台静默刷新一次；
+   * 3. 首次进入或筛选条件已变化时，延迟 180ms（待 Tab 切换动效完全平稳落定）后再触发表格 loading 与后端数据拉取，
    *    彻底杜绝数据请求与响应式 patch 争抢动画黄金帧导致的掉帧与顿挫感。
    * @param key Tab Key
    */
@@ -165,9 +177,20 @@ export function useNginxDeployLifecycle(params?: UseNginxDeployLifecycleParams) 
       tabRefreshTimer = null;
     }
 
+    const tabKey = activeTabKey.value;
+    const decision = decideTabRefresh({
+      loaded: tabLoadedFlags.value[tabKey],
+      snapshotKey: snapshotKeys.value[tabKey],
+      currentKey: queryKey(),
+      loadedAt: tabLoadedAt[tabKey],
+      now: Date.now(),
+    });
+    if (decision === 'none') return;
+
     tabRefreshTimer = setTimeout(() => {
       tabRefreshTimer = null;
-      void refreshActiveTab({ force: true }).catch(reportRefreshError);
+      const options = decision === 'force' ? { force: true } : { silent: true };
+      void refreshActiveTab(options).catch(reportRefreshError);
     }, 180);
   };
 

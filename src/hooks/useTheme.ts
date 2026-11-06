@@ -1,5 +1,6 @@
 import { computed, reactive, toRefs, watch } from 'vue';
 import { theme as antdTheme } from 'ant-design-vue';
+import { syncAppIcon } from './appIconSync';
 
 export type MenuTheme = 'light' | 'dark';
 
@@ -31,27 +32,6 @@ function loadFromStorage(): ThemeState {
 }
 
 const themeState = reactive<ThemeState>(loadFromStorage());
-
-/**
- * 动态同步应用图标（暗夜霓虹玻璃 / 晨曦微光白玉）
- * @param isDark 是否为暗黑模式
- */
-function syncAppIcon(isDark: boolean) {
-  try {
-    // 动态引入 tauri api，兼容浏览器开发环境
-    import('@tauri-apps/api/core')
-      .then(({ invoke }) => {
-        invoke('change_app_icon', { isDark }).catch((err) => {
-          console.error('Failed to change app icon via Tauri:', err);
-        });
-      })
-      .catch(() => {
-        // 非 Tauri 环境下忽略
-      });
-  } catch {
-    // 忽略
-  }
-}
 
 /**
  * 将关键主题语义同步为全局 CSS 变量，供自定义样式使用

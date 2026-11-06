@@ -74,10 +74,11 @@ const handleOpenNginxRuntime = async () => {
           message="暂无中央部署数据"
           description="当前共享部署工作区还没有服务器部署目标。"
         />
+        <!-- 只挂载当前 Tab 的重型表格：数据与筛选条件均在父级状态中，切回时由生命周期 Hook 按缓存决定是否刷新 -->
         <a-tabs
           v-model:activeKey="lifecycleState.activeTabKey.value"
           :animated="{ inkBar: true, tabPane: false }"
-          :destroy-inactive-tab-pane="false"
+          destroy-inactive-tab-pane
           @change="lifecycleState.handleTabChange"
         >
         <a-tab-pane key="targets" tab="部署目标">
