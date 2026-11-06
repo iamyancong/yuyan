@@ -171,8 +171,7 @@ const loadRoot = async () => {
     );
 
     treeData.value = convertToTreeNodes(items);
-  } catch (error) {
-    console.error('加载文件树失败:', error);
+  } catch {
     message.error('加载文件树失败');
   } finally {
     loading.value = false;
@@ -225,8 +224,7 @@ const onLoadData = (treeNode: any) => {
       treeData.value = updateTreeData(treeData.value, folderPath, children);
 
       resolve();
-    } catch (error) {
-      console.error('加载子目录失败:', error);
+    } catch {
       message.error('加载失败');
       resolve();
     }
@@ -300,8 +298,7 @@ const onSelect = async (keys: string[], info: any) => {
     if (monacoRef.value?.setLanguage) {
       monacoRef.value.setLanguage(lang);
     }
-  } catch (error) {
-    console.error('预览失败:', error);
+  } catch {
     previewContent.value = '预览失败，无法读取文件内容';
   } finally {
     previewLoading.value = false;

@@ -128,7 +128,6 @@ export const isWindowFocused = async (): Promise<boolean> => {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       const focused = await invoke<boolean>('is_desktop_window_focused');
-      console.info('[DeployNotification] 桌面端 Rust 窗口聚焦与进程激活检测结果:', focused);
       return Boolean(focused);
     } catch (error) {
       console.warn('[DeployNotification] is_desktop_window_focused 检查异常，降级回退到 Web 检测:', error);
@@ -138,9 +137,7 @@ export const isWindowFocused = async (): Promise<boolean> => {
   // 2. Web 浏览器环境下，结合 document.hasFocus 与 visibilityState
   const hasDocumentFocus = typeof document.hasFocus === 'function' ? document.hasFocus() : true;
   const isDocumentVisible = document.visibilityState === 'visible';
-  const focused = Boolean(hasDocumentFocus && isDocumentVisible);
-  console.info('[DeployNotification] Web 窗口聚焦检测结果:', focused, { hasDocumentFocus, isDocumentVisible });
-  return focused;
+  return Boolean(hasDocumentFocus && isDocumentVisible);
 };
 
 /**
@@ -215,7 +212,6 @@ export const clearDeployNotificationHistory = (): void => {
 export const notifyDeployResult = async (options: DeployNotificationOptions): Promise<boolean> => {
   // 1. 校验用户开关
   if (!isDeployNotificationEnabled()) {
-    console.info('[DeployNotification] 用户未开启部署通知开关，跳过通知发送');
     return false;
   }
 
@@ -223,7 +219,6 @@ export const notifyDeployResult = async (options: DeployNotificationOptions): Pr
   if (!options.force) {
     const focused = await isWindowFocused();
     if (focused) {
-      console.info('[DeployNotification] 应用处于前台聚焦激活态，跳过系统通知以避免打扰');
       return false;
     }
   }
@@ -231,7 +226,6 @@ export const notifyDeployResult = async (options: DeployNotificationOptions): Pr
   // 3. 校验任务防重幂等
   const deployKey = options.deployId ? String(options.deployId) : undefined;
   if (deployKey && notifiedDeployIds.has(deployKey)) {
-    console.info('[DeployNotification] 任务已在防重缓存中，跳过重复通知:', deployKey);
     return false;
   }
 
@@ -257,7 +251,6 @@ export const notifyDeployResult = async (options: DeployNotificationOptions): Pr
         },
       });
       recordNotifiedDeployId(deployKey);
-      console.info('[DeployNotification] C4D 3D 玻璃拟态跨桌面全局浮窗唤起成功:', { title, body });
       return true;
     } catch (error) {
       console.warn('[DeployNotification] show_floating_notification 唤起异常，降级至原生系统通知:', error);
@@ -313,9 +306,6 @@ const trackWebNotification = (notification: any): void => {
 
         trackWebNotification(notification);
 
-        notification.onshow = () => {
-          console.info('[DeployNotification] Web 桌面系统通知已展示:', { title, body });
-        };
         notification.onerror = (err: any) => {
           console.warn('[DeployNotification] Web 桌面系统通知展示异常，请检查操作系统或浏览器权限:', err);
         };
@@ -327,10 +317,8 @@ const trackWebNotification = (notification: any): void => {
           }
         };
         recordNotifiedDeployId(deployKey);
-        console.info('[DeployNotification] Web 桌面系统通知已成功派发给浏览器:', { title, body });
         return true;
       }
-      console.info('[DeployNotification] Web 桌面通知未获得权限:', permission);
     } catch (error) {
       console.warn('[DeployNotification] 发送 Web 桌面通知失败，静默降级:', error);
     }

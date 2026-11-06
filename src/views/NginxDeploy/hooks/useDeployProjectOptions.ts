@@ -335,8 +335,8 @@ export function useDeployProjectOptions() {
           searchProjectsBySource[normalizedSource] = filtered;
           filtered.forEach((p) => pinnedProjectsMap.set(p.id, p));
         }
-      } catch (error) {
-        console.error('[useDeployProjectOptions] 搜索 GitLab 项目失败:', error);
+      } catch {
+        // 搜索失败时静默重置 loading，避免控制台刷屏
       } finally {
         if (currentSeq === searchRequestSeq) {
           searchLoading.value = false;

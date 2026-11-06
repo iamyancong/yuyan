@@ -136,7 +136,6 @@ export const useGitOpsForm = (params: {
               const bestMatch = similarDirs[0];
               params.customDirName.value = bestMatch.dir;
               suggestedDir.value = bestMatch;
-              console.log(`检测到相似目录: ${bestMatch.dir}, 相似度: ${(bestMatch.similarity * 100).toFixed(0)}%`);
             }
           }
         } catch {}

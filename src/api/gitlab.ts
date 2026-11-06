@@ -416,13 +416,8 @@ gitlabClient.interceptors.response.use(
  * @returns 项目列表
  */
 export const getProjects = async (params: ProjectSearchParams = {}): Promise<GitLabProject[]> => {
-  try {
-    const response = await gitlabClient.get<GitLabProject[]>('/projects', { params });
-    return response.data;
-  } catch (error) {
-    console.error('获取项目列表失败:', error);
-    throw error;
-  }
+  const response = await gitlabClient.get<GitLabProject[]>('/projects', { params });
+  return response.data;
 };
 
 /**
@@ -433,22 +428,17 @@ export const getProjects = async (params: ProjectSearchParams = {}): Promise<Git
 export const getProjectsWithTotal = async (
   params: ProjectSearchParams = {}
 ): Promise<{ items: GitLabProject[]; total: number }> => {
-  try {
-    const response = await gitlabClient.get<GitLabProject[]>('/projects', { params });
-    return {
-      items: response.data,
-      total: resolveProjectsPageTotal({
-        rawTotal: response.headers?.['x-total'],
-        rawNextPage: response.headers?.['x-next-page'],
-        page: params.page,
-        perPage: params.per_page,
-        itemsOnPage: response.data.length,
-      }),
-    };
-  } catch (error) {
-    console.error('获取项目列表失败:', error);
-    throw error;
-  }
+  const response = await gitlabClient.get<GitLabProject[]>('/projects', { params });
+  return {
+    items: response.data,
+    total: resolveProjectsPageTotal({
+      rawTotal: response.headers?.['x-total'],
+      rawNextPage: response.headers?.['x-next-page'],
+      page: params.page,
+      perPage: params.per_page,
+      itemsOnPage: response.data.length,
+    }),
+  };
 };
 
 /**
@@ -457,13 +447,8 @@ export const getProjectsWithTotal = async (
  * @returns 项目详情
  */
 export const getProject = async (projectId: number): Promise<GitLabProject> => {
-  try {
-    const response = await gitlabClient.get<GitLabProject>(`/projects/${projectId}`);
-    return response.data;
-  } catch (error) {
-    console.error('获取项目详情失败:', error);
-    throw error;
-  }
+  const response = await gitlabClient.get<GitLabProject>(`/projects/${projectId}`);
+  return response.data;
 };
 
 /**
@@ -472,13 +457,8 @@ export const getProject = async (projectId: number): Promise<GitLabProject> => {
  * @returns 项目数组
  */
 export const getProjectById = async (projectId: number): Promise<GitLabProject[]> => {
-  try {
-    const project = await getProject(projectId);
-    return [project];
-  } catch (error) {
-    console.error('根据ID获取项目失败:', error);
-    throw error;
-  }
+  const project = await getProject(projectId);
+  return [project];
 };
 
 /**
@@ -487,75 +467,49 @@ export const getProjectById = async (projectId: number): Promise<GitLabProject[]
  * @returns 分组列表
  */
 export const getGroups = async (params: GitLabGroupSearchParams = {}): Promise<GitLabGroup[]> => {
-  try {
-    const response = await gitlabClient.get<GitLabGroup[]>('/groups', { params });
-    return response.data;
-  } catch (error) {
-    console.error('获取分组列表失败:', error);
-    throw error;
-  }
+  const response = await gitlabClient.get<GitLabGroup[]>('/groups', { params });
+  return response.data;
 };
 
 /**
  * 获取指定分组详情
  */
 export const getGroupById = async (groupId: number): Promise<GitLabGroup> => {
-  try {
-    const response = await gitlabClient.get<GitLabGroup>(`/groups/${groupId}`);
-    return response.data as unknown as GitLabGroup;
-  } catch (error) {
-    console.error('获取分组详情失败:', error);
-    throw error;
-  }
+  const response = await gitlabClient.get<GitLabGroup>(`/groups/${groupId}`);
+  return response.data as unknown as GitLabGroup;
 };
 
 /**
  * 通过 full_path 获取分组详情（GitLab 支持用路径作为 id）
  */
 export const getGroupByPath = async (fullPath: string): Promise<GitLabGroup> => {
-  try {
-    // 需要对路径进行 URL 编码，形如 group%2Fsubgroup
-    const encoded = encodeURIComponent(fullPath);
-    const response = await gitlabClient.get<GitLabGroup>(`/groups/${encoded}`);
-    return response.data as unknown as GitLabGroup;
-  } catch (error) {
-    console.error('根据 full_path 获取分组详情失败:', error);
-    throw error;
-  }
+  const encoded = encodeURIComponent(fullPath);
+  const response = await gitlabClient.get<GitLabGroup>(`/groups/${encoded}`);
+  return response.data as unknown as GitLabGroup;
 };
 
 /**
  * 获取顶层分组（不包含子分组）
  */
 export const getTopLevelGroups = async (params: any = {}): Promise<GitLabGroup[]> => {
-  try {
-    const result = await fetchGitLabPagedList<GitLabGroup>(
-      '/groups',
-      { all_available: true, top_level_only: true, with_projects: false, per_page: 100, ...params },
-      5
-    );
-    return result.items;
-  } catch (error) {
-    console.error('获取顶层分组失败:', error);
-    throw error;
-  }
+  const result = await fetchGitLabPagedList<GitLabGroup>(
+    '/groups',
+    { all_available: true, top_level_only: true, with_projects: false, per_page: 100, ...params },
+    5
+  );
+  return result.items;
 };
 
 /**
  * 获取某个分组的直接子分组
  */
 export const getGroupSubgroups = async (groupId: number, params: any = {}): Promise<GitLabGroup[]> => {
-  try {
-    const result = await fetchGitLabPagedList<GitLabGroup>(
-      `/groups/${groupId}/subgroups`,
-      { all_available: true, with_projects: false, per_page: 100, ...params },
-      5
-    );
-    return result.items;
-  } catch (error) {
-    console.error('获取子分组失败:', error);
-    throw error;
-  }
+  const result = await fetchGitLabPagedList<GitLabGroup>(
+    `/groups/${groupId}/subgroups`,
+    { all_available: true, with_projects: false, per_page: 100, ...params },
+    5
+  );
+  return result.items;
 };
 
 /**
@@ -570,21 +524,16 @@ export const searchNamespacesPaged = async (
   params: GitLabNamespaceSearchParams = {},
   maxPages = 5
 ): Promise<GitLabPagedList<GitLabNamespace>> => {
-  try {
-    return await fetchGitLabPagedList<GitLabNamespace>(
-      '/namespaces',
-      {
-        search: keyword,
-        full_path_search: true,
-        per_page: 100,
-        ...params,
-      },
-      maxPages
-    );
-  } catch (error) {
-    console.error('搜索命名空间失败:', error);
-    throw error;
-  }
+  return await fetchGitLabPagedList<GitLabNamespace>(
+    '/namespaces',
+    {
+      search: keyword,
+      full_path_search: true,
+      per_page: 100,
+      ...params,
+    },
+    maxPages
+  );
 };
 
 /**
@@ -610,35 +559,25 @@ export const searchGroupsPaged = async (
   params: GitLabGroupSearchParams = {},
   maxPages = 5
 ): Promise<GitLabPagedList<GitLabGroup>> => {
-  try {
-    return await fetchGitLabPagedList<GitLabGroup>(
-      '/groups',
-      {
-        search: keyword,
-        all_available: true,
-        with_projects: false,
-        per_page: 100,
-        ...params,
-      },
-      maxPages
-    );
-  } catch (error) {
-    console.error('搜索分组失败:', error);
-    throw error;
-  }
+  return await fetchGitLabPagedList<GitLabGroup>(
+    '/groups',
+    {
+      search: keyword,
+      all_available: true,
+      with_projects: false,
+      per_page: 100,
+      ...params,
+    },
+    maxPages
+  );
 };
 
 /**
  * 根据 ID 获取命名空间详情
  */
 export const getNamespaceById = async (id: number): Promise<GitLabNamespace> => {
-  try {
-    const response = await gitlabClient.get<GitLabNamespace>(`/namespaces/${id}`);
-    return response.data;
-  } catch (error) {
-    console.error('获取命名空间详情失败:', error);
-    throw error;
-  }
+  const response = await gitlabClient.get<GitLabNamespace>(`/namespaces/${id}`);
+  return response.data;
 };
 
 /**
@@ -646,37 +585,32 @@ export const getNamespaceById = async (id: number): Promise<GitLabNamespace> => 
  * @returns 分组树形结构
  */
 export const getGroupTree = async (): Promise<GroupTreeNode[]> => {
-  try {
-    const response = await gitlabClient.get<GroupTreeNode[]>('/groups', {
-      params: { all_available: true, top_level_only: true },
-    });
+  const response = await gitlabClient.get<GroupTreeNode[]>('/groups', {
+    params: { all_available: true, top_level_only: true },
+  });
 
-    // 构建树形结构
-    const buildTree = (groups: GroupTreeNode[], parentId: number | null = null, level = 0): GroupTreeNode[] => {
-      return groups
-        .filter((group) => group.parent_id === parentId)
-        .map((group) => ({
-          ...group,
-          level,
-          isGroup: true,
-          children: buildTree(groups, group.id, level + 1),
-          isExpanded: level < 2, // 前两级默认展开
-          hasChildren: groups.some((g) => g.parent_id === group.id),
-        }));
-    };
+  // 构建树形结构
+  const buildTree = (groups: GroupTreeNode[], parentId: number | null = null, level = 0): GroupTreeNode[] => {
+    return groups
+      .filter((group) => group.parent_id === parentId)
+      .map((group) => ({
+        ...group,
+        level,
+        isGroup: true,
+        children: buildTree(groups, group.id, level + 1),
+        isExpanded: level < 2, // 前两级默认展开
+        hasChildren: groups.some((g) => g.parent_id === group.id),
+      }));
+  };
 
-    const treeData = buildTree(response.data);
+  const treeData = buildTree(response.data);
 
-    // 为每个分组添加项目
-    for (const group of treeData) {
-      await addProjectsToGroup(group);
-    }
-
-    return treeData;
-  } catch (error) {
-    console.error('获取分组树失败:', error);
-    throw error;
+  // 为每个分组添加项目
+  for (const group of treeData) {
+    await addProjectsToGroup(group);
   }
+
+  return treeData;
 };
 
 /**
@@ -695,8 +629,8 @@ const addProjectsToGroup = async (group: GroupTreeNode): Promise<void> => {
       // 这里需要根据项目的命名空间路径来判断是否属于当前分组
       return project.namespace.full_path.startsWith(group.full_path);
     });
-  } catch (error) {
-    console.error(`为分组 ${group.name} 添加项目失败:`, error);
+  } catch {
+    // 忽略单分组项目补齐失败，不阻断整棵树展示
   }
 };
 
@@ -706,15 +640,10 @@ const addProjectsToGroup = async (group: GroupTreeNode): Promise<void> => {
  * @returns 匹配的项目列表
  */
 export const searchProjects = async (keyword: string): Promise<GitLabProject[]> => {
-  try {
-    const response = await gitlabClient.get<GitLabProject[]>('/projects', {
-      params: { search: keyword },
-    });
-    return response.data;
-  } catch (error) {
-    console.error('搜索项目失败:', error);
-    throw error;
-  }
+  const response = await gitlabClient.get<GitLabProject[]>('/projects', {
+    params: { search: keyword },
+  });
+  return response.data;
 };
 
 /**
@@ -723,13 +652,8 @@ export const searchProjects = async (keyword: string): Promise<GitLabProject[]> 
  * @returns 项目统计信息
  */
 export const getProjectStatistics = async (projectId: number) => {
-  try {
-    const response = await gitlabClient.get(`/projects/${projectId}/statistics`);
-    return response.data;
-  } catch (error) {
-    console.error('获取项目统计信息失败:', error);
-    throw error;
-  }
+  const response = await gitlabClient.get(`/projects/${projectId}/statistics`);
+  return response.data;
 };
 
 /**
@@ -785,13 +709,8 @@ export const getGitLabHost = (): string => {
  * @returns 当前用户信息
  */
 export const getCurrentUser = async (): Promise<GitLabUser> => {
-  try {
-    const response = await gitlabClient.get<GitLabUser>('/user');
-    return response.data;
-  } catch (error) {
-    console.error('获取当前用户信息失败:', error);
-    throw error;
-  }
+  const response = await gitlabClient.get<GitLabUser>('/user');
+  return response.data;
 };
 
 export default gitlabClient;
@@ -802,14 +721,9 @@ export default gitlabClient;
  * 根据 full_path 获取项目（GitLab 支持用路径作为 id）
  */
 export const getProjectByPath = async (fullPath: string): Promise<GitLabProject> => {
-  try {
-    const encoded = encodeURIComponent(fullPath);
-    const { data } = await gitlabClient.get<GitLabProject>(`/projects/${encoded}`);
-    return data;
-  } catch (error) {
-    console.error('根据 full_path 获取项目失败:', error);
-    throw error;
-  }
+  const encoded = encodeURIComponent(fullPath);
+  const { data } = await gitlabClient.get<GitLabProject>(`/projects/${encoded}`);
+  return data;
 };
 
 export interface GitLabBranch {
@@ -833,16 +747,11 @@ export interface GitLabBranchQuery {
  * @returns 分支列表
  */
 export const getBranches = async (projectId: number, query: GitLabBranchQuery = {}): Promise<GitLabBranch[]> => {
-  try {
-    const search = String(query.search || '').trim();
-    const { data } = await gitlabClient.get<GitLabBranch[]>(`/projects/${projectId}/repository/branches`, {
-      params: { per_page: query.perPage || 100, ...(search ? { search } : {}) },
-    });
-    return data;
-  } catch (error) {
-    console.error('获取分支列表失败:', error);
-    throw error;
-  }
+  const search = String(query.search || '').trim();
+  const { data } = await gitlabClient.get<GitLabBranch[]>(`/projects/${projectId}/repository/branches`, {
+    params: { per_page: query.perPage || 100, ...(search ? { search } : {}) },
+  });
+  return data;
 };
 
 /**
@@ -867,14 +776,8 @@ export const getBranch = async (projectId: number, branchName: string): Promise<
  * 创建分支（从指定 ref 创建）
  */
 export const createBranch = async (projectId: number, branch: string, ref: string): Promise<GitLabBranch> => {
-  try {
-    const { data } = await gitlabClient.post<GitLabBranch>(`/projects/${projectId}/repository/branches`, null, { params: { branch, ref } });
-    return data;
-  } catch (error) {
-    // 由调用方决定如何处理“已存在”等场景
-    console.error('创建分支失败:', error);
-    throw error;
-  }
+  const { data } = await gitlabClient.post<GitLabBranch>(`/projects/${projectId}/repository/branches`, null, { params: { branch, ref } });
+  return data;
 };
 
 export interface RepoTreeItem {
@@ -894,26 +797,16 @@ export const getRepoTree = async (
   page = 1,
   perPage = 100
 ): Promise<RepoTreeItem[]> => {
-  try {
-    const response = await gitlabClient.get<RepoTreeItem[]>(`/projects/${projectId}/repository/tree`, {
-      params: { path: pathParam, ref, recursive, page, per_page: perPage },
-    });
+  const response = await gitlabClient.get<RepoTreeItem[]>(`/projects/${projectId}/repository/tree`, {
+    params: { path: pathParam, ref, recursive, page, per_page: perPage },
+  });
 
-    // 防御性检查：确保返回数组
-    if (!response.data || !Array.isArray(response.data)) {
-      console.error('getRepoTree 返回数据异常:', {
-        status: response.status,
-        data: response.data,
-        url: response.config.url,
-      });
-      return [];
-    }
-
-    return response.data;
-  } catch (error) {
-    console.error('获取仓库树失败:', error);
-    throw error;
+  // 防御性检查：确保返回数组
+  if (!response.data || !Array.isArray(response.data)) {
+    return [];
   }
+
+  return response.data;
 };
 
 /**
@@ -1003,17 +896,12 @@ const decodeBase64Utf8 = (base64: string): string => {
 };
 
 export const getFileContent = async (projectId: number, filePath: string, ref: string): Promise<{ file_path: string; content: string }> => {
-  try {
-    const encoded = encodeURIComponent(filePath);
-    const { data } = await gitlabClient.get(`/projects/${projectId}/repository/files/${encoded}`, { params: { ref } });
-    const raw = (data as any).content;
-    const encoding = (data as any).encoding;
-    const decoded = encoding === 'base64' ? decodeBase64Utf8(raw) : raw;
-    return { file_path: (data as any).file_path as string, content: decoded as string };
-  } catch (error) {
-    console.error(`读取文件失败: ${filePath}`, error);
-    throw error;
-  }
+  const encoded = encodeURIComponent(filePath);
+  const { data } = await gitlabClient.get(`/projects/${projectId}/repository/files/${encoded}`, { params: { ref } });
+  const raw = (data as any).content;
+  const encoding = (data as any).encoding;
+  const decoded = encoding === 'base64' ? decodeBase64Utf8(raw) : raw;
+  return { file_path: (data as any).file_path as string, content: decoded as string };
 };
 
 /**
@@ -1047,14 +935,9 @@ export type CommitAction = {
 
 /** 批量提交变更 */
 export const createCommit = async (projectId: number, branch: string, commitMessage: string, actions: CommitAction[]) => {
-  try {
-    const payload = { branch, commit_message: commitMessage, actions };
-    const { data } = await gitlabClient.post(`/projects/${projectId}/repository/commits`, payload);
-    return data;
-  } catch (error) {
-    console.error('创建提交失败:', error);
-    throw error;
-  }
+  const payload = { branch, commit_message: commitMessage, actions };
+  const { data } = await gitlabClient.post(`/projects/${projectId}/repository/commits`, payload);
+  return data;
 };
 
 // ====== Merge Request 相关 ======
@@ -1081,11 +964,6 @@ export type CreateMergeRequestParams = {
 
 /** 创建 Merge Request */
 export const createMergeRequest = async (projectId: number, params: CreateMergeRequestParams): Promise<MergeRequestMinimal> => {
-  try {
-    const { data } = await gitlabClient.post<MergeRequestMinimal>(`/projects/${projectId}/merge_requests`, params);
-    return data;
-  } catch (error) {
-    console.error('创建 Merge Request 失败:', error);
-    throw error;
-  }
+  const { data } = await gitlabClient.post<MergeRequestMinimal>(`/projects/${projectId}/merge_requests`, params);
+  return data;
 };

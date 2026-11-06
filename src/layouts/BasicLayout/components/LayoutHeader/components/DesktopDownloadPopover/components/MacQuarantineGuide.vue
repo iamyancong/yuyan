@@ -34,8 +34,7 @@ const copyCommand = async () => {
     timer = setTimeout(() => {
       copied.value = false;
     }, 2000);
-  } catch (err) {
-    console.error('复制命令失败:', err);
+  } catch {
     message.error('复制失败，请手动选择复制');
   }
 };

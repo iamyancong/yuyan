@@ -69,8 +69,7 @@ export const useAboutInfo = () => {
         renderEngine: getRenderEngineInfo(),
         localServerStatus,
       };
-    } catch (error) {
-      console.error('获取关于系统诊断信息失败:', error);
+    } catch {
       message.error('无法读取桌面端环境诊断数据');
     } finally {
       infoLoading.value = false;
@@ -92,8 +91,7 @@ export const useAboutInfo = () => {
     try {
       await navigator.clipboard.writeText(infoText);
       message.success('诊断信息已成功复制到剪贴板');
-    } catch (err) {
-      console.error('复制失败:', err);
+    } catch {
       message.error('复制诊断信息失败，请手动选定复制');
     }
   };

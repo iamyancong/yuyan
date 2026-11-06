@@ -23,8 +23,7 @@ const copyToClipboard = async (command: string): Promise<boolean> => {
     const successful = document.execCommand('copy');
     document.body.removeChild(textarea);
     return successful;
-  } catch (e) {
-    console.error('[MacNotification] 复制失败:', e);
+  } catch {
     return false;
   }
 };

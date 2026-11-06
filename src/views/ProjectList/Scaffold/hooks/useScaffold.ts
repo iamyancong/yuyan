@@ -516,7 +516,6 @@ export function useScaffold() {
       message.success('创建成功');
     } catch (e: any) {
       if (controller.signal.aborted) return;
-      console.error('创建请求失败:', e);
       const errorMessage = e?.response?.data?.error || e?.message || '创建失败';
       failProgress(errorMessage);
       message.error({

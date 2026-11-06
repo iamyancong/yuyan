@@ -169,26 +169,13 @@ async function updateExistingTemplate() {
   }
 
   // 使用 fetch origin 获取远端全部更新，以保证目标分支与 fallback 分支均可用
-  const { stdout: fetchOut, stderr: fetchErr } = await runGit(
-    ['fetch', 'origin'],
-    { cwd: TEMPLATE_REPO_PATH },
-  );
-  if (fetchOut) console.log('[template-service] git fetch stdout:', fetchOut);
-  if (fetchErr) console.log('[template-service] git fetch stderr:', fetchErr);
+  await runGit(['fetch', 'origin'], { cwd: TEMPLATE_REPO_PATH });
 
   // 签出目标分支（支持 main 回退）
   const activeBranch = await checkoutBranchWithFallback(TEMPLATE_BRANCH, TEMPLATE_REPO_PATH);
 
-  const { stdout: resetOut, stderr: resetErr } = await runGit(
-    ['reset', '--hard', `origin/${activeBranch}`],
-    { cwd: TEMPLATE_REPO_PATH },
-  );
-  if (resetOut) console.log('[template-service] git reset stdout:', resetOut);
-  if (resetErr) console.log('[template-service] git reset stderr:', resetErr);
-
-  const { stdout: cleanOut, stderr: cleanErr } = await runGit(['clean', '-fd'], { cwd: TEMPLATE_REPO_PATH });
-  if (cleanOut) console.log('[template-service] git clean stdout:', cleanOut);
-  if (cleanErr) console.log('[template-service] git clean stderr:', cleanErr);
+  await runGit(['reset', '--hard', `origin/${activeBranch}`], { cwd: TEMPLATE_REPO_PATH });
+  await runGit(['clean', '-fd'], { cwd: TEMPLATE_REPO_PATH });
 
   console.log('[template-service] ✅ 模板更新成功');
   return true;
@@ -207,20 +194,13 @@ async function cloneTemplate() {
   const cloneUrl = buildAuthenticatedRepoUrl(TEMPLATE_REPO_URL, GITLAB_TOKEN, GITLAB_HOST);
 
   // 克隆仓库
-  const { stdout: cloneOut, stderr: cloneErr } = await runGit(['clone', cloneUrl, TEMPLATE_REPO_PATH]);
-  if (cloneOut) console.log('[template-service] git clone stdout:', cloneOut);
-  if (cloneErr) console.log('[template-service] git clone stderr:', cloneErr);
+  await runGit(['clone', cloneUrl, TEMPLATE_REPO_PATH]);
 
   // checkout 到指定分支（支持 main 回退）
   const activeBranch = await checkoutBranchWithFallback(TEMPLATE_BRANCH, TEMPLATE_REPO_PATH);
 
   // 确保工作树是最新的
-  const { stdout: resetOut, stderr: resetErr } = await runGit(
-    ['reset', '--hard', `origin/${activeBranch}`],
-    { cwd: TEMPLATE_REPO_PATH },
-  );
-  if (resetOut) console.log('[template-service] git reset stdout:', resetOut);
-  if (resetErr) console.log('[template-service] git reset stderr:', resetErr);
+  await runGit(['reset', '--hard', `origin/${activeBranch}`], { cwd: TEMPLATE_REPO_PATH });
 
   console.log('[template-service] ✅ 模板克隆成功');
   return true;

@@ -44,7 +44,6 @@ export function useLoginForm(emitSuccess: () => void, closeDialog: () => void) {
         message.error('登录失败，请检查令牌和服务器地址');
       }
     } catch (error: any) {
-      console.error('登录失败:', error);
       message.error(error?.response?.data?.message || error?.message || '登录失败');
     } finally {
       loading.value = false;

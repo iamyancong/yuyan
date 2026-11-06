@@ -1960,7 +1960,6 @@ async function getActiveLocalServerUrl(): Promise<string> {
     try {
       await axios.get(`${configuredUrl}/health`, { timeout: 1000 });
       activeLocalServerUrl = configuredUrl;
-      console.log(`[Port Detector] 使用 VITE_LOCAL_SERVER_URL 配置的本地辅助服务: ${configuredUrl}`);
       return activeLocalServerUrl;
     } catch (e) {
       console.warn('[Port Detector] VITE_LOCAL_SERVER_URL 配置的本地服务不可用，将尝试自动探测', e);
@@ -1979,7 +1978,6 @@ async function getActiveLocalServerUrl(): Promise<string> {
         const baseUrl = `http://127.0.0.1:${status.port}`;
         await axios.get(`${baseUrl}/health`, { timeout: 1200 });
         activeLocalServerUrl = baseUrl;
-        console.log(`[Port Detector] 本地辅助服务健康检查通过: ${baseUrl}`);
         return activeLocalServerUrl;
       }
       const detail = status?.lastError || status?.lastOutput || '本地服务仍在启动或已进入降级模式';

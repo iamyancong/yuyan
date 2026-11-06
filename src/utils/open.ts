@@ -14,9 +14,8 @@ export async function openExternal(url: string): Promise<void> {
     try {
       const { openUrl } = await import('@tauri-apps/plugin-opener');
       await openUrl(url);
-    } catch (error) {
-      console.error('Failed to open URL in Tauri:', error);
-      // 作为降级方案
+    } catch {
+      // 降级方案：使用浏览器标准能力打开
       window.open(url, '_blank', 'noopener,noreferrer');
     }
   } else {

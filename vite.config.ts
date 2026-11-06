@@ -100,6 +100,9 @@ export default defineConfig(({ mode }) => {
   const gitlabHostDefault = env.VITE_GITLAB_HOST || 'http://127.0.0.1:8081';
 
   return {
+    esbuild: {
+      drop: mode === 'production' ? ['console', 'debugger'] : [],
+    },
     optimizeDeps: {
       include: ['@yss-ui/components'],
     },

@@ -245,9 +245,6 @@ const syncNativeDownloadStatus = async (generation: number) => {
     applyNativeUpdateStatus(status);
     if (status.status === 'completed') {
       clearProgressPolling();
-      if (isCurrentNativeAsset(status)) {
-        console.log(`[Update] v${latestVersion.value} 已静默下载并校验完成，等待用户安装`);
-      }
       notifyDownloadFailure = false;
     } else if (status.status === 'error' || status.status === 'paused') {
       clearProgressPolling();

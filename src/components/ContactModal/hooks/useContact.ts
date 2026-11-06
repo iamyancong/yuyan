@@ -30,8 +30,7 @@ export const useContact = () => {
         `已复制邮箱【${contactInfo.value.email}】并唤起企微，直接在企微搜索框 ⌘V / Ctrl+V 粘贴即可联系！`,
         4
       );
-    } catch (error) {
-      console.error('唤起企微或复制邮箱失败:', error);
+    } catch {
       // 降级提示手动复制
       message.info(`邮箱已复制: ${contactInfo.value.email}，请在企业微信中搜索联系`);
     } finally {
@@ -52,8 +51,7 @@ export const useContact = () => {
     }
     try {
       await openExternal(contactInfo.value.cardUrl);
-    } catch (error) {
-      console.error('打开名片链接失败:', error);
+    } catch {
       message.error('打开企业微信名片链接失败');
     }
   };
@@ -66,8 +64,7 @@ export const useContact = () => {
     try {
       await navigator.clipboard.writeText(contactInfo.value.email);
       message.success(`邮箱已成功复制: ${contactInfo.value.email}`);
-    } catch (error) {
-      console.error('复制邮箱失败:', error);
+    } catch {
       message.error('复制邮箱失败，请手动选择复制');
     }
   };
@@ -80,8 +77,7 @@ export const useContact = () => {
     try {
       await navigator.clipboard.writeText(contactInfo.value.workNo);
       message.success(`工号已成功复制: ${contactInfo.value.workNo}`);
-    } catch (error) {
-      console.error('复制工号失败:', error);
+    } catch {
       message.error('复制工号失败，请手动选择复制');
     }
   };
