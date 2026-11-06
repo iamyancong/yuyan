@@ -61,7 +61,7 @@ export function useDeployRecordTab(options: UseDeployRecordTabOptions) {
         }, 220);
       }
     },
-    // 非激活 Tab 已被销毁，重新挂载时 active 已为 true，需要立即执行一次延迟重算
+    // 表格实例会保留，切回时容器从 display:none 恢复，需要再量一次高度
     { immediate: true }
   );
 

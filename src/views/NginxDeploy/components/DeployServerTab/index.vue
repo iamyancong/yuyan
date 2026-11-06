@@ -132,7 +132,7 @@ watch(
       }, 220);
     }
   },
-  // 非激活 Tab 已被销毁，重新挂载时 active 已为 true，需要立即执行一次延迟重算
+  // 表格实例会保留，切回时容器从 display:none 恢复，需要再量一次高度
   { immediate: true }
 );
 
@@ -261,14 +261,14 @@ const handleRowDragEnd = (params: any) => {
       @drop="handleAreaDrop"
       @dragend="handleAreaDragEnd"
     >
+      <!-- 不强制虚拟滚动。显式 min-height 关掉 YTable 在仅有 max-height 时的反复 recalculate，否则切 Tab 会卡住数秒。 -->
       <YTable
         v-model:data="tableData"
         :columns="serverColumns"
         :loading="loading"
         :action-config="actionConfig"
         :max-height="tableHeight"
-        :virtual-x-config="{ enabled: true, gt: 0 }"
-        :virtual-y-config="{ enabled: true, gt: 0 }"
+        :min-height="TABLE_MIN_HEIGHT"
         :row-config="{ keyField: 'id', useKey: true, drag: isDragable }"
         :row-dragable="isDragable"
         :pageable="false"

@@ -81,7 +81,7 @@ watch(
       }, 220);
     }
   },
-  // 非激活 Tab 已被销毁，重新挂载时 active 已为 true，需要立即执行一次延迟重算
+  // 表格实例会保留，切回时容器从 display:none 恢复，需要再量一次高度
   { immediate: true }
 );
 
@@ -129,16 +129,16 @@ const activeColumns = computed(() => {
       @reset="emit('reset')"
     />
     <div ref="tableAreaRef" class="nginx-deploy-table-area">
+      <!-- 不强制虚拟滚动。显式 min-height 关掉 YTable 在仅有 max-height 时的反复 recalculate，否则切 Tab 会卡住数秒。 -->
       <YTable
         :data="targets"
         :columns="activeColumns"
         :loading="loading"
         :action-config="actionConfig"
         :max-height="tableHeight"
+        :min-height="240"
         :cell-config="{ height: 58 }"
         :header-height="42"
-        :virtual-x-config="{ enabled: true, gt: 0 }"
-        :virtual-y-config="{ enabled: true, gt: 0 }"
         :row-config="{ keyField: 'id', useKey: true }"
         :pageable="false"
         size="small"

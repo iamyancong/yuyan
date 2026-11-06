@@ -5,7 +5,7 @@ import type { YTableActionConfig } from '@yss-ui/components/lite';
 import type { DeployRecord } from '@/api/deploy';
 import { getDeployRecordStatusColor, getDeployRecordStatusLabel, recordColumns } from '../../constant';
 import type { RecordProjectOption, RecordServerOption } from '../../types';
-import { TABLE_CELL_CONFIG, TABLE_HEADER_HEIGHT } from './constant';
+import { TABLE_CELL_CONFIG, TABLE_HEADER_HEIGHT, TABLE_MIN_HEIGHT } from './constant';
 import { useDeployRecordTab } from './hooks/useDeployRecordTab';
 import DeployRecordFilterBar from './components/DeployRecordFilterBar.vue';
 import NginxProjectNameCell from '../NginxProjectNameCell/index.vue';
@@ -87,16 +87,16 @@ const { tableAreaRef, tableHeight, getCommitUrl } = useDeployRecordTab({
       @refresh="emit('refresh')"
     />
     <div ref="tableAreaRef" class="nginx-deploy-table-area">
+      <!-- 不强制虚拟滚动。显式 min-height 关掉 YTable 在仅有 max-height 时的反复 recalculate，否则切 Tab 会卡住数秒。 -->
       <YTable
         :data="records"
         :columns="recordColumns"
         :loading="loading"
         :action-config="actionConfig"
         :max-height="tableHeight"
+        :min-height="TABLE_MIN_HEIGHT"
         :cell-config="TABLE_CELL_CONFIG"
         :header-height="TABLE_HEADER_HEIGHT"
-        :virtual-x-config="{ enabled: true, gt: 0 }"
-        :virtual-y-config="{ enabled: true, gt: 0 }"
         :row-config="{ keyField: 'id', useKey: true }"
         :pageable="true"
         :auto-flex-column="false"
