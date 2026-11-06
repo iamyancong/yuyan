@@ -1,0 +1,41 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>#29 · 服务器列表 SSH 健康芯片</title><link rel="stylesheet" href="file:///workspace/yuyan-wireframes/_base.css">
+<style>body{padding:20px}.shot-title{margin-bottom:8px;font-size:12px;color:#555}</style></head>
+<body>
+<div class="shot-title"><strong>#29 · 服务器列表 SSH 健康芯片</strong> · 低保真线框（非视觉稿）</div>
+
+<div class="page">
+  <div class="topbar"><div class="title">服务器管理</div></div>
+  <div class="main">
+    <table class="table">
+      <tr><th>名称 / 地址</th><th>SSH 状态</th><th>Nginx</th><th>操作</th></tr>
+      <tr>
+        <td><strong>prod-web</strong><div class="tiny mono">10.0.1.12:22</div></td>
+        <td><span class="chip"><span class="dot g"></span> SSH 可达 · 2 分钟前</span></td>
+        <td><span class="badge ok">运行中</span></td>
+        <td><button class="btn sm">检测连接</button></td>
+      </tr>
+      <tr>
+        <td><strong>staging-api</strong><div class="tiny mono">staging.example.com:22</div></td>
+        <td><span class="chip"><span class="dot r"></span> 鉴权失败 · 刚刚</span>
+          <div class="tiny" style="margin-top:4px;color:#a22">身份认证失败，请检查账号和凭据</div></td>
+        <td><span class="badge info">已接入</span></td>
+        <td><button class="btn sm">检测连接</button></td>
+      </tr>
+      <tr>
+        <td><strong>old-bastion</strong><div class="tiny mono">10.0.1.99:22</div></td>
+        <td><span class="chip"><span class="dot gray"></span> 未检测</span></td>
+        <td><span class="badge muted">无实例</span></td>
+        <td><button class="btn sm">检测连接</button></td>
+      </tr>
+      <tr>
+        <td><strong>edge-01</strong><div class="tiny mono">10.0.1.30:22</div></td>
+        <td><span class="chip"><span class="dot y"></span> 检测中…</span></td>
+        <td>—</td>
+        <td>—</td>
+      </tr>
+    </table>
+    <div class="anno">SSH 健康 ≠ Nginx 健康；文案加前缀区分</div>
+  </div>
+</div>
+
+</body></html>

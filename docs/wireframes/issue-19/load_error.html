@@ -1,0 +1,43 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>#19 · load_error — 加载失败（禁止伪装成空态）</title><link rel="stylesheet" href="file:///workspace/yuyan-wireframes/_base.css">
+<style>body{padding:20px}.shot-title{margin-bottom:8px;font-size:12px;color:#555}</style></head>
+<body>
+<div class="shot-title"><strong>#19 · load_error — 加载失败（禁止伪装成空态）</strong> · 低保真线框（非视觉稿）</div>
+
+<div class="page">
+  <div class="topbar"><div class="title">部署中心 / 部署目标</div><div><button class="btn sm">+ 新增目标</button></div></div>
+  <div class="layout">
+    <div class="sidebar">
+      <div class="nav active">部署目标</div>
+      <div class="nav">服务器管理</div>
+      <div class="nav">发布历史</div>
+    </div>
+    <div class="main">
+      <div class="banner err">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+          <div>
+            <strong>⚠ 无法加载部署目标</strong>
+            <div class="tiny" style="margin-top:4px">中央服务超时（已自动重试 2/3）· 诊断: <span class="mono">req_8f3a…</span>
+              <button class="btn sm" style="margin-left:6px">复制</button>
+            </div>
+          </div>
+          <div>
+            <button class="btn primary">重新加载</button><span class="cta-note">主 CTA</span>
+          </div>
+        </div>
+        <div class="tiny" style="margin-top:6px">次要：查看连接状态</div>
+      </div>
+      <div class="card" style="opacity:.55;position:relative">
+        <span class="badge warn" style="position:absolute;right:12px;top:12px">可能过期</span>
+        <div class="tiny">下方保留上次缓存列表 · 半透明</div>
+        <table class="table" style="margin-top:8px">
+          <tr><th>目标</th><th>环境</th><th>状态</th></tr>
+          <tr><td>prod-web</td><td>生产</td><td>● 成功</td></tr>
+          <tr><td>staging-api</td><td>预发</td><td>● 空闲</td></tr>
+        </table>
+      </div>
+      <div class="anno">对照：失败态不得渲染成「还没有部署目标」</div>
+    </div>
+  </div>
+</div>
+
+</body></html>
