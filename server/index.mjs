@@ -5,7 +5,6 @@
  */
 
 import express from 'express';
-import fs from 'node:fs';
 import crypto from 'node:crypto';
 import cors from 'cors';
 import history from 'connect-history-api-fallback';
@@ -36,6 +35,7 @@ import { getRequestContext, useSharedDeployWorkspace } from './services/request-
 import { closeDeployDb, getDeployDb, migrateCentralDeployWorkspace } from './services/deploy-store.mjs';
 import { closeAgentDb, getAgentDb } from './services/agent-store.mjs';
 import { timingSafeTokenEqual } from './services/agent-security.mjs';
+import { createAppUpdateETagResolver } from './services/app-update-etag.mjs';
 import { abortAppUpdateTransfers, abortRunningDeployTasks } from './controllers/deploy-controller.mjs';
 import { closeAllDeployEventStreams } from './services/deploy-event-service.mjs';
 import { startAppUpdatePreloadScheduler } from './services/app-update-release-service.mjs';
@@ -213,6 +213,12 @@ app.use(['/deploy-api', '/api/v2', '/agent-api', '/scaffold-api'], httpMetricsMi
 // 健康检查路由
 app.use('/health', healthRoutes);
 
+/**
+ * 安装包 sha256 → ETag 解析器（见 ./services/app-update-etag.mjs）。
+ * @description 缓存键绑定安装包与 .sha256 的 size、mtimeMs，同路径重发或摘要改写后自动失效；摘要缺失不缓存。
+ */
+const resolveAppUpdateETag = createAppUpdateETagResolver();
+
 /** 桌面端安装包静态分发，原生支持 Range、ETag 和断点续传。 */
 app.use(
   '/app-updates',
@@ -223,15 +229,11 @@ app.use(
     immutable: true,
     lastModified: true,
     maxAge: '1y',
-    setHeaders: (res, filePath) => {
+    setHeaders: (res, filePath, stat) => {
       res.setHeader('Content-Type', 'application/octet-stream');
       res.setHeader('X-Content-Type-Options', 'nosniff');
-      try {
-        const sha256 = fs.readFileSync(`${filePath}.sha256`, 'utf8').trim();
-        if (/^[a-f0-9]{64}$/i.test(sha256)) {
-          res.setHeader('ETag', `"sha256-${sha256.toLowerCase()}"`);
-        }
-      } catch {}
+      const etag = resolveAppUpdateETag(filePath, stat);
+      if (etag) res.setHeader('ETag', etag);
     },
   })
 );

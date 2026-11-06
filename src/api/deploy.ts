@@ -1,4 +1,5 @@
 import { DeployResultUnconfirmed, reconcileDeployTask } from './deployTaskRecovery';
+import { normalizeDeployHttpError } from './deployResponsePolicy';
 import { CENTRAL_LIST_READ_TIMEOUT_MS, isReadCancelled, isRecoverableReadError, recoverCentralRead } from '@/utils/centralReadRecovery';
 import axios from 'axios';
 import {
@@ -992,6 +993,9 @@ client.interceptors.request.use(async (config) => {
   Object.assign(config.headers, getDeployApiAuthHeaders());
   return config;
 });
+
+/** 归一化响应错误：回填服务端业务错误码与展示文案，保持网络与取消状态 */
+client.interceptors.response.use((r) => r, (error) => Promise.reject(normalizeDeployHttpError(error)));
 
 /** 提取 API 数据 */
 const unwrap = <T>(response: { data: { data: T } }) => response.data.data;

@@ -456,25 +456,39 @@ function normalizeDeployRecordVersionFields(db, options = {}) {
 
 /**
  * 获取每个部署目标当前生效的成功记录 ID。
+ * @description 用 ROW_NUMBER 窗口函数批量查询替代逐 target 查询（N+1），排序口径与原实现一致：
+ * started_at DESC, id DESC；只按传入的 target_id 过滤（与原实现相同），IN 列表按批分块防御 SQLite 变量上限。
  * @param {DatabaseSync} db - SQLite 数据库实例
  * @param {number[]} targetIds - 部署目标 ID 列表
  * @returns {Map<number, number>} 部署目标 ID 与当前成功记录 ID 映射
  */
-function getCurrentRecordIdsByTarget(db, targetIds) {
+export function getCurrentRecordIdsByTarget(db, targetIds) {
   const result = new Map();
   const ids = Array.from(new Set((targetIds || []).map(normalizeRecordId).filter(Boolean)));
   if (!ids.length) return result;
-  const stmt = db.prepare(
-    `SELECT id
-     FROM deploy_records
-     WHERE target_id = ? AND status = 'success'
-     ORDER BY started_at DESC, id DESC
-     LIMIT 1`
-  );
-  ids.forEach((targetId) => {
-    const row = stmt.get(targetId);
-    if (row?.id) result.set(targetId, Number(row.id));
-  });
+
+  const BATCH_SIZE = 500;
+  let stmt = null;
+  let stmtSize = 0;
+  for (let offset = 0; offset < ids.length; offset += BATCH_SIZE) {
+    const chunk = ids.slice(offset, offset + BATCH_SIZE);
+    if (!stmt || stmtSize !== chunk.length) {
+      stmt = db.prepare(
+        `SELECT target_id, id
+         FROM (
+           SELECT target_id, id,
+                  ROW_NUMBER() OVER (PARTITION BY target_id ORDER BY started_at DESC, id DESC) AS rn
+           FROM deploy_records
+           WHERE status = 'success' AND target_id IN (${chunk.map(() => '?').join(',')})
+         )
+         WHERE rn = 1`
+      );
+      stmtSize = chunk.length;
+    }
+    stmt.all(...chunk).forEach((row) => {
+      if (row?.id) result.set(Number(row.target_id), Number(row.id));
+    });
+  }
   return result;
 }
 
