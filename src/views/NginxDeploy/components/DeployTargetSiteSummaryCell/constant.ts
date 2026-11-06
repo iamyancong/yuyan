@@ -1,4 +1,5 @@
 import type { DeployTarget } from '@/api/deploy';
+import { formatSummaryPortMismatchHint, getVisitUrlPortMismatch } from '../../hooks/visitUrlPortPolicy.ts';
 
 /** 站点就绪状态类型 */
 export type TargetSiteStatus = 'unlinked' | 'incomplete' | 'accessible' | 'ready';
@@ -29,6 +30,8 @@ export interface TargetSiteMeta {
   showSiteConfig: boolean;
   /** 是否存在可展示的部署路径 */
   showDeploymentPath: boolean;
+  /** 访问地址端口与监听端口不一致时的提示；一致、未记录监听端口或无法比较时为空 */
+  portMismatchHint: string;
 }
 
 /**
@@ -50,6 +53,7 @@ export function getSiteReadinessStatus(target?: DeployTarget | null): TargetSite
       visitUrl: '',
       showSiteConfig: false,
       showDeploymentPath: false,
+      portMismatchHint: '',
     };
   }
 
@@ -67,6 +71,7 @@ export function getSiteReadinessStatus(target?: DeployTarget | null): TargetSite
       visitUrl: '',
       showSiteConfig: false,
       showDeploymentPath: Boolean(target.deployRoot?.trim()),
+      portMismatchHint: '',
     };
   }
 
@@ -84,6 +89,10 @@ export function getSiteReadinessStatus(target?: DeployTarget | null): TargetSite
   const rawInstanceName = target.nginxInstanceName || (target.nginxInstanceId ? `实例 #${target.nginxInstanceId}` : '');
   const matchedPort = listenPort ? rawInstanceName.match(/^(.*\S)\s+:(\d+)$/) : null;
   const instanceName = matchedPort && Number(matchedPort[2]) === listenPort ? matchedPort[1] : rawInstanceName;
+  // 列表仍以监听端口为准；只有记录了监听端口且和访问地址端口对不上时才给轻量提示，
+  // 未记录监听端口的历史目标（多为已有实例下的微应用）不提示，避免满屏标记。
+  const portMismatch = listenPort ? getVisitUrlPortMismatch(target.visitUrl, listenPort) : null;
+  const portMismatchHint = portMismatch ? formatSummaryPortMismatchHint(portMismatch) : '';
 
   // 2. 可访问优先判定：只看 visitUrl 是否有效，彻底解耦端口和域名要求
   if (isAccessible) {
@@ -100,6 +109,7 @@ export function getSiteReadinessStatus(target?: DeployTarget | null): TargetSite
       visitUrl: String(target.visitUrl).trim(),
       showSiteConfig,
       showDeploymentPath,
+      portMismatchHint,
     };
   }
 
@@ -118,6 +128,7 @@ export function getSiteReadinessStatus(target?: DeployTarget | null): TargetSite
       visitUrl: '',
       showSiteConfig,
       showDeploymentPath,
+      portMismatchHint,
     };
   }
 
@@ -135,5 +146,6 @@ export function getSiteReadinessStatus(target?: DeployTarget | null): TargetSite
     visitUrl: '',
     showSiteConfig,
     showDeploymentPath,
+    portMismatchHint,
   };
 }

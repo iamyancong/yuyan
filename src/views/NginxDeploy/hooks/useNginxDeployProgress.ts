@@ -538,7 +538,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
 
     try {
       const result = await subscribeTargetDeployProgress(target.id, target.projectType, {
-        taskId: snapshot.taskId,
+        taskId: snapshot.taskId ?? undefined,
         operationId: snapshot.operationId,
         signal: abortController.signal,
         onEvent: createScopedProgressHandler(sessionId),

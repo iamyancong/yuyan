@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { defineAsyncComponent } from 'vue';
+import { ExclamationCircleOutlined } from '@ant-design/icons-vue';
 import { YssFormily } from '@yss-ui/components/lite';
 import DeployRootField from '../DeployRootField/index.vue';
 import NginxInstanceField from '../NginxInstanceField/index.vue';
@@ -25,6 +26,13 @@ const {
   closeExplorer,
   handleSelectPath,
   handleUpdateOccupiedMap,
+  listenPortSyncHint,
+  listenPortSyncValue,
+  listenPortPlaceholder,
+  applyListenPortSync,
+  syncingListenPortFromConf,
+  canSyncListenPortFromConf,
+  syncListenPortFromNginxConf,
 } = useDeployTargetForm(props, emit);
 </script>
 
@@ -52,6 +60,57 @@ const {
               formModel.nginxInstanceId = val || 0;
             }"
           />
+        </template>
+        <template #listenPortField="{ value, onChange, disabled }">
+          <div class="listen-port-field">
+            <a-input-number
+              :value="value"
+              :min="1"
+              :max="65535"
+              :precision="0"
+              :disabled="disabled"
+              :placeholder="listenPortPlaceholder"
+              class="listen-port-field__input"
+              @update:value="(val: number | null) => onChange(val)"
+            />
+            <div v-if="listenPortSyncHint && listenPortSyncValue" class="listen-port-field__hint" role="status">
+              <ExclamationCircleOutlined class="listen-port-field__hint-icon" />
+              <span class="listen-port-field__hint-text">{{ listenPortSyncHint }}</span>
+              <a-button
+                type="link"
+                size="small"
+                class="listen-port-field__sync-btn"
+                :disabled="disabled"
+                @click="() => {
+                  const nextPort = applyListenPortSync();
+                  if (nextPort) onChange(nextPort);
+                }"
+              >
+                同步为 {{ listenPortSyncValue }}
+              </a-button>
+            </div>
+            <div v-if="formModel.projectType !== 'backend'" class="listen-port-field__actions">
+              <a-tooltip
+                :title="canSyncListenPortFromConf
+                  ? '读取服务器上该目标的 Nginx 配置文件，解析 listen 端口后询问是否同步'
+                  : '保存部署目标后才能从服务器读取 Nginx 配置'"
+              >
+                <span class="listen-port-field__action-wrap">
+                  <a-button
+                    type="link"
+                    size="small"
+                    class="listen-port-field__sync-btn"
+                    :disabled="disabled || !canSyncListenPortFromConf"
+                    :loading="syncingListenPortFromConf"
+                    @click="syncListenPortFromNginxConf"
+                  >
+                    从 Nginx 配置同步
+                  </a-button>
+                </span>
+              </a-tooltip>
+              <span v-if="!canSyncListenPortFromConf" class="listen-port-field__action-tip">保存目标后可用</span>
+            </div>
+          </div>
         </template>
         <template #targetPathSection>
           <div class="target-form-section">

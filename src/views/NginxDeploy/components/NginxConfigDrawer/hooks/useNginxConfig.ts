@@ -14,7 +14,7 @@ export function useNginxConfig(
   props: { targetId: number | null },
   emit: {
     (e: 'update:targetId', value: number | null): void;
-    (e: 'save', targetId: number, content: string, done: (error?: unknown) => void): void;
+    (e: 'save', targetId: number, content: string, done: (error?: unknown) => void, previousContent?: string): void;
   },
   callbacks?: {
     onSaveError?: (error: unknown) => void;
@@ -83,10 +83,11 @@ export function useNginxConfig(
     saving.value = true;
     try {
       await new Promise<void>((resolve, reject) => {
+        // 第 4 个参数带上保存前的基线内容，外层据此判断 listen 端口是否在这次保存里被改动
         emit('save', props.targetId as number, content.value, (error?: unknown) => {
           if (error) reject(error);
           else resolve();
-        });
+        }, originalContent.value);
       });
       originalContent.value = content.value;
       callbacks?.onSaveSuccess?.();

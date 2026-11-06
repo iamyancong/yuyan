@@ -18,6 +18,7 @@ import {
   listServers,
   reorderServers,
   listTargets,
+  getTarget,
   listTargetRuntimeIndex,
   updateNginxInstance,
   updateTarget,
@@ -271,6 +272,34 @@ function serializeDeployTask(task) {
     failureCode: task.failureCode || '',
     failure: task.failure || null,
     events: task.events,
+    maxConcurrent: stats.maxConcurrent,
+    runningCount: stats.runningCount,
+  };
+}
+
+/**
+ * 获取空闲状态部署目标快照。
+ * @param {number} targetId - 部署目标 ID
+ * @returns {Object} 空闲快照
+ */
+function serializeIdleDeployTask(targetId) {
+  const stats = deployTaskScheduler.getStats();
+  return {
+    taskId: null,
+    targetId: Number(targetId),
+    action: 'deploy',
+    operator: '',
+    startedAt: '',
+    currentStage: '',
+    queued: false,
+    queuePosition: 0,
+    queuedCount: stats.queuedCount,
+    running: false,
+    result: null,
+    error: null,
+    failureCode: '',
+    failure: null,
+    events: [],
     maxConcurrent: stats.maxConcurrent,
     runningCount: stats.runningCount,
   };
@@ -1885,11 +1914,36 @@ export async function handleGetDeployTaskReconciliation(req, res) {
 export async function handleGetTargetDeployProgress(req, res) {
   const targetId = Number(req.params.id);
   const task = deployTasksByTargetId.get(targetId);
-  if (!task || (req.query.taskId && String(task.persistentId) !== String(req.query.taskId))) {
+
+  // 1. 有任务且（无 taskId 或 taskId 匹配）-> 正常输出进度
+  if (task && (!req.query.taskId || String(task.persistentId) === String(req.query.taskId))) {
+    await sendDeployTaskProgress(req, res, task, isStreamRequest(req));
+    return;
+  }
+
+  // 2. 流式请求或带 taskId 查询参数但没有对应任务 -> 保持 404
+  if (isStreamRequest(req) || req.query.taskId) {
     sendError(res, new Error('该部署目标当前没有运行中的发布任务'), 404);
     return;
   }
-  await sendDeployTaskProgress(req, res, task, isStreamRequest(req));
+
+  // 3. 非流式、无 taskId、没任务：
+  // targetId 非法（非正整数）按 404 处理并注明
+  if (!Number.isInteger(targetId) || targetId <= 0) {
+    sendError(res, new Error('部署目标不存在'), 404);
+    return;
+  }
+
+  try {
+    const target = await getTarget(targetId);
+    if (!target) {
+      sendError(res, new Error('部署目标不存在'), 404);
+      return;
+    }
+    res.json({ success: true, data: serializeIdleDeployTask(targetId) });
+  } catch (error) {
+    sendError(res, error);
+  }
 }
 
 /**

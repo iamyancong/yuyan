@@ -16,7 +16,7 @@ defineOptions({ name: 'NginxConfigDrawer' });
 const props = defineProps<{ targetId: number | null; target?: DeployTarget | null }>();
 const emit = defineEmits<{
   (e: 'update:targetId', value: number | null): void;
-  (e: 'save', targetId: number, content: string, done: (error?: unknown) => void): void;
+  (e: 'save', targetId: number, content: string, done: (error?: unknown) => void, previousContent?: string): void;
 }>();
 
 // 配置读取与保存 Hook

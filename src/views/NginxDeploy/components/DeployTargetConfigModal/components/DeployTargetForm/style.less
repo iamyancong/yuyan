@@ -92,3 +92,54 @@
   margin-bottom: 0;
   overflow: hidden;
 }
+
+/* 监听端口字段：访问地址端口对不上时的同步提示 */
+.target-config-form {
+  .listen-port-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: 100%;
+
+    &__input {
+      width: 100%;
+    }
+
+    &__hint {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 4px;
+      font-size: 12px;
+      line-height: 18px;
+      color: var(--ant-color-warning-text, #d48806);
+    }
+
+    &__hint-icon {
+      flex-shrink: 0;
+    }
+
+    &__sync-btn {
+      height: 18px;
+      padding: 0 2px;
+      font-size: 12px;
+      line-height: 18px;
+    }
+
+    &__actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 12px;
+      line-height: 18px;
+    }
+
+    &__action-wrap {
+      display: inline-flex;
+    }
+
+    &__action-tip {
+      color: var(--ant-color-text-tertiary, #8c8c8c);
+    }
+  }
+}

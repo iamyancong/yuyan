@@ -71,6 +71,14 @@ import { normalizeDeployRoot } from './deployRootRecommendationPolicy';
 import { useTargetRuntime } from './useTargetRuntime';
 import { BACKEND_SERVICE_STATUS_CONCURRENCY, mapWithConcurrency } from './targetRuntimePolicy';
 import { filterDeployTargets } from './targetFilterPolicy';
+import { normalizeListenPort, syncVisitUrlWithListenPort } from './visitUrlPortPolicy';
+import {
+  buildListenPortSyncPlan,
+  formatAmbiguousListenPortsHint,
+  parseNginxListenPorts,
+  resolveListenPortSuggestion,
+} from './nginxListenSyncPolicy';
+import { confirmListenPortSync } from './listenPortSyncPrompt';
 import { createNginxInstanceFilterOptions, resolveInstanceFilterAfterServerChange } from './targetInstancePolicy';
 import { useTargetNginxConf } from './useTargetNginxConf';
 import {
@@ -212,6 +220,9 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
   const javaManagerServerId = ref(0);
   const environmentManagerOpen = ref(false);
   let targetListRefreshSequence = 0;
+  let targetModalOpenSequence = 0;
+  let backendOptionsLoaded = false;
+  let backendOptionsPromise: Promise<boolean> | null = null;
 
   const targetFilterForm = reactive<TargetFilterForm>({
     projectKeyword: activeProject?.projectName || '',
@@ -278,7 +289,71 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     openNginxConfig,
     handleSaveNginxConf,
     handleTestNginxConf,
-  } = useTargetNginxConf(ensureTargetIdle, ensureLoggedIn);
+  } = useTargetNginxConf(ensureTargetIdle, ensureLoggedIn, {
+    onConfigSaved: (targetId, content, previousContent) => {
+      void promptListenPortSyncAfterNginxSave(targetId, content, previousContent);
+    },
+  });
+
+  /**
+   * 「保存并重载」Nginx 配置成功后：从刚保存的文本解析 listen（不再 SSH），
+   * 与部署目标记录的监听端口比较，变了才询问是否同步；取消则什么都不改。
+   * @param targetId 部署目标 ID
+   * @param content 刚保存的配置
+   * @param previousContent 保存前的配置基线；listen 端口集合没变时不打扰
+   */
+  const promptListenPortSyncAfterNginxSave = async (targetId: number, content: string, previousContent?: string) => {
+    const cachedTarget = [...allTargets.value, ...targets.value].find((item) => Number(item.id) === Number(targetId));
+    if (!cachedTarget || cachedTarget.projectType === 'backend') return;
+    const suggestion = resolveListenPortSuggestion({
+      currentListenPort: cachedTarget.listenPort,
+      nextPorts: parseNginxListenPorts(content),
+      previousPorts: previousContent === undefined ? undefined : parseNginxListenPorts(previousContent),
+    });
+    if (suggestion.kind === 'ambiguous') {
+      message.warning(formatAmbiguousListenPortsHint(suggestion.ports), 6);
+      return;
+    }
+    if (suggestion.kind !== 'suggest') return;
+    const plan = buildListenPortSyncPlan(suggestion, String(cachedTarget.visitUrl || ''));
+    if (!(await confirmListenPortSync(suggestion, plan))) return;
+    try {
+      // 以服务端最新数据为底，只改监听端口和访问地址，避免用旧缓存覆盖别处刚改的字段
+      const latestTargets = await listDeployTargets();
+      const latestTarget = latestTargets.find((item) => Number(item.id) === Number(targetId));
+      if (!latestTarget) {
+        message.error('部署目标不存在或已被删除，未同步监听端口');
+        return;
+      }
+      if (!(await ensureTargetIdle(latestTarget, '同步监听端口'))) return;
+      const latestPlan = buildListenPortSyncPlan(
+        { ...suggestion, from: normalizeListenPort(latestTarget.listenPort) },
+        String(latestTarget.visitUrl || '')
+      );
+      const payload = {
+        ...latestTarget,
+        serverName: latestTarget.nginxServerName || '_',
+        listenPort: latestPlan.listenPort,
+        visitUrl: latestPlan.visitUrl,
+      } as DeployTargetPayload;
+      // 不回传构建内存，保持服务端已有值（与编辑保存「未改动则不传」一致）
+      delete (payload as Partial<DeployTargetPayload>).buildMemoryMb;
+      const savedTarget = await updateDeployTarget(targetId, payload);
+      const patchTarget = <T extends DeployTarget>(item: T): T => (
+        Number(item.id) === Number(targetId) ? { ...item, ...savedTarget } : item
+      );
+      allTargets.value = allTargets.value.map(patchTarget);
+      targets.value = targets.value.map(patchTarget);
+      message.success(`部署目标监听端口已同步为 ${latestPlan.listenPort}`);
+      try {
+        await refreshActiveTab({ force: true });
+      } catch (refreshError) {
+        message.warning(`监听端口已同步，但列表刷新失败：${getErrorMessage(refreshError)}。请手动刷新查看最新配置`);
+      }
+    } catch (error) {
+      message.error(`同步监听端口失败：${getErrorMessage(error)}`);
+    }
+  };
 
   // ==========================================
 
@@ -455,14 +530,8 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     });
   };
 
-  /** 刷新本机构建 JDK 列表并同步表单下拉。 */
-  const refreshBuildJdks = async () => {
-    jdks.value = await listDeployJdks().catch(() => []);
-  };
-
-  /** 刷新共享环境依赖配置并同步表单下拉。 */
-  const refreshDeployEnvironments = async () => {
-    deployEnvironments.value = await listDeployEnvironments().catch(() => []);
+  /** 同步共享环境依赖下拉状态。 */
+  const syncTargetEnvironmentFieldState = () => {
     syncSelectFieldState(
       targetFormRef.value,
       'environmentId',
@@ -476,6 +545,54 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
         },
       }
     );
+  };
+
+  /** 刷新本机构建 JDK 列表。成功返回 true，失败返回 false 并静默置空。 */
+  const refreshBuildJdks = async (): Promise<boolean> => {
+    try {
+      const list = await listDeployJdks();
+      jdks.value = Array.isArray(list) ? list : [];
+      return true;
+    } catch {
+      jdks.value = [];
+      return false;
+    }
+  };
+
+  /** 刷新共享环境依赖配置并同步表单下拉。成功返回 true，失败返回 false 并静默置空。 */
+  const refreshDeployEnvironments = async (): Promise<boolean> => {
+    try {
+      const list = await listDeployEnvironments();
+      deployEnvironments.value = Array.isArray(list) ? list : [];
+      return true;
+    } catch {
+      deployEnvironments.value = [];
+      return false;
+    } finally {
+      syncTargetEnvironmentFieldState();
+    }
+  };
+
+  /**
+   * 按需加载后端表单选项（构建 JDK 列表与共享环境列表）。
+   * 仅在尚未加载过或上次失败时发起请求，并对并发请求进行复用去重。
+   * 永不 reject，只有两者都成功才标记 backendOptionsLoaded = true。
+   */
+  const ensureBackendFormOptions = async (options?: { force?: boolean }): Promise<boolean> => {
+    if (backendOptionsLoaded && !options?.force) return true;
+    if (backendOptionsPromise) return backendOptionsPromise;
+
+    backendOptionsPromise = (async () => {
+      try {
+        const [jdkOk, envOk] = await Promise.all([refreshBuildJdks(), refreshDeployEnvironments()]);
+        backendOptionsLoaded = Boolean(jdkOk && envOk);
+        return backendOptionsLoaded;
+      } finally {
+        backendOptionsPromise = null;
+      }
+    })();
+
+    return await backendOptionsPromise;
   };
 
   /** 使用选中的共享环境依赖配置。 */
@@ -542,11 +659,12 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     targetFormRef.value?.setFieldState?.('visitUrl', (state: any) => {
       state.display = isFrontend ? 'visible' : 'none';
     });
-    // 监听端口和 server_name 仅在托管实例且开启托管时显示作为配置参数
-    const showNginxConfigFields = Boolean(isManagedSite && targetForm.nginxSiteManaged);
+    // 监听端口是 Nginx 实际 listen 的端口，和访问地址一样对所有前端目标可见（已有实例也能修改）
     targetFormRef.value?.setFieldState?.('listenPort', (state: any) => {
-      state.display = showNginxConfigFields ? 'visible' : 'none';
+      state.display = isFrontend ? 'visible' : 'none';
     });
+    // server_name 仅在托管实例且开启托管时显示作为配置参数
+    const showNginxConfigFields = Boolean(isManagedSite && targetForm.nginxSiteManaged);
     targetFormRef.value?.setFieldState?.('serverName', (state: any) => {
       state.display = showNginxConfigFields ? 'visible' : 'none';
     });
@@ -1033,6 +1151,10 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
   /** 打开新增部署目标弹窗 */
   const openCreateTarget = async () => {
     if (!ensureLoggedIn()) return;
+    if (targetFormLoading.value && targetModalOpen.value) return;
+    targetModalOpenSequence += 1;
+    const currentSeq = targetModalOpenSequence;
+
     resetSearch();
     // 立即打开弹窗，展现 Loading 状态以提高响应体验
     targetModalOpen.value = true;
@@ -1042,12 +1164,14 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       resetTargetForm();
       // 开始加载依赖接口
       await refreshServerList();
+      if (currentSeq !== targetModalOpenSequence || !targetModalOpen.value) return;
       if (!servers.value.length) {
         message.warning('请先新增独立服务器');
         targetModalOpen.value = false;
         return;
       }
       await loadProjects(DEFAULT_PROJECT_SOURCE);
+      if (currentSeq !== targetModalOpenSequence || !targetModalOpen.value) return;
       if (!deployProjects.value.length && !hasProjectContext.value) {
         message.warning('暂无可选择的平台应用，请先在平台应用列表确认应用');
         targetModalOpen.value = false;
@@ -1055,28 +1179,39 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       }
       // 数据准备就绪后，再次重置并填充完整的默认表单数据
       resetTargetForm();
-      await refreshBuildJdks();
-      await refreshDeployEnvironments();
+      if (targetForm.projectType === 'backend') {
+        await ensureBackendFormOptions({ force: true });
+        if (currentSeq !== targetModalOpenSequence || !targetModalOpen.value) return;
+      }
 
       if (targetForm.projectId) {
         await loadBranches(Number(targetForm.projectId), { ensure: [targetForm.defaultBranch] });
+        if (currentSeq !== targetModalOpenSequence || !targetModalOpen.value) return;
         if (!deployBranches.value.some((branch) => branch.name === targetForm.defaultBranch)) {
           targetForm.defaultBranch = resolveDefaultBranch(targetForm.defaultBranch || 'dev');
         }
       }
       await nextTick();
+      if (currentSeq !== targetModalOpenSequence || !targetModalOpen.value) return;
       syncTargetProjectSourceFieldState();
       syncTargetProjectFieldState();
       syncTargetBranchFieldState();
       syncTargetNginxInstanceFieldState();
       syncTargetServerFieldState();
       syncTargetNginxSiteManagedState();
+      if (targetForm.projectType === 'backend') {
+        syncTargetEnvironmentFieldState();
+      }
       syncTargetFormValues();
     } catch (error: any) {
+      if (currentSeq !== targetModalOpenSequence || !targetModalOpen.value) return;
       message.error(getErrorMessage(error));
       targetModalOpen.value = false; // 加载异常时自动关闭弹窗
     } finally {
-      targetFormLoading.value = false;
+      if (currentSeq === targetModalOpenSequence) {
+        initializingTargetForm.value = false;
+        targetFormLoading.value = false;
+      }
     }
   };
 
@@ -1086,10 +1221,11 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
    */
   const openEditTarget = async (target: DeployTarget) => {
     if (!ensureLoggedIn()) return;
-    if (targetFormLoading.value) return;
-    if (!(await ensureTargetIdle(target, '编辑'))) return;
+    if (targetFormLoading.value && targetModalOpen.value) return;
+    targetModalOpenSequence += 1;
+    const currentSeq = targetModalOpenSequence;
+
     resetSearch();
-    targetFormLoading.value = true;
     activeTargetId.value = target.id;
     initialEditBuildMemoryMb.value = Math.min(
       Math.max(0, Math.floor(Number(target.buildMemoryMb ?? 0) || 0)),
@@ -1100,17 +1236,46 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     Object.assign(targetForm, { ...target, projectSource: targetSource, serverName: target.nginxServerName || '_' });
     activeProjectSource.value = targetSource;
     targetModalOpen.value = true;
+    targetFormLoading.value = true;
+
     try {
-      await refreshServerList();
-      await refreshBuildJdks();
-      if (targetForm.projectType === 'backend') {
+      const idlePromise = ensureTargetIdle(target, '编辑');
+      void idlePromise.then((idle) => {
+        if (!idle && currentSeq === targetModalOpenSequence && targetModalOpen.value) {
+          targetModalOpen.value = false;
+        }
+      });
+
+      // 并行加载服务器列表以及（后端目标的）环境配置
+      await Promise.all([
+        refreshServerList(),
+        target.projectType === 'backend' ? ensureBackendFormOptions({ force: true }) : Promise.resolve(),
+      ]);
+      if (currentSeq !== targetModalOpenSequence || !targetModalOpen.value) return;
+
+      if (target.projectType === 'backend') {
         targetForm.requiredJdkAlias = parseMajorVersionFromAlias(targetForm.requiredJdkAlias);
       }
-      await refreshDeployEnvironments();
+
       await loadProjects(targetSource);
+      if (currentSeq !== targetModalOpenSequence || !targetModalOpen.value) return;
+
       if (target.projectId) {
         await ensureProjectLoaded(Number(target.projectId), targetSource);
+        if (currentSeq !== targetModalOpenSequence || !targetModalOpen.value) return;
       }
+
+      /** 编辑回显：确保已保存的分支即使不在首页 100 个分支中也可选 */
+      await loadBranches(Number(target.projectId), { ensure: [target.defaultBranch] });
+      if (currentSeq !== targetModalOpenSequence || !targetModalOpen.value) return;
+
+      const isIdle = await idlePromise;
+      if (currentSeq !== targetModalOpenSequence || !targetModalOpen.value) return;
+      if (!isIdle) {
+        targetModalOpen.value = false;
+        return;
+      }
+
       Object.assign(targetForm, { ...target, projectSource: targetSource, serverName: target.nginxServerName || '_' });
       if (targetForm.projectType === 'backend') {
         targetForm.requiredJdkAlias = parseMajorVersionFromAlias(targetForm.requiredJdkAlias);
@@ -1130,23 +1295,29 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       if (!isManagedInstance) {
         targetForm.nginxSiteManaged = false;
       }
-      /** 编辑回显：确保已保存的分支即使不在首页 100 个分支中也可选 */
-      await loadBranches(Number(target.projectId), { ensure: [target.defaultBranch] });
+
       await nextTick();
+      if (currentSeq !== targetModalOpenSequence || !targetModalOpen.value) return;
       syncTargetProjectSourceFieldState();
       syncTargetProjectFieldState();
       syncTargetBranchFieldState();
       syncTargetServerFieldState();
       syncTargetNginxInstanceFieldState();
       syncTargetNginxSiteManagedState();
+      if (targetForm.projectType === 'backend') {
+        syncTargetEnvironmentFieldState();
+      }
       syncTargetFormValues();
       await nextTick();
     } catch (error: any) {
+      if (currentSeq !== targetModalOpenSequence || !targetModalOpen.value) return;
       message.error(getErrorMessage(error));
       targetModalOpen.value = false; // 加载异常时自动关闭弹窗
     } finally {
-      initializingTargetForm.value = false;
-      targetFormLoading.value = false;
+      if (currentSeq === targetModalOpenSequence) {
+        initializingTargetForm.value = false;
+        targetFormLoading.value = false;
+      }
     }
   };
 
@@ -1156,6 +1327,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       message.info('请先保存部署目标，再检测仓库配置');
       return;
     }
+    await ensureBackendFormOptions();
     targetFormLoading.value = true;
     try {
       const inspection = await inspectBackendTarget(
@@ -1595,6 +1767,9 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
   /** 清空部署目标数据和临时态 */
   const clearTargetData = () => {
     targetListRefreshSequence += 1;
+    targetModalOpenSequence += 1;
+    backendOptionsLoaded = false;
+    backendOptionsPromise = null;
     stopTargetRuntimePolling();
     cancelPendingRequests();
     backendStatusAbortController?.abort();
@@ -1692,6 +1867,34 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     }
   );
 
+  /**
+   * 托管且由平台管理站点时，监听端口是主字段：用户改监听端口后，访问地址里的端口跟着改。
+   * 只在访问地址原本和上一个有效监听端口一致时改写（见 syncVisitUrlWithListenPort），
+   * 反过来访问地址变了绝不覆盖监听端口；已有实例两边各自独立，靠表单提示手动同步。
+   */
+  let lastValidListenPort: number | null = null;
+  watch(
+    () => targetForm.listenPort,
+    (nextPort) => {
+      const normalizedNext = normalizeListenPort(nextPort);
+      if (initializingTargetForm.value || !targetModalOpen.value || targetFormLoading.value) {
+        lastValidListenPort = normalizedNext;
+        return;
+      }
+      const previousPort = lastValidListenPort;
+      if (normalizedNext === null) return;
+      lastValidListenPort = normalizedNext;
+      if (targetForm.projectType === 'backend' || !targetForm.nginxSiteManaged) return;
+      const server = servers.value.find((item) => item.id === Number(targetForm.serverId));
+      if (getSelectedNginxInstance(server)?.instanceType !== 'managed') return;
+      const currentVisitUrl = String(targetForm.visitUrl || '');
+      const nextVisitUrl = syncVisitUrlWithListenPort(currentVisitUrl, previousPort, normalizedNext);
+      if (nextVisitUrl === currentVisitUrl) return;
+      targetForm.visitUrl = nextVisitUrl;
+      targetFormRef.value?.setValues?.({ visitUrl: nextVisitUrl });
+    }
+  );
+
   watch(targetFormRef, (newRef) => {
     if (newRef && targetModalOpen.value) {
       syncTargetProjectSourceFieldState();
@@ -1700,6 +1903,9 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       syncTargetServerFieldState();
       syncTargetNginxInstanceFieldState();
       syncTargetNginxSiteManagedState();
+      if (targetForm.projectType === 'backend') {
+        syncTargetEnvironmentFieldState();
+      }
       syncTargetFormValues();
     }
   });
@@ -1719,6 +1925,12 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
       const server = servers.value.find((item) => item.id === Number(targetForm.serverId));
 
       if (newType === 'backend') {
+        void ensureBackendFormOptions().then(async () => {
+          await nextTick();
+          if (!targetModalOpen.value || targetForm.projectType !== 'backend') return;
+          syncTargetEnvironmentFieldState();
+        });
+
         if (targetForm.projectSource !== 'gitlab') {
           void handleTargetProjectSourceChange('gitlab');
         }

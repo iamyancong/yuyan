@@ -11,7 +11,11 @@ import { useNginxDeployContext } from './useNginxDeployContext';
  */
 export function useTargetNginxConf(
   ensureTargetIdle: (target: Pick<DeployTarget, 'id' | 'projectName' | 'projectType'>, operationLabel: string) => Promise<boolean>,
-  ensureLoggedIn?: () => boolean
+  ensureLoggedIn?: () => boolean,
+  options?: {
+    /** 「保存并重载」成功后回调（抽屉已结束 loading），用于询问是否同步监听端口 */
+    onConfigSaved?: (targetId: number, content: string, previousContent?: string) => void;
+  }
 ) {
   // 安全的鉴权判断方法
   const runEnsureLoggedIn = () => {
@@ -25,6 +29,7 @@ export function useTargetNginxConf(
 
   /** 当前正在查看/修改 Nginx 配置的部署目标 ID */
   const nginxTargetId = ref<number | null>(null);
+  let nginxConfigOpenSequence = 0;
 
   /**
    * 打开 Nginx 配置抽屉。
@@ -32,8 +37,14 @@ export function useTargetNginxConf(
    */
   const openNginxConfig = (target: DeployTarget) => {
     if (!runEnsureLoggedIn()) return;
+    nginxConfigOpenSequence += 1;
+    const currentSeq = nginxConfigOpenSequence;
+    nginxTargetId.value = target.id;
     void ensureTargetIdle(target, '修改 Nginx 配置').then((idle) => {
-      if (idle) nginxTargetId.value = target.id;
+      if (currentSeq !== nginxConfigOpenSequence) return;
+      if (!idle && nginxTargetId.value === target.id) {
+        nginxTargetId.value = null;
+      }
     });
   };
 
@@ -42,8 +53,9 @@ export function useTargetNginxConf(
    * @param targetId 部署目标 ID
    * @param content 配置内容
    * @param done 完成回调
+   * @param previousContent 保存前的配置基线
    */
-  const handleSaveNginxConf = async (targetId: number, content: string, done?: (error?: unknown) => void) => {
+  const handleSaveNginxConf = async (targetId: number, content: string, done?: (error?: unknown) => void, previousContent?: string) => {
     if (!runEnsureLoggedIn()) {
       done?.(new Error('请先登录后再保存 Nginx 配置文件'));
       return;
@@ -60,7 +72,9 @@ export function useTargetNginxConf(
       done?.();
     } catch (error) {
       done?.(error);
+      return;
     }
+    options?.onConfigSaved?.(targetId, content, previousContent);
   };
 
   /**

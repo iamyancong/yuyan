@@ -904,8 +904,12 @@ export const targetFormSchema = {
               type: 'number',
               title: '监听端口',
               'x-decorator': 'FormItem',
-              'x-component': 'InputNumber',
-              'x-component-props': { min: 1, max: 65535, placeholder: '自动分配' },
+              'x-decorator-props': {
+                tooltip: 'Nginx 实际 listen 的端口，列表「站点摘要」和端口冲突判断都以它为准。它和访问地址的端口可以不同：前面还有一层反向代理时，对外可能是 80/443，而 Nginx 自己监听 8050。托管实例开启「平台管理站点」时，平台按这个端口生成站点配置。',
+              },
+              // 自定义插槽：输入框下方在访问地址端口对不上时给出「同步为 xxx」提示，点了才改
+              'x-component': 'Slot',
+              'x-component-props': { name: 'listenPortField' },
             },
             serverName: {
               type: 'string',

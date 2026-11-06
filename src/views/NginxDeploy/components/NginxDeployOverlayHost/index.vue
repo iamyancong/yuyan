@@ -35,6 +35,7 @@ onMounted(() => {
     void import('../NginxRuntimeDrawer/index.vue');
     void import('../DeployTargetConfigModal/index.vue');
     void import('../RemoteFsBrowseDrawer/index.vue');
+    void import('../NginxConfigDrawer/index.vue');
   });
 });
 </script>

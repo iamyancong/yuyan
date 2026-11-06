@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { ExportOutlined } from '@ant-design/icons-vue';
+import { ExclamationCircleOutlined, ExportOutlined } from '@ant-design/icons-vue';
 import type { DeployTarget } from '@/api/deploy';
 import { openExternal } from '@/utils/open';
 import { getSiteReadinessStatus } from './constant';
@@ -90,6 +90,14 @@ const handleBindClick = () => {
       >
         <span class="instance-pill">
           {{ meta.instanceTypeLabel ? `[${meta.instanceTypeLabel}] ` : '' }}{{ meta.instanceName }}{{ meta.listenPort ? ` :${meta.listenPort}` : '' }}
+        </span>
+      </a-tooltip>
+
+      <!-- 访问地址端口与监听端口对不上时的轻量标记：端口展示仍以监听端口为准 -->
+      <a-tooltip v-if="meta.portMismatchHint" :title="meta.portMismatchHint">
+        <span class="port-mismatch-mark" role="img" :aria-label="meta.portMismatchHint">
+          <ExclamationCircleOutlined />
+          端口不一致
         </span>
       </a-tooltip>
     </div>

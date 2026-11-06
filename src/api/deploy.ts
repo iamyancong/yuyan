@@ -607,7 +607,7 @@ export interface NginxRuntimeProgressOptions {
 
 /** 运行中的发布任务快照 */
 export interface DeployProgressSnapshot {
-  taskId?: number;
+  taskId?: number | null;
   operationId?: string;
   targetId: number;
   action: 'deploy' | 'rollback' | 'undoRollback' | 'openapi' | 'start' | 'stop' | 'restart';
@@ -1394,14 +1394,20 @@ export async function getTargetDeployProgress(
   } catch (error: any) {
     if (Number(error?.status || error?.response?.status || 0) === 404) {
       const emptySnapshot: DeployProgressSnapshot = {
+        taskId: null,
         targetId,
         action: 'deploy',
         operator: '',
         startedAt: '',
         currentStage: '',
+        queued: false,
+        queuePosition: 0,
+        queuedCount: 0,
         running: false,
         result: null,
         error: null,
+        failureCode: '',
+        failure: null,
         events: [],
         maxConcurrent: 1,
         runningCount: 0,
