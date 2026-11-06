@@ -4,6 +4,7 @@ import {
   buildListenPortSyncPlan,
   formatAmbiguousListenPortsHint,
   formatListenPortSyncConfirm,
+  isNginxConfSyncResultActive,
   parseListenAddressPort,
   parseNginxListenPorts,
   resolveListenPortSuggestion,
@@ -134,4 +135,30 @@ test('询问与提示文案', () => {
     ['该站点配置里的监听端口是 8050，部署目标还没有填写监听端口，是否同步到部署目标？']
   );
   assert.equal(formatAmbiguousListenPortsHint([80, 443]), '配置里检测到多个监听端口：80、443，请在部署目标里手动确认');
+});
+
+test('isNginxConfSyncResultActive：生命周期与过期防护判断', () => {
+  const baseState = {
+    aborted: false,
+    disposed: false,
+    requestGeneration: 1,
+    currentGeneration: 1,
+    requestTargetId: 100,
+    currentTargetId: 100,
+  };
+
+  // true 场景：正常匹配且未销毁未中止
+  assert.equal(isNginxConfSyncResultActive(baseState), true);
+
+  // false 场景 1：请求已被 abort
+  assert.equal(isNginxConfSyncResultActive({ ...baseState, aborted: true }), false);
+
+  // false 场景 2：表单组件已卸载（弹窗关闭）
+  assert.equal(isNginxConfSyncResultActive({ ...baseState, disposed: true }), false);
+
+  // false 场景 3：世代不匹配（有更新的同步请求发起）
+  assert.equal(isNginxConfSyncResultActive({ ...baseState, requestGeneration: 1, currentGeneration: 2 }), false);
+
+  // false 场景 4：部署目标 ID 已切换
+  assert.equal(isNginxConfSyncResultActive({ ...baseState, requestTargetId: 100, currentTargetId: 101 }), false);
 });

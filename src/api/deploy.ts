@@ -1358,7 +1358,8 @@ export const getDeployRecord = (recordId: number, gitlabToken = '', gitlabHost =
     .then(unwrap<DeployRecord>);
 
 /** 读取 Nginx 配置文件 */
-export const readNginxConf = (targetId: number) => client.get(`/targets/${targetId}/nginx-conf`).then(unwrap<{ path: string; content: string }>);
+export const readNginxConf = (targetId: number, signal?: AbortSignal) =>
+  client.get(`/targets/${targetId}/nginx-conf`, { signal }).then(unwrap<{ path: string; content: string }>);
 
 /** 保存 Nginx 配置文件 */
 export const saveNginxConf = (targetId: number, content: string, reload = true) =>

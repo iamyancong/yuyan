@@ -1113,13 +1113,12 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     targetFilterForm.nginxInstanceId = resolveInstanceFilterAfterServerChange(targetFilterForm.nginxInstanceId, targetInstanceFilterOptions.value);
     const targetList = filterDeployTargets(completeTargetList, getTargetQueryParams());
     targets.value = targetList;
+    startTargetRuntimePolling();
     /** 运行态独立探测，不占用中央列表恢复预算；徽章稍后更新，失败由运行态轮询退避处理。 */
     void refreshTargetRuntimeSnapshots(targetList);
     if (signal?.aborted || refreshSequence !== targetListRefreshSequence) return;
     /** 后端服务探测同样不阻塞列表，失败在目标上保留 unknown 状态和错误详情。 */
     void refreshBackendServiceStatuses(targetList);
-    if (signal?.aborted || refreshSequence !== targetListRefreshSequence) return;
-    startTargetRuntimePolling();
   };
 
   /** 当前一轮后端服务状态探测的取消控制器，新一轮刷新开始时取消旧探测 */

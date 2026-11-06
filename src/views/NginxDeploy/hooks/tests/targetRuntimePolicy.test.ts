@@ -10,6 +10,7 @@ import {
   isTargetRuntimeBatchUnsupported,
   isTargetRuntimeSseUnsupported,
   mapWithConcurrency,
+  resolveRuntimeRefreshFollowUp,
   resolveStoppedDeployProgressPresentation,
   shouldScheduleRuntimePoll,
   TARGET_RUNTIME_ACTIVE_INTERVAL,
@@ -160,4 +161,52 @@ test('排队超时与手动取消停止态标题区分：stopReason=timeout 显�
     title: '已停止',
     detail: '任务已在排队阶段取消，未产生构建或发布变更',
   });
+});
+
+test('resolveRuntimeRefreshFollowUp: 退出轮询、过期请求、排队与前后台分支决策', () => {
+  // 1. 停止轮询（pollingEnabled=false）后统一返回 'none'，即便处于排队或页面可见
+  assert.equal(
+    resolveRuntimeRefreshFollowUp({ pollingEnabled: false, queued: true, pageHidden: false, stale: false }),
+    'none',
+  );
+  assert.equal(
+    resolveRuntimeRefreshFollowUp({ pollingEnabled: false, queued: false, pageHidden: false, stale: true }),
+    'none',
+  );
+  assert.equal(
+    resolveRuntimeRefreshFollowUp({ pollingEnabled: false, queued: false, pageHidden: true, stale: false }),
+    'none',
+  );
+
+  // 2. 有排队请求且页面可见：无论当前请求是否 stale，均优先进入立即补刷 'refresh'
+  assert.equal(
+    resolveRuntimeRefreshFollowUp({ pollingEnabled: true, queued: true, pageHidden: false, stale: false }),
+    'refresh',
+  );
+  assert.equal(
+    resolveRuntimeRefreshFollowUp({ pollingEnabled: true, queued: true, pageHidden: false, stale: true }),
+    'refresh',
+  );
+
+  // 3. 过期请求（stale=true）且无有效可见排队：返回 'none'，不安排下一次定时轮询（由新请求接管调度）
+  assert.equal(
+    resolveRuntimeRefreshFollowUp({ pollingEnabled: true, queued: false, pageHidden: false, stale: true }),
+    'none',
+  );
+  assert.equal(
+    resolveRuntimeRefreshFollowUp({ pollingEnabled: true, queued: true, pageHidden: true, stale: true }),
+    'none',
+  );
+
+  // 4. 排队但页面隐藏：返回 'schedule'（定时器内部会判断 pageHidden 并跳过）
+  assert.equal(
+    resolveRuntimeRefreshFollowUp({ pollingEnabled: true, queued: true, pageHidden: true, stale: false }),
+    'schedule',
+  );
+
+  // 5. 正常完成且无需补刷：安排下一次定时轮询 'schedule'
+  assert.equal(
+    resolveRuntimeRefreshFollowUp({ pollingEnabled: true, queued: false, pageHidden: false, stale: false }),
+    'schedule',
+  );
 });

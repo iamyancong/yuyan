@@ -69,6 +69,23 @@ export function shouldScheduleRuntimePoll(state: {
 }
 
 /**
+ * 决策一轮部署运行态快照刷新完成后的后续动作。
+ * @param state 当前排队、轮询开关、页面可见性及过期状态
+ * @returns 'refresh' 立即补刷 | 'schedule' 安排下一次轮询 | 'none' 不做后续动作
+ */
+export function resolveRuntimeRefreshFollowUp(state: {
+  queued: boolean;
+  pollingEnabled: boolean;
+  pageHidden: boolean;
+  stale: boolean;
+}): 'refresh' | 'schedule' | 'none' {
+  if (!state.pollingEnabled) return 'none';
+  if (state.queued && !state.pageHidden) return 'refresh';
+  if (state.stale) return 'none';
+  return 'schedule';
+}
+
+/**
  * 以固定并发数映射数组并保持结果顺序。
  * @param items 输入数组
  * @param concurrency 最大并发数

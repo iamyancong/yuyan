@@ -17,6 +17,7 @@ import {
   isTargetRuntimeBatchUnsupported,
   isTargetRuntimeSseUnsupported,
   mapWithConcurrency,
+  resolveRuntimeRefreshFollowUp,
   shouldScheduleRuntimePoll,
   TARGET_RUNTIME_FALLBACK_CONCURRENCY,
 } from './targetRuntimePolicy';
@@ -325,11 +326,16 @@ export function useTargetRuntime(targets: Ref<DeployTarget[]>, options: UseTarge
       if (runtimeRefreshPromise === promise) runtimeRefreshPromise = null;
       if (runtimeAbortController === controller) runtimeAbortController = null;
       if (sequence === runtimeRefreshSequence) targetRuntimeLoading.value = false;
-      if (runtimeRefreshQueued && runtimePollingEnabled && !isPageHidden()) {
-        runtimeRefreshQueued = false;
+      const followUp = resolveRuntimeRefreshFollowUp({
+        queued: runtimeRefreshQueued,
+        pollingEnabled: runtimePollingEnabled,
+        pageHidden: isPageHidden(),
+        stale: sequence !== runtimeRefreshSequence,
+      });
+      runtimeRefreshQueued = false;
+      if (followUp === 'refresh') {
         void refreshTargetRuntimeSnapshots();
-      } else {
-        runtimeRefreshQueued = false;
+      } else if (followUp === 'schedule') {
         scheduleNextRefresh();
       }
     }
@@ -345,11 +351,11 @@ export function useTargetRuntime(targets: Ref<DeployTarget[]>, options: UseTarge
 
   /** 停止部署运行态实时订阅、轮询并取消当前请求。 */
   const stopTargetRuntimePolling = () => {
+    runtimePollingEnabled = false;
     clearScheduledRefresh();
     stopSseStream();
     detachVisibilityListener();
-    runtimeAbortController?.abort();
-    runtimeAbortController = null;
+    cancelPendingRequests();
   };
 
   /** 取消并废弃所有正在进行的运行态快照请求。 */
@@ -372,15 +378,11 @@ export function useTargetRuntime(targets: Ref<DeployTarget[]>, options: UseTarge
   });
 
   onDeactivated(() => {
-    runtimePollingEnabled = false;
     stopTargetRuntimePolling();
-    cancelPendingRequests();
   });
 
   onUnmounted(() => {
-    runtimePollingEnabled = false;
     stopTargetRuntimePolling();
-    cancelPendingRequests();
   });
 
   return {

@@ -17,6 +17,7 @@ import {
 import {
   buildListenPortSyncPlan,
   formatAmbiguousListenPortsHint,
+  isNginxConfSyncResultActive,
   parseNginxListenPorts,
   resolveListenPortSuggestion,
 } from '../../../../../hooks/nginxListenSyncPolicy.ts';
@@ -122,10 +123,17 @@ export function useDeployTargetForm(
   };
 
   let lastTargetId = props.targetId;
+  let syncAbortController: AbortController | null = null;
+  let syncGeneration = 0;
+  let disposed = false;
 
   watch(
     () => props.targetId,
     () => {
+      syncAbortController?.abort();
+      syncAbortController = null;
+      syncGeneration += 1;
+      syncingListenPortFromConf.value = false;
       baselineKind.value = normalizeApplicationKind(props.form.applicationKind);
       updateResolvedKind();
       queueMicrotask(() => {
@@ -188,6 +196,17 @@ export function useDeployTargetForm(
   /** 只有已保存的目标才有服务器上的配置文件可读 */
   const canSyncListenPortFromConf = computed(() => Boolean(props.targetId) && formModel.value.projectType !== 'backend');
 
+  /** 校验当前配置同步响应是否依然有效 */
+  const isSyncActive = (requestGeneration: number, requestTargetId: number, signal?: AbortSignal) =>
+    isNginxConfSyncResultActive({
+      aborted: signal?.aborted ?? false,
+      disposed,
+      requestGeneration,
+      currentGeneration: syncGeneration,
+      requestTargetId,
+      currentTargetId: Number(props.targetId || 0),
+    });
+
   /**
    * 服务器上手工改了 listen 后，在表单里一键读取并询问同步。
    * @description 只读取该目标已保存的 Nginx 配置文件（readNginxConf），不扫描整机；
@@ -196,17 +215,30 @@ export function useDeployTargetForm(
   const syncListenPortFromNginxConf = async () => {
     const targetId = Number(props.targetId || 0);
     if (!targetId || syncingListenPortFromConf.value) return;
+
+    syncAbortController?.abort();
+    const generation = ++syncGeneration;
+    const controller = new AbortController();
+    syncAbortController = controller;
     syncingListenPortFromConf.value = true;
+
     let config: { path: string; content: string };
     try {
-      config = await readNginxConf(targetId);
+      config = await readNginxConf(targetId, controller.signal);
     } catch (error) {
+      if (!isSyncActive(generation, targetId, controller.signal)) return;
       message.error(`读取 Nginx 配置文件失败：${getErrorMessage(error)}`);
       return;
     } finally {
-      syncingListenPortFromConf.value = false;
+      if (syncGeneration === generation) {
+        syncingListenPortFromConf.value = false;
+        if (syncAbortController === controller) {
+          syncAbortController = null;
+        }
+      }
     }
-    if (Number(props.targetId || 0) !== targetId) return;
+
+    if (!isSyncActive(generation, targetId, controller.signal)) return;
     const suggestion = resolveListenPortSuggestion({
       currentListenPort: formModel.value.listenPort,
       nextPorts: parseNginxListenPorts(config.content),
@@ -227,7 +259,7 @@ export function useDeployTargetForm(
     if (suggestion.kind !== 'suggest') return;
     const plan = buildListenPortSyncPlan(suggestion, String(formModel.value.visitUrl || ''));
     if (!(await confirmListenPortSync(suggestion, plan, '同步到表单'))) return;
-    if (Number(props.targetId || 0) !== targetId) return;
+    if (!isSyncActive(generation, targetId, controller.signal)) return;
     // 访问地址与监听端口一次写入：托管站点的端口联动 watch 看到访问地址已是新端口就不会重复改写
     formModel.value = { ...formModel.value, visitUrl: plan.visitUrl, listenPort: plan.listenPort };
     formRef.value?.setValues?.({ visitUrl: plan.visitUrl, listenPort: plan.listenPort });
@@ -235,7 +267,14 @@ export function useDeployTargetForm(
   };
 
   watch(formRef, (instance) => emit('formRefChange', instance), { flush: 'post' });
-  onUnmounted(() => emit('formRefChange', null));
+  onUnmounted(() => {
+    disposed = true;
+    syncAbortController?.abort();
+    syncAbortController = null;
+    syncGeneration += 1;
+    syncingListenPortFromConf.value = false;
+    emit('formRefChange', null);
+  });
 
   return {
     formRef,

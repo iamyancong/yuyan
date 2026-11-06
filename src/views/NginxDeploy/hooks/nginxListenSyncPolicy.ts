@@ -177,3 +177,22 @@ export function formatListenPortSyncConfirm(
 export function formatAmbiguousListenPortsHint(ports: number[]): string {
   return `配置里检测到多个监听端口：${ports.join('、')}，请在部署目标里手动确认`;
 }
+
+/**
+ * 校验从 Nginx 配置同步监听端口的异步结果是否仍然处于有效生命周期内。
+ * @param state 当前请求的中止、组件销毁、请求世代与目标 ID
+ * @returns 若请求已被中止、组件已卸载、世代不匹配或目标 ID 已变更则返回 false，否则返回 true
+ */
+export function isNginxConfSyncResultActive(state: {
+  aborted: boolean;
+  disposed: boolean;
+  requestGeneration: number;
+  currentGeneration: number;
+  requestTargetId: number;
+  currentTargetId: number;
+}): boolean {
+  if (state.aborted || state.disposed) return false;
+  if (state.requestGeneration !== state.currentGeneration) return false;
+  if (state.requestTargetId !== state.currentTargetId) return false;
+  return true;
+}
