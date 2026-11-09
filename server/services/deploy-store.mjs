@@ -3281,6 +3281,62 @@ export async function listTargets(query = {}) {
 }
 
 /**
+ * 查询指定物理主机（或指定 serverId 对应物理主机）上的所有部署目标（用于安全嵌套/冲突分析，跨多记录与跨团队）。
+ * 仅暴露安全保护所需的最小字段：id, serverId, teamId, deployRoot, projectName。
+ * @param {Object} params - 查询参数
+ * @param {number} [params.serverId] - 服务器 ID
+ * @param {string} [params.host] - 主机地址
+ * @param {number} [params.port=22] - 端口
+ * @returns {Promise<Array<{id: number, serverId: number, teamId: string, deployRoot: string, projectName: string}>>}
+ */
+export async function listPhysicalServerTargets(params = {}) {
+  const db = await getDeployDb();
+  let host = params.host;
+  let port = params.port || 22;
+
+  if (!host && params.serverId) {
+    const serverRow = db.prepare('SELECT host, port FROM deploy_servers WHERE id = ?').get(Number(params.serverId));
+    if (serverRow) {
+      host = serverRow.host;
+      port = serverRow.port || 22;
+    }
+  }
+
+  if (!host) {
+    if (params.serverId) {
+      const rows = db.prepare('SELECT id, server_id, team_id, deploy_root, project_name FROM deploy_targets WHERE server_id = ?').all(Number(params.serverId));
+      return rows.map((r) => ({
+        id: Number(r.id),
+        serverId: Number(r.server_id),
+        teamId: r.team_id,
+        deployRoot: r.deploy_root,
+        projectName: r.project_name,
+      }));
+    }
+    return [];
+  }
+
+  const serverRows = db.prepare('SELECT id FROM deploy_servers WHERE host = ? AND port = ?').all(host, port);
+  const serverIds = serverRows.map((r) => Number(r.id)).filter(Boolean);
+  if (!serverIds.length) return [];
+
+  const placeholders = serverIds.map(() => '?').join(', ');
+  const targetRows = db.prepare(
+    `SELECT id, server_id, team_id, deploy_root, project_name
+     FROM deploy_targets
+     WHERE server_id IN (${placeholders})`
+  ).all(...serverIds);
+
+  return targetRows.map((r) => ({
+    id: Number(r.id),
+    serverId: Number(r.server_id),
+    teamId: r.team_id,
+    deployRoot: r.deploy_root,
+    projectName: r.project_name,
+  }));
+}
+
+/**
  * 轻量列出当前团队部署目标运行态索引。
  * @returns {Promise<Array<{id: number, projectType: string}>>} 目标 ID 与项目类型
  */

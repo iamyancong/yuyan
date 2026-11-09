@@ -13,6 +13,10 @@ import {
   planRestore,
   filterManifestRelativeFiles,
   RESERVED_DEPLOY_ENTRIES,
+  isReservedDeployEntry,
+  isPathNestedOrConflicting,
+  assertCleanupSafetyCeiling,
+  resolveTopmostLockRoot,
 } from '../deploy-cleanup-policy.mjs';
 
 test('normalizeDeployRootPath: 路径规范化与合法性校验', () => {
@@ -395,4 +399,160 @@ test('buildLocalTarExcludeArgs: 原地追加受保护目录后，能够生成包
   assert.ok(args2.includes('--exclude=\'./sub-dynamic\''));
   assert.ok(args2.includes('--exclude=\'./sub-dynamic/*\''));
   assert.ok(args2.includes('--exclude=\'./index.html\''));
+});
+
+test('isPathNestedOrConflicting: 路径嵌套与冲突判定', () => {
+  // 1. 完全相同路径（含尾斜杠或斜杠重复）
+  assert.equal(isPathNestedOrConflicting('/opt/yuyan/html', '/opt/yuyan/html'), true);
+  assert.equal(isPathNestedOrConflicting('/opt/yuyan/html/', '/opt/yuyan/html'), true);
+  assert.equal(isPathNestedOrConflicting('//opt//yuyan/html', '/opt/yuyan/html/'), true);
+
+  // 2. 父子嵌套关系
+  assert.equal(isPathNestedOrConflicting('/opt/yuyan/html', '/opt/yuyan/html/subApp'), true);
+  assert.equal(isPathNestedOrConflicting('/opt/yuyan/html/subApp', '/opt/yuyan/html'), true);
+  assert.equal(isPathNestedOrConflicting('/', '/opt'), true);
+
+  // 3. 前缀相似但属于兄弟目录，绝不冲突
+  assert.equal(isPathNestedOrConflicting('/opt/yuyan/html', '/opt/yuyan/html2'), false);
+  assert.equal(isPathNestedOrConflicting('/opt/yuyan/html-v2', '/opt/yuyan/html'), false);
+  assert.equal(isPathNestedOrConflicting('/data/html', '/data/html-backup'), false);
+
+  // 4. 完全不相关的目录
+  assert.equal(isPathNestedOrConflicting('/opt/appA', '/opt/appB'), false);
+  assert.equal(isPathNestedOrConflicting('/var/www', '/opt/yuyan/html'), false);
+
+  // 5. 空路径容错
+  assert.equal(isPathNestedOrConflicting('', '/opt/yuyan'), false);
+  assert.equal(isPathNestedOrConflicting(null, '/opt/yuyan'), false);
+});
+
+test('isReservedDeployEntry: 系统保留条目与暂存目录识别', () => {
+  assert.equal(isReservedDeployEntry('.yuyan-backups'), true);
+  assert.equal(isReservedDeployEntry('.yuyan-manifests'), true);
+  assert.equal(isReservedDeployEntry('.yuyan-deploy.lock'), true);
+  assert.equal(isReservedDeployEntry('.yuyan-retiring-20261109120000'), true);
+  assert.equal(isReservedDeployEntry('.yuyan-trash-temp'), true);
+
+  assert.equal(isReservedDeployEntry('index.html'), false);
+  assert.equal(isReservedDeployEntry('assets'), false);
+  assert.equal(isReservedDeployEntry('other-file.txt'), false);
+  assert.equal(isReservedDeployEntry(''), false);
+  assert.equal(isReservedDeployEntry(null), false);
+});
+
+test('assertCleanupSafetyCeiling: 清理上限与子应用重名保护断言', () => {
+  // 1. 产物顶层名与嵌套子应用重名时，抛出明确错误阻断发布
+  assert.throws(
+    () =>
+      assertCleanupSafetyCeiling({
+        cleanupPlan: { deleteNames: ['index.html'] },
+        rawArtifactTopNames: ['index.html', 'dataService'],
+        nestedNames: ['dataService'],
+        manifestTopNames: ['index.html'],
+      }),
+    /与.*已登记子应用.*重名/
+  );
+
+  // 1.1 与手填保留目录重名时不抛错
+  assert.doesNotThrow(() =>
+    assertCleanupSafetyCeiling({
+      cleanupPlan: { deleteNames: ['index.html'] },
+      rawArtifactTopNames: ['index.html', 'manualApp'],
+      nestedNames: [],
+      protectedNames: ['manualApp'],
+      manifestTopNames: ['index.html'],
+    })
+  );
+
+  // 2. 待删除项不在产物、清单或额外清理白名单内时，抛出安全防御错误
+  assert.throws(
+    () =>
+      assertCleanupSafetyCeiling({
+        cleanupPlan: { deleteNames: ['rogue-file.sh'] },
+        rawArtifactTopNames: ['index.html'],
+        nestedNames: ['sub'],
+        manifestTopNames: ['index.html'],
+        extraCleanupNames: [],
+      }),
+    /安全防御拦截：待删除项「rogue-file\.sh」既不在产物顶层/
+  );
+
+  // 3. 正常情况通过校验（排除 rejectedExtra）
+  assert.doesNotThrow(() =>
+    assertCleanupSafetyCeiling({
+      cleanupPlan: { deleteNames: ['index.html', 'assets', 'extra-stray.txt'], rejectedExtra: ['rejected.txt'] },
+      rawArtifactTopNames: ['index.html', 'assets'],
+      filteredArtifactTopNames: ['index.html', 'assets'],
+      nestedNames: ['subApp'],
+      manifestTopNames: ['index.html', 'assets'],
+      extraCleanupNames: ['extra-stray.txt', 'rejected.txt'],
+    })
+  );
+
+  // 4. filteredArtifactTopNames 与 rawArtifactTopNames 传入空数组时不得回退到未过滤的 artifactTopNames
+  assert.throws(
+    () =>
+      assertCleanupSafetyCeiling({
+        cleanupPlan: { deleteNames: ['extra.txt'] },
+        artifactTopNames: ['extra.txt'],
+        filteredArtifactTopNames: [], // 显式传入空数组，表示本次产物无有效删除项，不得回退到 artifactTopNames
+        manifestTopNames: [],
+        extraCleanupNames: [],
+      }),
+    /安全防御拦截：待删除项「extra\.txt」既不在产物顶层/
+  );
+
+  assert.doesNotThrow(() =>
+    assertCleanupSafetyCeiling({
+      cleanupPlan: { deleteNames: [] },
+      artifactTopNames: ['subApp'],
+      rawArtifactTopNames: [], // 显式传入空数组，表示本次原始产物为空，不得回退到 artifactTopNames 而误报与子应用重名
+      nestedNames: ['subApp'],
+    })
+  );
+});
+
+test('resolveTopmostLockRoot: 父子孙、兄弟、前缀相似与相同路径计算最外层锁根', () => {
+  // 1. 父/子/孙场景：子或孙目标均收敛至最外层祖先目录
+  assert.equal(
+    resolveTopmostLockRoot('/data/www/html/sub/sub2', ['/data/www/html', '/data/www/html/sub', '/data/www']),
+    '/data/www',
+    '孙应用应匹配最外层 /data/www'
+  );
+  assert.equal(
+    resolveTopmostLockRoot('/data/www/html/sub', ['/data/www/html', '/data/www']),
+    '/data/www',
+    '子应用应匹配最外层 /data/www'
+  );
+  assert.equal(
+    resolveTopmostLockRoot('/data/www', ['/data/www/html', '/data/www/html/sub']),
+    '/data/www',
+    '父目标自身就是最外层'
+  );
+
+  // 2. 兄弟目录场景：互不为祖先，各自锁定自身目录
+  assert.equal(
+    resolveTopmostLockRoot('/data/www/app1', ['/data/www/app2', '/data/www/app3']),
+    '/data/www/app1',
+    '兄弟目录各持己锁'
+  );
+
+  // 3. 前缀相似场景：/html 与 /html2，/data/www/html 与 /data/www/html2
+  assert.equal(
+    resolveTopmostLockRoot('/html2', ['/html']),
+    '/html2',
+    '/html 不是 /html2 的父目录'
+  );
+  assert.equal(
+    resolveTopmostLockRoot('/data/www/html2', ['/data/www/html']),
+    '/data/www/html2',
+    '/data/www/html 不是 /data/www/html2 的父目录'
+  );
+
+  // 4. 相同路径（带或不带尾斜杠）
+  assert.equal(
+    resolveTopmostLockRoot('/data/www/html', ['/data/www/html', '/data/www/html/']),
+    '/data/www/html',
+    '相同路径规范化后一致'
+  );
 });

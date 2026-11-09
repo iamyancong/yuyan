@@ -4,6 +4,8 @@
  * 支持排队名次实时推进通知、排队期间取消（立即退队不创建脏记录）以及排队等待超时保护。
  */
 
+import { isPathNestedOrConflicting } from './deploy-cleanup-policy.mjs';
+
 /** 默认同时运行的部署/回滚/服务操作任务上限 */
 export const DEFAULT_MAX_RUNNING_DEPLOY_TASKS = Math.max(
   1,
@@ -73,13 +75,18 @@ export class DeployTargetBusyError extends Error {
   /**
    * @param {number} targetId 部署目标 ID
    * @param {Object} [existingTask] 当前占用的任务对象
+   * @param {string} [customMessage] 自定义错误信息
    */
-  constructor(targetId, existingTask = null) {
-    const operatorText = existingTask?.operator ? `「${existingTask.operator}」` : '其他成员';
-    const isQueued = Boolean(existingTask?.queued || existingTask?.currentStage === 'queued');
-    const stateVerb = isQueued ? '排队等待' : '执行';
-    const suffix = isQueued ? '，可先停止排队中的发布后再操作' : '，请稍后重试';
-    super(`该部署目标正由 ${operatorText} ${stateVerb}任务${suffix}`);
+  constructor(targetId, existingTask = null, customMessage = '') {
+    if (customMessage) {
+      super(customMessage);
+    } else {
+      const operatorText = existingTask?.operator ? `「${existingTask.operator}」` : '其他成员';
+      const isQueued = Boolean(existingTask?.queued || existingTask?.currentStage === 'queued');
+      const stateVerb = isQueued ? '排队等待' : '执行';
+      const suffix = isQueued ? '，可先停止排队中的发布后再操作' : '，请稍后重试';
+      super(`该部署目标正由 ${operatorText} ${stateVerb}任务${suffix}`);
+    }
     this.name = 'DeployTargetBusyError';
     this.code = 'DEPLOY_TARGET_BUSY';
     this.status = 409;
@@ -87,6 +94,30 @@ export class DeployTargetBusyError extends Error {
     this.targetId = targetId;
     this.existingTask = existingTask;
   }
+}
+
+/**
+ * 判断两个部署任务是否存在物理服务器与部署根路径冲突（相同目标、或同服务器上的嵌套/相同路径）。
+ * @param {Object} taskA - 任务 A
+ * @param {Object} taskB - 任务 B
+ * @returns {boolean} 是否冲突
+ */
+export function isTaskConflicting(taskA, taskB) {
+  if (!taskA || !taskB) return false;
+  if (taskA === taskB) return false;
+  // 1. 同一目标 ID 绝对冲突
+  if (Number(taskA.targetId) === Number(taskB.targetId)) return true;
+
+  // 2. 检查同物理服务器或同一 serverId 下的部署路径冲突
+  const sameServer =
+    (taskA.serverId && taskB.serverId && Number(taskA.serverId) === Number(taskB.serverId)) ||
+    (taskA.host && taskB.host && taskA.host === taskB.host && Number(taskA.port || 22) === Number(taskB.port || 22));
+
+  if (sameServer && taskA.deployRoot && taskB.deployRoot) {
+    return isPathNestedOrConflicting(taskA.deployRoot, taskB.deployRoot);
+  }
+
+  return false;
 }
 
 /**
@@ -108,6 +139,9 @@ export function createDeployTaskScheduler(options = {}) {
 
   /** @type {Set<number>} 当前正占用执行槽位的 targetId 集合 */
   const runningTargetIds = new Set();
+
+  /** @type {Set<Object>} 当前正在执行的快速通道任务集合（不占用执行槽位，但参与路径冲突检测） */
+  const runningBypassTasks = new Set();
 
   /** @type {Array<{task: Object, runner: () => Promise<Object>, hooks: Object, resolve: Function, reject: Function, cleanupQueueListeners: () => void}>} */
   const pendingQueue = [];
@@ -152,11 +186,38 @@ export function createDeployTaskScheduler(options = {}) {
   }
 
   /**
-   * 尝试从 FIFO 队列头部取出任务补充到空闲运行槽位。
+   * 查找当前正处于运行槽位且与目标任务发生物理服务器/路径冲突的任务。
+   * @param {Object} task
+   * @returns {Object|null}
+   */
+  function getConflictingRunningTask(task) {
+    for (const runningId of runningTargetIds) {
+      const runningTask = tasksByTargetId.get(runningId);
+      if (runningTask && isTaskConflicting(task, runningTask)) {
+        return runningTask;
+      }
+    }
+    for (const bypassTask of runningBypassTasks) {
+      if (bypassTask && isTaskConflicting(task, bypassTask)) {
+        return bypassTask;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 尝试从 FIFO 队列中取出与当前运行中任务均不发生路径冲突的任务补充到空闲运行槽位。
    */
   function drainQueue() {
     while (runningTargetIds.size < maxRunning && pendingQueue.length > 0) {
-      const nextEntry = pendingQueue.shift();
+      const candidateIndex = pendingQueue.findIndex(
+        (entry) => !getConflictingRunningTask(entry.task)
+      );
+      if (candidateIndex < 0) {
+        // 队列中剩余任务均与正在运行的任务冲突，等待运行中任务完成后再调度
+        break;
+      }
+      const [nextEntry] = pendingQueue.splice(candidateIndex, 1);
       if (!nextEntry) break;
       nextEntry.cleanupQueueListeners();
       const { task, runner, hooks, resolve, reject } = nextEntry;
@@ -189,6 +250,9 @@ export function createDeployTaskScheduler(options = {}) {
    */
   async function executeTask(task, runner, hooks, execOptions = {}) {
     const bypassQueue = Boolean(execOptions.bypassQueue);
+    if (bypassQueue) {
+      runningBypassTasks.add(task);
+    }
     try {
       const result = await runner();
       if (hooks?.onSuccess) {
@@ -201,7 +265,9 @@ export function createDeployTaskScheduler(options = {}) {
       }
       throw error;
     } finally {
-      if (!bypassQueue) {
+      if (bypassQueue) {
+        runningBypassTasks.delete(task);
+      } else {
         runningTargetIds.delete(task.targetId);
       }
       if (tasksByTargetId.get(task.targetId) === task) {
@@ -210,9 +276,7 @@ export function createDeployTaskScheduler(options = {}) {
       try {
         hooks?.onComplete?.(task, getStats());
       } catch {}
-      if (!bypassQueue) {
-        drainQueue();
-      }
+      drainQueue();
     }
   }
 
@@ -229,9 +293,18 @@ export function createDeployTaskScheduler(options = {}) {
       throw new DeployTargetBusyError(task.targetId, existingTask);
     }
 
+    const conflictingRunningTask = getConflictingRunningTask(task);
     const bypassQueue = Boolean(hooks?.bypassQueue ?? isLightweightDeployAction(task?.action));
 
     if (bypassQueue) {
+      if (conflictingRunningTask) {
+        const targetDesc = conflictingRunningTask.projectName || `目标 #${conflictingRunningTask.targetId}`;
+        throw new DeployTargetBusyError(
+          task.targetId,
+          conflictingRunningTask,
+          `该操作因与正在执行任务的「${targetDesc}」（部署目录：${conflictingRunningTask.deployRoot}）存在嵌套路径冲突而无法并发执行，请稍后重试`
+        );
+      }
       tasksByTargetId.set(task.targetId, task);
       task.queued = false;
       task.queuePosition = 0;
@@ -250,7 +323,7 @@ export function createDeployTaskScheduler(options = {}) {
 
     tasksByTargetId.set(task.targetId, task);
 
-    if (runningTargetIds.size < maxRunning) {
+    if (runningTargetIds.size < maxRunning && !conflictingRunningTask) {
       task.queued = false;
       task.queuePosition = 0;
       runningTargetIds.add(task.targetId);

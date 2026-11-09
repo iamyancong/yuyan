@@ -71,6 +71,17 @@ function formatDetectOutput(realRoot, names = [], manifestText = '') {
   ].join('\n');
 }
 
+function isDeleteCommand(cmd) {
+  if (cmd.includes('# yuyan:deploy-lock')) return false;
+  // 只清理雨燕自己留下的、超过 60 分钟的 .yuyan-retiring-* / .yuyan-trash-* 临时目录，不触及任何用户条目
+  if (cmd.includes('# yuyan:prune-stale-staging')) return false;
+  return (
+    cmd.includes('clear_deploy_root') ||
+    cmd.includes('# yuyan:staged-retire') ||
+    (cmd.includes('rm -rf') && !cmd.includes('.yuyan-backups'))
+  );
+}
+
 function createMockSsh({
   realRoot = '/data/www/html',
   existingNames = [],
@@ -79,6 +90,7 @@ function createMockSsh({
   failOnClear = false,
   failOnReload = false,
   failOnUpload = false,
+  failOnPatterns = [],
 } = {}) {
   const commands = [];
 
@@ -99,6 +111,15 @@ function createMockSsh({
           return;
         }
 
+        // 1.1 按特征串模拟任意命令失败
+        if (failOnPatterns.some((p) => cmd.includes(p))) {
+          stream.stderr.write('Mocked pattern command failed');
+          stream.end();
+          stream.stderr.end();
+          stream.emit('close', 1);
+          return;
+        }
+
         // 2. 模拟备份命令失败
         if (failOnBackup && (cmd.includes('.yuyan-backups') || cmd.includes('backup_deploy_root') || cmd.includes('cp -a') || cmd.includes('cp -f'))) {
           stream.stderr.write('Mocked backup command failed');
@@ -108,8 +129,8 @@ function createMockSsh({
           return;
         }
 
-        // 3. 模拟清理命令失败
-        if (failOnClear && (cmd.includes('clear_deploy_root') || cmd.includes('rm -rf') || cmd.includes('find') || cmd.includes('rm -f'))) {
+        // 3. 模拟清理命令失败（匹配真实的清空/暂存命令，绝不匹配锁命令）
+        if (failOnClear && !cmd.includes('# yuyan:deploy-lock') && (cmd.includes('clear_deploy_root') || cmd.includes('# yuyan:staged-retire'))) {
           stream.stderr.write('Mocked clear command failed');
           stream.end();
           stream.stderr.end();
@@ -444,9 +465,7 @@ test('安全门禁：payload 传入 __testHooks={skipBuild:true} 时被忽略，
   );
 
   // 校验发出的远程命令，断言绝不能发出任何 clear 或 rm -rf 命令
-  const clearCmds = mock.commands.filter(
-    (c) => c.includes('clear_deploy_root') || (c.includes('rm -rf') && !c.includes('.yuyan-backups'))
-  );
+  const clearCmds = mock.commands.filter(isDeleteCommand);
   assert.equal(clearCmds.length, 0, 'clone 阶段失败时绝不能发出任何删除清空命令');
 
   // 断言数据库未写入任何指纹
@@ -523,9 +542,7 @@ test('端到端场景 b：备份命令失败时立即中止清空，不写指纹
   const targetRow = await runRequestContext(env.context, () => store.getTarget(env.mainTarget.id));
   assert.equal(targetRow.cleanupConfirmedFingerprint, '', 'b) 备份失败时绝对不能写入确认指纹');
 
-  const deleteCommands = mock.commands.filter(
-    (c) => c.includes('clear_deploy_root') || (c.includes('rm -rf') && !c.includes('.yuyan-backups'))
-  );
+  const deleteCommands = mock.commands.filter(isDeleteCommand);
   assert.equal(deleteCommands.length, 0, 'b) 备份失败中止时绝不能发出任何删除命令');
 });
 
@@ -563,8 +580,8 @@ test('端到端场景 c：清空执行成功后完整写入确认指纹、确认
   assert.deepEqual(scopeObj.protected, ['sub-app'], 'c) 正确记录受保护名单');
   assert.deepEqual(scopeObj.unknown, ['manual.pdf'], 'c) 正确记录未识别名单');
 
-  // 断言发出了清空旧条目命令
-  const clearCmd = mock.commands.find((c) => c.includes('index.html') && (c.includes('rm -rf') || c.includes('rm -f')));
+  // 断言发出了清空旧条目命令（暂存等价于删除）
+  const clearCmd = mock.commands.find((c) => c.includes('index.html') && (c.includes('# yuyan:staged-retire') || c.includes('rm -rf') || c.includes('rm -f')));
   assert.ok(clearCmd, 'c) 必须发出了包含旧版本条目的清空命令');
 
   // 断言写入了中央审计
@@ -699,7 +716,7 @@ test('端到端场景 f：发布时服务器新增未识别项导致指纹不符
   );
 
   // 检查发出的远程命令，绝不含清空旧版本条目命令
-  const clearCmds = mock.commands.filter((c) => c.includes('clear_deploy_root') || (c.includes('rm -rf') && !c.includes('.yuyan-backups')));
+  const clearCmds = mock.commands.filter(isDeleteCommand);
   assert.equal(clearCmds.length, 0, 'f) 拒绝时绝对不能发出清空删除命令');
 });
 
@@ -731,7 +748,7 @@ test('端到端场景 g：前端传 cleanReplaceConfirmed 但缺失 confirmedFin
     /服务器目录有变化，请重新预览后确认/
   );
 
-  const clearCmds = mock.commands.filter((c) => c.includes('clear_deploy_root') || (c.includes('rm -rf') && !c.includes('.yuyan-backups')));
+  const clearCmds = mock.commands.filter(isDeleteCommand);
   assert.equal(clearCmds.length, 0, 'g) 缺失指纹被拒时绝不能发出删除命令');
 });
 
@@ -763,7 +780,7 @@ test('端到端场景 h：勾选额外清理项但未传 cleanReplaceConfirmed �
     /额外清理项需要二次确认后才能发布/
   );
 
-  const clearCmds = mock.commands.filter((c) => c.includes('clear_deploy_root') || (c.includes('rm -rf') && !c.includes('.yuyan-backups')));
+  const clearCmds = mock.commands.filter(isDeleteCommand);
   assert.equal(clearCmds.length, 0, 'h) 额外清理未确认时绝不能发出删除命令');
 });
 
@@ -1221,5 +1238,77 @@ test('MCP 端到端：服务器目录发生变化导致指纹改变时，MCP 发
         })
       ),
     /服务器目录有变化，请重新预览后确认/
+  );
+});
+
+test('端到端场景 i：暂存后 Nginx reload 失败时先从暂存区还原，且不再整份备份恢复', async () => {
+  const env = await createE2ETestContext('e2e-i');
+  const iEntries = ['index.html', 'assets', 'sub-app', 'manual.pdf', 'doc2.pdf'];
+  const iFp = computeCleanupScopeFingerprint('/data/www/html', ['sub-app'], ['doc2.pdf', 'manual.pdf']);
+  const mock = createMockSsh({
+    realRoot: '/data/www/html',
+    existingNames: iEntries,
+    manifestText: baseManifest,
+    failOnReload: true,
+  });
+  __setTestHooks({ withSsh: mock.withSsh, skipBuild: true, prepareArtifacts: defaultPrepareTestArtifacts });
+
+  await assert.rejects(
+    () =>
+      runRequestContext(env.context, () =>
+        service.deployTarget(env.mainTarget.id, {
+          branch: 'main',
+          cleanReplaceConfirmed: true,
+          confirmedFingerprint: iFp,
+          operator: '发布员I',
+        })
+      ),
+    /Mocked nginx reload failed|重载 Nginx/
+  );
+
+  assert.ok(mock.commands.some((c) => c.includes('# yuyan:staged-retire')), 'i) 必须先挪入暂存区');
+  assert.ok(mock.commands.some((c) => c.includes('# yuyan:restore-from-staging')), 'i) 失败后必须从暂存区还原');
+  assert.equal(
+    mock.commands.filter((c) => c.includes('is_entry_only="$3"')).length,
+    0,
+    'i) 暂存区还原成功后不得再整份备份恢复'
+  );
+});
+
+test('端到端场景 j：持锁期间恢复失败后，锁释放后不得再做第二次恢复', async () => {
+  const env = await createE2ETestContext('e2e-j');
+  const jEntries = ['index.html', 'assets', 'sub-app', 'manual.pdf', 'doc2.pdf'];
+  const jFp = computeCleanupScopeFingerprint('/data/www/html', ['sub-app'], ['doc2.pdf', 'manual.pdf']);
+  const mock = createMockSsh({
+    realRoot: '/data/www/html',
+    existingNames: jEntries,
+    manifestText: baseManifest,
+    failOnReload: true,
+    failOnPatterns: ['# yuyan:restore-from-staging', 'is_entry_only="$3"'],
+  });
+  __setTestHooks({ withSsh: mock.withSsh, skipBuild: true, prepareArtifacts: defaultPrepareTestArtifacts });
+
+  await assert.rejects(
+    () =>
+      runRequestContext(env.context, () =>
+        service.deployTarget(env.mainTarget.id, {
+          branch: 'main',
+          cleanReplaceConfirmed: true,
+          confirmedFingerprint: jFp,
+          operator: '发布员J',
+        })
+      ),
+    /Mocked nginx reload failed|重载 Nginx/
+  );
+
+  const lockReleaseIndex = mock.commands.findLastIndex((c) => c.includes('# yuyan:deploy-lock') && c.includes('expected_owner'));
+  assert.ok(lockReleaseIndex >= 0, 'j) 必须释放锁');
+  const restoreAfterRelease = mock.commands
+    .slice(lockReleaseIndex + 1)
+    .filter((c) => c.includes('# yuyan:restore-from-staging') || c.includes('is_entry_only="$3"'));
+  assert.equal(restoreAfterRelease.length, 0, 'j) 锁释放后不得再发出任何恢复命令');
+  assert.ok(
+    mock.commands.slice(0, lockReleaseIndex).some((c) => c.includes('# yuyan:restore-from-staging')),
+    'j) 持锁期间必须尝试过暂存区还原'
   );
 });

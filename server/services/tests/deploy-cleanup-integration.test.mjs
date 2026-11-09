@@ -3,6 +3,7 @@ import { exec } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import util from 'node:util';
 
@@ -16,6 +17,12 @@ import {
   buildDetectBackupRestorePlanCommand,
   parseDetectBackupRestorePlanOutput,
   detectBackupRestorePlan,
+  buildStagedRetireCommand,
+  buildPurgeStagedRetireCommand,
+  buildRestoreFromStagingCommand,
+  batchDetectRealRoots,
+  acquireFrontendDeployLock,
+  releaseFrontendDeployLock,
 } from '../deploy-service.mjs';
 import { shellQuote } from '../ssh-service.mjs';
 import {
@@ -1355,5 +1362,257 @@ test('真实 Shell 集成：5 大核心场景套件（Busybox 参数化重跑）
     await runShellIntegrationSuite(busyboxEnv, 'Busybox 环境');
   } finally {
     await fs.rm(tmpBin, { recursive: true, force: true });
+  }
+});
+
+test('真实 Shell 集成：buildStagedRetireCommand 正常暂存条目并由 buildPurgeStagedRetireCommand 物理清除', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yuyan-staged-retire-'));
+  try {
+    const deployRoot = path.join(tmpDir, 'html');
+    await fs.mkdir(deployRoot, { recursive: true });
+    await fs.writeFile(path.join(deployRoot, 'index.html'), '<html>old</html>', 'utf8');
+    await fs.writeFile(path.join(deployRoot, 'old.txt'), 'old file', 'utf8');
+    await fs.writeFile(path.join(deployRoot, 'keep.txt'), 'keep me', 'utf8');
+
+    const releaseName = '20261109120000';
+    const stagingDir = path.join(deployRoot, `.yuyan-retiring-${releaseName}`);
+
+    // 执行暂存命令
+    const retireCmd = buildStagedRetireCommand(deployRoot, ['index.html', 'old.txt'], releaseName, false);
+    await execAsync(retireCmd);
+
+    // 验证条目已被安全移入暂存区
+    assert.equal(await fs.stat(path.join(deployRoot, 'index.html')).catch(() => null), null);
+    assert.equal(await fs.stat(path.join(deployRoot, 'old.txt')).catch(() => null), null);
+    assert.ok(await fs.stat(path.join(deployRoot, 'keep.txt')));
+    assert.ok(await fs.stat(path.join(stagingDir, 'index.html')));
+    assert.ok(await fs.stat(path.join(stagingDir, 'old.txt')));
+
+    // 执行清理暂存命令
+    const purgeCmd = buildPurgeStagedRetireCommand(deployRoot, releaseName, false);
+    await execAsync(purgeCmd);
+
+    // 验证暂存区已彻底被清理
+    assert.equal(await fs.stat(stagingDir).catch(() => null), null);
+    assert.ok(await fs.stat(path.join(deployRoot, 'keep.txt')));
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('真实 Shell 集成：buildStagedRetireCommand 遇错失败时自动触发 trap 反向还原已移动条目', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yuyan-staged-fail-'));
+  try {
+    const deployRoot = path.join(tmpDir, 'html');
+    await fs.mkdir(deployRoot, { recursive: true });
+    await fs.writeFile(path.join(deployRoot, 'fileA.txt'), 'content A', 'utf8');
+    await fs.writeFile(path.join(deployRoot, 'fileB.txt'), 'content B', 'utf8');
+
+    const releaseName = '20261109130000';
+    const stagingDir = path.join(deployRoot, `.yuyan-retiring-${releaseName}`);
+
+    // 预先构造一个同名只读目录阻止 fileB.txt 被移动，迫使 mv 失败
+    await fs.mkdir(stagingDir, { recursive: true });
+    const blockDest = path.join(stagingDir, 'fileB.txt');
+    await fs.mkdir(blockDest, { recursive: true });
+    await fs.writeFile(path.join(blockDest, 'immutable.txt'), 'block file', 'utf8');
+
+    const retireCmd = buildStagedRetireCommand(deployRoot, ['fileA.txt', 'fileB.txt'], releaseName, false);
+    await assert.rejects(
+      async () => execAsync(retireCmd),
+      /暂存旧条目失败/
+    );
+
+    // 验证现场必须 100% 还原：fileA.txt 回到了 deployRoot，原文件内容完好；暂存区因有未挪回条目已被安全保留（全文不允许 rm -rf）
+    assert.equal(await fs.readFile(path.join(deployRoot, 'fileA.txt'), 'utf8'), 'content A');
+    assert.equal(await fs.readFile(path.join(deployRoot, 'fileB.txt'), 'utf8'), 'content B');
+    assert.ok(await fs.stat(stagingDir).catch(() => null), '暂存区有未还原条目时必须被安全保留');
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('真实 Shell 集成：batchDetectRealRoots 能够跨平台穿透软链接目录批量输出真实规范路径', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yuyan-batch-realpath-'));
+  try {
+    const realA = path.join(tmpDir, 'real-a');
+    const linkA = path.join(tmpDir, 'link-a');
+    const normalB = path.join(tmpDir, 'normal-b');
+    const subNonexistent = path.join(realA, 'not-created-yet');
+
+    await fs.mkdir(realA, { recursive: true });
+    await fs.mkdir(normalB, { recursive: true });
+    await fs.symlink(realA, linkA);
+
+    const inputPaths = [linkA, normalB, path.join(linkA, 'sub'), subNonexistent];
+
+    // 真正调用 batchDetectRealRoots 并传入最小 fake conn
+    const fakeConn = {
+      exec(cmd, callback) {
+        const stream = new PassThrough();
+        stream.stderr = new PassThrough();
+        callback(null, stream);
+        exec(cmd, { shell: '/bin/sh' }, (err, stdout, stderr) => {
+          if (stdout) stream.write(stdout);
+          if (stderr) stream.stderr.write(stderr);
+          stream.end();
+          stream.stderr.end();
+          stream.emit('close', err ? (err.code || 1) : 0);
+        });
+      },
+    };
+
+    const lines = await batchDetectRealRoots(fakeConn, inputPaths);
+
+    const expectedRealA = await fs.realpath(realA);
+    const expectedNormalB = await fs.realpath(normalB);
+
+    assert.equal(lines[0], expectedRealA, '软链接 linkA 必须解析为真实路径 realA');
+    assert.equal(lines[1], expectedNormalB, '正常目录 normalB 保持真实规范路径');
+    assert.equal(lines[2], path.join(expectedRealA, 'sub'), '尚未创建的子目录应穿透父软链接');
+    assert.equal(lines[3], path.join(expectedRealA, 'not-created-yet'), '穿透真实路径');
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('真实 Shell 集成：暂存回退含空格/星号/前导横杠名字不丢数据（无 rm -rf）', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yuyan-staged-rollback-'));
+  try {
+    const root = path.join(tmpDir, 'root');
+    await fs.mkdir(root, { recursive: true });
+
+    // 创建包含特殊字符的目录和文件
+    const fileWithSpace = 'my app site';
+    const fileWithGlob = 'app*test';
+    const fileWithDash = '-leading-dash';
+    const fileChinese = '中文 目录';
+    const conflictItem = 'conflict.txt';
+
+    await fs.mkdir(path.join(root, fileWithSpace), { recursive: true });
+    await fs.writeFile(path.join(root, fileWithSpace, 'index.html'), 'hello space');
+    await fs.writeFile(path.join(root, fileWithGlob), 'hello glob');
+    await fs.writeFile(path.join(root, fileWithDash), 'hello dash');
+    await fs.writeFile(path.join(root, fileChinese), 'hello chinese');
+    await fs.writeFile(path.join(root, conflictItem), 'root conflict');
+
+    // 在暂存区故意制造同名冲突，触发暂存失败反向回退
+    const stagingDir = path.join(root, '.yuyan-retiring-v1');
+    await fs.mkdir(stagingDir, { recursive: true });
+    await fs.writeFile(path.join(stagingDir, conflictItem), 'staging conflict');
+
+    const names = [fileWithSpace, fileWithGlob, fileWithDash, fileChinese, conflictItem];
+    const cmd = buildStagedRetireCommand(root, names, 'v1');
+
+    // 执行暂存命令，预期因 conflictItem 失败并执行反向回退
+    const result = await execAsync(cmd, { shell: '/bin/sh' }).catch((err) => err);
+    assert.notEqual(result.code, 0, '发生冲突时暂存命令必须退出非 0');
+
+    // 验证所有正常条目均已完好反向还原至 root
+    const spaceStat = await fs.stat(path.join(root, fileWithSpace)).catch(() => null);
+    assert.ok(spaceStat?.isDirectory(), '带空格的目录必须被完整还原');
+    const spaceHtml = await fs.readFile(path.join(root, fileWithSpace, 'index.html'), 'utf8');
+    assert.equal(spaceHtml, 'hello space');
+
+    const globStat = await fs.stat(path.join(root, fileWithGlob)).catch(() => null);
+    assert.ok(globStat?.isFile(), '带星号的文件必须被完整还原');
+
+    const dashStat = await fs.stat(path.join(root, fileWithDash)).catch(() => null);
+    assert.ok(dashStat?.isFile(), '前导横杠的文件必须被完整还原');
+
+    const chineseStat = await fs.stat(path.join(root, fileChinese)).catch(() => null);
+    assert.ok(chineseStat?.isFile(), '中文文件名必须被完整还原');
+
+    // 暂存区因 conflictItem 仍未挪回，rmdir 失败但已被安全保留
+    const stagingStat = await fs.stat(stagingDir).catch(() => null);
+    assert.ok(stagingStat?.isDirectory(), '暂存区有残留条目时必须被安全保留');
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('真实 Shell 集成：buildRestoreFromStagingCommand 发布失败恢复暂存旧版本条目', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yuyan-restore-staging-'));
+  try {
+    const root = path.join(tmpDir, 'root');
+    const stagingDir = path.join(root, '.yuyan-retiring-v2');
+    await fs.mkdir(root, { recursive: true });
+    await fs.mkdir(stagingDir, { recursive: true });
+
+    // 暂存区中的旧条目（包含空格与特殊字符）
+    await fs.writeFile(path.join(stagingDir, 'index.html'), 'old html v1');
+    await fs.mkdir(path.join(stagingDir, 'assets with space'), { recursive: true });
+    await fs.writeFile(path.join(stagingDir, 'assets with space', 'chunk.js'), 'old chunk');
+
+    // root 下本次新上传的新条目与额外新文件
+    await fs.writeFile(path.join(root, 'index.html'), 'new broken html v2');
+    await fs.mkdir(path.join(root, 'assets with space'), { recursive: true });
+    await fs.writeFile(path.join(root, 'assets with space', 'chunk.js'), 'new chunk');
+    await fs.writeFile(path.join(root, 'brand-new.js'), 'new stray file');
+
+    const cmd = buildRestoreFromStagingCommand(root, 'v2', ['index.html', 'assets with space']);
+    const { stdout, stderr } = await execAsync(cmd, { shell: '/bin/sh' });
+
+    // 验证暂存区旧条目已还原回 root
+    const restoredHtml = await fs.readFile(path.join(root, 'index.html'), 'utf8');
+    assert.equal(restoredHtml, 'old html v1', 'index.html 应还原为旧内容');
+
+    const restoredChunk = await fs.readFile(path.join(root, 'assets with space', 'chunk.js'), 'utf8');
+    assert.equal(restoredChunk, 'old chunk', 'assets with space 应还原为旧内容');
+
+    // 验证暂存区已空并被 rmdir 成功删除
+    const stagingStat = await fs.stat(stagingDir).catch(() => null);
+    assert.equal(stagingStat, null, '暂存区条目全数还原后暂存目录应被彻底清除');
+
+    // 新增的文件 brand-new.js 保留在 root 中等待后续备份恢复处理
+    const brandNewStat = await fs.stat(path.join(root, 'brand-new.js')).catch(() => null);
+    assert.ok(brandNewStat?.isFile(), '新产物独有条目保留在 root 中');
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('真实 Shell 集成：远程锁 owner 校验（他人持有时 release 不删，自身持有时安全清除）', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yuyan-lock-owner-'));
+  try {
+    const root = path.join(tmpDir, 'root');
+    await fs.mkdir(root, { recursive: true });
+
+    const fakeConn = {
+      exec(cmd, callback) {
+        const stream = new PassThrough();
+        stream.stderr = new PassThrough();
+        callback(null, stream);
+        exec(cmd, { shell: '/bin/sh' }, (err, stdout, stderr) => {
+          if (stdout) stream.write(stdout);
+          if (stderr) stream.stderr.write(stderr);
+          stream.end();
+          stream.stderr.end();
+          stream.emit('close', err ? (err.code || 1) : 0);
+        });
+      },
+    };
+
+    // 1. acquire 锁
+    const myToken = await acquireFrontendDeployLock(fakeConn, root, false, { recordId: 888 });
+    assert.match(myToken, /record=888/);
+
+    const lockDir = path.join(root, '.yuyan-deploy.lock');
+    const lockStat = await fs.stat(lockDir).catch(() => null);
+    assert.ok(lockStat?.isDirectory(), '锁目录必须已成功创建');
+
+    // 2. 尝试用他人 token 释放锁：应当不删锁目录
+    const otherToken = 'host=other-host pid=99999 record=999 at=2026-01-01T00:00:00.000Z';
+    await releaseFrontendDeployLock(fakeConn, root, otherToken, false);
+
+    const lockStatAfterOther = await fs.stat(lockDir).catch(() => null);
+    assert.ok(lockStatAfterOther?.isDirectory(), '他人持有时 release 绝不能删除锁目录');
+
+    // 3. 用自己正确的 token 释放锁：应当正常删除
+    await releaseFrontendDeployLock(fakeConn, root, myToken, false);
+    const lockStatAfterMine = await fs.stat(lockDir).catch(() => null);
+    assert.equal(lockStatAfterMine, null, '自己释放时锁目录应已被彻底清除');
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
   }
 });

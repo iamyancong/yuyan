@@ -6,6 +6,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { buildAuthUrl } from './git-service.mjs';
 import {
@@ -17,6 +18,7 @@ import {
   getServerWithCredential,
   getTarget,
   listTargets,
+  listPhysicalServerTargets,
   pruneProjectRecords,
   pruneTargetBackupReferences,
   updateRecord,
@@ -41,6 +43,10 @@ import {
   isValidEntryName,
   filterManifestRelativeFiles,
   RESERVED_DEPLOY_ENTRIES,
+  isReservedDeployEntry,
+  assertCleanupSafetyCeiling,
+  isPathNestedOrConflicting,
+  resolveTopmostLockRoot,
 } from './deploy-cleanup-policy.mjs';
 import {
   execSsh,
@@ -402,6 +408,9 @@ function getNestedDeploySubDir(parentRoot, childRoot) {
 /**
  * 获取当前部署目标的受保护条目详情（包含来源）。
  * @param {Object} target - 当前部署目标
+ * @param {Object} [options={}] - 配置项
+ * @param {string} [options.currentRealRoot] - 当前目标的真实绝对路径（已解析软链接）
+ * @param {Map<number, string>} [options.realRootsByTargetId] - 其他目标的真实路径映射
  * @returns {Promise<{
  *   manualEntries: string[],
  *   nestedEntries: string[],
@@ -409,13 +418,30 @@ function getNestedDeploySubDir(parentRoot, childRoot) {
  *   protectedList: Array<{ name: string, source: 'nested'|'manual' }>
  * }>} 受保护条目详情
  */
-export async function resolveProtectedEntriesWithDetails(target) {
+export async function resolveProtectedEntriesWithDetails(target, options = {}) {
   const manualEntries = parsePreserveSubDirs(target.preserveSubDirs);
-  const targets = await listTargets({ serverId: target.serverId });
+  let targets = [];
+  try {
+    targets = await listPhysicalServerTargets({ serverId: target.serverId });
+  } catch (error) {
+    if (typeof options.log === 'function') {
+      options.log('warn', `查询物理服务器部署目标失败，降级使用逻辑服务器目标：${error.message || error}`, 'upload');
+    } else {
+      console.warn(`[Deploy] 查询物理服务器部署目标失败，降级使用逻辑服务器目标：${error.message || error}`);
+    }
+    targets = await listTargets({ serverId: target.serverId });
+  }
+
+  const parentRoot = options.currentRealRoot || target.realDeployRoot || target.deployRoot;
+
   const nestedEntries = targets
     .filter((item) => Number(item.id) !== Number(target.id))
-    .map((item) => getNestedDeploySubDir(target.deployRoot, item.deployRoot))
-    .filter((item) => isValidEntryName(item) && !RESERVED_DEPLOY_ENTRIES.includes(item));
+    .map((item) => {
+      const childRoot = options.realRootsByTargetId?.get(item.id) || item.realDeployRoot || item.deployRoot;
+      // 真实路径与配置路径双重判定，任一命中嵌套均视为受保护子应用
+      return getNestedDeploySubDir(parentRoot, childRoot) || getNestedDeploySubDir(target.deployRoot, item.deployRoot);
+    })
+    .filter((item) => isValidEntryName(item) && !isReservedDeployEntry(item));
 
   const uniqueNested = [...new Set(nestedEntries)];
   const uniqueManual = [...new Set(manualEntries.filter((m) => !uniqueNested.includes(m)))];
@@ -437,10 +463,11 @@ export async function resolveProtectedEntriesWithDetails(target) {
 /**
  * 获取当前部署目标需要保护的顶层子目录。
  * @param {Object} target - 当前部署目标
+ * @param {Object} [options={}] - 配置项
  * @returns {Promise<string[]>} 保留子目录列表
  */
-export async function resolveProtectedSubDirs(target) {
-  const details = await resolveProtectedEntriesWithDetails(target);
+export async function resolveProtectedSubDirs(target, options = {}) {
+  const details = await resolveProtectedEntriesWithDetails(target, options);
   return details.allProtected;
 }
 
@@ -1884,6 +1911,256 @@ export async function detectDeployRoot(conn, deployRoot, useSudo = false, option
 }
 
 /**
+ * 远程批量解析路径真实规范路径（穿透软链接，支持尚不存在的子路径）。
+ * 每行输出带序号前缀（如 <i>\t<path>），JS 端按序号解析，缺失或失败回退为原路径。
+ * @param {Object} conn - SSH 连接
+ * @param {string[]} paths - 待解析路径列表
+ * @param {boolean} [useSudo=false] - 是否使用 sudo
+ * @returns {Promise<string[]>} 解析后的真实路径列表（与输入顺序严格对应）
+ */
+export async function batchDetectRealRoots(conn, paths = [], useSudo = false) {
+  if (!paths || !paths.length) return [];
+  const script = [
+    'idx=0',
+    'for p in "$@"; do',
+    '  out=""',
+    '  if [ -d "$p" ]; then',
+    '    out=$(cd -P "$p" 2>/dev/null && pwd -P) || out="$p"',
+    '  else',
+    '    dir="$(dirname "$p")"',
+    '    base="$(basename "$p")"',
+    '    if [ -d "$dir" ]; then',
+    '      real_dir=$(cd -P "$dir" 2>/dev/null && pwd -P) || true',
+    '      if [ -n "$real_dir" ]; then',
+    '        if [ "$real_dir" = "/" ]; then',
+    '          out="/$base"',
+    '        else',
+    '          out="$real_dir/$base"',
+    '        fi',
+    '      else',
+    '        out="$p"',
+    '      fi',
+    '    else',
+    '      out="$p"',
+    '    fi',
+    '  fi',
+    '  if [ -z "$out" ]; then',
+    '    out="$p"',
+    '  fi',
+    '  printf "%d\\t%s\\n" "$idx" "$out"',
+    '  idx=$((idx + 1))',
+    'done',
+  ].join('\n');
+  const result = await execSsh(conn, buildRemoteShellCommand(script, paths, useSudo), {
+    allowFailure: true,
+    label: '批量探测路径真实映射',
+  });
+  if (result.code !== 0) {
+    return [...paths];
+  }
+  const resultMap = new Map();
+  const rawLines = (result.stdout || '').split(/\r?\n/);
+  for (const line of rawLines) {
+    if (!line) continue;
+    const tabIndex = line.indexOf('\t');
+    if (tabIndex !== -1) {
+      const idx = Number(line.slice(0, tabIndex));
+      const val = line.slice(tabIndex + 1).trim();
+      if (!Number.isNaN(idx) && val) {
+        resultMap.set(idx, val);
+      }
+    }
+  }
+  return paths.map((original, i) => resultMap.get(i) || original);
+}
+
+/**
+ * 清理部署根目录下过期的暂存与垃圾箱目录（超过 60 分钟）。
+ * 必须在持有目录锁后、执行探测前调用。删除只针对 .yuyan-retiring-* 与 .yuyan-trash-* 前缀。
+ * @param {Object} conn - SSH 连接
+ * @param {string} rootPath - 部署真实根路径
+ * @param {boolean} [useSudo=false] - 是否使用 sudo
+ * @param {Function} [log] - 日志记录函数
+ */
+export async function cleanupExpiredStagingAndTrash(conn, rootPath, useSudo = false, log = null) {
+  const script = [
+    '# yuyan:prune-stale-staging',
+    'root="$1"',
+    'if [ -d "$root" ]; then',
+    '  find "$root" -maxdepth 1 -mindepth 1 \\( -name ".yuyan-retiring-*" -o -name ".yuyan-trash-*" \\) -mmin +60 2>/dev/null | while IFS= read -r dir; do',
+    '    base=$(basename "$dir")',
+    '    case "$base" in',
+    '      .yuyan-retiring-*|.yuyan-trash-*)',
+    '        if rm -rf "$dir" 2>/dev/null; then',
+    '          echo "cleaned: $base"',
+    '        else',
+    '          echo "failed: $base" >&2',
+    '        fi',
+    '        ;;',
+    '    esac',
+    '  done',
+    'fi',
+  ].join('\n');
+
+  try {
+    const result = await execSsh(conn, buildRemoteShellCommand(script, [rootPath], useSudo), {
+      allowFailure: true,
+      label: '清理过期暂存与垃圾箱目录',
+    });
+    if (result.code === 0 && result.stdout) {
+      const cleaned = result.stdout
+        .split(/\r?\n/)
+        .filter((l) => l.startsWith('cleaned:'))
+        .map((l) => l.replace('cleaned:', '').trim())
+        .filter(Boolean);
+      if (cleaned.length > 0 && typeof log === 'function') {
+        log('info', `已清理 ${cleaned.length} 个过期暂存/垃圾箱目录：${cleaned.join('、')}`, 'cleanup');
+      }
+    } else if (result.code !== 0 && typeof log === 'function') {
+      log('warn', `清理过期暂存目录异常（退出码 ${result.code}）：${result.stderr || ''}`, 'cleanup');
+    }
+  } catch (error) {
+    if (typeof log === 'function') {
+      log('warn', `清理过期暂存目录失败：${error.message || error}`, 'cleanup');
+    }
+  }
+}
+
+/**
+ * 获取远程前端部署目录锁（防多实例踩踏与父子目录并发冲突）。
+ * 锁目录为 .yuyan-deploy.lock，在内部记录 owner 文件：host=<hostname> pid=<pid> record=<recordId> at=<ISO时间>。
+ * 全程不用 rm -rf，使用 mkdir 原子加锁；如已有锁但 owner 超过 120 分钟未更新则尝试清理过期锁并重新竞争获取。
+ * @param {Object} conn - SSH 连接
+ * @param {string} deployRoot - 部署根目录（通常为最外层 lockRoot）
+ * @param {boolean} [useSudo=false] - 是否使用 sudo
+ * @param {Object} [options={}] - 配置选项
+ * @param {number|string} [options.recordId] - 当前部署/回滚记录 ID
+ * @param {Function} [options.log] - 日志记录函数
+ * @returns {Promise<string>} ownerToken（用于释放锁时的校验）
+ */
+export async function acquireFrontendDeployLock(conn, deployRoot, useSudo = false, options = {}) {
+  if (typeof useSudo === 'object') {
+    options = useSudo;
+    useSudo = options.useSudo || false;
+  }
+  const lockDir = path.posix.join(deployRoot, '.yuyan-deploy.lock');
+  const recordId = options.recordId || 0;
+  const ownerToken = `host=${os.hostname()} pid=${process.pid} record=${recordId} at=${new Date().toISOString()}`;
+
+  const script = [
+    '# yuyan:deploy-lock',
+    'set -u',
+    'lock="$1"',
+    'owner_str="$2"',
+    'owner_file="$lock/owner"',
+    '',
+    'if [ -d "$lock" ]; then',
+    '  # 检查 owner 文件是否存在且超过 120 分钟未修改（使用 find 检查 mtime）',
+    '  if [ -f "$owner_file" ] && find "$owner_file" -maxdepth 0 -mmin +120 2>/dev/null | grep -q .; then',
+    '    # 说明仍有极小竞争窗口：并发下两个进程可能同时判定过期，但随后的 mkdir 保证原子性',
+    '    rm -f "$owner_file" 2>/dev/null || true',
+    '    rmdir "$lock" 2>/dev/null || true',
+    '  elif [ ! -f "$owner_file" ] && find "$lock" -maxdepth 0 -mmin +120 2>/dev/null | grep -q .; then',
+    '    rmdir "$lock" 2>/dev/null || true',
+    '  fi',
+    'fi',
+    '',
+    'if mkdir "$lock" 2>/dev/null; then',
+    '  if ! printf \'%s\\n\' "$owner_str" > "$owner_file"; then',
+    '    rmdir "$lock" 2>/dev/null || true',
+    '    echo "LOCK_FAILED: 写入持有者信息失败" >&2',
+    '    exit 1',
+    '  fi',
+    '  exit 0',
+    'else',
+    '  cur_owner=$(cat "$owner_file" 2>/dev/null || echo "未知持有者")',
+    '  echo "LOCK_FAILED: $cur_owner" >&2',
+    '  exit 1',
+    'fi',
+  ].join('\n');
+
+  const result = await execSsh(conn, buildRemoteShellCommand(script, [lockDir, ownerToken], useSudo), {
+    allowFailure: true,
+    label: '获取远程部署目录锁',
+  });
+
+  if (result.code !== 0) {
+    const stderr = String(result.stderr || '');
+    const match = stderr.match(/LOCK_FAILED:\s*(.+)/);
+    const ownerInfo = match ? match[1].trim() : '未知持有者';
+    throw new Error(
+      `无法获取远程部署目录锁（${lockDir} 已存在或无权创建）。当前持有者：${ownerInfo}。可能已有其他雨燕进程正在向该目录部署，请稍后重试`
+    );
+  }
+
+  return ownerToken;
+}
+
+/**
+ * 释放远程前端部署目录锁。
+ * 先比对 owner 文件内容，完全一致才执行 rm -f owner && rmdir lock；不一致则不删并记录 warn。全程不用 rm -rf。
+ * @param {Object} conn - SSH 连接
+ * @param {string} deployRoot - 部署根目录
+ * @param {string} [ownerToken] - 获取锁时返回的 ownerToken
+ * @param {boolean} [useSudo=false] - 是否使用 sudo
+ * @param {Function} [log] - 日志记录函数
+ */
+export async function releaseFrontendDeployLock(conn, deployRoot, ownerToken = '', useSudo = false, log = null) {
+  if (typeof ownerToken === 'boolean') {
+    useSudo = ownerToken;
+    ownerToken = '';
+  }
+
+  const lockDir = path.posix.join(deployRoot, '.yuyan-deploy.lock');
+  const script = [
+    '# yuyan:deploy-lock',
+    'set -u',
+    'lock="$1"',
+    'expected_owner="$2"',
+    'owner_file="$lock/owner"',
+    '',
+    'if [ ! -d "$lock" ]; then',
+    '  exit 0',
+    'fi',
+    '',
+    'if [ -f "$owner_file" ]; then',
+    '  actual_owner=$(cat "$owner_file" 2>/dev/null || echo "")',
+    '  if [ -n "$expected_owner" ] && [ "$actual_owner" != "$expected_owner" ]; then',
+    '    echo "OWNER_MISMATCH: actual=[$actual_owner] expected=[$expected_owner]" >&2',
+    '    exit 2',
+    '  fi',
+    '  rm -f "$owner_file" && rmdir "$lock"',
+    '  exit 0',
+    'else',
+    '  echo "OWNER_FILE_MISSING: $lock/owner not found" >&2',
+    '  exit 2',
+    'fi',
+  ].join('\n');
+
+  try {
+    const result = await execSsh(conn, buildRemoteShellCommand(script, [lockDir, ownerToken || ''], useSudo), {
+      allowFailure: true,
+      label: '释放远程部署目录锁',
+    });
+    if (result.code === 2) {
+      const stderr = (result.stderr || '').trim();
+      const msg = stderr.includes('OWNER_FILE_MISSING')
+        ? `释放部署目录锁警告：未找到持有者信息文件，未删除锁（${lockDir}，${stderr}）`
+        : `释放部署目录锁失败：锁持有者与预期不一致，未删除锁（${lockDir}，${stderr}）`;
+      if (typeof log === 'function') {
+        log('warn', msg, 'cleanup');
+      } else {
+        console.warn(`[Deploy] ${msg}`);
+      }
+    }
+  } catch (err) {
+    if (typeof log === 'function') {
+      log('warn', `释放部署目录锁时发生异常：${err.message || err}`, 'cleanup');
+    }
+  }
+}
+
+/**
  * 生成备份部署目录命令。
  * 遵循白名单显式拷贝原则，通过 "$@" 传入需备份条目，逐项校验存在且备份前检查可用磁盘空间。
  * @param {Object|string} target - 部署目标或部署路径
@@ -2022,10 +2299,167 @@ export function buildClearDeployRootCommand(target, deleteNames = [], useSudo = 
   ].join('\n');
 
   const safeNames = (deleteNames || []).filter(
-    (name) => isValidEntryName(name) && !RESERVED_DEPLOY_ENTRIES.includes(name)
+    (name) => isValidEntryName(name) && !isReservedDeployEntry(name)
   );
 
   return buildRemoteShellCommand(script, [rootPath, ...safeNames], useSudo);
+}
+
+/**
+ * 生成暂存待清理条目的远程 shell 命令。
+ * 采用同文件系统暂存重命名（Staging Rename）策略：在部署根目录内创建 .yuyan-retiring-<releaseName>，
+ * 逐个将待删除条目原子移动到暂存目录；如果任何一项移动失败，自动捕获退出并在 trap 中执行反向回退恢复现场。
+ * 全程绝不使用 rm -rf，回退失败或暂存区非空时保留并报错。
+ * @param {Object|string} target - 部署目标或部署路径
+ * @param {string[]} [deleteNames=[]] - 待暂存的条目名单
+ * @param {string} releaseName - 发布版本号
+ * @param {boolean} [useSudo=false] - 是否使用 sudo
+ * @returns {string} 远程命令
+ */
+export function buildStagedRetireCommand(target, deleteNames = [], releaseName, useSudo = false) {
+  const rootPath = typeof target === 'object' ? target.deployRoot : target;
+  const stagingName = `.yuyan-retiring-${releaseName}`;
+  const script = [
+    '# yuyan:staged-retire',
+    'set -eu',
+    'root="$1"',
+    'staging="$root/$2"',
+    'shift 2',
+    'mkdir -p "$staging"',
+    '',
+    'rollback_on_error() {',
+    '  err=$?',
+    '  trap - EXIT',
+    '  set +e',
+    '  echo "暂存旧条目失败（退出码 ${err}），正在反向还原已移动条目..." >&2',
+    '  rollback_failed=0',
+    '  for name in "$@"; do',
+    '    case "$name" in ""|"."|".."|"*"|".*"|*/*|".yuyan-backups"|".yuyan-manifests"|".yuyan-deploy.lock"|".yuyan-retiring-"*|".yuyan-trash-"*) continue ;; esac',
+    '    if [ -e "$staging/$name" ] || [ -L "$staging/$name" ]; then',
+    '      if [ ! -e "$root/$name" ] && [ ! -L "$root/$name" ]; then',
+    '        if ! mv -- "$staging/$name" "$root/$name" 2>/dev/null; then',
+    '          echo "反向还原条目失败：$name" >&2',
+    '          rollback_failed=1',
+    '        fi',
+    '      fi',
+    '    fi',
+    '  done',
+    '  if ! rmdir "$staging" 2>/dev/null; then',
+    '    echo "暂存区仍有未还原条目，已保留：$staging" >&2',
+    '  fi',
+    '  if [ "$err" -ne 0 ]; then',
+    '    exit "$err"',
+    '  elif [ "$rollback_failed" -ne 0 ]; then',
+    '    exit 1',
+    '  fi',
+    '}',
+    'trap \'rollback_on_error "$@"\' EXIT',
+    '',
+    'for name in "$@"; do',
+    '  case "$name" in ""|"."|".."|"*"|".*"|*/*|".yuyan-backups"|".yuyan-manifests"|".yuyan-deploy.lock"|".yuyan-retiring-"*|".yuyan-trash-"*) continue ;; esac',
+    '  if [ -e "$root/$name" ] || [ -L "$root/$name" ]; then',
+    '    if [ -e "$staging/$name" ] || [ -L "$staging/$name" ]; then',
+    '      echo "暂存区已存在同名冲突条目：$name" >&2',
+    '      exit 1',
+    '    fi',
+    '    if ! mv -- "$root/$name" "$staging/$name"; then',
+    '      echo "移动条目到暂存区失败：$name" >&2',
+    '      exit 1',
+    '    fi',
+    '  fi',
+    'done',
+    '',
+    'trap - EXIT',
+  ].join('\n');
+
+  const safeNames = (deleteNames || []).filter(
+    (name) => isValidEntryName(name) && !isReservedDeployEntry(name)
+  );
+
+  return buildRemoteShellCommand(script, [rootPath, stagingName, ...safeNames], useSudo);
+}
+
+/**
+ * 生成从暂存区还原旧条目的远程 shell 命令（用于发布失败后现场恢复）。
+ * 对每个条目名，若 root 下已有同名项（新上传产物），先挪入 .yuyan-trash-<releaseName>，
+ * 再把暂存区中的旧条目挪回部署根；随后清理垃圾箱（允许且仅允许在此处针对 trash 目录执行 rm -rf）；
+ * 最后 rmdir 暂存区，若非空则保留并报错。
+ * @param {Object|string} target - 部署目标或部署路径
+ * @param {string} releaseName - 发布版本号
+ * @param {string[]} [names=[]] - 需还原的条目名单
+ * @param {boolean} [useSudo=false] - 是否使用 sudo
+ * @returns {string} 远程命令
+ */
+export function buildRestoreFromStagingCommand(target, releaseName, names = [], useSudo = false) {
+  const rootPath = typeof target === 'object' ? target.deployRoot : target;
+  const script = [
+    '# yuyan:restore-from-staging',
+    'set -eu',
+    'root="$1"',
+    'staging="$root/.yuyan-retiring-$2"',
+    'trash="$root/.yuyan-trash-$2"',
+    'shift 2',
+    'rm -rf "$trash" 2>/dev/null || true',
+    'mkdir -p "$trash"',
+    '',
+    'failed=0',
+    'for name in "$@"; do',
+    '  case "$name" in ""|"."|".."|"*"|".*"|*/*|".yuyan-backups"|".yuyan-manifests"|".yuyan-deploy.lock"|".yuyan-retiring-"*|".yuyan-trash-"*) continue ;; esac',
+    '  if [ -e "$staging/$name" ] || [ -L "$staging/$name" ]; then',
+    '    if [ -e "$root/$name" ] || [ -L "$root/$name" ]; then',
+    '      if ! mv -- "$root/$name" "$trash/$name" 2>/dev/null; then',
+    '        echo "移动新产物到垃圾箱失败：$name" >&2',
+    '        failed=1',
+    '        continue',
+    '      fi',
+    '    fi',
+    '    if ! mv -- "$staging/$name" "$root/$name" 2>/dev/null; then',
+    '      echo "从暂存区还原条目失败：$name" >&2',
+    '      failed=1',
+    '    fi',
+    '  fi',
+    'done',
+    '',
+    'rm -rf "$trash" 2>/dev/null || true',
+    '',
+    'if [ -d "$staging" ]; then',
+    '  if ! rmdir "$staging" 2>/dev/null; then',
+    '    echo "暂存区仍有未还原条目，已保留：$staging" >&2',
+    '    failed=1',
+    '  fi',
+    'fi',
+    '',
+    'if [ "$failed" -ne 0 ]; then',
+    '  exit 1',
+    'fi',
+  ].join('\n');
+
+  const safeNames = (names || []).filter(
+    (name) => isValidEntryName(name) && !isReservedDeployEntry(name)
+  );
+
+  return buildRemoteShellCommand(script, [rootPath, releaseName, ...safeNames], useSudo);
+}
+
+/**
+ * 生成清理退休暂存目录的远程 shell 命令。
+ * @param {Object|string} target - 部署目标或部署路径
+ * @param {string} releaseName - 发布版本号
+ * @param {boolean} [useSudo=false] - 是否使用 sudo
+ * @returns {string} 远程命令
+ */
+export function buildPurgeStagedRetireCommand(target, releaseName, useSudo = false) {
+  const rootPath = typeof target === 'object' ? target.deployRoot : target;
+  const stagingName = `.yuyan-retiring-${releaseName}`;
+  const script = [
+    'set -eu',
+    'root="$1"',
+    'staging="$root/$2"',
+    'if [ -d "$staging" ]; then',
+    '  rm -rf "$staging"',
+    'fi',
+  ].join('\n');
+  return buildRemoteShellCommand(script, [rootPath, stagingName], useSudo);
 }
 
 /**
@@ -2758,11 +3192,16 @@ export async function deployTarget(targetId, payload, emit) {
   let commitAuthor = '';
   let backupRetentionSynced = false;
   let backupCreated = false;
+  let stagedRetireCreated = false;
   let deployRootRestored = false;
+  let recoveryAttempted = false;
+  let existingNames = [];
   let uploadStarted = false;
   let artifactManifestPath = '';
   let artifactTopNames = [];
+  let rawArtifactTopNames = [];
   let filteredArtifactTopNames = [];
+  let cleanupPlan = null;
   let uploadableFiles = [];
   let deployAccess = { useSudo: deployUseSudo, uploadMode: 'sftp', userWritable: false };
   let currentStage = 'validate';
@@ -3050,6 +3489,12 @@ export async function deployTarget(targetId, payload, emit) {
       artifactManifestPath = await createArtifactManifestFile(workspaceRoot, releaseName, uploadableFiles, protectedSubDirs);
       log('info', `本次发布产物清单：${uploadableFiles.length} 个文件`, 'build');
       const artifactEntries = await fs.readdir(artifactPath).catch(() => []);
+      rawArtifactTopNames = artifactEntries.filter(isValidEntryName);
+      const manualProtectedNames = parsePreserveSubDirs(target.preserveSubDirs);
+      const skippedManual = rawArtifactTopNames.filter((name) => manualProtectedNames.includes(name));
+      if (skippedManual.length > 0) {
+        log('info', `构建产物项「${skippedManual.join('、')}」命中手填保留目录，已按保留配置跳过上传`, 'build');
+      }
       artifactTopNames = artifactEntries.filter((name) => isValidEntryName(name) && !protectedSubDirs.includes(name));
     }
 
@@ -3061,280 +3506,402 @@ export async function deployTarget(targetId, payload, emit) {
         label: '创建部署目录',
       });
 
-      if (isBackend) {
-        throw new Error('后端目标必须使用版本化后端发布流程');
-      } else {
-        // 1. 在执行备份与清空前，重新计算保留名单（并入构建期间新登记的子应用）
-        const currentProtectedSubDirs = await resolveProtectedSubDirs(target);
-        const newProtectedAdded = currentProtectedSubDirs.filter((d) => !protectedSubDirs.includes(d));
-        if (newProtectedAdded.length) {
-          log('info', `检测到构建期间新增受保护子目录：${newProtectedAdded.join('、')}，已自动并入保留名单`, 'upload');
-          protectedSubDirs.push(...newProtectedAdded);
-          if (artifactManifestPath && uploadableFiles.length > 0) {
-            artifactManifestPath = await createArtifactManifestFile(workspaceRoot, releaseName, uploadableFiles, protectedSubDirs);
-          }
-        }
+      // 1. 先做只读探测以获取初始 realRoot，并探测同物理服务器目标以计算最外层 lockRoot
+      const initialProbe = await detectDeployRoot(conn, target.deployRoot, deployUseSudo, { ensureDir: false });
+      const currentRealRoot = initialProbe.realRoot || target.deployRoot;
+      const candidateRoots = [currentRealRoot];
 
-        // 重新计算保留名单后，过滤产物顶层名，排除受保护项与系统保留项
-        const protectedSet = new Set(protectedSubDirs);
-        const reservedSet = new Set(RESERVED_DEPLOY_ENTRIES);
-        filteredArtifactTopNames = artifactTopNames.filter(
-          (name) => !protectedSet.has(name) && !reservedSet.has(name)
-        );
-
-        // 2. 远程探测部署根目录的真实路径与顶层条目
-        const probe = await detectDeployRoot(conn, target.deployRoot, deployUseSudo);
-        realRoot = probe.realRoot || target.deployRoot;
-        releasePath = realRoot;
-        let normConfig = target.deployRoot;
-        try { normConfig = normalizeDeployRootPath(target.deployRoot); } catch {}
-        let normReal = realRoot;
-        try { normReal = normalizeDeployRootPath(realRoot); } catch {}
-        if (normReal !== normConfig) {
-          log('info', `检测到部署目录为软链接或存在重定向，真实路径为 ${realRoot}（配置路径为 ${target.deployRoot}），后续操作将在真实路径下执行`, 'upload');
-        }
-
-        // 用探测到的真实路径再次执行安全分级校验
-        const nginxPaths = resolveNginxPaths(nginxInstance, target);
-        const realRootRisk = classifyDeployRootRisk(realRoot, { nginxPaths });
-        if (realRootRisk.level === 'block') {
-          throw new Error(`探测到的真实部署根目录 ${realRoot} 存在高危风险（${realRootRisk.reason}），发布已中止`);
-        }
-
-        const existingNames = probe.existingNames;
-        const lastManifestTops = manifestTopNames(probe.manifestText);
-        if (!lastManifestTops.length) {
-          log('info', '没有找到上次发布清单，本次只清理产物里出现的顶层项', 'upload');
-        }
-
-        // 3. 计算清理范围指纹与门禁判定
-        const extraCleanupNames = isOverlayUpload ? [] : (Array.isArray(payload.extraCleanupNames) ? payload.extraCleanupNames : []);
-        const replaceOrCleanItems = lastManifestTops.filter(
-          (name) => existingNames.includes(name) && !protectedSet.has(name) && !reservedSet.has(name)
-        );
-        const replaceOrCleanSet = new Set(replaceOrCleanItems);
-        const currentUnknown = existingNames.filter(
-          (name) => !protectedSet.has(name) && !reservedSet.has(name) && !replaceOrCleanSet.has(name)
-        );
-        const currentFingerprint = computeCleanupScopeFingerprint(realRoot, protectedSubDirs, currentUnknown);
-
-        const allServerTargets = await listTargets({ serverId: target.serverId });
-        const isSharedRoot = isSharedDeployRoot({ target, allServerTargets, nginxInstance });
-
-        const publishGateResult = verifyPublishCleanupGate({
-          isCleanReplace: uploadStrategy === DEPLOY_UPLOAD_STRATEGIES.cleanReplace,
-          isSharedRoot,
-          currentFingerprint,
-          confirmedFingerprint: payload.confirmedFingerprint || '',
-          savedFingerprint: target.cleanupConfirmedFingerprint || '',
-          cleanReplaceConfirmed: payload.cleanReplaceConfirmed === true,
-          extraCleanupNames,
-        });
-
-        if (!publishGateResult.allowed) {
-          throw new Error(publishGateResult.reason || '清理范围门禁校验未通过，已中止发布');
-        }
-
-        const cleanupPlan = computeCleanupPlan({
-          existingNames,
-          artifactTopNames: filteredArtifactTopNames,
-          manifestTopNames: lastManifestTops,
-          protectedNames: protectedSubDirs,
-          extraCleanupNames,
-          mode: uploadStrategy,
-        });
-
-        if (cleanupPlan.rejectedExtra.length) {
-          log('warn', `以下勾选的额外清理项已被跳过（仅允许清理当前未识别项）：${cleanupPlan.rejectedExtra.join('、')}`, 'upload');
-        }
-
-        // 部署日志记录
-        log('info', `部署真实路径：${realRoot}`, 'upload');
-        log('info', `保留名单（嵌套目标/手填保留/系统目录）：${[...cleanupPlan.keptProtected, ...cleanupPlan.keptReserved].join('、') || '无'}`, 'upload');
-        log('info', `待删除名单：${cleanupPlan.deleteNames.join('、') || '无'}`, 'upload');
-        log('info', `未识别已保留名单：${cleanupPlan.keptUnknown.join('、') || '无'}`, 'upload');
-        if (extraCleanupNames.length) {
-          log('info', `用户确认额外清理项：${extraCleanupNames.join('、')}`, 'upload');
-        }
-        // 如果实际删除名单里有只因产物同名而删的未识别项，单独记录一行日志
-        const replacedByArtifact = cleanupPlan.deleteNames.filter(
-          (name) => !lastManifestTops.includes(name) && !extraCleanupNames.includes(name) && filteredArtifactTopNames.includes(name)
-        );
-        if (replacedByArtifact.length > 0) {
-          log('info', `以下项因与本次产物同名而被替换：${replacedByArtifact.join('、')}`, 'upload');
-        }
-
-        // 上限保护断言（代码级防回归）：deleteNames 必须在产物顶层、上次清单顶层或合法额外清理项中
-        for (const delName of cleanupPlan.deleteNames) {
-          const inArtifact = filteredArtifactTopNames.includes(delName);
-          const inManifest = lastManifestTops.includes(delName);
-          const inExtra = extraCleanupNames.includes(delName) && !cleanupPlan.rejectedExtra.includes(delName);
-          if (!inArtifact && !inManifest && !inExtra) {
-            throw new Error(`安全防御拦截：待删除项「${delName}」既不在产物顶层、也不在上次清单顶层、也不在合法额外清理项中，已终止清空操作`);
-          }
-        }
-
-        // 4. 计算备份包含的顶层条目
-        backupPath = path.posix.join(realRoot, '.yuyan-backups', releaseName);
-        let backupKind = BACKUP_KINDS.full;
-        let namesToBackup = [];
-        if (isOverlayUpload) {
-          if (lastManifestTops.length > 0) {
-            backupKind = BACKUP_KINDS.entryOnly;
-            const candidateBackup = new Set([...filteredArtifactTopNames, ...lastManifestTops]);
-            const hashedSet = new Set(DEFAULT_HASHED_ASSET_DIRS);
-            namesToBackup = existingNames.filter(
-              (name) => candidateBackup.has(name) && !protectedSubDirs.includes(name) && !RESERVED_DEPLOY_ENTRIES.includes(name) && !hashedSet.has(name)
-            );
-          } else {
-            backupKind = BACKUP_KINDS.full;
-            const candidateBackup = new Set([...filteredArtifactTopNames, ...lastManifestTops]);
-            namesToBackup = existingNames.filter(
-              (name) => candidateBackup.has(name) && !protectedSubDirs.includes(name) && !RESERVED_DEPLOY_ENTRIES.includes(name)
-            );
-          }
-        } else {
-          backupKind = BACKUP_KINDS.full;
-          namesToBackup = cleanupPlan.deleteNames;
-        }
-
-        // 5. 拆成两次独立执行：备份成功后立刻置 backupCreated = true，再执行清空
-        await execSsh(
-          conn,
-          [
-            buildRemoteMkdirCommand(backupPath, deployUseSudo),
-            buildBackupDeployRootCommand(realRoot, backupPath, protectedSubDirs, deployUseSudo, {
-              kind: backupKind,
-              namesToBackup,
-              isOverlayUpload,
-            }),
-          ].join(' && '),
-          {
-            label: '备份部署目录',
-          }
-        );
-        backupCreated = true;
-        log('info', `备份已完成（路径：${backupPath}，包含顶层条目：${namesToBackup.join('、') || '无'}）`, 'upload');
-
-        if (!isOverlayUpload) {
-          if (cleanupPlan.deleteNames.length > 0) {
-            await execSsh(conn, buildClearDeployRootCommand(realRoot, cleanupPlan.deleteNames, deployUseSudo), {
-              label: '清空旧版本条目',
-            });
-          }
-          if (isSharedRoot && payload.cleanReplaceConfirmed === true && publishGateResult.requireSaveConfirmation) {
-            try {
-              await updateTargetCleanupConfirmed(target.id, {
-                fingerprint: currentFingerprint,
-                at: new Date().toISOString(),
-                by: payload.operator || target.createdBy || 'unknown',
-                scope: {
-                  protected: [...protectedSubDirs].sort(),
-                  unknown: [...currentUnknown].sort(),
-                },
-              });
-              log('info', `已更新共享根目录清理确认指纹（${currentFingerprint.slice(0, 8)}）与审计记录`, 'cleanup');
-            } catch (confirmError) {
-              log('warn', `保存清理确认指纹失败：${confirmError.message || confirmError}`, 'cleanup');
-            }
-          }
-        } else {
-          log('info', '覆盖上传模式已跳过清空部署目录，旧 hash 静态资源将暂时保留', 'upload');
-        }
-
-        let uploaded = 0;
-        if (deployAccess.uploadMode === 'sudoTar') {
-          uploaded = await uploadDirectoryWithSudoTar(conn, artifactPath, realRoot, {
-            archivePath: path.join(workspaceRoot, `artifact-${releaseName}.tar.gz`),
-            releaseName,
-            protectedSubDirs,
-            signal,
-            log,
-            deferRootFileNames: ['index.html'],
-          });
-        } else {
-          await uploadDirectory(conn, artifactPath, realRoot, ({ remotePath }) => {
-            uploaded += 1;
-            if (uploaded <= 5 || uploaded % 30 === 0) {
-              log('info', `已上传：${remotePath}`, 'upload');
-            }
-          }, { excludeTopLevelNames: protectedSubDirs, deferRootFileNames: ['index.html'] });
-        }
-        log('success', `产物上传完成，共 ${uploaded} 个文件`, 'upload');
-
-        if (target.enableNginxTest) {
-          stage('nginx', 82, '校验 Nginx', `执行 ${getNginxCommandLabel(server, nginxInstance, 'test')}`);
-          try {
-            const testResult = await runNginxTest(conn, server, nginxInstance);
-            log('success', `${testResult.stderr || testResult.stdout}`.trim() || 'nginx -t 校验通过', 'nginx');
-          } catch (error) {
-            deployRootRestored = await restoreDeployRootFromBackup(conn, { ...target, deployRoot: realRoot }, backupPath, '恢复部署目录备份', protectedSubDirs, deployUseSudo, { extraRemoveNames: filteredArtifactTopNames, realRoot, log });
-            throw error;
-          }
-        }
-
-        if (target.enableNginxReload) {
-          stage('reload', 92, '重载 Nginx', `执行 ${getNginxCommandLabel(server, nginxInstance, 'reload')}`);
-          await reloadNginx(conn, server, nginxInstance);
-          log('success', 'Nginx 重载完成', 'reload');
-        }
-
-        if (artifactManifestPath) {
-          try {
-            const remoteManifestPath = await uploadArtifactManifest(conn, artifactManifestPath, { ...target, deployRoot: realRoot }, releaseName, deployUseSudo);
-            log('info', `已写入发布产物清单：${remoteManifestPath}`, 'cleanup');
-          } catch (manifestError) {
-            log('warn', `发布产物清单写入失败，本次发布不回滚：${manifestError.message || manifestError}`, 'cleanup');
-          }
-        }
+      let allHostTargets = [];
+      try {
+        allHostTargets = await listPhysicalServerTargets({ serverId: target.serverId });
+      } catch (err) {
+        log('warn', `查询物理服务器同宿主目标失败，降级使用逻辑服务器目标：${err.message || err}`, 'upload');
+        allHostTargets = await listTargets({ serverId: target.serverId }).catch(() => [target]);
       }
-
-      // 1. 先清理超出保留上限的旧备份目录，淘汰最老版本
-      backupRetentionSynced = await pruneRemoteBackups(conn, { ...target, deployRoot: realRoot }, log, deployUseSudo);
-
-      // 2. 再按现存备份目录下的 .manifest.txt 以及最近清单清理静态资源，确保所有存活备份依赖的 chunk 绝不误删
-      if (artifactManifestPath) {
+      const otherTargets = allHostTargets.filter((t) => Number(t.id) !== Number(target.id));
+      let otherRealRootsMap = new Map();
+      if (otherTargets.length > 0) {
+        const otherPaths = otherTargets.map((t) => t.deployRoot);
         try {
-          await pruneRemoteArtifactManifests(conn, { ...target, deployRoot: realRoot }, log, deployUseSudo);
-        } catch (manifestError) {
-          log('warn', `旧静态资源清理失败，本次发布不回滚：${manifestError.message || manifestError}`, 'cleanup');
+          const detectedOthers = await batchDetectRealRoots(conn, otherPaths, deployUseSudo);
+          otherTargets.forEach((t, i) => {
+            const rPath = detectedOthers[i] || otherPaths[i];
+            otherRealRootsMap.set(t.id, rPath);
+            candidateRoots.push(rPath);
+          });
+        } catch (err) {
+          log('warn', `批量探测其他目标真实路径失败：${err.message || err}`, 'upload');
+          otherTargets.forEach((t) => {
+            otherRealRootsMap.set(t.id, t.deployRoot);
+            candidateRoots.push(t.deployRoot);
+          });
         }
       }
+
+      const lockRoot = resolveTopmostLockRoot(currentRealRoot, candidateRoots);
+      const lockToken = await acquireFrontendDeployLock(conn, lockRoot, deployUseSudo, { recordId: record.id, log });
 
       try {
-        const statsScript = [
-          'root="$1"',
-          'backup="$2"',
-          'get_size() {',
-          '  val=""',
-          '  if command -v timeout >/dev/null 2>&1; then',
-          '    val=$(timeout 5 du -sh "$1" 2>/dev/null | cut -f1) || true',
-          '  else',
-          '    val=$(du -sh "$1" 2>/dev/null | cut -f1) || true',
-          '  fi',
-          '  if [ -n "$val" ]; then echo "$val"; else echo "-"; fi',
-          '}',
-          'b_size=$(get_size "$backup")',
-          'all_b_size=$(get_size "$root/.yuyan-backups")',
-          'assets_size=$(get_size "$root/assets")',
-          'echo "backup=$b_size all_backups=$all_b_size assets=$assets_size"',
-        ].join('\n');
-        const statsResult = await execSsh(conn, buildRemoteShellCommand(statsScript, [realRoot, backupPath], deployUseSudo), {
-          allowFailure: true,
-          label: '采集备份与存储占用统计',
-        });
-        if (statsResult.code === 0) {
-          const out = String(statsResult.stdout || '');
-          const bMatch = out.match(/backup=([^\s]+)/);
-          const allMatch = out.match(/all_backups=([^\s]+)/);
-          const assetsMatch = out.match(/assets=([^\s]+)/);
-          const bSize = bMatch ? bMatch[1] : '-';
-          const allSize = allMatch ? allMatch[1] : '-';
-          const assetsSize = assetsMatch ? assetsMatch[1] : '-';
-          log('info', `存储可观测：本次备份体积 ${bSize}，备份目录总体积 ${allSize}，静态资源(assets)体积 ${assetsSize}`, 'cleanup');
+        if (isBackend) {
+          throw new Error('后端目标必须使用版本化后端发布流程');
+        } else {
+          // 拿到锁之后、探测之前，清理过期的暂存与垃圾箱目录（超过 60 分钟）
+          await cleanupExpiredStagingAndTrash(conn, currentRealRoot, deployUseSudo, log);
+
+          // 加锁后重新探测部署根目录的真实路径与顶层条目
+          const probe = await detectDeployRoot(conn, target.deployRoot, deployUseSudo);
+          realRoot = probe.realRoot || target.deployRoot;
+          releasePath = realRoot;
+          let normConfig = target.deployRoot;
+          try { normConfig = normalizeDeployRootPath(target.deployRoot); } catch {}
+          let normReal = realRoot;
+          try { normReal = normalizeDeployRootPath(realRoot); } catch {}
+          if (normReal !== normConfig) {
+            log('info', `检测到部署目录为软链接或存在重定向，真实路径为 ${realRoot}（配置路径为 ${target.deployRoot}），后续操作将在真实路径下执行`, 'upload');
+          }
+
+          // 在执行备份与清空前，重新计算保留名单（并入构建期间新登记的子应用与 realpath 穿透）
+          const currentProtectedDetails = await resolveProtectedEntriesWithDetails(target, {
+            currentRealRoot: realRoot,
+            realRootsByTargetId: otherRealRootsMap,
+            log,
+          });
+          const currentProtectedSubDirs = currentProtectedDetails.allProtected;
+          const currentNestedEntries = currentProtectedDetails.nestedEntries;
+          const newProtectedAdded = currentProtectedSubDirs.filter((d) => !protectedSubDirs.includes(d));
+          if (newProtectedAdded.length) {
+            log('info', `检测到构建期间新增受保护子目录：${newProtectedAdded.join('、')}，已自动并入保留名单`, 'upload');
+            protectedSubDirs.push(...newProtectedAdded);
+            if (artifactManifestPath && uploadableFiles.length > 0) {
+              artifactManifestPath = await createArtifactManifestFile(workspaceRoot, releaseName, uploadableFiles, protectedSubDirs);
+            }
+          }
+
+          // 重新计算保留名单后，过滤产物顶层名，排除受保护项与系统保留项
+          const protectedSet = new Set(protectedSubDirs);
+          filteredArtifactTopNames = artifactTopNames.filter(
+            (name) => !protectedSet.has(name) && !isReservedDeployEntry(name)
+          );
+
+          // 用探测到的真实路径再次执行安全分级校验
+          const nginxPaths = resolveNginxPaths(nginxInstance, target);
+          const realRootRisk = classifyDeployRootRisk(realRoot, { nginxPaths });
+          if (realRootRisk.level === 'block') {
+            throw new Error(`探测到的真实部署根目录 ${realRoot} 存在高危风险（${realRootRisk.reason}），发布已中止`);
+          }
+
+          existingNames = probe.existingNames || [];
+          const lastManifestTops = manifestTopNames(probe.manifestText);
+          if (!lastManifestTops.length) {
+            log('info', '没有找到上次发布清单，本次只清理产物里出现的顶层项', 'upload');
+          }
+
+          // 2. 计算清理范围指纹与门禁判定
+          const extraCleanupNames = isOverlayUpload ? [] : (Array.isArray(payload.extraCleanupNames) ? payload.extraCleanupNames : []);
+          const replaceOrCleanItems = lastManifestTops.filter(
+            (name) => existingNames.includes(name) && !protectedSet.has(name) && !isReservedDeployEntry(name)
+          );
+          const replaceOrCleanSet = new Set(replaceOrCleanItems);
+          const currentUnknown = existingNames.filter(
+            (name) => !protectedSet.has(name) && !isReservedDeployEntry(name) && !replaceOrCleanSet.has(name)
+          );
+          const currentFingerprint = computeCleanupScopeFingerprint(realRoot, protectedSubDirs, currentUnknown);
+
+          let allServerTargets = [];
+          try {
+            allServerTargets = await listPhysicalServerTargets({ serverId: target.serverId });
+          } catch (err) {
+            log('warn', `查询物理服务器部署目标失败，降级使用逻辑服务器目标：${err.message || err}`, 'upload');
+            allServerTargets = await listTargets({ serverId: target.serverId });
+          }
+          const isSharedRoot = isSharedDeployRoot({ target, allServerTargets, nginxInstance });
+
+          const publishGateResult = verifyPublishCleanupGate({
+            isCleanReplace: uploadStrategy === DEPLOY_UPLOAD_STRATEGIES.cleanReplace,
+            isSharedRoot,
+            currentFingerprint,
+            confirmedFingerprint: payload.confirmedFingerprint || '',
+            savedFingerprint: target.cleanupConfirmedFingerprint || '',
+            cleanReplaceConfirmed: payload.cleanReplaceConfirmed === true,
+            extraCleanupNames,
+          });
+
+          if (!publishGateResult.allowed) {
+            throw new Error(publishGateResult.reason || '清理范围门禁校验未通过，已中止发布');
+          }
+
+          cleanupPlan = computeCleanupPlan({
+            existingNames,
+            artifactTopNames: filteredArtifactTopNames,
+            manifestTopNames: lastManifestTops,
+            protectedNames: protectedSubDirs,
+            extraCleanupNames,
+            mode: uploadStrategy,
+          });
+
+          if (cleanupPlan.rejectedExtra.length) {
+            log('warn', `以下勾选的额外清理项已被跳过（仅允许清理当前未识别项）：${cleanupPlan.rejectedExtra.join('、')}`, 'upload');
+          }
+
+          // 部署日志记录
+          log('info', `部署真实路径：${realRoot}`, 'upload');
+          log('info', `保留名单（嵌套目标/手填保留/系统目录）：${[...cleanupPlan.keptProtected, ...cleanupPlan.keptReserved].join('、') || '无'}`, 'upload');
+          log('info', `待删除名单：${cleanupPlan.deleteNames.join('、') || '无'}`, 'upload');
+          log('info', `未识别已保留名单：${cleanupPlan.keptUnknown.join('、') || '无'}`, 'upload');
+          if (extraCleanupNames.length) {
+            log('info', `用户确认额外清理项：${extraCleanupNames.join('、')}`, 'upload');
+          }
+          // 如果实际删除名单里有只因产物同名而删的未识别项，单独记录一行日志
+          const replacedByArtifact = cleanupPlan.deleteNames.filter(
+            (name) => !lastManifestTops.includes(name) && !extraCleanupNames.includes(name) && filteredArtifactTopNames.includes(name)
+          );
+          if (replacedByArtifact.length > 0) {
+            log('info', `以下项因与本次产物同名而被替换：${replacedByArtifact.join('、')}`, 'upload');
+          }
+
+          // 上限保护与子应用重名防御拦截
+          assertCleanupSafetyCeiling({
+            cleanupPlan,
+            rawArtifactTopNames,
+            filteredArtifactTopNames,
+            nestedNames: currentNestedEntries,
+            manifestTopNames: lastManifestTops,
+            extraCleanupNames,
+          });
+
+          // 3. 计算备份包含的顶层条目
+          backupPath = path.posix.join(realRoot, '.yuyan-backups', releaseName);
+          let backupKind = BACKUP_KINDS.full;
+          let namesToBackup = [];
+          if (isOverlayUpload) {
+            if (lastManifestTops.length > 0) {
+              backupKind = BACKUP_KINDS.entryOnly;
+              const candidateBackup = new Set([...filteredArtifactTopNames, ...lastManifestTops]);
+              const hashedSet = new Set(DEFAULT_HASHED_ASSET_DIRS);
+              namesToBackup = existingNames.filter(
+                (name) => candidateBackup.has(name) && !protectedSubDirs.includes(name) && !isReservedDeployEntry(name) && !hashedSet.has(name)
+              );
+            } else {
+              backupKind = BACKUP_KINDS.full;
+              const candidateBackup = new Set([...filteredArtifactTopNames, ...lastManifestTops]);
+              namesToBackup = existingNames.filter(
+                (name) => candidateBackup.has(name) && !protectedSubDirs.includes(name) && !isReservedDeployEntry(name)
+              );
+            }
+          } else {
+            backupKind = BACKUP_KINDS.full;
+            namesToBackup = cleanupPlan.deleteNames;
+          }
+
+          // 4. 拆成两次独立执行：备份成功后立刻置 backupCreated = true，再执行暂存/清空
+          await execSsh(
+            conn,
+            [
+              buildRemoteMkdirCommand(backupPath, deployUseSudo),
+              buildBackupDeployRootCommand(realRoot, backupPath, protectedSubDirs, deployUseSudo, {
+                kind: backupKind,
+                namesToBackup,
+                isOverlayUpload,
+              }),
+            ].join(' && '),
+            {
+              label: '备份部署目录',
+            }
+          );
+          backupCreated = true;
+          log('info', `备份已完成（路径：${backupPath}，包含顶层条目：${namesToBackup.join('、') || '无'}）`, 'upload');
+
+          if (!isOverlayUpload) {
+            if (cleanupPlan.deleteNames.length > 0) {
+              await execSsh(conn, buildStagedRetireCommand(realRoot, cleanupPlan.deleteNames, releaseName, deployUseSudo), {
+                label: '暂存旧版本条目',
+              });
+              stagedRetireCreated = true;
+              log('info', `旧版本条目已安全移入暂存区（.yuyan-retiring-${releaseName}）`, 'cleanup');
+            }
+            if (isSharedRoot && payload.cleanReplaceConfirmed === true && publishGateResult.requireSaveConfirmation) {
+              try {
+                await updateTargetCleanupConfirmed(target.id, {
+                  fingerprint: currentFingerprint,
+                  at: new Date().toISOString(),
+                  by: payload.operator || target.createdBy || 'unknown',
+                  scope: {
+                    protected: [...protectedSubDirs].sort(),
+                    unknown: [...currentUnknown].sort(),
+                  },
+                });
+                log('info', `已更新共享根目录清理确认指纹（${currentFingerprint.slice(0, 8)}）与审计记录`, 'cleanup');
+              } catch (confirmError) {
+                log('warn', `保存清理确认指纹失败：${confirmError.message || confirmError}`, 'cleanup');
+              }
+            }
+          } else {
+            log('info', '覆盖上传模式已跳过清空部署目录，旧 hash 静态资源将暂时保留', 'upload');
+          }
+
+          let uploaded = 0;
+          if (deployAccess.uploadMode === 'sudoTar') {
+            uploaded = await uploadDirectoryWithSudoTar(conn, artifactPath, realRoot, {
+              archivePath: path.join(workspaceRoot, `artifact-${releaseName}.tar.gz`),
+              releaseName,
+              protectedSubDirs,
+              signal,
+              log,
+              deferRootFileNames: ['index.html'],
+            });
+          } else {
+            await uploadDirectory(conn, artifactPath, realRoot, ({ remotePath }) => {
+              uploaded += 1;
+              if (uploaded <= 5 || uploaded % 30 === 0) {
+                log('info', `已上传：${remotePath}`, 'upload');
+              }
+            }, { excludeTopLevelNames: protectedSubDirs, deferRootFileNames: ['index.html'] });
+          }
+          log('success', `产物上传完成，共 ${uploaded} 个文件`, 'upload');
+
+          if (target.enableNginxTest) {
+            stage('nginx', 82, '校验 Nginx', `执行 ${getNginxCommandLabel(server, nginxInstance, 'test')}`);
+            const testResult = await runNginxTest(conn, server, nginxInstance);
+            log('success', `${testResult.stderr || testResult.stdout}`.trim() || 'nginx -t 校验通过', 'nginx');
+          }
+
+          if (target.enableNginxReload) {
+            stage('reload', 92, '重载 Nginx', `执行 ${getNginxCommandLabel(server, nginxInstance, 'reload')}`);
+            await reloadNginx(conn, server, nginxInstance);
+            log('success', 'Nginx 重载完成', 'reload');
+          }
+
+          if (stagedRetireCreated) {
+            const purgeResult = await execSsh(conn, buildPurgeStagedRetireCommand(realRoot, releaseName, deployUseSudo), {
+              allowFailure: true,
+              label: '清理暂存旧版本条目',
+            }).catch((err) => ({ code: 1, stderr: err?.message || String(err) }));
+            stagedRetireCreated = false;
+            if (purgeResult.code !== 0) {
+              const stagingPath = path.posix.join(realRoot, `.yuyan-retiring-${releaseName}`);
+              log('warn', `清理暂存区失败，目录已保留：${stagingPath}（${purgeResult.stderr || '未知错误'}）`, 'cleanup');
+            }
+          }
+
+          if (artifactManifestPath) {
+            try {
+              const remoteManifestPath = await uploadArtifactManifest(conn, artifactManifestPath, { ...target, deployRoot: realRoot }, releaseName, deployUseSudo);
+              log('info', `已写入发布产物清单：${remoteManifestPath}`, 'cleanup');
+            } catch (manifestError) {
+              log('warn', `发布产物清单写入失败，本次发布不回滚：${manifestError.message || manifestError}`, 'cleanup');
+            }
+          }
         }
-      } catch {
-        // 可观测性统计采集异常不影响发布主流程
+
+        // 1. 先清理超出保留上限的旧备份目录，淘汰最老版本
+        backupRetentionSynced = await pruneRemoteBackups(conn, { ...target, deployRoot: realRoot }, log, deployUseSudo);
+
+        // 2. 再按现存备份目录下的 .manifest.txt 以及最近清单清理静态资源，确保所有存活备份依赖的 chunk 绝不误删
+        if (artifactManifestPath) {
+          try {
+            await pruneRemoteArtifactManifests(conn, { ...target, deployRoot: realRoot }, log, deployUseSudo);
+          } catch (manifestError) {
+            log('warn', `旧静态资源清理失败，本次发布不回滚：${manifestError.message || manifestError}`, 'cleanup');
+          }
+        }
+
+        try {
+          const statsScript = [
+            'root="$1"',
+            'backup="$2"',
+            'get_size() {',
+            '  val=""',
+            '  if command -v timeout >/dev/null 2>&1; then',
+            '    val=$(timeout 5 du -sh "$1" 2>/dev/null | cut -f1) || true',
+            '  else',
+            '    val=$(du -sh "$1" 2>/dev/null | cut -f1) || true',
+            '  fi',
+            '  if [ -n "$val" ]; then echo "$val"; else echo "-"; fi',
+            '}',
+            'b_size=$(get_size "$backup")',
+            'all_b_size=$(get_size "$root/.yuyan-backups")',
+            'assets_size=$(get_size "$root/assets")',
+            'echo "backup=$b_size all_backups=$all_b_size assets=$assets_size"',
+          ].join('\n');
+          const statsResult = await execSsh(conn, buildRemoteShellCommand(statsScript, [realRoot, backupPath], deployUseSudo), {
+            allowFailure: true,
+            label: '采集备份与存储占用统计',
+          });
+          if (statsResult.code === 0) {
+            const out = String(statsResult.stdout || '');
+            const bMatch = out.match(/backup=([^\s]+)/);
+            const allMatch = out.match(/all_backups=([^\s]+)/);
+            const assetsMatch = out.match(/assets=([^\s]+)/);
+            const bSize = bMatch ? bMatch[1] : '-';
+            const allSize = allMatch ? allMatch[1] : '-';
+            const assetsSize = assetsMatch ? assetsMatch[1] : '-';
+            log('info', `存储可观测：本次备份体积 ${bSize}，备份目录总体积 ${allSize}，静态资源(assets)体积 ${assetsSize}`, 'cleanup');
+          }
+        } catch {
+          // 可观测性统计采集异常不影响发布主流程
+        }
+      } catch (deployError) {
+        recoveryAttempted = true;
+        if (stagedRetireCreated) {
+          const restoreStagingRes = await execSsh(
+            conn,
+            buildRestoreFromStagingCommand(realRoot, releaseName, cleanupPlan?.deleteNames || [], deployUseSudo),
+            {
+              allowFailure: true,
+              label: '从暂存区还原旧条目',
+            }
+          ).catch((err) => ({ code: 1, stderr: err?.message || String(err) }));
+          if (restoreStagingRes.code === 0) {
+            stagedRetireCreated = false;
+            log('info', `发布失败，已成功从暂存区还原旧版本条目（.yuyan-retiring-${releaseName}）`, 'cleanup');
+
+            const candidateNames = (filteredArtifactTopNames || []).filter(
+              (name) => !cleanupPlan?.deleteNames?.includes(name) && !existingNames.includes(name)
+            );
+            let clearSuccess = true;
+            if (candidateNames.length > 0) {
+              const clearRes = await execSsh(
+                conn,
+                buildClearDeployRootCommand(realRoot, candidateNames, deployUseSudo),
+                {
+                  allowFailure: true,
+                  label: '清理新增条目',
+                }
+              ).catch((err) => ({ code: 1, stderr: err?.message || String(err) }));
+              if (clearRes.code !== 0) {
+                clearSuccess = false;
+                log('warn', `清理本次新增条目失败（${candidateNames.join('、')}），退回备份恢复流程：${clearRes.stderr || '未知错误'}`, 'cleanup');
+              }
+            }
+            if (clearSuccess) {
+              deployRootRestored = true;
+              log('warn', '发布失败，已从暂存区还原旧版本并移除本次新增条目', 'cleanup');
+            }
+          } else {
+            const stagingPath = path.posix.join(realRoot, `.yuyan-retiring-${releaseName}`);
+            log('warn', `发布失败，暂存区还原失败，目录已保留以供排查：${stagingPath}（${restoreStagingRes.stderr || '未知错误'}）`, 'cleanup');
+          }
+        }
+
+        if (backupCreated && !deployRootRestored) {
+          deployRootRestored = await restoreDeployRootFromBackup(
+            conn,
+            { ...target, deployRoot: realRoot || target.deployRoot },
+            backupPath,
+            '恢复失败发布前目录',
+            protectedSubDirs,
+            deployUseSudo,
+            { extraRemoveNames: filteredArtifactTopNames, realRoot, log }
+          ).catch(() => false);
+          if (deployRootRestored) {
+            log('warn', `发布失败，已恢复部署目录到失败前状态：${backupPath}`, 'cleanup');
+          } else {
+            log('error', `发布失败，部署目录自动恢复失败，请人工检查备份目录：${backupPath}`, 'cleanup');
+          }
+        }
+        throw deployError;
+      } finally {
+        await releaseFrontendDeployLock(conn, lockRoot, lockToken, deployUseSudo, log).catch(() => {});
       }
     });
 
@@ -3382,7 +3949,7 @@ export async function deployTarget(targetId, payload, emit) {
     }
 
     logOperationFailure(log, error, 'error');
-    if (backupCreated && !deployRootRestored) {
+    if (backupCreated && !deployRootRestored && !recoveryAttempted) {
       deployRootRestored = await effectiveWithSsh(server, async (conn) =>
         restoreDeployRootFromBackup(conn, { ...target, deployRoot: realRoot || target.deployRoot }, backupPath, '恢复失败发布前目录', protectedSubDirs, deployUseSudo, { extraRemoveNames: filteredArtifactTopNames, realRoot, log })
       ).catch(() => false);
@@ -3495,6 +4062,7 @@ async function restoreRecordVersion(recordId, payload, emit, action) {
   let targetRestoreNames = [];
   let backupRetentionSynced = false;
   let rollbackRootRestored = false;
+  let rollbackRecoveryAttempted = false;
   let currentStage = 'rollback';
   const logs = [];
   const log = (level, message, stage = '', source = '', extra = {}) => {
@@ -3541,67 +4109,116 @@ async function restoreRecordVersion(recordId, payload, emit, action) {
         log('info', `检测到部署目录为软链接或存在重定向，真实路径为 ${realRoot}（配置路径为 ${target.deployRoot}），后续操作将在真实路径下执行`, 'validate');
       }
 
-      // 回滚/撤销回滚对探测到的真实路径做风险分级校验，block 即中止
-      const nginxPaths = resolveNginxPaths(nginxInstance, target);
-      const realRootRisk = classifyDeployRootRisk(realRoot, { nginxPaths });
-      if (realRootRisk.level === 'block') {
-        throw new Error(`探测到的真实部署根目录 ${realRoot} 存在高危风险（${realRootRisk.reason}），操作已中止`);
+      // 计算 lockRoot 并加锁（需求 6）
+      let allHostTargets = [];
+      try {
+        allHostTargets = await listPhysicalServerTargets({ serverId: target.serverId });
+      } catch (err) {
+        log('warn', `查询物理服务器同宿主目标失败，降级使用逻辑服务器目标：${err.message || err}`, 'rollback');
+        allHostTargets = await listTargets({ serverId: target.serverId }).catch(() => [target]);
       }
-
-      await preflightCheckRollback(conn, { ...target, deployRoot: realRoot }, sourceRecord.backupPath, log, deployUseSudo);
-
-      // 先算 restorePlan，再备份待变更项，kind 与 restorePlan.kind 相同
-      const restorePlan = await detectBackupRestorePlan(conn, { ...target, deployRoot: realRoot }, sourceRecord.backupPath, protectedSubDirs, deployUseSudo, { realRoot });
-      targetRestoreNames = restorePlan.restoreNames || [];
-      if (restorePlan.warningMessage) {
-        log('warn', restorePlan.warningMessage, 'cleanup');
-      }
-      if (restorePlan.skippedOldBackupNames?.length) {
-        log(
-          'info',
-          `旧备份里有未识别的项，没有自动恢复，如需要可手动从 ${sourceRecord.backupPath}/${restorePlan.skippedOldBackupNames.join('、')} 拷回`,
-          'cleanup'
-        );
-      }
-      log('info', `待恢复条目名单：${restorePlan.restoreNames.join('、') || '无'}`, 'rollback');
-      log('info', `待清理旧条目名单：${restorePlan.removeNames.join('、') || '无'}`, 'rollback');
-
-      const existingSet = new Set(probe.existingNames);
-      const namesToBackupSet = new Set(restorePlan.removeNames);
-      for (const rName of restorePlan.restoreNames) {
-        if (existingSet.has(rName)) {
-          namesToBackupSet.add(rName);
+      const otherTargets = allHostTargets.filter((t) => Number(t.id) !== Number(target.id));
+      const candidateRoots = [realRoot];
+      if (otherTargets.length > 0) {
+        const otherPaths = otherTargets.map((t) => t.deployRoot);
+        try {
+          const detectedOthers = await batchDetectRealRoots(conn, otherPaths, deployUseSudo);
+          otherTargets.forEach((t, i) => {
+            const rPath = detectedOthers[i] || otherPaths[i];
+            candidateRoots.push(rPath);
+          });
+        } catch (err) {
+          otherTargets.forEach((t) => candidateRoots.push(t.deployRoot));
         }
       }
-      const namesToBackup = [...namesToBackupSet].sort();
+      const lockRoot = resolveTopmostLockRoot(realRoot, candidateRoots);
+      const lockToken = await acquireFrontendDeployLock(conn, lockRoot, deployUseSudo, { recordId: restoreRecord.id, log });
 
-      currentBackup = path.posix.join(realRoot, '.yuyan-backups', `${meta.branchPrefix}-${createReleaseName()}`);
-      await execSsh(conn, buildRemoteMkdirCommand(currentBackup, deployUseSudo), {
-        label: '创建操作前备份目录',
-      });
-      await execSsh(conn, buildBackupDeployRootCommand(realRoot, currentBackup, protectedSubDirs, deployUseSudo, {
-        kind: restorePlan.kind,
-        namesToBackup,
-        isOverlayUpload: restorePlan.kind === BACKUP_KINDS.entryOnly,
-      }), {
-        label: '备份当前目录',
-      });
-      currentBackupCreated = true;
+      try {
+        // 拿到锁之后、探测之前，清理过期暂存与垃圾箱
+        await cleanupExpiredStagingAndTrash(conn, realRoot, deployUseSudo, log);
 
-      const restoreCmd = buildRestoreDeployRootCommand(realRoot, sourceRecord.backupPath, protectedSubDirs, deployUseSudo, {
-        restoreNames: restorePlan.restoreNames,
-        removeNames: restorePlan.removeNames,
-        isEntryOnly: restorePlan.kind === BACKUP_KINDS.entryOnly,
-      });
-      await execSsh(conn, restoreCmd, {
-        label: '恢复目录备份',
-      });
+        // 回滚/撤销回滚对探测到的真实路径做风险分级校验，block 即中止
+        const nginxPaths = resolveNginxPaths(nginxInstance, target);
+        const realRootRisk = classifyDeployRootRisk(realRoot, { nginxPaths });
+        if (realRootRisk.level === 'block') {
+          throw new Error(`探测到的真实部署根目录 ${realRoot} 存在高危风险（${realRootRisk.reason}），操作已中止`);
+        }
 
-      const testResult = await runNginxTest(conn, server, nginxInstance);
-      log('success', `${testResult.stderr || testResult.stdout}`.trim() || 'nginx -t 校验通过', 'nginx');
-      await reloadNginx(conn, server, nginxInstance);
-      log('success', 'Nginx 重载完成', 'reload');
-      backupRetentionSynced = await pruneRemoteBackups(conn, { ...target, deployRoot: realRoot }, log, deployUseSudo);
+        await preflightCheckRollback(conn, { ...target, deployRoot: realRoot }, sourceRecord.backupPath, log, deployUseSudo);
+
+        // 先算 restorePlan，再备份待变更项，kind 与 restorePlan.kind 相同
+        const restorePlan = await detectBackupRestorePlan(conn, { ...target, deployRoot: realRoot }, sourceRecord.backupPath, protectedSubDirs, deployUseSudo, { realRoot });
+        targetRestoreNames = restorePlan.restoreNames || [];
+        if (restorePlan.warningMessage) {
+          log('warn', restorePlan.warningMessage, 'cleanup');
+        }
+        if (restorePlan.skippedOldBackupNames?.length) {
+          log(
+            'info',
+            `旧备份里有未识别的项，没有自动恢复，如需要可手动从 ${sourceRecord.backupPath}/${restorePlan.skippedOldBackupNames.join('、')} 拷回`,
+            'cleanup'
+          );
+        }
+        log('info', `待恢复条目名单：${restorePlan.restoreNames.join('、') || '无'}`, 'rollback');
+        log('info', `待清理旧条目名单：${restorePlan.removeNames.join('、') || '无'}`, 'rollback');
+
+        const existingSet = new Set(probe.existingNames);
+        const namesToBackupSet = new Set(restorePlan.removeNames);
+        for (const rName of restorePlan.restoreNames) {
+          if (existingSet.has(rName)) {
+            namesToBackupSet.add(rName);
+          }
+        }
+        const namesToBackup = [...namesToBackupSet].sort();
+
+        currentBackup = path.posix.join(realRoot, '.yuyan-backups', `${meta.branchPrefix}-${createReleaseName()}`);
+        await execSsh(conn, buildRemoteMkdirCommand(currentBackup, deployUseSudo), {
+          label: '创建操作前备份目录',
+        });
+        await execSsh(conn, buildBackupDeployRootCommand(realRoot, currentBackup, protectedSubDirs, deployUseSudo, {
+          kind: restorePlan.kind,
+          namesToBackup,
+          isOverlayUpload: restorePlan.kind === BACKUP_KINDS.entryOnly,
+        }), {
+          label: '备份当前目录',
+        });
+        currentBackupCreated = true;
+
+        const restoreCmd = buildRestoreDeployRootCommand(realRoot, sourceRecord.backupPath, protectedSubDirs, deployUseSudo, {
+          restoreNames: restorePlan.restoreNames,
+          removeNames: restorePlan.removeNames,
+          isEntryOnly: restorePlan.kind === BACKUP_KINDS.entryOnly,
+        });
+        await execSsh(conn, restoreCmd, {
+          label: '恢复目录备份',
+        });
+
+        const testResult = await runNginxTest(conn, server, nginxInstance);
+        log('success', `${testResult.stderr || testResult.stdout}`.trim() || 'nginx -t 校验通过', 'nginx');
+        await reloadNginx(conn, server, nginxInstance);
+        log('success', 'Nginx 重载完成', 'reload');
+        backupRetentionSynced = await pruneRemoteBackups(conn, { ...target, deployRoot: realRoot }, log, deployUseSudo);
+      } catch (rollbackError) {
+        rollbackRecoveryAttempted = true;
+        if (currentBackupCreated && currentBackup && !rollbackRootRestored) {
+          rollbackRootRestored = await restoreDeployRootFromBackup(conn, { ...target, deployRoot: realRoot }, currentBackup, '恢复操作前目录', protectedSubDirs, deployUseSudo, {
+            realRoot,
+            log,
+            extraRemoveNames: targetRestoreNames,
+          }).catch(() => false);
+          if (rollbackRootRestored) {
+            log('warn', `${meta.operationText}失败，已恢复部署目录到操作前状态：${currentBackup}`, 'cleanup');
+            await removeRemotePath(conn, server, currentBackup, `清理失败${meta.operationText}备份目录`, deployUseSudo).catch(() => {});
+            log('warn', `${meta.operationText}失败，已触发失败备份清理：${currentBackup}`, 'cleanup');
+          } else {
+            log('error', `${meta.operationText}失败，部署目录自动恢复失败，请人工检查备份目录：${currentBackup}`, 'cleanup');
+          }
+        }
+        throw rollbackError;
+      } finally {
+        await releaseFrontendDeployLock(conn, lockRoot, lockToken, deployUseSudo, log).catch(() => {});
+      }
     });
 
     currentStage = 'finish';
@@ -3630,7 +4247,9 @@ async function restoreRecordVersion(recordId, payload, emit, action) {
     return successRecord;
   } catch (error) {
     logOperationFailure(log, error, 'error');
-    if (currentBackupCreated && currentBackup) {
+    if (rollbackRecoveryAttempted && currentBackupCreated && currentBackup) {
+      // 持锁期间内层已执行过恢复（成功时已清理备份，失败时保留备份），锁释放后不再重复恢复
+    } else if (currentBackupCreated && currentBackup) {
       rollbackRootRestored = await withSsh(server, async (conn) =>
         restoreDeployRootFromBackup(conn, { ...target, deployRoot: realRoot }, currentBackup, '恢复操作前目录', protectedSubDirs, deployUseSudo, {
           realRoot,

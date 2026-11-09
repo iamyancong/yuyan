@@ -533,3 +533,168 @@ test('cleanupAndRespondScheduleError、构建内存重置/封顶与构建峰值�
   );
   assert.equal(storedAfterCleanup?.status, 'stopped');
 });
+
+test('嵌套根目录并发互斥锁：同服务器父子/相同目录排斥排队，不同服务器或独立路径并发', async () => {
+  const scheduler = createDeployTaskScheduler({ maxRunning: 4, maxQueued: 10 });
+  const d1 = createDeferred();
+  const d2 = createDeferred();
+  const d3 = createDeferred();
+  const d4 = createDeferred();
+
+  const taskMain = {
+    ...createMockTask(101),
+    serverId: 1,
+    deployRoot: '/opt/yuyan/html',
+    projectName: '主应用',
+  };
+  const taskSub = {
+    ...createMockTask(102),
+    serverId: 1,
+    deployRoot: '/opt/yuyan/html/dataService',
+    projectName: '数据服务子应用',
+  };
+  const taskOtherServer = {
+    ...createMockTask(103),
+    serverId: 2, // 不同服务器，相同路径不冲突
+    deployRoot: '/opt/yuyan/html',
+    projectName: '不同服务器应用',
+  };
+  const taskIndependent = {
+    ...createMockTask(104),
+    serverId: 1,
+    deployRoot: '/opt/yuyan/backend-api', // 独立路径不冲突
+    projectName: '同服务器独立应用',
+  };
+
+  // 1. 启动主应用
+  let mainStarted = false;
+  const p1 = scheduler.scheduleTask(taskMain, () => {
+    mainStarted = true;
+    return d1.promise;
+  });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(mainStarted, true);
+  assert.equal(taskMain.queued, false);
+
+  // 2. 提交子应用（同服务器且路径嵌套）：必须进入排队等待，绝不能并发执行
+  let subStarted = false;
+  const p2 = scheduler.scheduleTask(taskSub, () => {
+    subStarted = true;
+    return d2.promise;
+  });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(subStarted, false, '子应用因父路径主应用正在运行，必须被互斥锁排斥并排队');
+  assert.equal(taskSub.queued, true);
+
+  // 3. 提交不同服务器目标与同服务器独立路径目标：槽位充足且路径无冲突，立即并发执行
+  let otherStarted = false;
+  const p3 = scheduler.scheduleTask(taskOtherServer, () => {
+    otherStarted = true;
+    return d3.promise;
+  });
+  let independentStarted = false;
+  const p4 = scheduler.scheduleTask(taskIndependent, () => {
+    independentStarted = true;
+    return d4.promise;
+  });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(otherStarted, true, '不同服务器目标应可并发执行');
+  assert.equal(independentStarted, true, '同服务器独立路径目标应可并发执行');
+  assert.equal(subStarted, false, '子应用依然在排队等待');
+
+  // 4. 对运行中任务目录提交轻量回滚（bypassQueue）：应当直接抛错阻断，防止相互踩踏
+  const rollbackTask = {
+    ...createMockTask(105),
+    action: 'rollback',
+    serverId: 1,
+    deployRoot: '/opt/yuyan/html/subApp',
+  };
+  assert.throws(
+    () => scheduler.scheduleTask(rollbackTask, () => Promise.resolve()),
+    (err) => {
+      assert.equal(err instanceof DeployTargetBusyError, true);
+      assert.match(err.message, /存在嵌套路径冲突而无法并发执行/);
+      return true;
+    }
+  );
+
+  // 5. 主应用发布完成，释放路径锁，子应用自动从队列中唤醒并执行
+  d1.resolve({ success: true });
+  await p1;
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(subStarted, true, '主应用完成后子应用应自动开始执行');
+
+  d2.resolve({ success: true });
+  d3.resolve({ success: true });
+  d4.resolve({ success: true });
+  await Promise.all([p2, p3, p4]);
+});
+
+test('快速通道任务（回滚）运行中时，嵌套目标发布进入排队并在回滚完成后自动调度；双回滚冲突抛 409', async () => {
+  const scheduler = createDeployTaskScheduler({ maxRunning: 5, maxQueued: 5 });
+  const dRollback = createDeferred();
+  const dDeploy = createDeferred();
+
+  const taskRollback = {
+    ...createMockTask(201),
+    action: 'rollback',
+    serverId: 1,
+    deployRoot: '/data/www/html',
+    projectName: '主应用',
+  };
+
+  const taskNestedDeploy = {
+    ...createMockTask(202),
+    action: 'deploy',
+    serverId: 1,
+    deployRoot: '/data/www/html/subApp',
+    projectName: '子应用',
+  };
+
+  const taskConflictingRollback = {
+    ...createMockTask(203),
+    action: 'rollback',
+    serverId: 1,
+    deployRoot: '/data/www/html/subApp',
+    projectName: '子应用回滚',
+  };
+
+  // 1. 提交主应用回滚（快速通道）
+  let rollbackStarted = false;
+  const pRollback = scheduler.scheduleTask(taskRollback, () => {
+    rollbackStarted = true;
+    return dRollback.promise;
+  });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(rollbackStarted, true, '回滚任务应立即执行');
+  assert.equal(scheduler.getStats().runningCount, 0, '快速通道任务不应占用执行槽位');
+
+  // 2. 两个嵌套目标的回滚同时提交时，后者抛出 409
+  assert.throws(
+    () => scheduler.scheduleTask(taskConflictingRollback, () => Promise.resolve()),
+    (err) => {
+      assert.equal(err instanceof DeployTargetBusyError, true);
+      assert.match(err.message, /存在嵌套路径冲突而无法并发执行/);
+      return true;
+    }
+  );
+
+  // 3. 提交嵌套子应用的普通发布：因主应用回滚正在执行，进入排队
+  let nestedDeployStarted = false;
+  const pDeploy = scheduler.scheduleTask(taskNestedDeploy, () => {
+    nestedDeployStarted = true;
+    return dDeploy.promise;
+  });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(nestedDeployStarted, false, '嵌套子应用发布因回滚正在运行必须排队');
+  assert.equal(taskNestedDeploy.queued, true, '子应用应处于排队状态');
+
+  // 4. 回滚完成，释放快速通道，触发 drainQueue()，子应用发布自动开始
+  dRollback.resolve({ success: true });
+  await pRollback;
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(nestedDeployStarted, true, '主应用回滚完成后排队的子应用发布应自动开始');
+
+  dDeploy.resolve({ success: true });
+  await pDeploy;
+});

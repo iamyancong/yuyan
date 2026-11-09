@@ -18,6 +18,7 @@ import {
   listServers,
   reorderServers,
   listTargets,
+  listPhysicalServerTargets,
   getTarget,
   listTargetRuntimeIndex,
   updateNginxInstance,
@@ -62,6 +63,7 @@ import {
   getTargetContext,
   resolveEffectiveDeploySudo,
   detectDeployRoot,
+  batchDetectRealRoots,
   resolveProtectedEntriesWithDetails,
   resolveNginxPaths,
 } from '../services/deploy-service.mjs';
@@ -226,8 +228,17 @@ async function createDeployTask(targetId, action, body = {}) {
     releaseTargetLease?.();
     throw error;
   }
+  let targetInfo = null;
+  try {
+    targetInfo = await getTarget(Number(targetId));
+  } catch (error) {
+    console.warn(`[Deploy] 获取部署目标 #${targetId} 信息失败，嵌套互斥将无法识别该任务路径：${error.message || error}`);
+  }
   return {
     targetId: Number(targetId),
+    serverId: targetInfo?.serverId,
+    deployRoot: targetInfo?.deployRoot,
+    projectName: targetInfo?.projectName,
     teamId,
     action,
     operator,
@@ -1662,18 +1673,42 @@ export async function handleGetTargetCleanupPreview(req, res) {
     const deployUseSudo = resolveEffectiveDeploySudo(server, nginxInstance);
     const testHooks = getTestHooks();
     const effectiveWithSsh = testHooks?.withSsh || withSsh;
+    let otherRealRootsMap = new Map();
     const probe = await effectiveWithSsh(server, async (conn) => {
-      return detectDeployRoot(conn, target.deployRoot, deployUseSudo, { ensureDir: false });
+      const rootProbe = await detectDeployRoot(conn, target.deployRoot, deployUseSudo, { ensureDir: false });
+      try {
+        const physicalTargets = await listPhysicalServerTargets({ serverId: target.serverId });
+        const otherTargets = physicalTargets.filter((t) => Number(t.id) !== Number(target.id));
+        if (otherTargets.length > 0) {
+          const otherPaths = otherTargets.map((t) => t.deployRoot);
+          const detectedOthers = await batchDetectRealRoots(conn, otherPaths, deployUseSudo).catch(() => otherPaths);
+          otherTargets.forEach((t, i) => {
+            otherRealRootsMap.set(t.id, detectedOthers[i]);
+          });
+        }
+      } catch (error) {
+        console.warn(`[Deploy] 查询物理服务器同宿主目标失败，降级使用配置路径：${error.message || error}`);
+      }
+      return rootProbe;
     });
 
     const realRoot = probe.realRoot || target.deployRoot;
     const nginxPaths = resolveNginxPaths(nginxInstance, target);
     const risk = classifyDeployRootRisk(realRoot, { ...nginxPaths, nginxPaths });
 
-    const allServerTargets = await listTargets({ serverId: target.serverId });
+    let allServerTargets = [];
+    try {
+      allServerTargets = await listPhysicalServerTargets({ serverId: target.serverId });
+    } catch (error) {
+      console.warn(`[Deploy] 查询物理服务器部署目标失败，降级使用逻辑服务器目标：${error.message || error}`);
+      allServerTargets = await listTargets({ serverId: target.serverId });
+    }
     const isSharedRoot = isSharedDeployRoot({ target, allServerTargets, nginxInstance });
 
-    const protectedDetails = await resolveProtectedEntriesWithDetails(target);
+    const protectedDetails = await resolveProtectedEntriesWithDetails(target, {
+      currentRealRoot: realRoot,
+      realRootsByTargetId: otherRealRootsMap,
+    });
     const protectedSet = new Set(protectedDetails.allProtected);
     const reservedSet = new Set(RESERVED_DEPLOY_ENTRIES);
 

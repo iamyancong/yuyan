@@ -6,7 +6,23 @@
 
 import crypto from 'node:crypto';
 
-export const RESERVED_DEPLOY_ENTRIES = Object.freeze(['.yuyan-backups', '.yuyan-manifests']);
+export const RESERVED_DEPLOY_ENTRIES = Object.freeze([
+  '.yuyan-backups',
+  '.yuyan-manifests',
+  '.yuyan-deploy.lock',
+]);
+
+/**
+ * 判断是否为系统保留条目（包含 .yuyan-retiring-* 等临时暂存目录）。
+ * @param {string} name - 条目名称
+ * @returns {boolean} 是否为系统保留条目
+ */
+export function isReservedDeployEntry(name) {
+  if (!name || typeof name !== 'string') return false;
+  if (RESERVED_DEPLOY_ENTRIES.includes(name)) return true;
+  if (name.startsWith('.yuyan-retiring-') || name.startsWith('.yuyan-trash-')) return true;
+  return false;
+}
 
 /**
  * 辅助函数：连接两个 POSIX 路径。
@@ -683,7 +699,7 @@ export function computeCleanupPlan(params = {}) {
   const isUnknown = (name) =>
     existingSet.has(name) &&
     !protectedSet.has(name) &&
-    !reservedSet.has(name) &&
+    !isReservedDeployEntry(name) &&
     !artifactSet.has(name) &&
     !manifestSet.has(name);
 
@@ -704,7 +720,7 @@ export function computeCleanupPlan(params = {}) {
   // deleteNames = candidateDelete ∩ existing − protected − reserved
   const deleteNames = [];
   for (const name of validExisting) {
-    if (candidateDeleteSet.has(name) && !protectedSet.has(name) && !reservedSet.has(name)) {
+    if (candidateDeleteSet.has(name) && !protectedSet.has(name) && !isReservedDeployEntry(name)) {
       deleteNames.push(name);
     }
   }
@@ -715,11 +731,11 @@ export function computeCleanupPlan(params = {}) {
   const keptProtected = validExisting.filter((name) => protectedSet.has(name));
 
   // keptReserved = existing ∩ reserved
-  const keptReserved = validExisting.filter((name) => reservedSet.has(name));
+  const keptReserved = validExisting.filter((name) => isReservedDeployEntry(name));
 
   // keptUnknown = existing − protected − reserved − deleteNames
   const keptUnknown = validExisting.filter(
-    (name) => !protectedSet.has(name) && !reservedSet.has(name) && !deleteSet.has(name)
+    (name) => !protectedSet.has(name) && !isReservedDeployEntry(name) && !deleteSet.has(name)
   );
 
   return {
@@ -913,4 +929,145 @@ export function verifyPublishCleanupGate(params = {}) {
     code: 'scope_changed_confirmation_required',
     reason: '服务器目录有变化，请重新预览后确认',
   };
+}
+
+/**
+ * 判断两个部署根路径在规范化后是否存在相同或父子嵌套冲突关系。
+ * @param {string} rootA - 路径 A
+ * @param {string} rootB - 路径 B
+ * @returns {boolean} 是否冲突（相同或相互嵌套）
+ */
+export function isPathNestedOrConflicting(rootA, rootB) {
+  if (!rootA || !rootB) return false;
+  let cleanA = '';
+  let cleanB = '';
+  try {
+    cleanA = normalizeDeployRootPath(rootA);
+  } catch {
+    cleanA = String(rootA).trim().replace(/\/+$/, '') || '/';
+  }
+  try {
+    cleanB = normalizeDeployRootPath(rootB);
+  } catch {
+    cleanB = String(rootB).trim().replace(/\/+$/, '') || '/';
+  }
+  if (cleanA === cleanB) return true;
+  const prefixA = cleanA === '/' ? '/' : `${cleanA}/`;
+  const prefixB = cleanB === '/' ? '/' : `${cleanB}/`;
+  return cleanB.startsWith(prefixA) || cleanA.startsWith(prefixB);
+}
+
+/**
+ * 解析最外层的部署目录锁路径（父子目标互斥锁）。
+ * 找出所有是 currentRoot 祖先或等于 currentRoot 的目标根（在 otherRoots ∪ {currentRoot} 中），
+ * 严格按照目录层级判定（避免 /html 与 /html2 误判），并选取路径最短（最外层）的那个作为 lockRoot。
+ * @param {string} currentRoot - 当前部署根路径
+ * @param {string[]} [otherRoots=[]] - 其他候选部署根路径列表
+ * @returns {string} 最外层部署锁根目录
+ */
+export function resolveTopmostLockRoot(currentRoot, otherRoots = []) {
+  if (!currentRoot) return '';
+  let curNorm = '';
+  try {
+    curNorm = normalizeDeployRootPath(currentRoot);
+  } catch {
+    curNorm = String(currentRoot).trim().replace(/\/+$/, '') || '/';
+  }
+
+  const allCandidates = [curNorm];
+  for (const r of otherRoots || []) {
+    if (!r) continue;
+    let rNorm = '';
+    try {
+      rNorm = normalizeDeployRootPath(r);
+    } catch {
+      rNorm = String(r).trim().replace(/\/+$/, '') || '/';
+    }
+    const isAncestor = curNorm === rNorm || (rNorm === '/' ? curNorm.startsWith('/') : curNorm.startsWith(`${rNorm}/`));
+    if (isAncestor) {
+      allCandidates.push(rNorm);
+    }
+  }
+
+  allCandidates.sort((a, b) => {
+    if (a.length !== b.length) return a.length - b.length;
+    return a.localeCompare(b);
+  });
+
+  return allCandidates[0];
+}
+
+/**
+ * 校验清理计划的安全性与上限保护。
+ * @param {Object} params - 校验参数
+ * @param {Object} params.cleanupPlan - computeCleanupPlan 的计算结果
+ * @param {string[]} [params.artifactTopNames=[]] - 本次构建产物顶层名（兼容回退）
+ * @param {string[]} [params.rawArtifactTopNames=[]] - 本次构建产物原始顶层名（未经保留名单过滤）
+ * @param {string[]} [params.filteredArtifactTopNames=[]] - 过滤掉受保护项和系统保留项后的产物顶层名
+ * @param {Array<string|{name: string, projectName?: string}>} [params.nestedNames=[]] - 受保护的嵌套子应用名单
+ * @param {string[]} [params.manifestTopNames=[]] - 上次清单顶层名
+ * @param {string[]} [params.extraCleanupNames=[]] - 用户显式确认的额外清理项
+ * @throws {Error} 校验未通过时抛出安全熔断错误
+ */
+export function assertCleanupSafetyCeiling(params = {}) {
+  const {
+    cleanupPlan,
+    artifactTopNames = [],
+    nestedNames = [],
+    manifestTopNames = [],
+    extraCleanupNames = [],
+  } = params;
+
+  if (!cleanupPlan) return;
+
+  // 1. 嵌套子应用重名检查：只与嵌套子应用比较，不与手填保留目录比较
+  const rawArtifactsSource = params.rawArtifactTopNames !== undefined
+    ? params.rawArtifactTopNames
+    : artifactTopNames;
+  const rawArtifacts = (rawArtifactsSource || []).filter(isValidEntryName);
+
+  const nestedMap = new Map();
+  for (const item of nestedNames || []) {
+    if (typeof item === 'string') {
+      if (isValidEntryName(item)) nestedMap.set(item, item);
+    } else if (item && typeof item === 'object' && item.name && isValidEntryName(item.name)) {
+      nestedMap.set(item.name, item.projectName || item.name);
+    }
+  }
+
+  for (const name of rawArtifacts) {
+    if (nestedMap.has(name)) {
+      const proj = nestedMap.get(name);
+      const detail = proj && proj !== name ? `已登记子应用「${proj}」（目录：${name}）` : `已登记子应用（目录：${name}）`;
+      throw new Error(
+        `构建产物顶层项「${name}」与${detail}重名，已终止发布以防覆盖子应用。请调整构建产物目录或检查子应用配置`
+      );
+    }
+  }
+
+  // 2. 待删除项白名单硬断言：每一项必须来自 (过滤后产物 ∪ 上次清单 ∪ 排除 rejectedExtra 后的合法额外清理)
+  const effectiveArtifactSource = params.filteredArtifactTopNames !== undefined
+    ? params.filteredArtifactTopNames
+    : artifactTopNames.filter((n) => !nestedMap.has(n));
+  const effectiveArtifactTops = (effectiveArtifactSource || [])
+    .filter((n) => isValidEntryName(n) && !isReservedDeployEntry(n));
+
+  const rejectedExtraSet = new Set(cleanupPlan.rejectedExtra || []);
+  const allowedExtraNames = (extraCleanupNames || []).filter(
+    (n) => isValidEntryName(n) && !rejectedExtraSet.has(n)
+  );
+
+  const candidateSet = new Set([
+    ...effectiveArtifactTops,
+    ...manifestTopNames.filter(isValidEntryName),
+    ...allowedExtraNames,
+  ]);
+
+  for (const delName of cleanupPlan.deleteNames || []) {
+    if (!candidateSet.has(delName)) {
+      throw new Error(
+        `安全防御拦截：待删除项「${delName}」既不在产物顶层、也不在上次清单顶层、也不在额外清理项中，已终止清空操作`
+      );
+    }
+  }
 }
