@@ -1,6 +1,7 @@
-import { computed, nextTick, onBeforeUnmount, ref, watch, type Ref } from 'vue';
+import { computed, nextTick, ref, watch, type Ref } from 'vue';
 import { useTableHeight } from '@yss-ui/hooks';
 import type { DeployRecord } from '@/api/deploy';
+import { useDeployTabTableLayout } from '../../../hooks/useDeployTabTableLayout';
 import { buildCommitUrl, TABLE_DEFAULT_HEIGHT, TABLE_MIN_HEIGHT } from '../constant';
 
 /** 发布历史 Tab Hook 入参 */
@@ -34,6 +35,11 @@ export function useDeployRecordTab(options: UseDeployRecordTabOptions) {
     return rawTableHeight.value > TABLE_MIN_HEIGHT ? rawTableHeight.value : TABLE_MIN_HEIGHT;
   });
 
+  useDeployTabTableLayout({
+    active: options.active,
+    recalculateHeight,
+  });
+
   /** 等待视图更新后重新计算表格高度（仅在当前 Tab 激活时执行，避免后台强制回流） */
   const recalculateAfterRender = async () => {
     if (!options.active.value) return;
@@ -43,33 +49,6 @@ export function useDeployRecordTab(options: UseDeployRecordTabOptions) {
 
   watch([options.loading, () => options.records.value.length, options.pageSize], recalculateAfterRender, {
     flush: 'post',
-  });
-
-  let activeTimer: ReturnType<typeof setTimeout> | null = null;
-  watch(
-    options.active,
-    (isActive) => {
-      if (activeTimer) {
-        clearTimeout(activeTimer);
-        activeTimer = null;
-      }
-      if (isActive) {
-        // 延迟 220ms 执行重算，彻底避开 Tab 切换 inkBar 动画执行期，防止同步回流卡顿
-        activeTimer = setTimeout(() => {
-          recalculateHeight();
-          activeTimer = null;
-        }, 220);
-      }
-    },
-    // 表格实例会保留，切回时容器从 display:none 恢复，需要再量一次高度
-    { immediate: true }
-  );
-
-  onBeforeUnmount(() => {
-    if (activeTimer) {
-      clearTimeout(activeTimer);
-      activeTimer = null;
-    }
   });
 
   /** 提交链接映射 */

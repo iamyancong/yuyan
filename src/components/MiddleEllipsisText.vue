@@ -39,6 +39,26 @@ const containerWidth = ref(0);
 const charWidth = ref(DEFAULT_CHAR_WIDTH);
 let resizeObserver: ResizeObserver | null = null;
 
+/** 当前单元格的字体只测量一次，避免观察回调里反复插入节点并强制布局。 */
+const charWidthCache = new Map<string, number>();
+const pendingMeasures = new Set<() => void>();
+let measureFrame = 0;
+
+/**
+ * 把测量安排到下一帧，并合并同一帧里的全部单元格。
+ * @param run 实际测量
+ */
+const scheduleMeasure = (run: () => void) => {
+  pendingMeasures.add(run);
+  if (measureFrame) return;
+  measureFrame = requestAnimationFrame(() => {
+    measureFrame = 0;
+    const batch = Array.from(pendingMeasures);
+    pendingMeasures.clear();
+    batch.forEach((fn) => fn());
+  });
+};
+
 /**
  * 获取可展示的原始文本。
  * @returns 原始文本或占位符
@@ -106,8 +126,11 @@ const isEllipsized = computed(() => displayText.value !== rawText.value);
  * @returns 平均字符宽度
  */
 const measureCharWidth = (element: HTMLElement) => {
-  const sample = document.createElement('span');
   const style = window.getComputedStyle(element);
+  const cacheKey = `${style.fontFamily}|${style.fontSize}|${style.fontWeight}`;
+  const cached = charWidthCache.get(cacheKey);
+  if (cached) return cached;
+  const sample = document.createElement('span');
   sample.textContent = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   sample.style.position = 'absolute';
   sample.style.visibility = 'hidden';
@@ -116,9 +139,23 @@ const measureCharWidth = (element: HTMLElement) => {
   sample.style.fontSize = style.fontSize;
   sample.style.fontWeight = style.fontWeight;
   document.body.appendChild(sample);
-  const width = sample.getBoundingClientRect().width / (sample.textContent?.length || 1);
+  const width = sample.getBoundingClientRect().width / (sample.textContent?.length || 1) || DEFAULT_CHAR_WIDTH;
   document.body.removeChild(sample);
-  return width || DEFAULT_CHAR_WIDTH;
+  charWidthCache.set(cacheKey, width);
+  return width;
+};
+
+/**
+ * 按已知宽度更新省略结果。宽度没变时不写响应式数据，避免观察器来回触发。
+ * @param width 容器宽度
+ */
+const applyWidth = (width: number) => {
+  const element = textRef.value;
+  if (!element || width <= 0) return;
+  const nextCharWidth = measureCharWidth(element);
+  if (Math.abs(width - containerWidth.value) < 1 && Math.abs(nextCharWidth - charWidth.value) < 0.01) return;
+  containerWidth.value = width;
+  charWidth.value = nextCharWidth;
 };
 
 /**
@@ -126,20 +163,30 @@ const measureCharWidth = (element: HTMLElement) => {
  */
 const updateMeasurements = () => {
   if (!textRef.value) return;
-  containerWidth.value = textRef.value.getBoundingClientRect().width;
-  charWidth.value = measureCharWidth(textRef.value);
+  applyWidth(textRef.value.getBoundingClientRect().width);
 };
+
+/** 当前实例排队中的测量，卸载时从队列移除。 */
+let queuedMeasure: (() => void) | null = null;
 
 onMounted(async () => {
   await nextTick();
   updateMeasurements();
   if (!textRef.value) return;
-  resizeObserver = new ResizeObserver(updateMeasurements);
+  resizeObserver = new ResizeObserver((entries) => {
+    const width = entries[0]?.contentRect.width ?? 0;
+    if (width <= 0) return;
+    if (queuedMeasure) pendingMeasures.delete(queuedMeasure);
+    queuedMeasure = () => applyWidth(width);
+    scheduleMeasure(queuedMeasure);
+  });
   resizeObserver.observe(textRef.value);
 });
 
 onBeforeUnmount(() => {
+  if (queuedMeasure) pendingMeasures.delete(queuedMeasure);
   resizeObserver?.disconnect();
+  resizeObserver = null;
 });
 
 watch(rawText, async () => {

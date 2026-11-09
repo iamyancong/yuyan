@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import { YTable } from '@yss-ui/components/lite';
 import { useTableHeight } from '@yss-ui/hooks';
 import type { YTableActionConfig } from '@yss-ui/components/lite';
 import type { DeployTarget } from '@/api/deploy';
-import type { RuntimeAwareDeployTarget, TargetFilterForm } from '../../types';
+import type { TargetFilterForm } from '../../types';
 import { targetColumns } from '../../constant';
 import NginxProjectNameCell from '../NginxProjectNameCell/index.vue';
 import DeployTargetRuntimeCell from '../DeployTargetRuntimeCell/index.vue';
@@ -12,6 +12,7 @@ import DeployServerCell from '../DeployServerCell/index.vue';
 import DeployTargetSiteSummaryCell from '../DeployTargetSiteSummaryCell/index.vue';
 import DeployTargetFilterBar from './components/DeployTargetFilterBar.vue';
 import { useNginxDeployContext } from '../../hooks/useNginxDeployContext';
+import { useDeployTabTableLayout } from '../../hooks/useDeployTabTableLayout';
 
 defineOptions({ name: 'DeployTargetTab' });
 
@@ -46,6 +47,7 @@ const emit = defineEmits<{
 }>();
 
 const tableAreaRef = ref<HTMLElement>();
+const activeRef = computed(() => props.active !== false);
 const { tableHeight: rawTableHeight, recalculateHeight } = useTableHeight(tableAreaRef, {
   minHeight: 240,
   defaultHeight: 420,
@@ -56,41 +58,19 @@ const tableHeight = computed(() => {
   return rawTableHeight.value > 240 ? rawTableHeight.value : 240;
 });
 
+useDeployTabTableLayout({
+  active: activeRef,
+  recalculateHeight,
+});
+
 /** 等待视图更新后重新计算表格高度（仅在当前 Tab 激活时执行，避免后台强制回流） */
 const recalculateAfterRender = async () => {
-  if (props.active === false) return;
+  if (!activeRef.value) return;
   await nextTick();
   recalculateHeight();
 };
 
 watch([() => props.loading, () => props.targets.length], recalculateAfterRender, { flush: 'post' });
-
-let activeTimer: ReturnType<typeof setTimeout> | null = null;
-watch(
-  () => props.active,
-  (isActive) => {
-    if (activeTimer) {
-      clearTimeout(activeTimer);
-      activeTimer = null;
-    }
-    if (isActive) {
-      // 延迟 220ms 执行重算，彻底避开 Tab 切换 inkBar 动画执行期，防止同步回流卡顿
-      activeTimer = setTimeout(() => {
-        recalculateHeight();
-        activeTimer = null;
-      }, 220);
-    }
-  },
-  // 表格实例会保留，切回时容器从 display:none 恢复，需要再量一次高度
-  { immediate: true }
-);
-
-onBeforeUnmount(() => {
-  if (activeTimer) {
-    clearTimeout(activeTimer);
-    activeTimer = null;
-  }
-});
 
 /**
  * 传递最新的筛选表单数据。

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import { YTable } from '@yss-ui/components/lite';
 import { useTableHeight } from '@yss-ui/hooks';
 import type { YTableActionConfig } from '@yss-ui/components/lite';
@@ -7,6 +7,7 @@ import type { DeployServer } from '@/api/deploy';
 import { formatDeployDateTime, serverColumns } from '../../constant';
 import DeployServerNginxCell from '../DeployServerNginxCell/index.vue';
 import { getServerConnectionStatusTag as getStatusTag } from '../../sshFailureGuide';
+import { useDeployTabTableLayout } from '../../hooks/useDeployTabTableLayout';
 
 /** 服务器连接状态标签（时间按本地时区展示） */
 const getServerConnectionStatusTag = (server: DeployServer) => getStatusTag(server, { formatTime: formatDeployDateTime });
@@ -38,6 +39,7 @@ const emit = defineEmits<{
 
 const tableAreaRef = ref<HTMLElement>();
 const tableData = ref<DeployServer[]>([]);
+const activeRef = computed(() => props.active !== false);
 const { tableHeight: rawTableHeight, recalculateHeight } = useTableHeight(tableAreaRef, {
   minHeight: TABLE_MIN_HEIGHT,
   defaultHeight: TABLE_DEFAULT_HEIGHT,
@@ -53,25 +55,11 @@ const isDragable = computed(() => {
   return tableData.value.length > 0 && !props.orderSaving;
 });
 
-/** 等待视图更新后重新计算表格高度（仅在当前 Tab 激活时执行，避免后台强制回流） */
-const recalculateAfterRender = async () => {
-  if (props.active === false) return;
-  await nextTick();
-  recalculateHeight();
-};
-
-/**
- * 拖拽状态追踪（解决 macOS WKWebView 向上拖拽时底层 dragleave 清空事件导致 API 未触发的 Bug）
- */
-let dragSourceServer: DeployServer | null = null;
-let dragTargetServer: DeployServer | null = null;
-let dragInsertPos: 'top' | 'bottom' = 'top';
-
 /**
  * 隐藏拖拽浮盒/指示线并还原所有节点的样式与透明度
  */
 const clearVxeDragStatus = () => {
-  if (!tableAreaRef.value || props.active === false) return;
+  if (!tableAreaRef.value || !activeRef.value) return;
 
   // 1. 隐藏残留的拖拽 Tip 浮盒与指示线
   const tipEl = tableAreaRef.value.querySelector('.vxe-table--drag-sort-tip') as HTMLElement | null;
@@ -114,34 +102,27 @@ const cleanupDragArtifacts = () => {
   requestAnimationFrame(() => clearVxeDragStatus());
 };
 
-watch([() => props.loading, () => props.servers.length], recalculateAfterRender, { flush: 'post' });
-
-let activeTimer: ReturnType<typeof setTimeout> | null = null;
-watch(
-  () => props.active,
-  (isActive) => {
-    if (activeTimer) {
-      clearTimeout(activeTimer);
-      activeTimer = null;
-    }
-    if (isActive) {
-      // 延迟 220ms 执行重算，彻底避开 Tab 切换 inkBar 动画执行期，防止同步回流卡顿
-      activeTimer = setTimeout(() => {
-        recalculateHeight();
-        activeTimer = null;
-      }, 220);
-    }
-  },
-  // 表格实例会保留，切回时容器从 display:none 恢复，需要再量一次高度
-  { immediate: true }
-);
-
-onBeforeUnmount(() => {
-  if (activeTimer) {
-    clearTimeout(activeTimer);
-    activeTimer = null;
-  }
+useDeployTabTableLayout({
+  active: activeRef,
+  recalculateHeight,
+  onActivated: cleanupDragArtifacts,
 });
+
+/** 等待视图更新后重新计算表格高度（仅在当前 Tab 激活时执行，避免后台强制回流） */
+const recalculateAfterRender = async () => {
+  if (!activeRef.value) return;
+  await nextTick();
+  recalculateHeight();
+};
+
+/**
+ * 拖拽状态追踪（解决 macOS WKWebView 向上拖拽时底层 dragleave 清空事件导致 API 未触发的 Bug）
+ */
+let dragSourceServer: DeployServer | null = null;
+let dragTargetServer: DeployServer | null = null;
+let dragInsertPos: 'top' | 'bottom' = 'top';
+
+watch([() => props.loading, () => props.servers.length], recalculateAfterRender, { flush: 'post' });
 
 watch(
   () => props.servers,
