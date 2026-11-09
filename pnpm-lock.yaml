@@ -1737,7 +1737,7 @@ packages:
         optional: true
 
   '@yss-ui/components@1.11.0':
-    resolution: {integrity: sha512-Pd71GU75vAiCne01NyRsKVn5DRW8orkc6lTfa3UrBXfplP25KWoTAhhu9tkbdEtSk05glK4zMwEEyG3AgXXX9w==, tarball: https://registry.npmjs.org/@yss-ui/components/-/components-1.11.0.tgz}
+    resolution: {integrity: sha512-Pd71GU75vAiCne01NyRsKVn5DRW8orkc6lTfa3UrBXfplP25KWoTAhhu9tkbdEtSk05glK4zMwEEyG3AgXXX9w==, tarball: https://registry.npmmirror.com/@yss-ui/components/-/components-1.11.0.tgz}
     peerDependencies:
       '@aiden0z/pptx-renderer': ~1.4.0
       ant-design-vue: ^4.0.7
@@ -1751,13 +1751,13 @@ packages:
         optional: true
 
   '@yss-ui/hooks@1.2.1':
-    resolution: {integrity: sha512-+Vp9xhdsai/gKFUhu/TPhGITougJgQlqNhUBR7PsuoWRId/V3rHpMI5F2Lzo/5AGBkUr487vWK5ZGDLcGC0BIQ==, tarball: https://registry.npmjs.org/@yss-ui/hooks/-/hooks-1.2.1.tgz}
+    resolution: {integrity: sha512-+Vp9xhdsai/gKFUhu/TPhGITougJgQlqNhUBR7PsuoWRId/V3rHpMI5F2Lzo/5AGBkUr487vWK5ZGDLcGC0BIQ==, tarball: https://registry.npmmirror.com/@yss-ui/hooks/-/hooks-1.2.1.tgz}
 
   '@yss-ui/theme@1.0.3':
-    resolution: {integrity: sha512-pF3LbnesmnygUj3fqnIHVMdi8WHcWOqphtuacrnXGPQ/h9cw7k1/zgXdP/egGUS9W2/gEvzJ0LIVQdf0dPYvQw==, tarball: https://registry.npmjs.org/@yss-ui/theme/-/theme-1.0.3.tgz}
+    resolution: {integrity: sha512-pF3LbnesmnygUj3fqnIHVMdi8WHcWOqphtuacrnXGPQ/h9cw7k1/zgXdP/egGUS9W2/gEvzJ0LIVQdf0dPYvQw==, tarball: https://registry.npmmirror.com/@yss-ui/theme/-/theme-1.0.3.tgz}
 
   '@yss-ui/utils@1.0.6':
-    resolution: {integrity: sha512-f/owRosLC1muucWcwYnU95MKtOF4+WyXxutcZyLxlQkNKeqhceLMtlq/R47KCT8GUFv2SfUJffv7l2ibAsnt8Q==, tarball: https://registry.npmjs.org/@yss-ui/utils/-/utils-1.0.6.tgz}
+    resolution: {integrity: sha512-f/owRosLC1muucWcwYnU95MKtOF4+WyXxutcZyLxlQkNKeqhceLMtlq/R47KCT8GUFv2SfUJffv7l2ibAsnt8Q==, tarball: https://registry.npmmirror.com/@yss-ui/utils/-/utils-1.0.6.tgz}
 
   accepts@2.0.0:
     resolution: {integrity: sha512-5cvg6CtKwfgdmVqY1WIiXKc3Q1bkRqGLi+2W/6ao+6Y7gu/RCwRuAhGEzh5B4KlszSuTLgZYuqFqo5bImjNKng==, tarball: https://registry.npmmirror.com/accepts/-/accepts-2.0.0.tgz}
