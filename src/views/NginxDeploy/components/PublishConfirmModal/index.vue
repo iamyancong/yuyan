@@ -257,6 +257,20 @@ const onStartButtonClick = () => {
   startConfirmOpen.value = true;
 };
 
+/**
+ * 气泡只允许由门禁打开：忽略 Trigger 点击按钮时自带的 open=true，只接受点外部等关闭事件。
+ * @param value Popover 请求的显隐值
+ */
+const onStartConfirmOpenChange = (value: boolean) => {
+  if (!value) startConfirmOpen.value = false;
+};
+const onRepublishConfirmOpenChange = (value: boolean) => {
+  if (!value) republishConfirmOpen.value = false;
+};
+
+/** 气泡挂在按钮所在的 footer 内，抽屉关闭时随之隐藏，不会漂到窗口左上角 */
+const getConfirmPopupContainer = (triggerNode?: HTMLElement) => triggerNode?.parentElement || document.body;
+
 /** 点击「重新发布」按钮触发门禁判定 */
 const onRepublishButtonClick = () => {
   const gate = resolvePublishGate({
@@ -370,6 +384,15 @@ const handleStopClick = () => {
   }
   emit('stop');
 };
+
+/** 抽屉开关、发布开始/结束时收起确认气泡，避免状态残留后重新挂载时自动弹出 */
+watch(
+  () => [props.open, props.started, props.running],
+  () => {
+    startConfirmOpen.value = false;
+    republishConfirmOpen.value = false;
+  }
+);
 
 watch(
   () => [props.open, props.target?.id],
@@ -732,8 +755,10 @@ watch(
             <!-- 开始发布 Popover 气泡确认 -->
             <a-popover
               v-if="!started"
-              v-model:open="startConfirmOpen"
+              :open="startConfirmOpen"
               trigger="click"
+              :getPopupContainer="getConfirmPopupContainer"
+              @openChange="onStartConfirmOpenChange"
               placement="topRight"
               overlayClassName="publish-confirm-popover"
             >
@@ -772,8 +797,10 @@ watch(
             <!-- 重新发布 Popover 气泡确认 -->
             <a-popover
               v-if="started && !running"
-              v-model:open="republishConfirmOpen"
+              :open="republishConfirmOpen"
               trigger="click"
+              :getPopupContainer="getConfirmPopupContainer"
+              @openChange="onRepublishConfirmOpenChange"
               placement="topRight"
               overlayClassName="publish-confirm-popover"
             >
