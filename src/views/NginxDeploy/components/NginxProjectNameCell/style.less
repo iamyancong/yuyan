@@ -33,6 +33,9 @@
 }
 
 .nginx-project-name-cell__name {
+  /* span 包在 <a> 里时是行内元素，text-overflow 不生效，需显式块级 */
+  display: block;
+  min-width: 0;
   overflow: hidden;
   color: var(--primary-color);
   font-size: 14px;
@@ -43,6 +46,12 @@
 }
 
 .nginx-project-name-cell__link {
+  /* 宽度跟随文字，超出列宽时收在 100% 内，点击/悬停区域不扩到整列 */
+  display: block;
+  width: fit-content;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   text-decoration: none;
   cursor: pointer;
   transition: opacity 0.2s;
@@ -62,4 +71,10 @@
   line-height: 16px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.nginx-project-name-cell__tooltip-sub {
+  opacity: 0.75;
+  font-size: 12px;
+  word-break: break-all;
 }

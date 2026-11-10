@@ -17,6 +17,12 @@ const props = defineProps<{
 
 const siteMeta = computed(() => (props.showAccessStatus ? getSiteReadinessStatus(props.record as DeployTarget) : null));
 
+/** 名称悬浮提示第二行：仓库地址或项目路径（名称被省略时仍能看到完整名称） */
+const nameTooltipSubtitle = computed(() => {
+  const sub = String(props.record.repositoryUrl || props.record.projectPath || '').trim();
+  return sub && sub !== props.record.projectName ? sub : '';
+});
+
 /** 打开部署目标的页面访问地址。 */
 const handleOpenVisit = () => {
   if (siteMeta.value?.isAccessible && siteMeta.value.visitUrl) {
@@ -29,7 +35,11 @@ const handleOpenVisit = () => {
   <div class="nginx-project-name-cell">
     <ProjectTypeIcon :type="props.record.projectType" />
     <div class="nginx-project-name-cell__main">
-      <a-tooltip :title="props.record.repositoryUrl || props.record.projectPath || props.record.projectName">
+      <a-tooltip>
+        <template #title>
+          <div>{{ props.record.projectName }}</div>
+          <div v-if="nameTooltipSubtitle" class="nginx-project-name-cell__tooltip-sub">{{ nameTooltipSubtitle }}</div>
+        </template>
         <a
           v-if="props.record.repositoryUrl"
           class="nginx-project-name-cell__link"
