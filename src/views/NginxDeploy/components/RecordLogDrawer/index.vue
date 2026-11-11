@@ -53,6 +53,7 @@ const drawerOpen = computed({
     placement="right"
     destroyOnClose
     class="record-log-drawer"
+    root-class-name="record-log-drawer-root"
     @after-open-change="handleDrawerAfterOpenChange"
   >
     <a-spin :spinning="Boolean(loading)">
@@ -95,26 +96,28 @@ const drawerOpen = computed({
 
         <DeployLogLegend :show-context="filterMode === 'errors'" />
 
-        <YMonaco
-          ref="logMonacoRef"
-          :model-value="recordLogContent"
-          language="log"
-          theme="vs-dark"
-          height="calc(100vh - 320px)"
-          :readonly="true"
-          log-mode
-          :max-lines="20000"
-          :auto-scroll="true"
-          :show-border="false"
-          :options="{
-            minimap: { enabled: false },
-            fontSize: 13,
-            wordWrap: 'on',
-            readOnly: true,
-            folding: false,
-            guides: { indentation: false },
-          }"
-        />
+        <div class="record-log-viewer">
+          <YMonaco
+            ref="logMonacoRef"
+            :model-value="recordLogContent"
+            language="log"
+            theme="vs-dark"
+            height="100%"
+            :readonly="true"
+            log-mode
+            :max-lines="20000"
+            :auto-scroll="true"
+            :show-border="false"
+            :options="{
+              minimap: { enabled: false },
+              fontSize: 13,
+              wordWrap: 'on',
+              readOnly: true,
+              folding: false,
+              guides: { indentation: false },
+            }"
+          />
+        </div>
       </div>
     </a-spin>
   </a-drawer>
