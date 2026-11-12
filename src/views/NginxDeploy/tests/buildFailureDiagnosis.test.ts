@@ -483,3 +483,93 @@ test('findDiagnosticBannerLine：按标题定位诊断报告所在行', () => {
   assert.ok(content.split('\n')[line - 1].includes('雨燕构建未通过诊断报告'));
   assert.equal(findDiagnosticBannerLine('no banner'), 0);
 });
+
+test('旧记录（无 source 标记）：按阶段与雨燕分界日志分段，安装阶段的报错不会被当成构建失败原因', () => {
+  const logs: DeployLogItem[] = [
+    { level: 'info', message: '操作人 ryan 发起发布', stage: 'validate', timestamp: TS },
+    { level: 'warn', message: 'npm ERR! network request to https://npm.corp.local/x failed, reason: connect ETIMEDOUT', stage: 'install', timestamp: TS },
+    { level: 'success', message: '依赖安装完成，已更新依赖缓存指纹：abcdef123456', stage: 'install', timestamp: TS },
+    { level: 'info', message: '构建内存预算池已预占 2048MB（上次峰值 0MB，子进程堆上限 --max-old-space-size=2048）', stage: 'build', timestamp: TS },
+    { level: 'info', message: '> app@1.0.0 build /x', stage: 'build', timestamp: TS },
+    { level: 'info', message: '> vite build', stage: 'build', timestamp: TS },
+    { level: 'warn', message: 'sh: 1: vite: not found', stage: 'build', timestamp: TS },
+    { level: 'error', message: '构建产物 执行失败，退出码 127\nsh: 1: vite: not found', stage: 'error', timestamp: TS },
+  ];
+  const summary = diagnose(logs);
+  assert.equal(summary?.category, '命令未安装');
+  assert.equal(summary?.violation, 'vite');
+  assert.equal(summary?.lineIndex, 7);
+
+  // 构建段没有可识别报错时，只退回汇总正文与退出码，不会去抓安装阶段的 ETIMEDOUT
+  const quiet: DeployLogItem[] = [...logs.slice(0, 6), { level: 'error', message: '构建产物 执行失败，退出码 2', stage: 'error', timestamp: TS }];
+  const quietSummary = diagnose(quiet);
+  assert.equal(quietSummary?.category, '执行失败');
+  assert.match(quietSummary!.title, /退出码 2/);
+});
+
+test('旧记录：整坨 stderr 汇总消息经去噪后，lineIndex 仍对准 Monaco 展示行', () => {
+  const message = `构建产物 执行失败，退出码 1
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+error during build:
+Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'vite-plugin-svg-icons' imported from ${WS}/vite.config.ts.timestamp-1-ab.mjs`;
+  const logs: DeployLogItem[] = [
+    { level: 'info', message: 'vite v5.4.10 building for production...', timestamp: TS },
+    { level: 'error', message, timestamp: TS },
+  ];
+  const summary = extractErrorSummaryFromLogs(logs, { status: 'failed' } as any);
+  assert.equal(summary?.violation, 'vite-plugin-svg-icons');
+  assertLineIndexPointsTo(logs, summary, 'Cannot find package');
+});
+
+test('子步骤推断：vue-tsc 自身崩溃算 vue-tsc 失败；vite 没开始时不乱猜失败步骤', () => {
+  const crash = diagnose(buildFailureLogs({
+    chunks: [
+      { out: '\n> app@1.0.0 build /x\n> vue-tsc --noEmit && vite build\n' },
+      { err: `TypeError: Cannot read properties of undefined (reading 'flags')\n    at Object.getTypeFlags (${WS}/node_modules/vue-tsc/node_modules/typescript/lib/tsc.js:100:1)\n    at run (${WS}/node_modules/vue-tsc/bin/vue-tsc.js:68:3)` },
+    ],
+  }));
+  assert.equal(crash?.failedStep, 'vue-tsc --noEmit');
+  assert.deepEqual(crash?.skippedSteps, ['vite build']);
+
+  const unknown = diagnose(buildFailureLogs({
+    chunks: [
+      { out: '\n> app@1.0.0 build /x\n> node scripts/gen.mjs && vite build\n' },
+      { err: 'Error: something failed' },
+    ],
+  }));
+  assert.equal(unknown?.failedStep, undefined, '无法确定时不写失败步骤');
+  assert.equal(unknown?.failedCommand, 'node scripts/gen.mjs && vite build');
+
+  const notFound = diagnose(buildFailureLogs({
+    chunks: [{ out: '\n> app@1.0.0 build /x\n> vue-tsc --noEmit && vite build\n' }, { err: 'sh: 1: vue-tsc: not found' }],
+  }));
+  assert.equal(notFound?.failedStep, 'vue-tsc --noEmit');
+});
+
+test('正则安全：各类 2000 字符对抗输入下单行诊断都是毫秒级', () => {
+  const units = [' ', 'a', '/', '.', ':', '@', '-', '\\', '"', "'", '[', '(', 'a.', 'a/', '1:', 'at ', '@a/', '||', '>=1 ', 'x@1 '];
+  const prefixes = ['', 'Error: ', '> ', 'npm ERR! ', 'at ', '[vite] ', 'file://', 'engines.node ', "Cannot find module '", 'sh: 1: ', '✘ [ERROR] ', 'src/a.ts(', 'requires Node.js version '];
+  let worst = 0;
+  for (const prefix of prefixes) {
+    for (const unit of units) {
+      const line = `${prefix}${unit.repeat(Math.ceil(2000 / unit.length))}`.slice(0, 2000) + '!';
+      const started = performance.now();
+      diagnose([
+        { level: 'error', message: line, source: 'tool', stage: 'build', timestamp: TS },
+        { level: 'error', message: `构建产物 执行失败，退出码 1\n${line}`, stage: 'error', timestamp: TS },
+      ]);
+      toRepoRelativePath(line);
+      worst = Math.max(worst, performance.now() - started);
+    }
+  }
+  assert.ok(worst < 200, `最慢一次 ${worst.toFixed(1)}ms`);
+});
+
+test('路径裁剪：默认数据目录 .yuyan-deploy 与自定义 DEPLOY_DATA_DIR 都能还原为仓库相对路径，非工作区路径原样保留', () => {
+  assert.equal(toRepoRelativePath('/opt/yuyan/.yuyan-deploy/cache/workspaces/7/0123456789abcdef/repo/src/App.vue:12:3'), 'src/App.vue:12:3');
+  assert.equal(toRepoRelativePath('D:\\yuyan-data\\cache\\workspaces\\7\\0123456789abcdef\\repo\\web\\vite.config.ts.timestamp-1-ab.mjs'), 'web/vite.config.ts');
+  assert.equal(toRepoRelativePath('file:///srv/data/cache/workspaces/7/abc/repo/scripts/check.mjs:3'), 'scripts/check.mjs:3');
+  assert.equal(toRepoRelativePath('/srv/cache/workspaces/7/repo-old/a.ts'), '/srv/cache/workspaces/7/repo-old/a.ts');
+  assert.equal(toRepoRelativePath('/usr/lib/node_modules/npm/index.js'), '/usr/lib/node_modules/npm/index.js');
+});

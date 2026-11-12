@@ -893,12 +893,26 @@ function summarizeCommandFailureOutput(rawOutput) {
 }
 
 /**
+ * 生成本地命令失败的错误信息（前端构建诊断按此格式解析失败命令与退出码，#58）。
+ * 被信号杀死时 code 为 null，补上信号名（如 SIGKILL），便于区分系统 OOM killer 与 Node 堆溢出。
+ * @param {string} label - 命令标签（如「构建产物」「构建产物 2/2」）
+ * @param {number|null} code - 退出码
+ * @param {string|null} [signalName] - 终止信号
+ * @param {string} [rawOutput] - 失败输出（stderr 优先）
+ * @returns {string} 错误信息
+ */
+export function formatLocalCommandFailureMessage(label, code, signalName, rawOutput = '') {
+  const signalSuffix = code === null && signalName ? `（信号 ${signalName}）` : '';
+  return `${label} 执行失败，退出码 ${code}${signalSuffix}\n${summarizeCommandFailureOutput(rawOutput)}`;
+}
+
+/**
  * 执行本地命令
  * @param {string} command - 命令
  * @param {Object} options - 选项
  * @returns {Promise<{stdout: string, stderr: string}>} 执行结果
  */
-function runLocalCommand(command, options = {}) {
+export function runLocalCommand(command, options = {}) {
   return new Promise((resolve, reject) => {
     if (options.signal?.aborted) {
       reject(createDeployStoppedError(options.signal));
@@ -998,10 +1012,7 @@ function runLocalCommand(command, options = {}) {
         resolve({ stdout, stderr });
         return;
       }
-      const failureOutput = summarizeCommandFailureOutput(stderr || stdout);
-      // 被信号杀死时 code 为 null，补上信号名（如 SIGKILL），便于诊断区分系统 OOM killer（#58）
-      const signalSuffix = code === null && signalName ? `（信号 ${signalName}）` : '';
-      reject(new Error(`${options.label || command} 执行失败，退出码 ${code}${signalSuffix}\n${failureOutput}`));
+      reject(new Error(formatLocalCommandFailureMessage(options.label || command, code, signalName, stderr || stdout)));
     });
   });
 }

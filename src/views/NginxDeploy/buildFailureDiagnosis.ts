@@ -46,6 +46,11 @@ const YARN_ECHO_RE = /^\$\s+\S/;
 const YUYAN_EXEC_RE = /^执行(.{1,40}?)\s(\d+)\/(\d+)[:：]\s*(.+)$/;
 /** 雨燕失败汇总首行：`构建产物 执行失败，退出码 1`、`构建产物 2/2 执行失败，退出码 null（信号 SIGKILL）` */
 const YUYAN_FAIL_RE = /^(.{1,60}?)\s*执行失败[，,]\s*退出码\s*([^\s（(]+)\s*(?:[（(]信号\s*([A-Z0-9]+)\s*[）)])?/;
+/** vite 已开始执行的输出特征 */
+const VITE_STARTED_RE = /^vite v\d[\w.-]*\s+building\b|^failed to load config from\b|^error during build\b|^[x✗✘×]\s+Build failed\b|^transforming\b|^\[vite[:\]]/i;
+/** 雨燕写在两条命令之间的分界日志（旧记录没有 source 时用来分段） */
+const YUYAN_SEGMENT_BOUNDARY_RE =
+  /^执行.{1,40}?\s\d+\/\d+[:：]|^依赖安装完成|^依赖缓存命中|^跳过依赖安装|^构建内存预算池已预占|^检测到构建过程 Node\.js 堆内存触及上限|^操作人 .{1,40} 发起/;
 /** 汇总首行中的多命令序号 */
 const YUYAN_FAIL_INDEX_RE = /\s(\d+)\/\d+$/;
 /** 包管理器失败尾巴：只说明“失败了”，不说明原因 */
@@ -164,6 +169,8 @@ interface FlatLine {
   inSummaryBody: boolean;
   /** 是否为雨燕失败汇总首行 */
   isSummaryHead: boolean;
+  /** 所属日志的阶段（build / install …），旧记录分段用 */
+  stage: string;
 }
 
 /** 单条分类结果 */
@@ -226,7 +233,7 @@ function truncate(text: string, max = MAX_LINE_LENGTH): string {
  * 把构建工作区内的绝对路径还原为仓库相对路径。
  * - 去掉 `file://` 前缀与 Windows 反斜杠；
  * - `vite.config.ts.timestamp-<数字>-<hex>.mjs` 还原为 `vite.config.ts`；
- * - `/…/deploy-data/cache/workspaces/<id>/<hash>/repo/` 前缀裁掉。
+ * - `<数据目录>/cache/workspaces/<id>/<hash>/repo/` 前缀裁掉（数据目录名不固定，默认 `.yuyan-deploy`）。
  * @param rawPath 原始路径（可带 `:行:列`）
  * @returns 展示用路径
  */
@@ -236,11 +243,12 @@ export function toRepoRelativePath(rawPath: string): string {
   if (/^\/[A-Za-z]:[\\/]/.test(p)) p = p.slice(1);
   p = p.replace(/\\/g, '/');
   p = p.replace(/\.timestamp-\d+(?:-[0-9a-f]+)?\.mjs(?=$|:)/i, '');
-  const marker = '/deploy-data/cache/workspaces/';
-  const markerIndex = p.indexOf(marker);
-  if (markerIndex >= 0) {
-    const rest = p.slice(markerIndex + marker.length).replace(/^[^/]+\/[^/]+\/repo\//, '');
-    if (rest !== p.slice(markerIndex + marker.length)) p = rest;
+  // 数据目录可由 DEPLOY_DATA_DIR 改名（默认 .yuyan-deploy），只认 `<数据目录>/cache/workspaces/<目标ID>/<分支哈希>/repo/` 这一段
+  const marker = '/cache/workspaces/';
+  for (let index = p.indexOf(marker); index >= 0; index = p.indexOf(marker, index + 1)) {
+    const tail = p.slice(index + marker.length);
+    const rest = tail.replace(/^[^/]+\/[^/]+\/repo\//, '');
+    if (rest !== tail) return rest;
   }
   return p;
 }
@@ -310,6 +318,7 @@ function flattenLogs(logs: DeployLogItem[]): FlatLine[] {
         tool: isSummary ? false : tool,
         inSummaryBody: isSummary && partIndex > 0,
         isSummaryHead: isSummary && partIndex === 0,
+        stage: String(item?.stage ?? ''),
       });
       lineIndex++;
     });
@@ -385,7 +394,9 @@ function extractCommandContext(lines: FlatLine[], regionStart: number, summaryIn
   for (let i = Math.max(0, regionStart - 2); i < end; i++) {
     const { clean } = lines[i];
     if (SCRIPT_PKG_INFO_RE.test(clean)) {
-      const next = lines[i + 1]?.clean || '';
+      let j = i + 1;
+      while (j < end && j < i + 4 && !lines[j].clean) j++;
+      const next = j < end ? lines[j].clean : '';
       if (SCRIPT_ECHO_RE.test(next) && !SCRIPT_PKG_INFO_RE.test(next)) echoCommand = next.replace(/^>\s+/, '');
     } else if (YARN_ECHO_RE.test(clean) && !echoCommand) {
       echoCommand = clean.replace(/^\$\s+/, '');
@@ -955,13 +966,16 @@ function resolveFailureRegion(lines: FlatLine[], summaryIndex: number): { start:
   if (hasSourceInfo) {
     while (start > 0 && lines[start - 1].tool === true) start--;
   } else {
-    // 旧记录没有 source：从最近一条「执行构建产物 N/M」之后开始，否则从头开始
-    start = 0;
-    for (let i = summaryIndex - 1; i >= 0; i--) {
-      if (YUYAN_EXEC_RE.test(lines[i].clean)) {
-        start = i + 1;
-        break;
-      }
+    // 旧记录（#46 之前）没有 source 标记：按「同一阶段 + 雨燕阶段分界日志」向前划出失败命令的输出段。
+    // 1. 失败汇总前一行所属阶段（build / install）内连续的行才算本命令输出；
+    // 2. 遇到雨燕自己写的分界日志（执行第 N/M 条命令、依赖安装完成、构建内存预占、扩容重试）即停止。
+    const stage = summaryIndex > 0 ? lines[summaryIndex - 1].stage : '';
+    while (
+      start > 0 &&
+      (!stage || lines[start - 1].stage === stage) &&
+      !YUYAN_SEGMENT_BOUNDARY_RE.test(lines[start - 1].clean)
+    ) {
+      start--;
     }
   }
   return { start, end: summaryIndex };
@@ -1010,6 +1024,14 @@ function inferFailedStep(
 
   const limit = primaryIndex >= 0 ? primaryIndex : region.end;
   const scriptName = (step: string) => step.match(/([\w.-]+\.(?:m?js|cjs|m?ts))(?:\s|$)/)?.[1] || '';
+  /** 子步骤实际执行的可执行文件名（跳过环境变量赋值与 npx / pnpm exec 等前缀） */
+  const binName = (step: string) => {
+    const tokens = step.split(/\s+/).filter((token) => token && !/^[A-Za-z_][\w]*=/.test(token));
+    let k = 0;
+    while (k < tokens.length && /^(?:npx|pnpx|cross-env|env)$/.test(tokens[k])) k++;
+    if (/^(?:pnpm|npm|yarn)$/.test(tokens[k] || '') && /^(?:exec|dlx|x)$/.test(tokens[k + 1] || '')) k += 2;
+    return (tokens[k] || '').replace(/^.*[/\\]/, '');
+  };
   const isVite = (step: string) => /\bvite(?:\s+build|\.js\s+build)\b|\bvue-cli-service\s+build\b/.test(step);
   const isTsc = (step: string) => /\b(?:vue-tsc|tsc)\b/.test(step);
 
@@ -1019,6 +1041,21 @@ function inferFailedStep(
       const { clean } = lines[i];
       if (!STACK_FRAME_RE.test(clean) && !NODE_SOURCE_POINTER_RE.test(clean)) continue;
       const hit = steps.findIndex((step) => scriptName(step) && clean.includes(scriptName(step)));
+      if (hit >= 0) return pick(hit);
+    }
+  }
+  // 1b. 找不到的命令 / 堆栈出自某个工具包（node_modules/<bin>/）对应的子步骤
+  if (primary?.category === '命令未安装' && primary.violation) {
+    const hit = steps.findIndex((step) => binName(step) === primary.violation);
+    if (hit >= 0) return pick(hit);
+  }
+  if (primaryIndex >= 0) {
+    for (let i = Math.max(region.start, primaryIndex - 2); i < Math.min(region.end, primaryIndex + 12); i++) {
+      const clean = lines[i].clean.replace(/\\/g, '/');
+      const hit = steps.findIndex((step) => {
+        const bin = binName(step);
+        return Boolean(bin) && !/^(?:node|pnpm|npm|yarn|sh|bash)$/.test(bin) && (clean.includes(`node_modules/${bin}/`) || clean.includes(`node_modules/.bin/${bin}`));
+      });
       if (hit >= 0) return pick(hit);
     }
   }
@@ -1043,8 +1080,13 @@ function inferFailedStep(
       if (/^✓\s*built in\b/i.test(lines[i].clean)) built = true;
     }
     if (!built) {
-      // vite 之前的步骤（如 vue-tsc）没有报错特征时，认定失败在 vite
-      return pick(viteIndex);
+      // vite 已经开始（有 building / failed to load config 等输出），或 vite 就是第一步：失败在 vite
+      let started = viteIndex === 0;
+      for (let i = region.start; i <= Math.min(region.end - 1, limit) && !started; i++) {
+        if (VITE_STARTED_RE.test(lines[i].clean)) started = true;
+      }
+      // 否则无法确定是 vite 之前哪一步失败，宁可不写也不误导
+      return started ? pick(viteIndex) : {};
     }
     // 打包已完成：失败在 vite 之后，取有输出痕迹的最后一个脚本步骤，否则取 vite 的下一步
     let last = -1;

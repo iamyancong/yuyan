@@ -269,5 +269,11 @@ export function extractErrorSummaryFromLogs(
     return record.errorSummary;
   }
   if (!logs?.length) return null;
-  return diagnoseBuildFailure(logs, { record });
+  // 与 Monaco 展示保持同一份文本（旧记录的整坨 stderr 会被 cleanLogMessage 去噪删行），保证 lineIndex 对得上展示行号
+  const displayed = logs.map((item) => {
+    const message = String(item?.message ?? '');
+    const cleaned = cleanLogMessage(message);
+    return cleaned === message ? item : { ...item, message: cleaned };
+  });
+  return diagnoseBuildFailure(displayed, { record });
 }
