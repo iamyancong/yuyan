@@ -688,6 +688,7 @@ watch(
           :readonly="true"
           log-mode
           :max-lines="20000"
+          :toolbar-options="{ copy: true, fullscreen: true, download: true }"
           :auto-scroll="true"
           :show-border="false"
           :options="{

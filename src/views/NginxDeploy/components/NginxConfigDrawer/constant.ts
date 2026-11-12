@@ -43,6 +43,16 @@ export const DIFF_MONACO_OPTIONS = {
   automaticLayout: true,
 } as const;
 
+/** 历史版本对比：两侧只读 side-by-side */
+export const HISTORY_DIFF_MONACO_OPTIONS = {
+  ...DIFF_MONACO_OPTIONS,
+  readOnly: true,
+  originalEditable: false,
+  renderMarginRevertIcon: false,
+  glyphMargin: false,
+  minimap: { enabled: false },
+} as const;
+
 /** 单栏编辑态默认配置选项 */
 export const DEFAULT_MONACO_OPTIONS = {
   minimap: { enabled: false },

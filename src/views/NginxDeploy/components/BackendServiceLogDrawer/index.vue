@@ -44,6 +44,7 @@ const drawerOpen = computed({
         :readonly="true"
         log-mode
         :max-lines="5000"
+        :toolbar-options="{ copy: true, fullscreen: true, download: true }"
         :auto-scroll="true"
         :options="{ minimap: { enabled: false }, fontSize: 13, wordWrap: 'on', readOnly: true }"
       />

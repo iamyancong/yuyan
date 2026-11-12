@@ -1,6 +1,7 @@
 import { computed, h, nextTick, reactive, ref, watch, type Ref } from 'vue';
 import { Modal, message } from 'ant-design-vue';
 import { ExclamationCircleOutlined } from '@ant-design/icons-vue';
+import { isReadonlyNginxRole } from '../components/NginxConfigDrawer/historyPolicy';
 import {
   createDeployTarget,
   deleteDeployTarget,
@@ -187,6 +188,10 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
   const refreshServerList = params?.refreshServerList ?? context?.refreshServerList!;
   const projectType = params?.projectType ?? context?.projectType!;
   const authState = params?.authState ?? context?.authState;
+  /** viewer 角色只能查看、对比、下载 Nginx 配置，不能保存或恢复 */
+  const nginxConfigReadonly = computed(() =>
+    isReadonlyNginxRole(String(context?.userRole?.value || (authState?.value as { role?: string } | undefined)?.role || ''))
+  );
 
   const {
     projectLoading,
@@ -2114,6 +2119,7 @@ export function useNginxDeployTargets(params?: UseNginxDeployTargetsParams) {
     targetModalOpen,
     activeTargetId,
     nginxTargetId,
+    nginxConfigReadonly,
     targetFormRef,
     targetForm,
     targetFormModel,

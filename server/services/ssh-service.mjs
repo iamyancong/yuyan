@@ -641,17 +641,22 @@ function normalizeLineEndings(text) {
  * @param {string} options.prefix - 字面量文件名前缀
  * @param {number} [options.keep=10] - 保留数量（默认 10）
  * @param {boolean} [options.useSudo=false] - 是否使用 sudo
+ * @param {boolean} [options.timestampSuffixOnly=false] - 只清理「前缀 + 14 位数字时间戳」的文件，外部命名的备份（如 .bak.old）不计数也不删除
  * @returns {string} 远程执行的 shell 命令
  */
-export function buildPruneByCountCommand({ dir, prefix, keep = 10, useSudo = false }) {
+export function buildPruneByCountCommand({ dir, prefix, keep = 10, useSudo = false, timestampSuffixOnly = false }) {
   const parsedKeep = Number(keep);
   const keepCount = Number.isInteger(parsedKeep) && parsedKeep >= 1 ? parsedKeep : 10;
+  const suffixGuard = timestampSuffixOnly
+    ? 'suffix="${name#"$prefix"}"; case "$suffix" in (*[!0-9]*|"") continue;; esac; [ "${#suffix}" -eq 14 ] || continue;'
+    : '';
   const script = [
     'if [ -d "$1" ]; then',
     'dir="$1"; prefix="$2"; keep="$3";',
     '[ "$keep" -gt 0 ] 2>/dev/null || keep=10;',
     'old_files=$(export LC_ALL=C; ls -1A "$dir" 2>/dev/null | while IFS= read -r name || [ -n "$name" ]; do',
     'case "$name" in ("$prefix"*)',
+    `${suffixGuard}`,
     'if [ -f "$dir/$name" ] && [ ! -L "$dir/$name" ]; then printf \'%s\\n\' "$name"; fi;;',
     'esac; done | sort -r | tail -n "+$((keep + 1))");',
     'if [ -n "$old_files" ]; then printf \'%s\\n\' "$old_files" | while IFS= read -r file || [ -n "$file" ]; do',
@@ -697,7 +702,7 @@ export function resolveNginxConfigBackupKeep(customKeep) {
  * @param {Object} server - 服务器配置
  * @param {string} filePath - 文件路径
  * @param {string} content - 文件内容
- * @returns {Promise<{backupPath: string, skipped: boolean}>} 备份信息与是否跳过
+ * @returns {Promise<{backupPath: string, skipped: boolean, existed: boolean}>} 备份信息、是否跳过、写入前原文件是否存在
  */
 export async function writeRemoteTextWithBackup(conn, server, filePath, content) {
   const useSudo = Boolean(server?.useSudo);
@@ -714,7 +719,7 @@ export async function writeRemoteTextWithBackup(conn, server, filePath, content)
   let shouldBackup = false;
   if (readResult.code === 0) {
     if (normalizeLineEndings(readResult.stdout) === normalizeLineEndings(content)) {
-      return { backupPath: '', skipped: true };
+      return { backupPath: '', skipped: true, existed: true };
     }
     shouldBackup = true;
   } else if (readResult.code === 44) {
@@ -763,7 +768,7 @@ export async function writeRemoteTextWithBackup(conn, server, filePath, content)
     }).catch(() => {});
   }
 
-  // 4. 写入成功后清理：每个文件只保留最近 N 份备份（默认 10 份）
+  // 4. 写入成功后清理：每个文件只保留最近 N 份平台备份（默认 10 份）；外部命名的 .bak.xxx 不计数、不删除
   try {
     const keep = resolveNginxConfigBackupKeep();
     const pruneResult = await pruneRemoteByCount(conn, {
@@ -771,6 +776,7 @@ export async function writeRemoteTextWithBackup(conn, server, filePath, content)
       prefix: `${path.posix.basename(filePath)}.bak.`,
       keep,
       useSudo,
+      timestampSuffixOnly: true,
     });
     if (pruneResult && pruneResult.code !== 0) {
       console.warn(`[writeRemoteTextWithBackup] 清理旧备份文件告警: ${pruneResult.stderr || pruneResult.stdout || `退出码 ${pruneResult.code}`}`);
@@ -779,7 +785,7 @@ export async function writeRemoteTextWithBackup(conn, server, filePath, content)
     console.warn(`[writeRemoteTextWithBackup] 清理旧备份文件异常:`, pruneError);
   }
 
-  return { backupPath, skipped: false };
+  return { backupPath, skipped: false, existed: shouldBackup };
 }
 
 /**

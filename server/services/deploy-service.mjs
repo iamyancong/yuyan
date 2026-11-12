@@ -50,12 +50,22 @@ import {
 } from './deploy-cleanup-policy.mjs';
 import {
   execSsh,
+  resolveNginxConfigBackupKeep,
   shellQuote,
   uploadDirectory,
   uploadFile,
   withSsh,
   writeRemoteTextWithBackup,
 } from './ssh-service.mjs';
+import {
+  assertSafeBackupName,
+  computeContentSha256,
+  listRemoteBackups,
+  NGINX_CONF_MAX_BYTES,
+  readRemoteBackup,
+  readRemoteTextSafe,
+  resolveBackupLocation,
+} from './nginx-conf-history.mjs';
 import { getTestHooks, __setTestHooks, __resetTestHooks } from './test-hooks.mjs';
 
 export { __setTestHooks, __resetTestHooks };
@@ -3081,60 +3091,239 @@ export async function testServer(serverId) {
 }
 
 /**
- * 读取 Nginx 配置文件
+ * 计算 Nginx 配置读写使用的有效 sudo 设置（与保存时一致）。
+ * @param {Object} server - 服务器
+ * @param {Object|null} nginxInstance - Nginx 实例
+ * @returns {boolean} 是否使用 sudo
+ */
+function resolveNginxConfUseSudo(server, nginxInstance) {
+  return Boolean(nginxInstance?.useSudo || server?.useSudo);
+}
+
+/**
+ * 校验并返回可编辑配置路径，未配置时报错。
+ * @param {Object} target - 部署目标
+ * @param {Object|null} nginxInstance - Nginx 实例
+ * @returns {string} 配置文件路径
+ */
+function requireEditableNginxConfPath(target, nginxInstance) {
+  const confPath = resolveEditableNginxConfPath(target, nginxInstance);
+  if (!confPath) {
+    throw Object.assign(new Error('部署目标未配置 Nginx 配置文件路径'), { statusCode: 400, code: 'NGINX_CONF_PATH_INVALID' });
+  }
+  return confPath;
+}
+
+/**
+ * 读取 Nginx 配置文件（sudo 感知，与写入一致；sudo 不可用时回退普通读取）
  * @param {number} targetId - 部署目标 ID
- * @returns {Promise<{content: string, path: string}>} 配置内容
+ * @returns {Promise<{content: string, path: string, sha256: string, exists: boolean, encodingWarning: boolean}>} 配置内容
  */
 export async function readNginxConfig(targetId) {
   const { target, server, nginxInstance } = await getTargetContext(targetId);
-  const confPath = resolveEditableNginxConfPath(target, nginxInstance);
+  const confPath = requireEditableNginxConfPath(target, nginxInstance);
+  const useSudo = resolveNginxConfUseSudo(server, nginxInstance);
   return withSsh(server, async (conn) => {
-    const result = await execSsh(conn, `[ -f ${shellQuote(confPath)} ] && cat ${shellQuote(confPath)} || true`, {
-      label: `读取 ${confPath}`,
-      allowFailure: true,
-    });
+    const result = await readRemoteTextSafe(conn, { filePath: confPath, useSudo, maxBytes: NGINX_CONF_MAX_BYTES, allowMissing: true });
     return {
       path: confPath,
-      content: result.stdout || '',
+      content: result.content,
+      sha256: result.sha256,
+      exists: result.exists,
+      encodingWarning: result.encodingWarning,
     };
   });
 }
 
 /**
+ * 列出 Nginx 配置文件历史备份（路径只由服务端解析）。
+ * @param {number} targetId - 部署目标 ID
+ * @returns {Promise<Object>} 历史列表与当前文件摘要
+ */
+export async function listNginxConfigHistory(targetId) {
+  const { target, server, nginxInstance } = await getTargetContext(targetId);
+  const confPath = requireEditableNginxConfPath(target, nginxInstance);
+  const useSudo = resolveNginxConfUseSudo(server, nginxInstance);
+  return withSsh(server, async (conn) => {
+    const list = await listRemoteBackups(conn, { confPath, useSudo });
+    const current = await readRemoteTextSafe(conn, { filePath: confPath, useSudo, maxBytes: NGINX_CONF_MAX_BYTES, allowMissing: true });
+    return {
+      path: confPath,
+      dir: list.dir,
+      base: list.base,
+      keep: resolveNginxConfigBackupKeep(),
+      items: list.items,
+      truncated: list.truncated,
+      current: { exists: current.exists, sha256: current.sha256, size: current.size },
+    };
+  });
+}
+
+/**
+ * 读取单个历史备份内容。
+ * @param {number} targetId - 部署目标 ID
+ * @param {string} name - 备份文件名（严格校验，不接受路径）
+ * @returns {Promise<Object>} 历史版本内容
+ */
+export async function readNginxConfigHistoryItem(targetId, name) {
+  const { target, server, nginxInstance } = await getTargetContext(targetId);
+  const confPath = requireEditableNginxConfPath(target, nginxInstance);
+  // 先做词法校验，非法文件名不建立 SSH 连接
+  assertSafeBackupName(resolveBackupLocation(confPath).base, name);
+  const useSudo = resolveNginxConfUseSudo(server, nginxInstance);
+  return withSsh(server, (conn) => readRemoteBackup(conn, { confPath, name, useSudo }));
+}
+
+/**
+ * 构建保存失败的结构化错误：保留原始报错文本（前端 nginx -t 解析依赖它），附带阶段与回滚结果。
+ * @param {Error} error - 原始错误
+ * @param {Object} details - 结构化信息
+ * @returns {Error} 业务错误
+ */
+function buildNginxSaveError(error, details) {
+  const wrapped = new Error(error?.message || String(error));
+  wrapped.statusCode = 400;
+  wrapped.code = details.stage === 'reload' ? 'NGINX_RELOAD_FAILED' : 'NGINX_TEST_FAILED';
+  wrapped.details = details;
+  return wrapped;
+}
+
+/**
+ * 把备份恢复回配置文件（sudo 感知）；原文件写入前不存在时删除新文件。
+ * @param {Object} conn - SSH 连接
+ * @param {Object} params - 参数
+ * @returns {Promise<{ rolledBack: boolean, rollbackError: string }>} 回滚结果
+ */
+async function rollbackNginxConfigWrite(conn, { confPath, backupPath, existed, skipped, useSudo }) {
+  if (skipped) return { rolledBack: true, rollbackError: '' };
+  const sudo = useSudo ? 'sudo -n ' : '';
+  if (backupPath) {
+    const result = await execSsh(conn, `${sudo}cp ${shellQuote(backupPath)} ${shellQuote(confPath)}`, {
+      allowFailure: true,
+      label: '恢复 Nginx 配置文件备份',
+    });
+    return { rolledBack: result.code === 0, rollbackError: result.code === 0 ? '' : String(result.stderr || result.stdout || `退出码 ${result.code}`).trim() };
+  }
+  if (!existed) {
+    const result = await execSsh(conn, `${sudo}rm -f ${shellQuote(confPath)}`, { allowFailure: true, label: '清理新建的 Nginx 配置文件' });
+    return { rolledBack: result.code === 0, rollbackError: result.code === 0 ? '' : String(result.stderr || `退出码 ${result.code}`).trim() };
+  }
+  return { rolledBack: false, rollbackError: '写入前备份失败，没有可用于回滚的备份文件' };
+}
+
+/**
+ * 在已建立的 SSH 连接上执行「写入 → nginx -t → reload」，任一阶段失败都回滚（#43 P1-2 方案 A）。
+ * @param {Object} conn - SSH 连接
+ * @param {Object} params - 参数
+ * @param {Object} params.server - 服务器
+ * @param {Object|null} params.nginxInstance - Nginx 实例
+ * @param {string} params.confPath - 配置文件路径
+ * @param {Object} params.payload - 保存参数 { content, reload, expectedSha256 }
+ * @returns {Promise<Object>} 保存结果
+ */
+export async function performNginxConfigSave(conn, { server, nginxInstance, confPath, payload }) {
+  const useSudo = resolveNginxConfUseSudo(server, nginxInstance);
+  const content = typeof payload?.content === 'string' ? payload.content : '';
+  const expectedSha256 = typeof payload?.expectedSha256 === 'string' ? payload.expectedSha256.trim().toLowerCase() : '';
+
+  // 1. 乐观锁：调用方声明了打开时的基线摘要时，线上已被改动则拒绝覆盖（老客户端不传则跳过）
+  if (expectedSha256) {
+    const current = await readRemoteTextSafe(conn, { filePath: confPath, useSudo, maxBytes: NGINX_CONF_MAX_BYTES, allowMissing: true });
+    if (current.sha256 !== expectedSha256) {
+      const conflict = new Error('线上 Nginx 配置在你打开之后已被修改，请先查看差异再决定是否覆盖');
+      conflict.statusCode = 409;
+      conflict.code = 'NGINX_CONF_CHANGED';
+      conflict.details = { path: confPath, currentContent: current.content, currentSha256: current.sha256, exists: current.exists };
+      throw conflict;
+    }
+  }
+
+  // 2. 写入（含备份、内容相同跳过、清理旧备份）
+  const effectiveServer = { ...server, useSudo };
+  const { backupPath = '', skipped = false, existed = true } = await writeRemoteTextWithBackup(conn, effectiveServer, confPath, content);
+  const rollbackParams = { confPath, backupPath, existed, skipped, useSudo };
+
+  // 3. nginx -t，失败回滚
+  let testResult;
+  try {
+    testResult = await runNginxTest(conn, server, nginxInstance);
+  } catch (error) {
+    const { rolledBack, rollbackError } = await rollbackNginxConfigWrite(conn, rollbackParams);
+    throw buildNginxSaveError(error, {
+      stage: 'test',
+      rolledBack,
+      unchanged: skipped,
+      reason: String(error?.message || ''),
+      backupPath,
+      rollbackError,
+    });
+  }
+
+  // 4. reload，失败同样回滚，并再校验一次恢复后的配置
+  let reloadOutput = '';
+  if (payload?.reload !== false) {
+    try {
+      const reloadResult = await reloadNginx(conn, server, nginxInstance);
+      reloadOutput = `${reloadResult.stdout || ''}${reloadResult.stderr || ''}`.trim();
+    } catch (error) {
+      const { rolledBack, rollbackError } = await rollbackNginxConfigWrite(conn, rollbackParams);
+      let restoreTestOk = false;
+      let restoreTestOutput = '';
+      if (rolledBack && !skipped) {
+        try {
+          const retest = await runNginxTest(conn, server, nginxInstance);
+          restoreTestOk = true;
+          restoreTestOutput = `${retest.stdout || ''}${retest.stderr || ''}`.trim();
+        } catch (retestError) {
+          restoreTestOutput = String(retestError?.message || '');
+        }
+      }
+      throw buildNginxSaveError(error, {
+        stage: 'reload',
+        rolledBack,
+        unchanged: skipped,
+        reason: String(error?.message || ''),
+        backupPath,
+        rollbackError,
+        restoreTestOk: skipped ? true : restoreTestOk,
+        restoreTestOutput,
+      });
+    }
+  }
+
+  return {
+    success: true,
+    backupPath,
+    skipped,
+    testOutput: `${testResult.stdout || ''}${testResult.stderr || ''}`.trim(),
+    reloadOutput,
+  };
+}
+
+/**
  * 保存 Nginx 配置文件并可选重载
  * @param {number} targetId - 部署目标 ID
- * @param {Object} payload - 保存参数
- * @returns {Promise<Object>} 保存结果
+ * @param {Object} payload - 保存参数 { content, reload, expectedSha256, restoredFrom }
+ * @returns {Promise<Object>} 保存结果（含新的线上摘要 sha256）
  */
 export async function saveNginxConfig(targetId, payload) {
   const { target, server, nginxInstance } = await getTargetContext(targetId);
-  const confPath = resolveEditableNginxConfPath(target, nginxInstance);
-  return withSsh(server, async (conn) => {
-    const effectiveUseSudo = Boolean(nginxInstance?.useSudo || server?.useSudo);
-    const effectiveServer = { ...server, useSudo: effectiveUseSudo };
-    const { backupPath = '', skipped = false } = await writeRemoteTextWithBackup(conn, effectiveServer, confPath, payload.content || '');
-    let testResult;
-    try {
-      testResult = await runNginxTest(conn, server, nginxInstance);
-    } catch (error) {
-      if (backupPath) {
-        const sudo = effectiveUseSudo ? 'sudo -n ' : '';
-        await execSsh(conn, `${sudo}cp ${shellQuote(backupPath)} ${shellQuote(confPath)}`, {
-          allowFailure: true,
-          label: '恢复 Nginx 配置文件备份',
-        });
-      }
-      throw error;
+  const confPath = requireEditableNginxConfPath(target, nginxInstance);
+  const testHooks = getTestHooks();
+  const effectiveWithSsh = testHooks?.withSsh || withSsh;
+  return effectiveWithSsh(server, async (conn) => {
+    const result = await performNginxConfigSave(conn, { server, nginxInstance, confPath, payload });
+    // 内容相同被跳过时线上文件可能只是换行符不同，按线上实际内容返回摘要，避免下次保存误报 409
+    if (result.skipped) {
+      const current = await readRemoteTextSafe(conn, {
+        filePath: confPath,
+        useSudo: resolveNginxConfUseSudo(server, nginxInstance),
+        maxBytes: NGINX_CONF_MAX_BYTES,
+        allowMissing: true,
+      }).catch(() => null);
+      if (current?.sha256) return { ...result, sha256: current.sha256 };
     }
-    if (payload.reload !== false) {
-      await reloadNginx(conn, server, nginxInstance);
-    }
-    return {
-      success: true,
-      backupPath,
-      skipped,
-      testOutput: `${testResult.stdout || ''}${testResult.stderr || ''}`.trim(),
-    };
+    return { ...result, sha256: computeContentSha256(typeof payload?.content === 'string' ? payload.content : '') };
   });
 }
 

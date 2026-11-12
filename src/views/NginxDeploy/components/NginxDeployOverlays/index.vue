@@ -349,6 +349,7 @@ const updateTargetForm = (values: Partial<DeployTargetPayload>) => {
     v-if="nginxConfigEverOpened"
     v-model:targetId="targetState.nginxTargetId.value"
     :target="activeNginxTarget"
+    :readonly="Boolean(unref(targetState.nginxConfigReadonly))"
     @save="targetState.handleSaveNginxConf"
   />
 

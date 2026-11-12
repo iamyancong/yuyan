@@ -56,6 +56,8 @@ import {
   handleRunNginxInstanceAction,
   handleRunNginxRuntimeAction,
   handleSaveNginxConfig,
+  handleListNginxConfigHistory,
+  handleReadNginxConfigHistoryItem,
   handleStopDeployTarget,
   handleSyncTargetNginxSite,
   handleTestNginx,
@@ -185,6 +187,8 @@ router.delete('/targets/:id', handleDeleteTarget);
 router.get('/targets/:id/cleanup-preview', handleGetTargetCleanupPreview);
 router.post('/targets/:id/nginx-site/sync', handleSyncTargetNginxSite);
 router.get('/targets/:id/nginx-conf', handleReadNginxConfig);
+router.get('/targets/:id/nginx-conf/history', handleListNginxConfigHistory);
+router.get('/targets/:id/nginx-conf/history/:name', handleReadNginxConfigHistoryItem);
 router.put('/targets/:id/nginx-conf', handleSaveNginxConfig);
 router.post('/targets/:id/nginx-test', handleTestNginx);
 router.get('/targets/:id/deploy-progress', handleGetTargetDeployProgress);

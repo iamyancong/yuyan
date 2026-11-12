@@ -1371,13 +1371,98 @@ export const getDeployRecord = (recordId: number, gitlabToken = '', gitlabHost =
     .get(`/records/${recordId}`, { headers: gitlabToken ? { 'X-GitLab-Token': gitlabToken, 'X-GitLab-Host': gitlabHost } : undefined })
     .then(unwrap<DeployRecord>);
 
+/** Nginx 配置文件读取结果 */
+export interface NginxConfReadResult {
+  /** 配置文件路径（服务端解析） */
+  path: string;
+  /** 文件内容 */
+  content: string;
+  /** 内容 sha256，保存时作为 expectedSha256 乐观锁基线 */
+  sha256?: string;
+  /** 文件是否存在 */
+  exists?: boolean;
+  /** 内容不是合法 UTF-8（例如 GBK 注释），展示可能乱码 */
+  encodingWarning?: boolean;
+}
+
+/** Nginx 配置文件保存参数 */
+export interface NginxConfSaveOptions {
+  /** 打开时的线上内容摘要；线上已被修改时后端返回 409 NGINX_CONF_CHANGED */
+  expectedSha256?: string;
+  /** 从历史版本恢复时的备份文件名，仅用于审计 */
+  restoredFrom?: string;
+}
+
+/** Nginx 配置文件保存结果 */
+export interface NginxConfSaveResult {
+  backupPath: string;
+  testOutput: string;
+  skipped?: boolean;
+  reloadOutput?: string;
+  /** 保存后线上内容摘要 */
+  sha256?: string;
+}
+
+/** Nginx 配置历史备份条目 */
+export interface NginxConfHistoryItem {
+  /** 备份文件名（如 nginx.conf.bak.20261112083005） */
+  name: string;
+  /** 文件名前缀之后的部分 */
+  suffix: string;
+  /** yuyan = 平台生成（.bak.<14 位 UTC 时间>）；external = 其他命名 */
+  source: 'yuyan' | 'external';
+  /** 文件名中解析出的 UTC 时间（ISO），外部备份为空 */
+  createdAt: string;
+  /** 文件修改时间（ISO） */
+  mtime: string;
+  /** 文件大小（字节） */
+  size: number;
+}
+
+/** Nginx 配置历史列表 */
+export interface NginxConfHistoryList {
+  path: string;
+  dir: string;
+  base: string;
+  /** 平台备份保留份数 */
+  keep: number;
+  items: NginxConfHistoryItem[];
+  truncated: boolean;
+  current: { exists: boolean; sha256: string; size: number };
+}
+
+/** 单个历史版本内容 */
+export interface NginxConfHistoryContent extends NginxConfHistoryItem {
+  path: string;
+  content: string;
+  sha256: string;
+  encodingWarning?: boolean;
+}
+
 /** 读取 Nginx 配置文件 */
 export const readNginxConf = (targetId: number, signal?: AbortSignal) =>
-  client.get(`/targets/${targetId}/nginx-conf`, { signal }).then(unwrap<{ path: string; content: string }>);
+  client.get(`/targets/${targetId}/nginx-conf`, { signal }).then(unwrap<NginxConfReadResult>);
 
 /** 保存 Nginx 配置文件 */
-export const saveNginxConf = (targetId: number, content: string, reload = true) =>
-  client.put(`/targets/${targetId}/nginx-conf`, { content, reload }).then(unwrap<{ backupPath: string; testOutput: string; skipped?: boolean }>);
+export const saveNginxConf = (targetId: number, content: string, reload = true, options: NginxConfSaveOptions = {}) =>
+  client
+    .put(`/targets/${targetId}/nginx-conf`, {
+      content,
+      reload,
+      ...(options.expectedSha256 ? { expectedSha256: options.expectedSha256 } : {}),
+      ...(options.restoredFrom ? { restoredFrom: options.restoredFrom } : {}),
+    })
+    .then(unwrap<NginxConfSaveResult>);
+
+/** 列出 Nginx 配置文件历史备份 */
+export const listNginxConfHistory = (targetId: number, signal?: AbortSignal) =>
+  client.get(`/targets/${targetId}/nginx-conf/history`, { signal }).then(unwrap<NginxConfHistoryList>);
+
+/** 读取单个 Nginx 配置历史备份 */
+export const readNginxConfHistoryItem = (targetId: number, name: string, signal?: AbortSignal) =>
+  client
+    .get(`/targets/${targetId}/nginx-conf/history/${encodeURIComponent(name)}`, { signal })
+    .then(unwrap<NginxConfHistoryContent>);
 
 /** 测试 Nginx 配置文件 */
 export const testNginxConf = (targetId: number) => client.post(`/targets/${targetId}/nginx-test`).then(unwrap<{ output: string }>);

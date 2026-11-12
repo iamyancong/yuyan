@@ -58,6 +58,8 @@ import {
   readNginxConfig,
   rollbackRecord,
   saveNginxConfig,
+  listNginxConfigHistory,
+  readNginxConfigHistoryItem,
   testTargetNginx,
   undoRollbackRecord,
   getTargetContext,
@@ -1842,10 +1844,47 @@ export async function handleReadNginxConfig(req, res) {
 
 /**
  * 保存 Nginx 配置文件
+ * 可选 expectedSha256：线上已被他人修改时返回 409 NGINX_CONF_CHANGED；
+ * 可选 restoredFrom：从历史版本恢复时的备份文件名，只写入审计。
  */
 export async function handleSaveNginxConfig(req, res) {
   try {
-    res.json({ success: true, data: await saveNginxConfig(Number(req.params.id), req.body || {}) });
+    const body = req.body || {};
+    const restoredFrom = typeof body.restoredFrom === 'string' && /^[^/\\\u0000-\u001f]{1,255}$/.test(body.restoredFrom) ? body.restoredFrom : '';
+    const data = await saveNginxConfig(Number(req.params.id), {
+      content: typeof body.content === 'string' ? body.content : '',
+      reload: body.reload,
+      expectedSha256: typeof body.expectedSha256 === 'string' && /^[a-f0-9]{64}$/i.test(body.expectedSha256) ? body.expectedSha256 : '',
+    });
+    res.locals.auditExtra = {
+      ...(restoredFrom ? { restoredFrom } : {}),
+      ...(data?.backupPath ? { backupPath: data.backupPath } : {}),
+      ...(data?.sha256 ? { sha256: data.sha256 } : {}),
+      skipped: Boolean(data?.skipped),
+    };
+    res.json({ success: true, data });
+  } catch (error) {
+    sendError(res, error, 400);
+  }
+}
+
+/**
+ * 列出 Nginx 配置文件历史备份
+ */
+export async function handleListNginxConfigHistory(req, res) {
+  try {
+    res.json({ success: true, data: await listNginxConfigHistory(Number(req.params.id)) });
+  } catch (error) {
+    sendError(res, error, 400);
+  }
+}
+
+/**
+ * 读取单个 Nginx 配置历史备份
+ */
+export async function handleReadNginxConfigHistoryItem(req, res) {
+  try {
+    res.json({ success: true, data: await readNginxConfigHistoryItem(Number(req.params.id), String(req.params.name || '')) });
   } catch (error) {
     sendError(res, error, 400);
   }

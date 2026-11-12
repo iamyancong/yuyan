@@ -127,6 +127,9 @@ const handleCopyContent = async () => {
         />
       </div>
 
+      <!-- 扩展操作（历史版本、下载等） -->
+      <slot name="actions" />
+
       <!-- 快速复制配置 -->
       <a-tooltip :title="copied ? '已复制！' : '复制配置内容'" placement="top">
         <button

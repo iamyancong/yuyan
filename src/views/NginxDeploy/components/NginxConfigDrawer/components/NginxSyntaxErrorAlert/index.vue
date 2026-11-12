@@ -10,13 +10,22 @@ import {
 import { copyToClipboard } from '@yss-ui/utils';
 import message from 'ant-design-vue/es/message';
 import type { ParsedNginxError } from '../../utils/nginxErrorParser';
+import type { NginxSaveFailureInfo } from '../../historyPolicy';
 
 defineOptions({ name: 'NginxSyntaxErrorAlert' });
 
 /** 属性定义 */
 const props = defineProps<{
   error: ParsedNginxError | null;
+  /** 保存失败的阶段与回滚结果（#43 P1-2），为空时按普通语法错误展示 */
+  failure?: NginxSaveFailureInfo | null;
 }>();
+
+/** 复制备份路径 */
+const handleCopyBackup = async () => {
+  if (!props.failure?.backupPath) return;
+  if (await copyToClipboard(props.failure.backupPath)) message.success('备份路径已复制');
+};
 
 /** 事件定义 */
 const emit = defineEmits<{
@@ -59,7 +68,16 @@ const handleCopyRaw = async () => {
 </script>
 
 <template>
-  <div v-if="error" class="nginx-syntax-error-alert" role="alert">
+  <div v-if="error" :class="['nginx-syntax-error-alert', failure?.kind ? `is-${failure.kind}` : '']" role="alert">
+    <!-- 保存阶段与回滚结果 -->
+    <div v-if="failure && failure.kind !== 'other' && failure.kind !== 'conflict'" class="alert-stage">
+      <span :class="['stage-headline', { 'is-severe': failure.severe, 'is-safe': !failure.severe }]">{{ failure.headline }}</span>
+      <span class="stage-detail">{{ failure.detail }}</span>
+      <span v-if="failure.kind === 'rollback-failed' && failure.backupPath" class="stage-backup">
+        备份文件：<code>{{ failure.backupPath }}</code>
+        <a-button size="small" type="link" @click="handleCopyBackup">复制路径</a-button>
+      </span>
+    </div>
     <!-- 头部：标题、行号 Tag 与快捷操作 -->
     <div class="alert-header">
       <div class="header-left">

@@ -1,6 +1,6 @@
 import { ref } from 'vue';
 import message from 'ant-design-vue/es/message';
-import { saveNginxConf, testNginxConf, type DeployTarget } from '@/api/deploy';
+import { saveNginxConf, testNginxConf, type DeployTarget, type NginxConfSaveOptions, type NginxConfSaveResult } from '@/api/deploy';
 import { useNginxDeployContext } from './useNginxDeployContext';
 
 /**
@@ -52,16 +52,23 @@ export function useTargetNginxConf(
    * 保存 Nginx 配置文件。
    * @param targetId 部署目标 ID
    * @param content 配置内容
-   * @param done 完成回调
+   * @param done 完成回调（成功时带保存结果）
    * @param previousContent 保存前的配置基线
+   * @param saveOptions 乐观锁摘要与历史恢复来源
    */
-  const handleSaveNginxConf = async (targetId: number, content: string, done?: (error?: unknown) => void, previousContent?: string) => {
+  const handleSaveNginxConf = async (
+    targetId: number,
+    content: string,
+    done?: (error?: unknown, result?: NginxConfSaveResult) => void,
+    previousContent?: string,
+    saveOptions?: NginxConfSaveOptions
+  ) => {
     if (!runEnsureLoggedIn()) {
       done?.(new Error('请先登录后再保存 Nginx 配置文件'));
       return;
     }
     try {
-      const result = await saveNginxConf(targetId, content, true);
+      const result = await saveNginxConf(targetId, content, true, saveOptions || {});
       if (result.skipped) {
         message.success('Nginx 配置内容未变化，未生成新备份');
       } else if (result.backupPath) {
@@ -69,7 +76,7 @@ export function useTargetNginxConf(
       } else {
         message.success('Nginx 配置文件已保存');
       }
-      done?.();
+      done?.(undefined, result);
     } catch (error) {
       done?.(error);
       return;

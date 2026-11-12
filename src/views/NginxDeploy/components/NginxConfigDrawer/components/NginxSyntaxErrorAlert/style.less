@@ -133,3 +133,53 @@
     }
   }
 }
+
+.nginx-syntax-error-alert {
+  &.is-reload {
+    background: rgba(250, 173, 20, 0.08);
+    border-color: rgba(250, 173, 20, 0.45);
+  }
+
+  &.is-rollback-failed {
+    background: rgba(255, 77, 79, 0.16);
+    border: 2px solid #ff4d4f;
+  }
+
+  .alert-stage {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-bottom: 8px;
+    margin-bottom: 8px;
+    border-bottom: 1px dashed rgba(255, 255, 255, 0.15);
+
+    .stage-headline {
+      font-weight: 600;
+      font-size: 14px;
+
+      &.is-safe {
+        color: #faad14;
+      }
+
+      &.is-severe {
+        color: #ff4d4f;
+      }
+    }
+
+    .stage-detail {
+      font-size: 12px;
+      opacity: 0.85;
+    }
+
+    .stage-backup {
+      font-size: 12px;
+
+      code {
+        font-family: var(--font-family-code, monospace);
+        background: rgba(255, 255, 255, 0.08);
+        padding: 1px 6px;
+        border-radius: 4px;
+      }
+    }
+  }
+}

@@ -122,6 +122,7 @@ export async function guardCentralDeployRequest(req, res, next) {
           resourceType: lookup?.type || 'collection',
           resourceId: lookup?.id || null,
           result: 'accepted',
+          ...(res.locals?.auditExtra && typeof res.locals.auditExtra === 'object' ? { extra: res.locals.auditExtra } : {}),
         }).catch(() => undefined);
       }
       return originalJson(body);
