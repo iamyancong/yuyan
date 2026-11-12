@@ -1,5 +1,6 @@
 import type { DeployErrorSummary, DeployLogItem, DeployRecord } from '@/api/deploy';
 import { formatDeployDateTime } from '../../constant.ts';
+import { diagnoseBuildFailure } from '../../buildFailureDiagnosis.ts';
 import { filterAttentionLogs, isToolLog, presentDeployLogMessage, shouldHideLevelTag } from '../../logPresentation.ts';
 
 /** 记录摘要项 */
@@ -149,6 +150,18 @@ export function buildRecordLogView(logs: DeployLogItem[], filterMode: LogFilterM
   return { text: lines.join('\n'), count: entries.length, contextLineNumbers };
 }
 
+/** 诊断报告标题（定位按钮据此查找报告所在行） */
+export const DIAGNOSTIC_BANNER_TITLE = '雨燕构建未通过诊断报告 (BUILD DIAGNOSTIC)';
+
+/**
+ * 格式化退出码 / 退出信号。
+ * @param exitCode 退出码或信号名
+ * @returns 展示文案
+ */
+function formatExitCode(exitCode: number | string): string {
+  return typeof exitCode === 'number' || /^-?\d+$/.test(String(exitCode)) ? `退出码: ${exitCode}` : `退出信号: ${exitCode}`;
+}
+
 /**
  * 格式化在 Monaco 编辑器内部展示的终端高亮诊断报告（全行顶格，避免触发 Monaco 缩进参考竖线与代码折叠箭头）
  * @param summary 错误根因诊断信息
@@ -160,7 +173,7 @@ export function formatEditorDiagnosticBanner(summary: DeployErrorSummary): strin
   const lines: string[] = [
     '',
     line,
-    '[ERROR] 🚨 雨燕构建未通过诊断报告 (BUILD DIAGNOSTIC)',
+    `[ERROR] 🚨 ${DIAGNOSTIC_BANNER_TITLE}`,
     line,
     `[ERROR] 拦截阶段: ${summary.stage || '构建执行'}`,
     `[ERROR] 错误类型: ${summary.category || '构建异常'}${summary.title ? ` - ${summary.title}` : ''}`,
@@ -172,6 +185,19 @@ export function formatEditorDiagnosticBanner(summary: DeployErrorSummary): strin
   if (summary.fileLocation) {
     lines.push(`[INFO]  相关位置: ${summary.fileLocation}`);
   }
+  if (summary.failedCommand) {
+    lines.push(`[INFO]  失败命令: ${summary.failedCommand}`);
+  }
+  if (summary.failedStep) {
+    const skipped = summary.skippedSteps?.length ? `（后续 ${summary.skippedSteps.join('、')} 未执行）` : '';
+    lines.push(`[ERROR] 失败步骤: ${summary.failedStep}${skipped}`);
+  }
+  if (summary.exitCode !== undefined && summary.exitCode !== null && summary.exitCode !== '') {
+    lines.push(`[INFO]  ${formatExitCode(summary.exitCode)}`);
+  }
+  if (summary.otherErrorCount) {
+    lines.push(`[WARN]  另有 ${summary.otherErrorCount} 处报错，修复上面这条后请一并查看上方日志`);
+  }
 
   if (summary.suggestion) {
     lines.push(thinLine);
@@ -182,12 +208,24 @@ export function formatEditorDiagnosticBanner(summary: DeployErrorSummary): strin
     }
   }
 
-  if (summary.rawDetail) {
+  const excerpt = summary.excerpt || summary.rawDetail;
+  if (excerpt) {
     lines.push(thinLine);
-    lines.push('[ERROR] 📋 核心错误堆栈:');
-    const rawLines = summary.rawDetail.split(/\r?\n/).slice(0, 8);
-    for (const rl of rawLines) {
-      if (rl.trim()) lines.push(`[ERROR] ▸ ${rl.trim()}`);
+    if (summary.excerpt) {
+      // 原始输出保留缩进（放在前缀之后，行首仍顶格），与本地执行构建命令看到的一致
+      lines.push('[ERROR] 📋 原始报错输出（与本地执行构建命令看到的一致）:');
+      for (const rl of summary.excerpt.split(/\r?\n/)) {
+        lines.push(`[ERROR] │ ${rl.replace(/\s+$/, '')}`);
+      }
+      if (summary.excerptOmittedLines) {
+        lines.push(`[INFO]  … 其余 ${summary.excerptOmittedLines} 行见上方日志`);
+      }
+    } else {
+      lines.push('[ERROR] 📋 核心错误堆栈:');
+      const rawLines = excerpt.split(/\r?\n/).slice(0, 8);
+      for (const rl of rawLines) {
+        if (rl.trim()) lines.push(`[ERROR] ▸ ${rl.trim()}`);
+      }
     }
   }
 
@@ -197,7 +235,23 @@ export function formatEditorDiagnosticBanner(summary: DeployErrorSummary): strin
 }
 
 /**
- * 从发布日志与发布记录中提取错误根因诊断信息
+ * 查找日志文本中诊断报告标题所在行（1 开始）。
+ * @param content 编辑器内容
+ * @returns 行号；未找到返回 0
+ */
+export function findDiagnosticBannerLine(content: string): number {
+  const text = String(content ?? '');
+  const index = text.lastIndexOf(DIAGNOSTIC_BANNER_TITLE);
+  if (index < 0) return 0;
+  let line = 1;
+  for (let i = 0; i < index; i++) {
+    if (text.charCodeAt(i) === 10) line++;
+  }
+  return line;
+}
+
+/**
+ * 从发布日志与发布记录中提取错误根因诊断信息（#58：按真实报错归因，见 buildFailureDiagnosis.ts）
  * @param logs 日志列表
  * @param record 发布记录
  * @returns 错误根因诊断
@@ -215,183 +269,5 @@ export function extractErrorSummaryFromLogs(
     return record.errorSummary;
   }
   if (!logs?.length) return null;
-
-  // 将日志展开为按行计数的列表，确保行号精准对应 Monaco 界面行号
-  const flattened: { lineIndex: number; clean: string; raw: string }[] = [];
-  let lineCounter = 1;
-  for (const item of logs) {
-    const lines = stripAnsi(String(item.message || '')).split(/\r?\n/);
-    for (const sub of lines) {
-      const trimmed = sub.trim();
-      const clean = trimmed
-        .replace(/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?\s+[A-Z]+\s+(?:\[[^\]]+\]\s+)?/, '')
-        .trim();
-      flattened.push({
-        lineIndex: lineCounter,
-        clean,
-        raw: trimmed,
-      });
-      lineCounter++;
-    }
-  }
-
-  // 1. 首屏重型依赖门禁拦截（如 check-build-bundle.mjs）
-  for (let i = 0; i < flattened.length; i++) {
-    const { clean, lineIndex } = flattened[i];
-    if (!clean || /^\s*at\s+/.test(clean) || clean === '^') continue;
-    if (/^throw\s+new\s+Error/i.test(clean) || clean.includes('${violations') || clean.includes('violations.join')) continue;
-
-    if (/首屏静态依赖包含重型运行时依赖/i.test(clean)) {
-      const match = clean.match(/首屏静态依赖包含重型运行时依赖[:：]?\s*(.*)/);
-      let violation = match && match[1] && !match[1].includes('${') ? match[1].trim() : '';
-      if (!violation) {
-        const assetMatch = clean.match(/assets\/[^\s"')]+/);
-        if (assetMatch) violation = assetMatch[0];
-      }
-
-      let fileLocation = '';
-      for (let j = Math.max(0, i - 5); j <= i; j++) {
-        const loc = flattened[j].clean.match(/(?:scripts\/[^\s:]+:\d+)/);
-        if (loc) {
-          fileLocation = loc[0];
-          break;
-        }
-      }
-
-      const stack: string[] = [clean];
-      for (let j = i + 1; j < Math.min(flattened.length, i + 6); j++) {
-        if (/^\s*at\s+/.test(flattened[j].clean)) {
-          stack.push(flattened[j].clean);
-        } else {
-          break;
-        }
-      }
-
-      return {
-        stage: 'check-build-bundle',
-        category: '工程门禁拦截',
-        title: '首屏静态依赖包含重型运行时依赖',
-        violation: violation || clean.replace(/^Error:\s*/i, ''),
-        fileLocation: fileLocation || 'scripts/check-build-bundle.mjs:286',
-        suggestion: '检测到首屏静态资源包含了未按需拆分的重型库（如 Monaco、ECharts、Sheet 等）。请检查 main.ts、App.vue 或路由顶层，避免全局静态 import，改为按需或 defineAsyncComponent 异步加载。',
-        rawDetail: stack.join('\n'),
-        lineIndex,
-      };
-    }
-  }
-
-  // 2. 依赖解析失败（如用户图一中的 @vue-office/excel）
-  for (let i = 0; i < flattened.length; i++) {
-    const { clean, lineIndex } = flattened[i];
-    if (/Failed to resolve entry for package\s+"([^"]+)"/i.test(clean)) {
-      const pkg = clean.match(/Failed to resolve entry for package\s+"([^"]+)"/i)?.[1] || '';
-      return {
-        stage: 'build',
-        category: '依赖解析失败',
-        title: '未能正确解析依赖包入口',
-        violation: pkg,
-        fileLocation: 'package.json',
-        suggestion: `未能在项目中正确解析依赖包 "${pkg}"。请检查 package.json 是否声明了该依赖，或在部署配置中勾选“本次重新安装依赖”。`,
-        rawDetail: clean,
-        lineIndex,
-      };
-    }
-    if (/Failed to resolve import\s+"([^"]+)"/i.test(clean) || /Cannot find module\s+'([^']+)'/i.test(clean)) {
-      const mod =
-        clean.match(/Failed to resolve import\s+"([^"]+)"/i)?.[1] ||
-        clean.match(/Cannot find module\s+'([^']+)'/i)?.[1] ||
-        '';
-      return {
-        stage: 'build',
-        category: '模块导入失败',
-        title: '找不到目标模块或路径错误',
-        violation: mod,
-        suggestion: `找不到路径 "${mod}"。请检查路径拼写、后缀或对应文件是否存在。`,
-        rawDetail: clean,
-        lineIndex,
-      };
-    }
-  }
-
-  // 3. 页面预算超标（check-page-budget.mjs）
-  for (let i = 0; i < flattened.length; i++) {
-    const { clean, lineIndex } = flattened[i];
-    if (/check-page-budget/i.test(clean) || /页面预算超出/i.test(clean) || /page budget exceeded/i.test(clean)) {
-      return {
-        stage: 'check-page-budget',
-        category: '性能预算门禁',
-        title: '首屏页面打包体积超出预设上限',
-        violation: clean,
-        suggestion: '首屏静态分包体积超出配置阈值，请使用 dynamic import() 拆分组件或优化 manualChunks。',
-        rawDetail: clean,
-        lineIndex,
-      };
-    }
-  }
-
-  // 4. Node.js 内存溢出 (OOM)
-  for (let i = 0; i < flattened.length; i++) {
-    const { clean, lineIndex } = flattened[i];
-    if (/JavaScript heap out of memory/i.test(clean)) {
-      return {
-        stage: 'build',
-        category: '构建内存溢出',
-        title: 'Node.js 堆内存耗尽 (OOM)',
-        suggestion: '打包构建消耗内存超出上限。系统会自动按更大内存重试；如果仍然失败，请在部署目标中调高「最低构建内存」。',
-        rawDetail: clean,
-        lineIndex,
-      };
-    }
-  }
-
-  // 5. TypeScript 类型校验失败
-  for (let i = 0; i < flattened.length; i++) {
-    const { clean, lineIndex } = flattened[i];
-    if (/error TS\d+:\s*(.*)/i.test(clean)) {
-      const match = clean.match(/error TS\d+:\s*(.*)/);
-      return {
-        stage: 'type-check',
-        category: 'TypeScript 类型错误',
-        title: 'TypeScript 类型校验未通过',
-        violation: match ? match[1] : clean,
-        suggestion: '请修复上述 TypeScript 类型校验错误后重新提交代码发布。',
-        rawDetail: clean,
-        lineIndex,
-      };
-    }
-  }
-
-  // 6. 兜底通用 Error（从后往前找最接近退出的错误）
-  for (let i = flattened.length - 1; i >= 0; i--) {
-    const { clean, lineIndex } = flattened[i];
-    if (/^(?:Error|TypeError|SyntaxError|ReferenceError):\s*(.+)/i.test(clean)) {
-      const match = clean.match(/^(?:Error|TypeError|SyntaxError|ReferenceError):\s*(.+)/i);
-      const title = match ? match[1].trim() : clean;
-      if (!title.includes('Command failed with exit code')) {
-        return {
-          stage: 'build',
-          category: '异常抛错',
-          title,
-          violation: title,
-          suggestion: '代码或构建脚本执行抛出未处理异常，请查看下方堆栈排查。',
-          rawDetail: clean,
-          lineIndex,
-        };
-      }
-    }
-  }
-
-  // 若发布状态为失败，提供兜底
-  if (record?.status === 'failed') {
-    return {
-      stage: 'build',
-      category: '执行失败',
-      title: '构建产物或发布流程执行失败，退出码非 0',
-      suggestion: '命令执行以非 0 状态码退出，请查看下方控制台日志排查。',
-      detail: logs.slice(-5).map((l) => l.message).join('\n'),
-      lineIndex: logs.length,
-    };
-  }
-
-  return null;
+  return diagnoseBuildFailure(logs, { record });
 }

@@ -12,6 +12,7 @@ import {
 import {
   buildRecordLogView,
   extractErrorSummaryFromLogs,
+  findDiagnosticBannerLine,
   formatEditorDiagnosticBanner,
   formatEmptyText,
   getStatusLabel,
@@ -126,8 +127,8 @@ export function useRecordLog(props: { open: boolean; record: DeployRecord | null
     const rawEditor = typeof expose?.getInstance === 'function' ? expose.getInstance() : (expose as any)?.editor;
     if (rawEditor) {
       const lineCount = rawEditor.getModel?.()?.getLineCount() || 99999;
-      // 诊断报告通常占 20-30 行，定位到报告标题附近
-      const targetLine = Math.max(1, lineCount - 16);
+      // 定位到诊断报告标题（报告长度随原始报错摘录变化，按标题查找，找不到时退回末尾附近）
+      const targetLine = findDiagnosticBannerLine(recordLogContent.value) || Math.max(1, lineCount - 16);
       if (typeof rawEditor.revealLineInCenter === 'function') {
         rawEditor.revealLineInCenter(targetLine);
       }

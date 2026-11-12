@@ -987,7 +987,7 @@ function runLocalCommand(command, options = {}) {
       await rssSampler?.stop();
       reject(stopped || options.signal?.aborted ? createDeployStoppedError(options.signal) : error);
     });
-    child.on('close', async (code) => {
+    child.on('close', async (code, signalName) => {
       cleanupAbortListener();
       await rssSampler?.stop();
       if (stopped || options.signal?.aborted) {
@@ -999,7 +999,9 @@ function runLocalCommand(command, options = {}) {
         return;
       }
       const failureOutput = summarizeCommandFailureOutput(stderr || stdout);
-      reject(new Error(`${options.label || command} 执行失败，退出码 ${code}\n${failureOutput}`));
+      // 被信号杀死时 code 为 null，补上信号名（如 SIGKILL），便于诊断区分系统 OOM killer（#58）
+      const signalSuffix = code === null && signalName ? `（信号 ${signalName}）` : '';
+      reject(new Error(`${options.label || command} 执行失败，退出码 ${code}${signalSuffix}\n${failureOutput}`));
     });
   });
 }

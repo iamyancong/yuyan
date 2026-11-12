@@ -71,6 +71,15 @@ export const DEPLOY_LOG_HINT_RULES: DeployLogHintRule[] = [
   { pattern: /^Lockfile is up to date/i, hint: '依赖锁文件一致，按锁定版本安装' },
   { pattern: /^Progress: resolved/i, hint: '依赖安装进度' },
   { pattern: /^Done in\s+([\d.]+\s*m?s)/i, hint: (m) => `执行完成，耗时 ${m[1]}` },
+  { pattern: /^failed to load config from/i, hint: 'Vite 读取配置文件失败，打包还没开始，原因见下面的报错' },
+  { pattern: /^error during build:?$/i, hint: '打包失败，具体原因见下一行' },
+  {
+    pattern: /Cannot find (?:package|module) '([^']+)'/,
+    hint: (m) =>
+      /^[./]/.test(m[1])
+        ? `找不到文件 ${m[1]}，请检查路径和文件是否已提交`
+        : `缺少依赖包 ${m[1]}：请在对应 package.json 中声明并提交更新后的锁文件`,
+  },
   { pattern: /ELIFECYCLE.*Command failed/i, hint: '构建脚本异常退出，请向上查找第一条红色错误' },
   { pattern: /ERR_PNPM_(\w+)/, hint: (m) => `pnpm 执行出错（${m[1]}），请结合上下文排查` },
   { pattern: /JavaScript heap out of memory/i, hint: '构建内存不足：系统会自动按更大内存重试；如果仍然失败，请调高目标的「最低构建内存」' },

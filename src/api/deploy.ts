@@ -498,6 +498,20 @@ export interface DeployErrorSummary {
   detail?: string;
   rawDetail?: string;
   lineIndex?: number;
+  /** 完整失败命令 */
+  failedCommand?: string;
+  /** 失败子步骤（如 `vite build`） */
+  failedStep?: string;
+  /** 因前一步失败未执行的子步骤 */
+  skippedSteps?: string[];
+  /** 退出码（数字或信号字符串） */
+  exitCode?: number | string;
+  /** 其余不同错误条数（去重） */
+  otherErrorCount?: number;
+  /** 原始报错摘录（多行字符串，与本地执行构建命令看到的一致） */
+  excerpt?: string;
+  /** 原始报错摘录超出展示上限而省略的行数 */
+  excerptOmittedLines?: number;
 }
 
 /** 发布记录 */

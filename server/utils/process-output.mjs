@@ -103,7 +103,8 @@ export function splitProcessOutputLines(chunk) {
  * @returns {'info' | 'warn' | 'error'} 日志级别
  */
 export function resolveStderrLogLevel(line) {
-  const text = String(line || '').trim();
+  // 超长单行（如报错代码帧里的压缩代码）只取前 2000 字符判级，避免正则回溯拖慢构建日志处理（#58）
+  const text = String(line || '').trim().slice(0, 2000);
   if (!text) return 'info';
   if (STDERR_WARN_PREFIX_PATTERN.test(text)) return 'warn';
   // 堆栈帧（`at error (file:///...)`、`at getRollupError (...)`）只是失败上下文，函数名里的 error 不代表告警

@@ -11,7 +11,7 @@ import {
   UPLOAD_STRATEGY_LABEL_MAP,
 } from '../../../constant';
 import { calcStageStatus, getLogText, type PublishConfirmModalProps } from '../constant';
-import { extractErrorSummaryFromLogs, formatEditorDiagnosticBanner } from '../../RecordLogDrawer/constant';
+import { extractErrorSummaryFromLogs, findDiagnosticBannerLine, formatEditorDiagnosticBanner } from '../../RecordLogDrawer/constant';
 import type { DeployErrorSummary } from '@/api/deploy';
 import { formatDeployDuration, resolveRuntimeLockState } from '../../../hooks/runtimeLockPolicy';
 import { useDeployLogHints } from '../../../hooks/useDeployLogHints';
@@ -284,6 +284,8 @@ export function usePublishConfirm(props: PublishConfirmModalProps) {
         level: (e.type === 'error' ? 'error' : (e as any).level || 'info') as any,
         message: (e as any).message || '',
         stage: e.stage || '',
+        // 保留日志来源：诊断据此只在失败命令自己的输出段内归因（#58）
+        ...((e as any).source ? { source: (e as any).source } : {}),
         timestamp: e.timestamp || '',
       }));
     return extractErrorSummaryFromLogs(logItems);
@@ -297,8 +299,8 @@ export function usePublishConfirm(props: PublishConfirmModalProps) {
     const rawEditor = typeof expose?.getInstance === 'function' ? expose.getInstance() : (expose as any)?.editor;
     if (rawEditor) {
       const lineCount = rawEditor.getModel?.()?.getLineCount() || 99999;
-      // 定位到诊断报告标题位置（通常位于末尾倒数 16 行左右）
-      const targetLine = Math.max(1, lineCount - 16);
+      // 定位到诊断报告标题（报告长度随原始报错摘录变化，按标题查找，找不到时退回末尾附近）
+      const targetLine = findDiagnosticBannerLine(publishLogContent.value) || Math.max(1, lineCount - 16);
       rawEditor.revealLineInCenter?.(targetLine);
       rawEditor.setPosition?.({ lineNumber: targetLine, column: 1 });
       rawEditor.focus?.();
