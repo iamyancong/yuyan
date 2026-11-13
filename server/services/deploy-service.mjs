@@ -285,6 +285,56 @@ function createRuntimeNpmrcContent() {
   return lines.join('\n');
 }
 
+/** 发布安装依赖时 pnpm 默认同时下载连接数 */
+const DEFAULT_PNPM_NETWORK_CONCURRENCY = 8;
+/** 单个依赖请求默认超时时间（毫秒） */
+const DEFAULT_PNPM_FETCH_TIMEOUT_MS = 120000;
+/** 依赖下载失败后的默认重试次数 */
+const DEFAULT_PNPM_FETCH_RETRIES = 4;
+/** 依赖下载重试的最小等待时间（毫秒） */
+const DEFAULT_PNPM_FETCH_RETRY_MINTIMEOUT_MS = 5000;
+
+/**
+ * 读取正整数环境变量，非法值回退到默认值。
+ * @param {string} name - 环境变量名
+ * @param {number} fallback - 默认值
+ * @returns {number} 解析后的正整数
+ */
+function parsePositiveIntEnv(name, fallback) {
+  const raw = String(process.env[name] ?? '').trim();
+  if (!raw) return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) return fallback;
+  return value;
+}
+
+/**
+ * 解析发布安装依赖时注入的 pnpm 网络参数。
+ * 通过 npm_config_* 环境变量注入，优先级高于项目 .npmrc，不改动私服 registry 配置。
+ * @returns {{networkConcurrency: number, fetchTimeoutMs: number, fetchRetries: number, fetchRetryMinTimeoutMs: number, env: Object}} 生效值及环境变量
+ */
+function resolvePnpmNetworkConfig() {
+  const networkConcurrency = parsePositiveIntEnv(
+    'YUYAN_PNPM_NETWORK_CONCURRENCY',
+    DEFAULT_PNPM_NETWORK_CONCURRENCY
+  );
+  const fetchTimeoutMs = parsePositiveIntEnv('YUYAN_PNPM_FETCH_TIMEOUT_MS', DEFAULT_PNPM_FETCH_TIMEOUT_MS);
+  const fetchRetries = parsePositiveIntEnv('YUYAN_PNPM_FETCH_RETRIES', DEFAULT_PNPM_FETCH_RETRIES);
+  const fetchRetryMinTimeoutMs = DEFAULT_PNPM_FETCH_RETRY_MINTIMEOUT_MS;
+  return {
+    networkConcurrency,
+    fetchTimeoutMs,
+    fetchRetries,
+    fetchRetryMinTimeoutMs,
+    env: {
+      npm_config_network_concurrency: String(networkConcurrency),
+      npm_config_fetch_timeout: String(fetchTimeoutMs),
+      npm_config_fetch_retries: String(fetchRetries),
+      npm_config_fetch_retry_mintimeout: String(fetchRetryMinTimeoutMs),
+    },
+  };
+}
+
 /**
  * 为本次发布准备临时 npm 认证配置与 CI 环境优化参数。
  * @param {string} repoDir - 本次发布 clone 出来的仓库目录
@@ -292,12 +342,19 @@ function createRuntimeNpmrcContent() {
  * @returns {Promise<Object>} 需要注入命令执行环境的变量
  */
 export async function prepareRuntimeNpmConfig(repoDir, log) {
+  const pnpmNetwork = resolvePnpmNetworkConfig();
   const baseCiEnv = {
     CYPRESS_INSTALL_BINARY: '0',
     PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'true',
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1',
     ELECTRON_SKIP_BINARY_DOWNLOAD: '1',
+    ...pnpmNetwork.env,
   };
+  log(
+    'info',
+    `已设置 pnpm 下载参数：network-concurrency=${pnpmNetwork.networkConcurrency}，fetch-timeout=${pnpmNetwork.fetchTimeoutMs}ms，fetch-retries=${pnpmNetwork.fetchRetries}，fetch-retry-mintimeout=${pnpmNetwork.fetchRetryMinTimeoutMs}ms`,
+    'install'
+  );
   const content = createRuntimeNpmrcContent();
   if (!content) return baseCiEnv;
 

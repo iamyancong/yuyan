@@ -192,6 +192,9 @@ pnpm build
 | `DEPLOY_SECRET_KEY` | 本机随机生成 | macOS 从应用本地加密保险库读取，Windows 从 Credential Manager 读取；非本机中央服务必须显式配置独立随机密钥，否则拒绝启动 |
 | `DEPLOY_RECORD_KEEP_PER_PROJECT` | `20` | 每个项目保留的发布记录数 |
 | `DEPLOY_BACKUP_KEEP_PER_TARGET` | `8` | 每个目标保留的远端备份版本数 |
+| `YUYAN_PNPM_NETWORK_CONCURRENCY` | `8` | 发布安装依赖时 pnpm 同时下载的连接数，用于降低对内网私服的并发压力；非法值回退默认值 |
+| `YUYAN_PNPM_FETCH_TIMEOUT_MS` | `120000` | 发布安装依赖时单个请求超时时间（毫秒）；非法值回退默认值 |
+| `YUYAN_PNPM_FETCH_RETRIES` | `4` | 发布安装依赖时下载失败后的重试次数；非法值回退默认值 |
 
 > 打包运行时，Tauri 会自动把部署数据目录与模板缓存目录指向应用数据目录（appData），从平台安全存储读取每设备主密钥并注入 `DEPLOY_SECRET_KEY`，同时注入动态 `PORT`（见 `src-tauri/src/lib.rs`）。macOS 使用 AES-256-GCM 加密的应用本地保险库，Windows 继续使用 Credential Manager；源码和正式桌面包不包含共享默认密钥。
 
