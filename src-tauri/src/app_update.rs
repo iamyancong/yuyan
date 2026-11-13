@@ -13,7 +13,7 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
 const UPDATE_SERVER_HOST: &str = match option_env!("UPDATE_SERVER_HOST") {
     Some(host) => host,
-    None => "192.168.164.27",
+    None => "192.168.167.8",
 };
 const UPDATE_SERVER_SCHEME: &str = match option_env!("UPDATE_SERVER_SCHEME") {
     Some(scheme) => scheme,
