@@ -1,0 +1,37 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>#25 · Live Logs 进行中（已取消跟随）</title><link rel="stylesheet" href="file:///workspace/yuyan-wireframes/_base.css">
+<style>body{padding:20px}.shot-title{margin-bottom:8px;font-size:12px;color:#555}</style></head>
+<body>
+<div class="shot-title"><strong>#25 · Live Logs 进行中（已取消跟随）</strong> · 低保真线框（非视觉稿）</div>
+
+<div class="page">
+  <div class="topbar">
+    <div class="title">实时发布 · prod-web &nbsp; <span class="badge info">62% 构建中</span></div>
+  </div>
+  <div class="main">
+    <div class="stage">
+      <span class="done">validate ✓</span><span class="done">clone ✓</span><span class="done">install ✓</span>
+      <span class="run">build ●</span><span>sync ○</span>
+    </div>
+    <div class="card" style="padding:10px">
+      <div style="font-weight:600;margin-bottom:8px">发布日志</div>
+      <div class="toolbar">
+        <input class="input" placeholder="🔍 搜索日志…">
+        <button class="btn sm">仅错误</button>
+        <button class="btn sm">跳到错误</button>
+        <button class="btn sm">复制全部</button>
+        <span class="tiny">跟随: ○ OFF</span>
+        <button class="btn primary sm">↓ 有 14 条新日志</button><span class="cta-note">恢复跟随</span>
+        <span class="tiny" style="margin-left:auto">显示 820 / 820</span>
+      </div>
+      <div class="log">
+[build] npm run build<br>
+[build] <span class="err hi">error TS2307: Cannot find module '@/foo'</span><br>
+[build] found 1 error in build<br>
+<span style="color:#888">…（未跟随，底部新日志暂不抢视口）</span>
+      </div>
+    </div>
+    <div class="footer-bar"><button class="btn">收起</button><button class="btn danger">停止发布</button></div>
+  </div>
+</div>
+
+</body></html>
