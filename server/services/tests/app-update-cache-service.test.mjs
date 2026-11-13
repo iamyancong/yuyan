@@ -227,3 +227,63 @@ test('损坏正式缓存会被删除并重新从 GitHub 预热', async () => {
     assert.deepEqual(await fs.readFile(cachePath), payload);
   });
 });
+
+test('旧版本缓存清理：只删不在保留集合内、且过了保护期的本服务缓存文件（#42）', async () => {
+  await withTempCache(async (cacheDir) => {
+    const manager = createUpdateAssetCacheManager({ cacheDir });
+    const now = Date.now();
+    const old = new Date(now - 2 * 60 * 60_000);
+    const files = {
+      '100-yuyan_1.3.22_x64-setup.exe': old, // 旧版本，删除
+      '100-yuyan_1.3.22_x64-setup.exe.part': old, // 旧版本残留分段，删除
+      '100-yuyan_1.3.22_x64-setup.exe.part.etag': old,
+      '200-yuyan_1.3.23_x64-setup.exe': old, // 最新版本，保留
+      '300-yuyan_1.3.23_aarch64.dmg.part': old, // 正在下载，保留
+      '400-yuyan_1.3.21_x64.dmg': new Date(now - 10 * 60_000), // 保护期内，保留
+      'README.txt': old, // 非本服务命名，保留
+      'abc-yuyan.exe': old, // 非数字 ID，保留
+    };
+    for (const [name, mtime] of Object.entries(files)) {
+      const filePath = path.join(cacheDir, name);
+      await fs.writeFile(filePath, 'x');
+      await fs.utimes(filePath, mtime, mtime);
+    }
+    await fs.mkdir(path.join(cacheDir, '500-dir'));
+    manager.activeTasks.set('300', { controller: new AbortController() });
+
+    const result = await manager.pruneCache(['200'], { now });
+
+    assert.deepEqual(result.removed.sort(), [
+      '100-yuyan_1.3.22_x64-setup.exe',
+      '100-yuyan_1.3.22_x64-setup.exe.part',
+      '100-yuyan_1.3.22_x64-setup.exe.part.etag',
+    ]);
+    assert.deepEqual(result.failed, []);
+    const remaining = (await fs.readdir(cacheDir)).sort();
+    assert.deepEqual(remaining, [
+      '200-yuyan_1.3.23_x64-setup.exe',
+      '300-yuyan_1.3.23_aarch64.dmg.part',
+      '400-yuyan_1.3.21_x64.dmg',
+      '500-dir',
+      'README.txt',
+      'abc-yuyan.exe',
+    ].sort());
+  });
+});
+
+test('旧版本缓存清理：保留集合为空或缓存目录不存在时不删除任何文件', async () => {
+  await withTempCache(async (cacheDir) => {
+    const manager = createUpdateAssetCacheManager({ cacheDir });
+    const filePath = path.join(cacheDir, '100-yuyan.exe');
+    await fs.writeFile(filePath, 'x');
+    const old = new Date(Date.now() - 2 * 60 * 60_000);
+    await fs.utimes(filePath, old, old);
+
+    assert.deepEqual(await manager.pruneCache([]), { removed: [], failed: [] });
+    assert.deepEqual(await manager.pruneCache(['', 'abc']), { removed: [], failed: [] });
+    assert.deepEqual(await fs.readdir(cacheDir), ['100-yuyan.exe']);
+
+    const missing = createUpdateAssetCacheManager({ cacheDir: path.join(cacheDir, 'missing') });
+    assert.deepEqual(await missing.pruneCache(['200']), { removed: [], failed: [] });
+  });
+});

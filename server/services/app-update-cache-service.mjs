@@ -14,6 +14,9 @@ const MAX_PRELOAD_RETRIES = 3;
 /** 预下载失败后的冷却时间。 */
 const PRELOAD_FAILURE_COOLDOWN_MS = 30_000;
 
+/** 旧版本缓存清理的保护期：最近 1 小时内写入过的文件不删，避免误删刚按需缓存、仍在下发的安装包。 */
+const CACHE_PRUNE_MIN_AGE_MS = 60 * 60_000;
+
 /** GitHub Release Asset 下载超时。 */
 const PRELOAD_REQUEST_TIMEOUT_MS = 5 * 60_000;
 
@@ -594,6 +597,55 @@ export class UpdateAssetCacheManager {
     if (totalBytes > 0 && task.downloadedBytes !== totalBytes) {
       throw new Error(`更新包响应长度不一致：${task.downloadedBytes}/${totalBytes}`);
     }
+  }
+
+  /**
+   * 清理不再需要的旧版本安装包缓存（#42）。
+   * 只处理本服务写入的 `<assetId>-<文件名>` 及其 `.part` / `.part.etag` 文件；
+   * 保留 keepAssetIds 中的资源、正在下载的资源和保护期内写入过的文件，其余删除。删除失败只告警，不抛出。
+   * @param {Iterable<string|number>} keepAssetIds - 需要保留的资源 ID（通常是最新 Release 的全部预热资源）
+   * @param {{ now?: number, minAgeMs?: number }} [options] - 测试用的当前时间与保护期
+   * @returns {Promise<{ removed: string[], failed: string[] }>} 清理结果
+   */
+  async pruneCache(keepAssetIds, options = {}) {
+    const now = Number.isFinite(options.now) ? options.now : Date.now();
+    const minAgeMs = Number.isFinite(options.minAgeMs) ? options.minAgeMs : CACHE_PRUNE_MIN_AGE_MS;
+    const keep = new Set(Array.from(keepAssetIds || [], (id) => String(id || '').trim()).filter((id) => /^\d+$/.test(id)));
+    const result = { removed: [], failed: [] };
+    // 没有可信的保留集合时不清理，避免 GitHub 查询异常时把缓存清空
+    if (keep.size === 0) return result;
+    for (const assetId of this.activeTasks.keys()) keep.add(String(assetId));
+
+    let entries;
+    try {
+      entries = await fs.readdir(this.cacheDir, { withFileTypes: true });
+    } catch (error) {
+      if (error?.code !== 'ENOENT') {
+        console.warn(`[Update Cache] 读取缓存目录失败，跳过旧版本清理: ${error.message || error}`);
+      }
+      return result;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      const match = /^(\d+)-[^/\\]+$/.exec(entry.name);
+      if (!match || keep.has(match[1])) continue;
+      const filePath = path.join(this.cacheDir, entry.name);
+      try {
+        const stats = await fs.stat(filePath);
+        if (now - stats.mtimeMs < minAgeMs) continue;
+        await fs.rm(filePath, { force: true });
+        this.validatedFiles.delete(filePath);
+        result.removed.push(entry.name);
+      } catch (error) {
+        result.failed.push(entry.name);
+        console.warn(`[Update Cache] 删除旧版本缓存失败: ${entry.name} (${error.message || error})`);
+      }
+    }
+    if (result.removed.length > 0) {
+      console.log(`[Update Cache] 已清理 ${result.removed.length} 个旧版本缓存文件: ${result.removed.join(', ')}`);
+    }
+    return result;
   }
 
   /** 中断全部正在执行的预下载任务。 */

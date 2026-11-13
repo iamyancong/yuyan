@@ -176,6 +176,12 @@ export async function preloadLatestAppUpdateAssets() {
   const statuses = await Promise.all(
     Array.from(assets.values()).map((asset) => updateAssetCacheManager.ensureCached(asset))
   );
+  // 最新 Release 的资源集合确定后，删掉旧版本安装包缓存；清理失败不影响预热（#42）
+  try {
+    await updateAssetCacheManager.pruneCache(assets.keys());
+  } catch (error) {
+    console.warn('[Update Preload] 清理旧版本缓存失败:', error.message || error);
+  }
   if (statuses.length > 0) {
     const summary = statuses.map((status) => `${status.filename}:${status.status}`).join(', ');
     console.log(`[Update Preload] 最新安装包与签名更新资源预热状态: ${summary}`);
