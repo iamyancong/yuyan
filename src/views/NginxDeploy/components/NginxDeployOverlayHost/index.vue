@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
+import { defineResilientAsyncComponent } from '@/utils/resilientAsyncComponent';
 import { hasAnyVisibleOverlay, type NginxDeployOverlayHostProps } from './constant';
 
 defineOptions({ name: 'NginxDeployOverlayHost' });
@@ -7,7 +8,7 @@ defineOptions({ name: 'NginxDeployOverlayHost' });
 const props = defineProps<NginxDeployOverlayHostProps>();
 
 /** 重型弹窗与抽屉仅在首次打开时加载 */
-const NginxDeployOverlays = defineAsyncComponent(() => import('../NginxDeployOverlays/index.vue'));
+const NginxDeployOverlays = defineResilientAsyncComponent(() => import('../NginxDeployOverlays/index.vue'));
 
 /** 当前是否存在需要渲染的部署弹层 */
 const hasVisibleOverlay = computed(() => hasAnyVisibleOverlay(props));
@@ -31,6 +32,9 @@ onMounted(() => {
   const scheduleIdlePrefetch = window.requestIdleCallback || ((cb: () => void) => setTimeout(cb, 1200));
   scheduleIdlePrefetch(() => {
     void import('../NginxDeployOverlays/index.vue');
+    // 发布抽屉与进度面板最常用，提前取回，镜像更新后也能尽早暴露 chunk 失效（#61）
+    void import('../PublishConfirmModal/index.vue');
+    void import('../ProgressPanel/index.vue');
     void import('../ServerConfigDrawer/index.vue');
     void import('../NginxRuntimeDrawer/index.vue');
     void import('../DeployTargetConfigModal/index.vue');

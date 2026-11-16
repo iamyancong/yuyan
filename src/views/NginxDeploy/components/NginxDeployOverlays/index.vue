@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, ref, unref, watch } from 'vue';
+import { computed, ref, unref, watch } from 'vue';
+import { defineResilientAsyncComponent } from '@/utils/resilientAsyncComponent';
 import { YButton } from '@yss-ui/components/lite';
 import { openExternal } from '@/utils/open';
 import message from 'ant-design-vue/es/message';
@@ -23,16 +24,16 @@ interface NginxDeployOverlaysProps {
 const props = defineProps<NginxDeployOverlaysProps>();
 
 /** 各业务弹层完全按需异步加载，阻断首开大包与 Monaco 等重型依赖 */
-const ProgressPanel = defineAsyncComponent(() => import('../ProgressPanel/index.vue'));
-const PublishConfirmModal = defineAsyncComponent(() => import('../PublishConfirmModal/index.vue'));
-const RollbackConfirmModal = defineAsyncComponent(() => import('../RollbackConfirmModal/index.vue'));
-const NginxConfigDrawer = defineAsyncComponent(() => import('../NginxConfigDrawer/index.vue'));
-const RecordLogDrawer = defineAsyncComponent(() => import('../RecordLogDrawer/index.vue'));
-const DeployTargetConfigModal = defineAsyncComponent(() => import('../DeployTargetConfigModal/index.vue'));
-const ServerDeployOverlays = defineAsyncComponent(() => import('../ServerDeployOverlays/index.vue'));
-const BackendDeployOverlays = defineAsyncComponent(() => import('../BackendDeployOverlays/index.vue'));
-const BackendServiceProgressModal = defineAsyncComponent(() => import('../BackendServiceProgressModal/index.vue'));
-const NginxConflictDiffModal = defineAsyncComponent(() => import('../NginxConflictDiffModal/index.vue'));
+const ProgressPanel = defineResilientAsyncComponent(() => import('../ProgressPanel/index.vue'));
+const PublishConfirmModal = defineResilientAsyncComponent(() => import('../PublishConfirmModal/index.vue'));
+const RollbackConfirmModal = defineResilientAsyncComponent(() => import('../RollbackConfirmModal/index.vue'));
+const NginxConfigDrawer = defineResilientAsyncComponent(() => import('../NginxConfigDrawer/index.vue'));
+const RecordLogDrawer = defineResilientAsyncComponent(() => import('../RecordLogDrawer/index.vue'));
+const DeployTargetConfigModal = defineResilientAsyncComponent(() => import('../DeployTargetConfigModal/index.vue'));
+const ServerDeployOverlays = defineResilientAsyncComponent(() => import('../ServerDeployOverlays/index.vue'));
+const BackendDeployOverlays = defineResilientAsyncComponent(() => import('../BackendDeployOverlays/index.vue'));
+const BackendServiceProgressModal = defineResilientAsyncComponent(() => import('../BackendServiceProgressModal/index.vue'));
+const NginxConflictDiffModal = defineResilientAsyncComponent(() => import('../NginxConflictDiffModal/index.vue'));
 
 /** 首次激活保活状态，未激活前零下载零挂载，关闭后保持保活避免重新渲染 */
 const serverOverlaysEverOpened = ref(false);
@@ -261,6 +262,9 @@ const updateTargetForm = (values: Partial<DeployTargetPayload>) => {
     :started-at="progressState.progressState.startedAt"
     :current-user-name="progressState.userName?.value"
     :user-role="progressState.userRole?.value"
+    :progress-loading="progressState.progressLoading?.value"
+    :progress-error="progressState.progressLoadError?.value"
+    @reload-progress="progressState.reloadTargetProgress?.()"
     @start="progressState.startPublishFromConfirm"
     @republish="progressState.republishFromConfirm"
     @stop="progressState.stopCurrentPublish"

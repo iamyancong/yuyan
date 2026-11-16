@@ -4,6 +4,7 @@ import router from './router';
 import { configureGlobalMessage } from '@/utils/globalMessage';
 import { configureGlobalNotification } from '@/utils/globalNotification';
 import { configureGlobalInputBehavior } from '@/utils/configureGlobalInputBehavior';
+import { installChunkLoadErrorHandler } from '@/utils/resilientAsyncComponent';
 import 'ant-design-vue/dist/reset.css';
 import '@yss-ui/components/dist/style.css';
 
@@ -13,6 +14,7 @@ import '@yss-ui/components/dist/style.css';
 configureGlobalMessage();
 configureGlobalNotification();
 configureGlobalInputBehavior();
+installChunkLoadErrorHandler();
 const app = createApp(App);
 app.use(router);
 app.mount('#app');

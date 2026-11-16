@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { defineAsyncComponent, ref, unref, watch } from 'vue';
+import { ref, unref, watch } from 'vue';
+import { defineResilientAsyncComponent } from '@/utils/resilientAsyncComponent';
 import type { DeployServerPayload, NginxInstancePayload, NginxRuntimePayload } from '@/api/deploy';
 import type { FormilyRef } from '../../types';
 
@@ -8,10 +9,10 @@ defineOptions({ name: 'ServerDeployOverlays' });
 const props = defineProps<{ serverState: Record<string, any> }>();
 
 /** 抽屉组件按需异步加载，避免相互污染与整包加载 */
-const ServerConfigDrawer = defineAsyncComponent(() => import('../ServerConfigDrawer/index.vue'));
-const NginxRuntimeDrawer = defineAsyncComponent(() => import('../NginxRuntimeDrawer/index.vue'));
-const RemoteFsBrowseDrawer = defineAsyncComponent(() => import('../RemoteFsBrowseDrawer/index.vue'));
-const NginxConflictDiffModal = defineAsyncComponent(() => import('../NginxConflictDiffModal/index.vue'));
+const ServerConfigDrawer = defineResilientAsyncComponent(() => import('../ServerConfigDrawer/index.vue'));
+const NginxRuntimeDrawer = defineResilientAsyncComponent(() => import('../NginxRuntimeDrawer/index.vue'));
+const RemoteFsBrowseDrawer = defineResilientAsyncComponent(() => import('../RemoteFsBrowseDrawer/index.vue'));
+const NginxConflictDiffModal = defineResilientAsyncComponent(() => import('../NginxConflictDiffModal/index.vue'));
 
 /** 首次激活标记，确保首次打开前零下载，关闭后常驻保活 */
 const serverModalEverOpened = ref(false);
