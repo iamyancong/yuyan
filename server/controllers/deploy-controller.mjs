@@ -52,6 +52,7 @@ import { buildSafeContentDisposition } from '../utils/http-header-utils.mjs';
 import { getProgressStreamStats, writeProgressStreamEvent } from '../services/progress-stream-writer.mjs';
 import { createRuntimeSnapshotCache } from '../services/runtime-snapshot-cache.mjs';
 import { findLatestStageEvent } from '../services/deploy-runtime-snapshot-service.mjs';
+import { DEFAULT_SNAPSHOT_EVENT_TAIL, appendTaskEvent, getTaskEventTail, getTaskEventsAfter } from '../services/deploy-task-events.mjs';
 
 import {
   deployTarget,
@@ -197,6 +198,7 @@ const STOPPABLE_DEPLOY_STAGE_KEYS = new Set([
   'validate',
   'clone',
   'waiting-build-slot',
+  'waiting-deploy-lock',
   'install',
   'build',
   'openapi',
@@ -252,6 +254,12 @@ async function createDeployTask(targetId, action, body = {}) {
     currentStage: 'validate',
     queued: false,
     queuePosition: 0,
+    queueReason: '',
+    eventSeq: 0,
+    omittedEventCount: 0,
+    latestStageEvent: null,
+    hasErrorEvent: false,
+    wasQueued: false,
     completed: false,
     result: null,
     error: null,
@@ -267,8 +275,10 @@ async function createDeployTask(targetId, action, body = {}) {
  * @param {Object} task - 任务上下文
  * @returns {Object} 快照
  */
-function serializeDeployTask(task) {
+function serializeDeployTask(task, options = {}) {
   const stats = deployTaskScheduler.getStats();
+  // 非流式快照只带最近若干条事件（#61），完整过程由流式订阅按 afterSeq 续传，避免整份日志发两遍
+  const eventTail = getTaskEventTail(task, options.eventTail ?? DEFAULT_SNAPSHOT_EVENT_TAIL);
   return {
     taskId: task.persistentId,
     targetId: task.targetId,
@@ -278,13 +288,16 @@ function serializeDeployTask(task) {
     currentStage: task.currentStage,
     queued: Boolean(task.queued || task.currentStage === 'queued'),
     queuePosition: Number(task.queuePosition || 0),
+    queueReason: task.queued || task.currentStage === 'queued' ? task.queueReason || 'slot' : '',
     queuedCount: stats.queuedCount,
     running: !task.completed,
     result: task.result,
     error: task.error,
     failureCode: task.failureCode || '',
     failure: task.failure || null,
-    events: task.events,
+    events: eventTail.events,
+    lastSeq: eventTail.lastSeq,
+    omittedEventCount: eventTail.omittedEventCount,
     maxConcurrent: stats.maxConcurrent,
     runningCount: stats.runningCount,
   };
@@ -320,9 +333,9 @@ function serializeIdleDeployTask(targetId) {
 
 /** 将进程内任务映射为列表页使用的轻量运行态快照。 */
 function serializeDeployTaskRuntime(task) {
-  const latestStage = findLatestStageEvent(task.events);
+  const latestStage = task.latestStageEvent || findLatestStageEvent(task.events);
   return {
-    ...serializeDeployTask(task),
+    ...serializeDeployTask(task, { eventTail: 0 }),
     events: latestStage ? [latestStage] : [],
   };
 }
@@ -370,7 +383,7 @@ function createProgressEmitter(task) {
       if (event.code) task.failureCode = event.code;
       if (event.failure) task.failure = event.failure;
     }
-    task.events.push(event);
+    appendTaskEvent(task, event);
     task.subscribers.forEach((res) => writeProgressEvent(res, event));
     if (event.type === 'stage') {
       void updatePersistentDeployTask(task.persistentId, { stage: event.stage, percent: event.percent });
@@ -408,7 +421,7 @@ function createProgressEmitter(task) {
  * @returns {boolean} 是否已有错误事件
  */
 function hasTaskErrorEvent(task) {
-  return task.events.some((event) => event.type === 'error');
+  return Boolean(task.hasErrorEvent || task.events.some((event) => event.type === 'error'));
 }
 
 /**
@@ -495,11 +508,11 @@ function startDeployTask(task, runner, emit) {
         'queued',
         2,
         '排队等待执行',
-        `当前排在第 ${position} 位（运行中 ${stats.runningCount}/${stats.maxConcurrent}，预计等待约 ${etaMinutes} 分钟），前序任务完成后将自动开始`
+        `排队第 ${position} 位 · 原因：并发已满 ${stats.runningCount}/${stats.maxConcurrent}（预计等待约 ${etaMinutes} 分钟），前序任务完成后将自动开始`
       );
       emit.log(
         'info',
-        `当前并发槽位已满（${stats.runningCount}/${stats.maxConcurrent}），任务已进入排队队列，当前第 ${position} 位（预计等待约 ${etaMinutes} 分钟）`,
+        `同时执行的发布已达上限（${stats.runningCount}/${stats.maxConcurrent}），任务已进入排队队列，当前第 ${position} 位（预计等待约 ${etaMinutes} 分钟）`,
         'queued'
       );
     },
@@ -509,12 +522,12 @@ function startDeployTask(task, runner, emit) {
         'queued',
         2,
         '排队等待执行',
-        `当前排在第 ${position} 位（运行中 ${stats.runningCount}/${stats.maxConcurrent}，预计等待约 ${etaMinutes} 分钟），前序任务完成后将自动开始`
+        `排队第 ${position} 位 · 原因：并发已满 ${stats.runningCount}/${stats.maxConcurrent}（预计等待约 ${etaMinutes} 分钟），前序任务完成后将自动开始`
       );
       emit.log('info', `排队名次已更新：当前排在第 ${position} 位（预计等待约 ${etaMinutes} 分钟）`, 'queued');
     },
     onStartExecution(runningTask) {
-      if (runningTask.events.some((event) => event.type === 'stage' && event.stage === 'queued')) {
+      if (runningTask.wasQueued || runningTask.events.some((event) => event.type === 'stage' && event.stage === 'queued')) {
         void updatePersistentDeployTask(runningTask.persistentId, {
           status: 'running',
           stage: 'validate',
@@ -639,7 +652,8 @@ async function sendDeployTaskProgress(req, res, task, streamMode) {
 
   prepareProgressStream(res);
   writeProgressEvent(res, { type: 'log', level: 'info', stage: 'connection', message: '已连接发布任务', timestamp: task.startedAt, taskId: task.persistentId, targetId: task.targetId });
-  task.events.forEach((event) => writeProgressEvent(res, event));
+  // afterSeq：客户端已从快照拿到的最大 seq，只补发之后的事件（#61）
+  getTaskEventsAfter(task, Number(req.query?.afterSeq || 0)).forEach((event) => writeProgressEvent(res, event));
   if (task.completed) {
     if (!res.writableEnded) res.end();
     return;
@@ -2094,7 +2108,7 @@ async function handleRestoreRecordTask(req, res, action, runner) {
   }
   const emit = createProgressEmitter(task);
   try {
-    startDeployTask(task, () => runner(recordId, req.body || {}, emit), emit);
+    startDeployTask(task, () => runner(recordId, { ...(req.body || {}), signal: task.controller.signal }, emit), emit);
   } catch (scheduleError) {
     await cleanupAndRespondScheduleError(task, scheduleError, res);
     return;
