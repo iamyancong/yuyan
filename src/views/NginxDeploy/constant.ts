@@ -421,6 +421,8 @@ export const recordColumns: YTableColumn[] = [
   { field: 'serverName', title: '服务器', minWidth: 160, showOverflow: false, slots: { default: 'serverName' } },
   { field: 'operator', title: '发布人', width: 90, formatter: ({ row }) => getDeployRecordOperator(row) },
   { field: 'branch', title: '分支', width: 120 },
+  // #43 P2-2：后端落库的失败根因，放在前面不用横向滚动就能看到
+  { field: 'errorSummary', title: '失败原因', minWidth: 220, showOverflow: false, slots: { default: 'errorSummary' } },
   { field: 'commitMessage', title: '当前生效提交信息', minWidth: 280, showOverflow: false, slots: { default: 'commitMessage' } },
   { field: 'commitAuthor', title: '提交人', width: 80, formatter: ({ row }) => getDeployRecordCommitAuthor(row) },
   { field: 'releasePath', title: '发布目录', minWidth: 240, showOverflow: false, slots: { default: 'releasePath' } },
@@ -431,6 +433,34 @@ export const recordColumns: YTableColumn[] = [
   { field: 'status', title: '状态', minWidth: 80, align: 'center', showOverflow: false, fixed: 'right' },
   // { field: 'envName', title: '环境', width: 90, align: 'center' },
 ];
+
+/** 发布记录列表「失败原因」单元格展示（#43 P2-2，数据来自后端落库的 errorSummary） */
+export interface RecordFailureReasonView {
+  /** 分类，如「依赖解析失败」「执行失败」 */
+  category: string;
+  /** 一句话原因 */
+  title: string;
+  /** 悬浮提示：违规项 / 位置 / 失败子步骤 / 退出码 / 建议 */
+  tooltip: string;
+}
+
+/**
+ * 生成发布记录的失败原因展示；非失败记录或旧记录（未落库根因）返回 null。
+ * @param record 发布记录
+ * @returns 展示数据
+ */
+export function describeRecordFailureReason(record: Pick<DeployRecord, 'status' | 'errorSummary'> | null | undefined): RecordFailureReasonView | null {
+  const summary = record?.status === 'failed' ? record.errorSummary : null;
+  if (!summary?.category) return null;
+  const lines = [`${summary.category}：${summary.title}`];
+  if (summary.violation) lines.push(`涉及：${summary.violation}`);
+  if (summary.fileLocation) lines.push(`位置：${summary.fileLocation}`);
+  if (summary.failedStep) lines.push(`失败步骤：${summary.failedStep}`);
+  if (summary.exitCode !== undefined && summary.exitCode !== null && summary.exitCode !== '') lines.push(`退出码：${summary.exitCode}`);
+  if (summary.otherErrorCount) lines.push(`另有 ${summary.otherErrorCount} 类报错`);
+  if (summary.suggestion) lines.push(`建议：${summary.suggestion}`);
+  return { category: summary.category, title: summary.title || summary.category, tooltip: lines.join('\n') };
+}
 
 /** 发布节点状态 */
 export type PublishStageStatus = 'wait' | 'process' | 'finish' | 'error' | 'stopped';

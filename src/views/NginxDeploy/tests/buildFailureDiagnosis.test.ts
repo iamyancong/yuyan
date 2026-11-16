@@ -443,7 +443,7 @@ test('多个不同报错：主因 + 其余计数（同一报错重复不计）',
   assert.equal(summary?.otherErrorCount, 1);
 });
 
-test('非命令失败（如上传阶段）沿用旧兜底；未失败不出诊断；已有 errorSummary 直接复用', () => {
+test('非命令失败（如上传阶段）沿用旧兜底；未失败不出诊断；后端 errorSummary 只在没有日志时兜底', () => {
   const logs: DeployLogItem[] = [
     { level: 'info', message: '开始上传', timestamp: TS },
     { level: 'error', message: 'SFTP 上传中断', timestamp: TS },
@@ -452,7 +452,12 @@ test('非命令失败（如上传阶段）沿用旧兜底；未失败不出诊�
   assert.equal(extractErrorSummaryFromLogs(logs, { status: 'success' } as any), null);
   assert.equal(extractErrorSummaryFromLogs([], { status: 'failed' } as any), null);
   const existing = { category: '自定义', title: '后端诊断' };
-  assert.equal(extractErrorSummaryFromLogs(logs, { status: 'failed', errorSummary: existing } as any), existing);
+  // 有日志：按展示文本重新诊断（需要 lineIndex 与摘录），不直接用后端的精简根因
+  assert.equal(extractErrorSummaryFromLogs(logs, { status: 'failed', errorSummary: existing } as any)?.category, '执行失败');
+  // 没有日志（列表项）：用后端落库的根因
+  assert.equal(extractErrorSummaryFromLogs([], { status: 'failed', errorSummary: existing } as any), existing);
+  // 旧版未插值的模板标题不复用
+  assert.equal(extractErrorSummaryFromLogs([], { status: 'failed', errorSummary: { category: 'x', title: '${violations.join()}' } } as any), null);
 });
 
 test('摘录超出上限时提示省略行数', () => {

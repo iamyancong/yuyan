@@ -260,15 +260,13 @@ export function extractErrorSummaryFromLogs(
   logs: DeployLogItem[] = [],
   record?: DeployRecord | null
 ): DeployErrorSummary | null {
-  // 如果已有记录中的 summary 且不包含未插值的模板字符串，则直接复用
-  if (
-    record?.errorSummary &&
-    !record.errorSummary.title?.includes('${violations') &&
-    !record.errorSummary.title?.includes('join(')
-  ) {
-    return record.errorSummary;
+  // 有日志时以前端按展示文本诊断为准（lineIndex 要对上 Monaco 行号）；
+  // 后端落库的 errorSummary（#43 P2-2）只有精简字段，仅在没有日志时兜底（如列表项）
+  if (!logs?.length) {
+    const stored = record?.errorSummary;
+    if (stored?.category && !stored.title?.includes('${violations') && !stored.title?.includes('join(')) return stored;
+    return null;
   }
-  if (!logs?.length) return null;
   // 与 Monaco 展示保持同一份文本（旧记录的整坨 stderr 会被 cleanLogMessage 去噪删行），保证 lineIndex 对得上展示行号
   const displayed = logs.map((item) => {
     const message = String(item?.message ?? '');

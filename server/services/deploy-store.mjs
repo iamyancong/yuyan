@@ -15,6 +15,7 @@ import { getRequestContext, getRequestTeamId, SHARED_DEPLOY_WORKSPACE_ID } from 
 import { isSshConnectionError, normalizeHostKeyFingerprint, SSH_CONNECTION_STATUS_CODES } from './ssh-errors.mjs';
 import { setSshConnectionHooks } from './ssh-service.mjs';
 import { normalizeDeployRootPath } from './deploy-cleanup-policy.mjs';
+import { parseErrorSummary, serializeErrorSummary, summarizeFailedRecordLogs } from './deploy-error-summary.mjs';
 
 /** 兼容旧调用方：提交元信息查询已迁移到独立服务（带超时、缓存与并发合并） */
 export { fetchGitlabCommitMeta } from './commit-meta-service.mjs';
@@ -952,6 +953,7 @@ function mapRecord(row, options = {}) {
     isCurrentVersion: false,
     canRollback: false,
     canUndoRollback: false,
+    errorSummary: parseErrorSummary(row.error_summary),
     logs: includeLogs ? parseJson(row.logs, []) : [],
     logPath: row.log_path || '',
     operator: row.operator || '',
@@ -2064,6 +2066,10 @@ export async function getDeployDb() {
   }
   if (!recordColumns.includes('backup_record_id')) {
     dbInstance.exec('ALTER TABLE deploy_records ADD COLUMN backup_record_id INTEGER');
+  }
+  if (!recordColumns.includes('error_summary')) {
+    // #43 P2-2：失败根因（精简 JSON），发布记录列表直接展示
+    dbInstance.exec('ALTER TABLE deploy_records ADD COLUMN error_summary TEXT');
   }
   normalizeDeployRecordVersionFields(dbInstance, { inferLegacyAction: !hadRecordActionColumn });
   applyBackendSchemaMigration(dbInstance);
@@ -4021,11 +4027,17 @@ export async function updateRecord(id, patch) {
   }
   /** 提交变化时重置探测标记，允许后台按新提交重新补全元信息 */
   const commitChanged = patch.commitSha !== undefined && String(patch.commitSha || '') !== String(current.commitSha || '');
+  /** #43 P2-2：以 failed 结束且带日志时落库失败根因；状态不是 failed 时清空 */
+  const nextStatus = patch.status ?? current.status;
+  let nextErrorSummary = current.errorSummary || null;
+  if (nextStatus !== 'failed') nextErrorSummary = null;
+  else if (patch.logs) nextErrorSummary = summarizeFailedRecordLogs(patch.logs) || nextErrorSummary;
   db.prepare(
     `UPDATE deploy_records
      SET commit_sha = ?, commit_message = ?, commit_author = ?, status = ?, release_path = ?, backup_path = ?,
          action = ?, source_record_id = ?, restored_record_id = ?, backup_record_id = ?, logs = ?, log_path = ?, finished_at = ?,
-         commit_meta_checked_at = CASE WHEN ? THEN NULL ELSE commit_meta_checked_at END
+         commit_meta_checked_at = CASE WHEN ? THEN NULL ELSE commit_meta_checked_at END,
+         error_summary = ?
      WHERE id = ?`
   ).run(
     patch.commitSha ?? current.commitSha,
@@ -4042,6 +4054,7 @@ export async function updateRecord(id, patch) {
     nextLogPath,
     patch.finishedAt ?? current.finishedAt ?? '',
     commitChanged ? 1 : 0,
+    serializeErrorSummary(nextErrorSummary),
     Number(id)
   );
   return getRecord(id);

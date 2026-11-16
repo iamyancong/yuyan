@@ -3,7 +3,7 @@ import { toRef } from 'vue';
 import { YTable } from '@yss-ui/components/lite';
 import type { YTableActionConfig } from '@yss-ui/components/lite';
 import type { DeployRecord } from '@/api/deploy';
-import { getDeployRecordStatusColor, getDeployRecordStatusLabel, recordColumns } from '../../constant';
+import { describeRecordFailureReason, getDeployRecordStatusColor, getDeployRecordStatusLabel, recordColumns } from '../../constant';
 import type { RecordProjectOption, RecordServerOption } from '../../types';
 import { TABLE_CELL_CONFIG, TABLE_HEADER_HEIGHT, TABLE_MIN_HEIGHT } from './constant';
 import { useDeployRecordTab } from './hooks/useDeployRecordTab';
@@ -118,6 +118,16 @@ const { tableAreaRef, tableHeight, getCommitUrl } = useDeployRecordTab({
           <a-tag :color="getDeployRecordStatusColor(row.status)">
             {{ getDeployRecordStatusLabel(row.status) }}
           </a-tag>
+        </template>
+        <template #errorSummary="{ row }">
+          <a-tooltip v-if="describeRecordFailureReason(row)" placement="topLeft" :overlay-style="{ maxWidth: '520px', whiteSpace: 'pre-line' }">
+            <template #title>{{ describeRecordFailureReason(row)?.tooltip }}</template>
+            <div class="record-failure-reason">
+              <a-tag color="error" class="record-failure-category">{{ describeRecordFailureReason(row)?.category }}</a-tag>
+              <span class="record-failure-title">{{ describeRecordFailureReason(row)?.title }}</span>
+            </div>
+          </a-tooltip>
+          <span v-else class="record-failure-empty">-</span>
         </template>
         <template #releasePath="{ row }">
           <MiddleEllipsisText :text="row.releasePath" />

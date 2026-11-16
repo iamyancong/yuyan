@@ -125,3 +125,27 @@
     padding: 10px 12px;
   }
 }
+
+.record-failure-reason {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+
+  .record-failure-category {
+    flex: none;
+    margin: 0;
+  }
+
+  .record-failure-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-color, inherit);
+  }
+}
+
+.record-failure-empty {
+  color: var(--text-color-secondary, #8c8c8c);
+}
