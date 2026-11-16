@@ -2,9 +2,14 @@
  * 独立服务器部署任务并发与 FIFO 排队调度器。
  * @description 控制全局同时执行的任务槽位上限（默认 7），超出并发时进入有界 FIFO 队列（默认 20）；
  * 支持排队名次实时推进通知、排队期间取消（立即退队不创建脏记录）以及排队等待超时保护。
+ * 调度器只负责「同一目标互斥 + 全局并发上限」。同服务器嵌套目录之间的互斥只发生在远程写入阶段，
+ * 由 deploy-root-lock 的等待型目录锁负责（#61），拉代码、装依赖、构建可以并行。
  */
 
 import { isPathNestedOrConflicting } from './deploy-cleanup-policy.mjs';
+
+/** 排队原因：全局运行上限已满 */
+export const DEPLOY_QUEUE_REASON_SLOT = 'slot';
 
 /** 默认同时运行的部署/回滚/服务操作任务上限 */
 export const DEFAULT_MAX_RUNNING_DEPLOY_TASKS = Math.max(
@@ -98,6 +103,7 @@ export class DeployTargetBusyError extends Error {
 
 /**
  * 判断两个部署任务是否存在物理服务器与部署根路径冲突（相同目标、或同服务器上的嵌套/相同路径）。
+ * @description 调度器不再用它决定排队（#61），保留给诊断与提示使用；远程写入互斥见 deploy-root-lock。
  * @param {Object} taskA - 任务 A
  * @param {Object} taskB - 任务 B
  * @returns {boolean} 是否冲突
@@ -186,38 +192,11 @@ export function createDeployTaskScheduler(options = {}) {
   }
 
   /**
-   * 查找当前正处于运行槽位且与目标任务发生物理服务器/路径冲突的任务。
-   * @param {Object} task
-   * @returns {Object|null}
-   */
-  function getConflictingRunningTask(task) {
-    for (const runningId of runningTargetIds) {
-      const runningTask = tasksByTargetId.get(runningId);
-      if (runningTask && isTaskConflicting(task, runningTask)) {
-        return runningTask;
-      }
-    }
-    for (const bypassTask of runningBypassTasks) {
-      if (bypassTask && isTaskConflicting(task, bypassTask)) {
-        return bypassTask;
-      }
-    }
-    return null;
-  }
-
-  /**
-   * 尝试从 FIFO 队列中取出与当前运行中任务均不发生路径冲突的任务补充到空闲运行槽位。
+   * 按 FIFO 顺序从队列取任务补充到空闲运行槽位。
    */
   function drainQueue() {
     while (runningTargetIds.size < maxRunning && pendingQueue.length > 0) {
-      const candidateIndex = pendingQueue.findIndex(
-        (entry) => !getConflictingRunningTask(entry.task)
-      );
-      if (candidateIndex < 0) {
-        // 队列中剩余任务均与正在运行的任务冲突，等待运行中任务完成后再调度
-        break;
-      }
-      const [nextEntry] = pendingQueue.splice(candidateIndex, 1);
+      const nextEntry = pendingQueue.shift();
       if (!nextEntry) break;
       nextEntry.cleanupQueueListeners();
       const { task, runner, hooks, resolve, reject } = nextEntry;
@@ -229,6 +208,7 @@ export function createDeployTaskScheduler(options = {}) {
       }
       task.queued = false;
       task.queuePosition = 0;
+      task.queueReason = '';
       task.currentStage = 'validate';
       runningTargetIds.add(task.targetId);
       refreshQueuePositions();
@@ -293,18 +273,10 @@ export function createDeployTaskScheduler(options = {}) {
       throw new DeployTargetBusyError(task.targetId, existingTask);
     }
 
-    const conflictingRunningTask = getConflictingRunningTask(task);
     const bypassQueue = Boolean(hooks?.bypassQueue ?? isLightweightDeployAction(task?.action));
 
     if (bypassQueue) {
-      if (conflictingRunningTask) {
-        const targetDesc = conflictingRunningTask.projectName || `目标 #${conflictingRunningTask.targetId}`;
-        throw new DeployTargetBusyError(
-          task.targetId,
-          conflictingRunningTask,
-          `该操作因与正在执行任务的「${targetDesc}」（部署目录：${conflictingRunningTask.deployRoot}）存在嵌套路径冲突而无法并发执行，请稍后重试`
-        );
-      }
+      // 嵌套目录的远程写入由等待型目录锁串行，快速通道不再因嵌套目录直接 409（#61）
       tasksByTargetId.set(task.targetId, task);
       task.queued = false;
       task.queuePosition = 0;
@@ -323,9 +295,10 @@ export function createDeployTaskScheduler(options = {}) {
 
     tasksByTargetId.set(task.targetId, task);
 
-    if (runningTargetIds.size < maxRunning && !conflictingRunningTask) {
+    if (runningTargetIds.size < maxRunning) {
       task.queued = false;
       task.queuePosition = 0;
+      task.queueReason = '';
       runningTargetIds.add(task.targetId);
       try {
         hooks?.onStartExecution?.(task, getStats());
@@ -339,6 +312,7 @@ export function createDeployTaskScheduler(options = {}) {
     task.queued = true;
     task.currentStage = 'queued';
     task.queuePosition = pendingQueue.length + 1;
+    task.queueReason = DEPLOY_QUEUE_REASON_SLOT;
 
     const effectiveQueueTimeoutMs = hasCustomTimeout
       ? queueTimeoutMs

@@ -70,6 +70,9 @@ export function createConnectConfig(server, verifyState = {}) {
     port: Number(server.port || 22),
     username: String(server.username || '').trim(),
     readyTimeout: 15000,
+    // 发布在等待同服务器目录锁时会空闲持有连接（#61），保活避免被防火墙/NAT 断开
+    keepaliveInterval: 15000,
+    keepaliveCountMax: 4,
   };
 
   if (server.authType === 'privateKey') {

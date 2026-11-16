@@ -48,6 +48,7 @@ import {
   isPathNestedOrConflicting,
   resolveTopmostLockRoot,
 } from './deploy-cleanup-policy.mjs';
+import { acquireDeployRootLock, buildDeployRootLockKey, formatDeployRootLockWait } from './deploy-root-lock.mjs';
 import {
   execSsh,
   resolveNginxConfigBackupKeep,
@@ -2107,27 +2108,46 @@ export async function cleanupExpiredStagingAndTrash(conn, rootPath, useSudo = fa
   }
 }
 
-/**
- * 获取远程前端部署目录锁（防多实例踩踏与父子目录并发冲突）。
- * 锁目录为 .yuyan-deploy.lock，在内部记录 owner 文件：host=<hostname> pid=<pid> record=<recordId> at=<ISO时间>。
- * 全程不用 rm -rf，使用 mkdir 原子加锁；如已有锁但 owner 超过 120 分钟未更新则尝试清理过期锁并重新竞争获取。
- * @param {Object} conn - SSH 连接
- * @param {string} deployRoot - 部署根目录（通常为最外层 lockRoot）
- * @param {boolean} [useSudo=false] - 是否使用 sudo
- * @param {Object} [options={}] - 配置选项
- * @param {number|string} [options.recordId] - 当前部署/回滚记录 ID
- * @param {Function} [options.log] - 日志记录函数
- * @returns {Promise<string>} ownerToken（用于释放锁时的校验）
- */
-export async function acquireFrontendDeployLock(conn, deployRoot, useSudo = false, options = {}) {
-  if (typeof useSudo === 'object') {
-    options = useSudo;
-    useSudo = options.useSudo || false;
-  }
-  const lockDir = path.posix.join(deployRoot, '.yuyan-deploy.lock');
-  const recordId = options.recordId || 0;
-  const ownerToken = `host=${os.hostname()} pid=${process.pid} record=${recordId} at=${new Date().toISOString()}`;
+/** 远程目录锁被其他实例占用时的最长等待时间（毫秒，默认 10 分钟） */
+export const DEFAULT_REMOTE_DEPLOY_LOCK_WAIT_MS = Math.max(
+  0,
+  Number(process.env.YUYAN_REMOTE_DEPLOY_LOCK_WAIT_MS ?? 10 * 60_000)
+);
 
+/** 本进程当前持有的远程目录锁 owner 字符串（用于识别本机旧进程遗留的锁） */
+const heldRemoteDeployLockTokens = new Set();
+
+/**
+ * 判断远程锁持有者是否为本机已不存在的旧持有者（容器重启前遗留、本进程释放失败等）。
+ * @description 同一进程内的远程写入都先经过进程内目录锁串行，因此「主机名相同、进程仍是自己或已退出、
+ * 且不在本进程持有集合中」的 owner 一定是遗留锁，可以安全清理；主机名不同（其他实例）一律等待。
+ * @param {string} ownerInfo 远程 owner 文件内容
+ * @returns {boolean}
+ */
+export function isStaleLocalDeployLockOwner(ownerInfo) {
+  const owner = String(ownerInfo || '').trim();
+  if (!owner || heldRemoteDeployLockTokens.has(owner)) return false;
+  if (!owner.startsWith(`host=${os.hostname()} `)) return false;
+  const pid = Number(owner.match(/\bpid=(\d+)/)?.[1] || 0);
+  if (!pid) return false;
+  if (pid === process.pid) return true;
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return error?.code === 'ESRCH';
+  }
+}
+
+/**
+ * 尝试一次获取远程目录锁。
+ * @param {Object} conn SSH 连接
+ * @param {string} lockDir 锁目录
+ * @param {string} ownerToken 持有者标识
+ * @param {boolean} useSudo 是否 sudo
+ * @returns {Promise<{ok: boolean, ownerInfo: string}>}
+ */
+async function tryAcquireRemoteDeployLockOnce(conn, lockDir, ownerToken, useSudo) {
   const script = [
     '# yuyan:deploy-lock',
     'set -u',
@@ -2164,17 +2184,175 @@ export async function acquireFrontendDeployLock(conn, deployRoot, useSudo = fals
     allowFailure: true,
     label: '获取远程部署目录锁',
   });
+  if (result.code === 0) return { ok: true, ownerInfo: '' };
+  const stderr = String(result.stderr || '');
+  const match = stderr.match(/LOCK_FAILED:\s*(.+)/);
+  return { ok: false, ownerInfo: match ? match[1].trim() : '未知持有者' };
+}
 
-  if (result.code !== 0) {
-    const stderr = String(result.stderr || '');
-    const match = stderr.match(/LOCK_FAILED:\s*(.+)/);
-    const ownerInfo = match ? match[1].trim() : '未知持有者';
-    throw new Error(
-      `无法获取远程部署目录锁（${lockDir} 已存在或无权创建）。当前持有者：${ownerInfo}。可能已有其他雨燕进程正在向该目录部署，请稍后重试`
-    );
+/**
+ * 可被停止信号打断的等待。
+ * @param {number} ms 毫秒
+ * @param {AbortSignal} [signal] 停止信号
+ * @returns {Promise<void>}
+ */
+function sleepWithSignal(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason || new Error('任务已停止'));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener?.('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason || new Error('任务已停止'));
+    };
+    signal?.addEventListener?.('abort', onAbort, { once: true });
+  });
+}
+
+/**
+ * 获取远程前端部署目录锁（防多实例踩踏与父子目录并发冲突）。
+ * 锁目录为 .yuyan-deploy.lock，在内部记录 owner 文件：host=<hostname> pid=<pid> record=<recordId> at=<ISO时间>。
+ * 全程不用 rm -rf，使用 mkdir 原子加锁；如已有锁但 owner 超过 120 分钟未更新则尝试清理过期锁并重新竞争获取。
+ * 同进程任务已由进程内目录锁串行（#61）；这里被占用时按退避重试等待（其他实例持有），
+ * 本机旧进程遗留的锁直接清理，超过 waitTimeoutMs 仍拿不到才报错。
+ * @param {Object} conn - SSH 连接
+ * @param {string} deployRoot - 部署根目录（通常为最外层 lockRoot）
+ * @param {boolean} [useSudo=false] - 是否使用 sudo
+ * @param {Object} [options={}] - 配置选项
+ * @param {number|string} [options.recordId] - 当前部署/回滚记录 ID
+ * @param {Function} [options.log] - 日志记录函数
+ * @param {number} [options.waitTimeoutMs] - 被其他实例占用时的最长等待（默认 10 分钟，0 表示不等待）
+ * @param {number} [options.retryBaseMs=1000] - 首次重试间隔
+ * @param {number} [options.retryMaxMs=10000] - 最大重试间隔
+ * @param {AbortSignal} [options.signal] - 停止信号
+ * @param {(ownerInfo: string) => void} [options.onWait] - 等待其他实例时回调
+ * @returns {Promise<string>} ownerToken（用于释放锁时的校验）
+ */
+export async function acquireFrontendDeployLock(conn, deployRoot, useSudo = false, options = {}) {
+  if (typeof useSudo === 'object') {
+    options = useSudo;
+    useSudo = options.useSudo || false;
   }
+  const lockDir = path.posix.join(deployRoot, '.yuyan-deploy.lock');
+  const recordId = options.recordId || 0;
+  const ownerToken = `host=${os.hostname()} pid=${process.pid} record=${recordId} at=${new Date().toISOString()}`;
+  const waitTimeoutMs = Math.max(0, Number(options.waitTimeoutMs ?? DEFAULT_REMOTE_DEPLOY_LOCK_WAIT_MS));
+  const retryBaseMs = Math.max(10, Number(options.retryBaseMs ?? 1000));
+  const retryMaxMs = Math.max(retryBaseMs, Number(options.retryMaxMs ?? 10_000));
+  const log = typeof options.log === 'function' ? options.log : null;
+  const deadline = Date.now() + waitTimeoutMs;
+  let delay = retryBaseMs;
+  let staleCleared = false;
+  let waitingNotified = false;
 
-  return ownerToken;
+  for (;;) {
+    const attempt = await tryAcquireRemoteDeployLockOnce(conn, lockDir, ownerToken, useSudo);
+    if (attempt.ok) {
+      heldRemoteDeployLockTokens.add(ownerToken);
+      return ownerToken;
+    }
+    const ownerInfo = attempt.ownerInfo;
+    if (!staleCleared && isStaleLocalDeployLockOwner(ownerInfo)) {
+      staleCleared = true;
+      log?.('warn', `远程部署目录锁由本机已结束的旧任务遗留（${ownerInfo}），已清理后重新获取`, 'upload');
+      await releaseFrontendDeployLock(conn, deployRoot, ownerInfo, useSudo, log).catch(() => {});
+      continue;
+    }
+    if (Date.now() + delay > deadline) {
+      throw new Error(
+        `无法获取远程部署目录锁（${lockDir} 已存在或无权创建）。当前持有者：${ownerInfo}。可能已有其他雨燕进程正在向该目录部署，请稍后重试`
+      );
+    }
+    if (!waitingNotified) {
+      waitingNotified = true;
+      log?.('info', `远程部署目录锁被其他实例占用（${ownerInfo}），正在等待释放…`, 'upload');
+      try {
+        options.onWait?.(ownerInfo);
+      } catch {}
+    }
+    await sleepWithSignal(delay, options.signal);
+    delay = Math.min(retryMaxMs, delay * 2);
+  }
+}
+
+/**
+ * 依次获取进程内等待型目录锁与远程目录锁（#61）。
+ * @description 同进程的任务先在进程内锁上 FIFO 等待（可随停止信号取消），拿到后再取远程锁（防多实例）。
+ * 返回的 release 先释放远程锁再释放进程内锁，必须在 finally 中调用。
+ * @param {Object} conn SSH 连接
+ * @param {Object} params 参数
+ * @param {Object} params.server 服务器（用于锁键的 host:port）
+ * @param {string} params.lockRoot 最外层部署目录
+ * @param {boolean} params.useSudo 是否 sudo
+ * @param {number|string} params.recordId 记录 ID
+ * @param {Object} params.owner 持有者信息（projectName、targetId、operator、actionLabel）
+ * @param {AbortSignal} [params.signal] 停止信号
+ * @param {Function} [params.log] 日志函数
+ * @param {string} [params.logStage='upload'] 日志阶段
+ * @param {string} [params.waitHint] 等待提示补充说明
+ * @param {(wait: {message: string, detail: string, holder: Object|null, position: number}) => void} [params.onWait] 等待回调
+ * @returns {Promise<{waited: boolean, release: () => Promise<void>}>}
+ */
+export async function acquireDeployRootLocks(conn, params) {
+  const { server, lockRoot, useSudo, recordId, owner, signal, log, logStage = 'upload', waitHint, onWait } = params;
+  const key = buildDeployRootLockKey(server, lockRoot);
+  let waited = false;
+  let lastHolderKey = '';
+  const notifyWait = (holder, position) => {
+    waited = true;
+    const formatted = formatDeployRootLockWait({ holder, position, lockRoot, hint: waitHint });
+    const holderKey = `${holder?.projectName || ''}|${holder?.recordId || ''}|${position}`;
+    if (holderKey !== lastHolderKey) {
+      lastHolderKey = holderKey;
+      log?.('info', `${formatted.message} ${formatted.detail}`, logStage);
+    }
+    try {
+      onWait?.({ ...formatted, holder, position });
+    } catch {}
+  };
+  let releaseLocal;
+  try {
+    releaseLocal = await acquireDeployRootLock(key, {
+      owner,
+      signal,
+      onWait: ({ holder, position }) => notifyWait(holder, position),
+    });
+  } catch (error) {
+    if (signal?.aborted) throw createDeployStoppedError(signal);
+    throw error;
+  }
+  let lockToken = '';
+  try {
+    throwIfDeployStopped(signal);
+    if (waited) log?.('info', `已获得同服务器目录锁（${lockRoot}），继续执行`, logStage);
+    lockToken = await acquireFrontendDeployLock(conn, lockRoot, useSudo, {
+      recordId,
+      log,
+      signal,
+      onWait: (ownerInfo) => notifyWait({ projectName: `其他雨燕实例（${ownerInfo}）` }, 1),
+    });
+  } catch (error) {
+    releaseLocal();
+    throw error;
+  }
+  let released = false;
+  return {
+    waited,
+    async release() {
+      if (released) return;
+      released = true;
+      try {
+        await releaseFrontendDeployLock(conn, lockRoot, lockToken, useSudo, log).catch(() => {});
+      } finally {
+        releaseLocal();
+      }
+    },
+  };
 }
 
 /**
@@ -2192,6 +2370,7 @@ export async function releaseFrontendDeployLock(conn, deployRoot, ownerToken = '
     ownerToken = '';
   }
 
+  if (ownerToken) heldRemoteDeployLockTokens.delete(ownerToken);
   const lockDir = path.posix.join(deployRoot, '.yuyan-deploy.lock');
   const script = [
     '# yuyan:deploy-lock',
@@ -3772,8 +3951,8 @@ async function deployTargetInLease(targetId, payload, emit) {
     }
 
     throwIfDeployStopped(signal);
-    uploadStarted = true;
-    stage('upload', 66, '上传产物', isBackend ? `上传 Jar 包到 ${server.name}:${target.deployRoot}` : `上传到 ${server.name}:${target.deployRoot}`);
+    const uploadStageDetail = isBackend ? `上传 Jar 包到 ${server.name}:${target.deployRoot}` : `上传到 ${server.name}:${target.deployRoot}`;
+    stage('upload', 66, '上传产物', uploadStageDetail);
     await effectiveWithSsh(server, async (conn) => {
       await execSsh(conn, buildRemoteMkdirCommand(target.deployRoot, deployUseSudo), {
         label: '创建部署目录',
@@ -3812,7 +3991,25 @@ async function deployTargetInLease(targetId, payload, emit) {
       }
 
       const lockRoot = resolveTopmostLockRoot(currentRealRoot, candidateRoots);
-      const lockToken = await acquireFrontendDeployLock(conn, lockRoot, deployUseSudo, { recordId: record.id, log });
+      // 同服务器嵌套目录的远程写入在这里排队等待，而不是撞锁失败（#61）；等待期间仍可停止
+      const deployRootLock = await acquireDeployRootLocks(conn, {
+        server,
+        lockRoot,
+        useSudo: deployUseSudo,
+        recordId: record.id,
+        owner: { projectName: target.projectName, targetId: target.id, recordId: record.id, operator, actionLabel: '发布' },
+        signal,
+        log,
+        logStage: 'upload',
+        waitHint: '构建已完成，轮到后自动上传',
+        onWait: (wait) => stage('waiting-deploy-lock', 66, wait.message, wait.detail),
+      });
+      if (signal?.aborted) {
+        await deployRootLock.release();
+        throwIfDeployStopped(signal);
+      }
+      if (deployRootLock.waited) stage('upload', 66, '上传产物', uploadStageDetail);
+      uploadStarted = true;
 
       try {
         if (isBackend) {
@@ -4174,7 +4371,7 @@ async function deployTargetInLease(targetId, payload, emit) {
         }
         throw deployError;
       } finally {
-        await releaseFrontendDeployLock(conn, lockRoot, lockToken, deployUseSudo, log).catch(() => {});
+        await deployRootLock.release();
       }
     });
 
@@ -4405,7 +4602,19 @@ async function restoreRecordVersion(recordId, payload, emit, action) {
         }
       }
       const lockRoot = resolveTopmostLockRoot(realRoot, candidateRoots);
-      const lockToken = await acquireFrontendDeployLock(conn, lockRoot, deployUseSudo, { recordId: restoreRecord.id, log });
+      const deployRootLock = await acquireDeployRootLocks(conn, {
+        server,
+        lockRoot,
+        useSudo: deployUseSudo,
+        recordId: restoreRecord.id,
+        owner: { projectName: target.projectName, targetId: target.id, recordId: restoreRecord.id, operator, actionLabel: meta.operationText },
+        signal: payload.signal,
+        log,
+        logStage: 'rollback',
+        waitHint: `轮到后自动${meta.operationText}`,
+        onWait: (wait) => emit?.stage('waiting-deploy-lock', 40, wait.message, wait.detail),
+      });
+      if (deployRootLock.waited) emit?.stage('rollback', 40, meta.progressTitle, `恢复目录备份 ${sourceRecord.backupPath}`);
 
       try {
         // 拿到锁之后、探测之前，清理过期暂存与垃圾箱
@@ -4490,7 +4699,7 @@ async function restoreRecordVersion(recordId, payload, emit, action) {
         }
         throw rollbackError;
       } finally {
-        await releaseFrontendDeployLock(conn, lockRoot, lockToken, deployUseSudo, log).catch(() => {});
+        await deployRootLock.release();
       }
     });
 
