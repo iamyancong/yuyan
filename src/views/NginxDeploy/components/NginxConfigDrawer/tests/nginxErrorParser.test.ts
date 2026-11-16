@@ -3,6 +3,9 @@ import test from 'node:test';
 import {
   parseNginxError,
   formatShortNginxErrorMessage,
+  normalizeNginxConfPath,
+  resolveNginxErrorFileScope,
+  scopeNginxErrorToFile,
 } from '../utils/nginxErrorParser.ts';
 
 test('正确解析用户实际遇到的 duplicate location 重复配置错误', () => {
@@ -109,4 +112,65 @@ test('其他服务占用端口仍提示修改 listen', () => {
   const result = parseNginxError(raw);
   assert.equal(result.title, '监听端口已被占用');
   assert.match(result.suggestion, /修改 listen/);
+});
+
+
+// ─── #43 P1-1：跨文件报错不标到当前文件 ───
+
+const CROSS_FILE_RAW =
+  '/home/nginx/sbin/nginx -t 执行失败，退出码 1 nginx: [emerg] duplicate location "/api/" in /home/nginx//conf/nginx.conf:111 nginx: configuration file /home/nginx//conf/nginx.conf test failed';
+
+test('归一化配置路径：重复斜杠、./ 与 .. 折叠、Windows 分隔符', () => {
+  assert.equal(normalizeNginxConfPath('/home/nginx//conf/./nginx.conf'), '/home/nginx/conf/nginx.conf');
+  assert.equal(normalizeNginxConfPath('/etc/nginx/sites/../conf.d/a.conf'), '/etc/nginx/conf.d/a.conf');
+  assert.equal(normalizeNginxConfPath('conf\\nginx.conf'), 'conf/nginx.conf');
+  assert.equal(normalizeNginxConfPath(''), '');
+});
+
+test('报错文件归属：同路径 / 相对路径后缀 / 同名软链兜底 / 不同文件 / 无法判断', () => {
+  assert.equal(resolveNginxErrorFileScope('/home/nginx//conf/nginx.conf', '/home/nginx/conf/nginx.conf'), 'same');
+  assert.equal(resolveNginxErrorFileScope('/home/nginx/conf/nginx.conf', 'conf/nginx.conf'), 'same');
+  assert.equal(resolveNginxErrorFileScope('/etc/nginx/sites-enabled/app.conf', '/etc/nginx/sites-available/app.conf'), 'same');
+  assert.equal(resolveNginxErrorFileScope('/home/nginx/conf/nginx.conf', '/opt/yuyan/nginx/sites/app-8050.conf'), 'other');
+  assert.equal(resolveNginxErrorFileScope('/etc/nginx/nginx.conf', 'conf.d/app.conf'), 'other');
+  assert.equal(resolveNginxErrorFileScope(null, '/etc/nginx/nginx.conf'), 'unknown');
+  assert.equal(resolveNginxErrorFileScope('/etc/nginx/nginx.conf', ''), 'unknown');
+});
+
+test('报错在当前文件：保留行号用于标红与定位', () => {
+  const scoped = scopeNginxErrorToFile(parseNginxError(CROSS_FILE_RAW), '/home/nginx/conf/nginx.conf');
+  assert.equal(scoped.fileScope, 'same');
+  assert.equal(scoped.line, 111);
+  assert.equal(scoped.externalLocation, null);
+  assert.equal(scoped.title, '第 111 行：路由规则重复声明');
+});
+
+test('报错在其他文件：line 不用于当前编辑器，标题与建议指向真实文件', () => {
+  const scoped = scopeNginxErrorToFile(parseNginxError(CROSS_FILE_RAW), '/opt/yuyan/nginx/sites/app-8050.conf');
+  assert.equal(scoped.fileScope, 'other');
+  assert.equal(scoped.line, null, '其他文件的行号不应用到当前编辑器');
+  assert.deepEqual(scoped.externalLocation, { file: '/home/nginx/conf/nginx.conf', line: 111 });
+  assert.equal(scoped.title, '问题出在其他配置文件：路由规则重复声明');
+  assert.ok(scoped.suggestion.includes('/home/nginx/conf/nginx.conf 第 111 行'));
+  assert.ok(!scoped.suggestion.includes('当前配置文件中已存在'));
+  assert.equal(
+    formatShortNginxErrorMessage(scoped),
+    'Nginx 校验未通过（问题在其他文件 nginx.conf:111）：路由路径 "/api/" 被多次重复定义'
+  );
+});
+
+test('其他文件的兜底「第 N 行语法校验未通过」标题不带行号', () => {
+  const raw = 'nginx: [emerg] invalid value "x" in /etc/nginx/conf.d/other.conf:7';
+  const scoped = scopeNginxErrorToFile(parseNginxError(raw), '/etc/nginx/conf.d/app.conf');
+  assert.equal(scoped.line, null);
+  assert.equal(scoped.title, '问题出在其他配置文件：语法校验未通过');
+  assert.ok(scoped.suggestion.includes('该文件第 7 行'));
+});
+
+test('无法解析出报错文件时维持原行为', () => {
+  const parsed = parseNginxError('nginx: [emerg] unexpected end of file, expecting "}"');
+  const scoped = scopeNginxErrorToFile(parsed, '/etc/nginx/nginx.conf');
+  assert.equal(scoped.fileScope, 'unknown');
+  assert.equal(scoped.title, parsed.title);
+  assert.equal(scoped.externalLocation, null);
 });

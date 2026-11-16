@@ -12,6 +12,10 @@ export interface RemoteFsPreviewModalProps {
   fileName: string;
   /** 文件内容 */
   content: string;
+  /** 打开后定位并选中的行号（可选，用于从 Nginx 报错跳到其他配置文件，#43 P1-1） */
+  revealLine?: number | null;
+  /** 标题后缀（可选，如「第 12 行，只读」） */
+  titleSuffix?: string;
 }
 
 /** Monaco 编辑器静态只读配置 */

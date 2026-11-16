@@ -3,7 +3,8 @@ import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import Modal from 'ant-design-vue/es/modal';
 import message from 'ant-design-vue/es/message';
 import { YMonaco, YMonacoDiff } from 'virtual:yss-heavy-components';
-import type { DeployTarget, NginxConfSaveOptions } from '@/api/deploy';
+import { readServerFsContent, type DeployTarget, type NginxConfSaveOptions } from '@/api/deploy';
+import RemoteFsPreviewModal from '../RemoteFsBrowseDrawer/components/RemoteFsPreviewModal/index.vue';
 import NginxConfigHeaderBar from './components/NginxConfigHeaderBar/index.vue';
 import NginxDiffToolbar from './components/NginxDiffToolbar/index.vue';
 import NginxSyntaxErrorAlert from './components/NginxSyntaxErrorAlert/index.vue';
@@ -73,7 +74,7 @@ const {
 
 // 语法错误诊断与 Monaco 标注 Hook
 const { syntaxError, bindSingleEditor, clearSyntaxError, handleSyntaxError, jumpToLine } =
-  useNginxSyntaxDiagnostics(content, diffMode, getDiffEditor);
+  useNginxSyntaxDiagnostics(content, diffMode, getDiffEditor, configPath);
 
 // 历史版本 Hook
 const history = useNginxHistory(props);
@@ -86,6 +87,23 @@ function clearSaveFeedback() {
 
 /** 用户改动内容会清掉语法错误，这里同步清掉阶段信息 */
 const visibleFailure = computed(() => (syntaxError.value ? saveFailure.value : null));
+
+/** 只读查看报错所在的其他配置文件（#43 P1-1，复用远程文件预览弹窗） */
+const externalPreview = ref({ open: false, loading: false, path: '', content: '', line: null as number | null });
+const canViewExternalFile = computed(() => Boolean(props.target?.serverId));
+const handleViewExternalFile = async (file: string, line: number | null) => {
+  const serverId = props.target?.serverId;
+  if (!serverId || !file) return;
+  externalPreview.value = { open: true, loading: true, path: file, content: '', line };
+  try {
+    const res = await readServerFsContent(serverId, file, { maxBytes: 512 * 1024 });
+    if (externalPreview.value.path !== file) return;
+    externalPreview.value = { ...externalPreview.value, loading: false, content: res.content || '' };
+  } catch (error: any) {
+    message.error(error?.response?.data?.message || error?.message || '读取该配置文件失败');
+    externalPreview.value = { ...externalPreview.value, open: false, loading: false };
+  }
+};
 
 /** 底部提示：历史恢复后优先展示 */
 const footerTip = computed(() => resolveRestoreHint(restoredLabel.value, isRawDirty.value) || actionTip.value);
@@ -204,7 +222,14 @@ const handleConflictOverwrite = async () => {
           class="nginx-config-inline-alert"
           message="当前账号为只读角色：可以查看、对比和下载配置，保存与恢复需要操作员权限"
         />
-        <NginxSyntaxErrorAlert :error="syntaxError" :failure="visibleFailure" @jump-to-line="jumpToLine" @close="clearSaveFeedback" />
+        <NginxSyntaxErrorAlert
+          :error="syntaxError"
+          :failure="visibleFailure"
+          :can-view-file="canViewExternalFile"
+          @jump-to-line="jumpToLine"
+          @view-file="handleViewExternalFile"
+          @close="clearSaveFeedback"
+        />
         <div class="nginx-config-editor-shell">
           <NginxHistoryDiffView
             v-if="history.compare.value"
@@ -301,6 +326,14 @@ const handleConflictOverwrite = async () => {
       </div>
     </template>
   </a-drawer>
+  <RemoteFsPreviewModal
+    v-model:open="externalPreview.open"
+    :loading="externalPreview.loading"
+    :file-name="externalPreview.path"
+    :title-suffix="externalPreview.line ? `第 ${externalPreview.line} 行，只读` : '只读'"
+    :content="externalPreview.content"
+    :reveal-line="externalPreview.line"
+  />
   <NginxConfChangedModal
     v-model:open="conflictOpen"
     :path="conflict?.path || configPath"

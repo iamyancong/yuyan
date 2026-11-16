@@ -188,7 +188,12 @@ export function parseNginxError(rawError: unknown, hints: ParseNginxErrorHints =
  * @param parsed 诊断结果
  * @returns 简洁错误提示字符串
  */
-export function formatShortNginxErrorMessage(parsed: ParsedNginxError): string {
+export function formatShortNginxErrorMessage(parsed: ParsedNginxError & { externalLocation?: { file: string; line: number | null } | null }): string {
+  const external = parsed.externalLocation;
+  if (external) {
+    const name = external.file.split('/').pop() || external.file;
+    return `Nginx 校验未通过（问题在其他文件 ${name}${external.line ? `:${external.line}` : ''}）：${parsed.reason}`;
+  }
   if (parsed.line) {
     return `Nginx 校验未通过（第 ${parsed.line} 行）：${parsed.reason}`;
   }
@@ -205,4 +210,89 @@ export function isSelfInstanceBindError(rawError: unknown): boolean {
       ? rawError
       : String((rawError as any)?.message || rawError || '');
   return /pid_repaired:\s*1/i.test(text) || /yuyan nginx already running/i.test(text);
+}
+
+/** 报错所在文件与当前编辑文件的关系：same 同一文件 / other 其他文件 / unknown 无法判断（未解析出文件） */
+export type NginxErrorFileScope = 'same' | 'other' | 'unknown';
+
+/**
+ * 归一化配置路径：统一分隔符、去掉重复斜杠与 `./`、折叠 `..`。
+ * @param path 原始路径
+ * @returns 归一化后的路径
+ */
+export function normalizeNginxConfPath(path: string): string {
+  const raw = String(path || '').trim().replace(/\\/g, '/').replace(/\/{2,}/g, '/');
+  if (!raw) return '';
+  const absolute = raw.startsWith('/');
+  const parts: string[] = [];
+  for (const part of raw.split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') {
+      if (parts.length && parts[parts.length - 1] !== '..') parts.pop();
+      else if (!absolute) parts.push('..');
+      continue;
+    }
+    parts.push(part);
+  }
+  return `${absolute ? '/' : ''}${parts.join('/')}`;
+}
+
+/**
+ * 判断 nginx -t 报错的文件是否就是当前编辑的文件（#43 P1-1）。
+ * - 归一化后完全相同 → same；
+ * - 任一方是相对路径（如 nginx_conf_path 配成 `conf/nginx.conf`）时按路径后缀匹配；
+ * - 两者都是绝对路径但不同：文件名相同时按软链/挂载别名兜底视为 same，文件名不同视为 other。
+ * @param errorFile 报错中解析出的文件
+ * @param editingPath 当前编辑的配置文件路径
+ * @returns 文件关系
+ */
+export function resolveNginxErrorFileScope(errorFile: string | null | undefined, editingPath: string | null | undefined): NginxErrorFileScope {
+  const a = normalizeNginxConfPath(errorFile || '');
+  const b = normalizeNginxConfPath(editingPath || '');
+  if (!a || !b) return 'unknown';
+  if (a === b) return 'same';
+  const baseA = a.split('/').pop() || '';
+  const baseB = b.split('/').pop() || '';
+  if (!a.startsWith('/') || !b.startsWith('/')) {
+    const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
+    const tail = shorter.replace(/^(\.\.\/)+/, '');
+    return longer === tail || longer.endsWith(`/${tail}`) ? 'same' : 'other';
+  }
+  return baseA && baseA === baseB ? 'same' : 'other';
+}
+
+/** 带文件归属的诊断结果 */
+export interface ScopedNginxError extends ParsedNginxError {
+  /** 报错文件与当前编辑文件的关系 */
+  fileScope: NginxErrorFileScope;
+  /** 报错在其他文件时的真实位置（此时 line 置空，编辑器不标红、不跳转） */
+  externalLocation: { file: string; line: number | null } | null;
+}
+
+/**
+ * 按当前编辑文件给诊断结果定归属：报错在其他文件时不把行号用到当前编辑器上，标题与建议改为指向真实文件。
+ * @param parsed parseNginxError 的结果
+ * @param editingPath 当前编辑的配置文件路径
+ * @returns 带归属的诊断结果
+ */
+export function scopeNginxErrorToFile(parsed: ParsedNginxError, editingPath: string | null | undefined): ScopedNginxError {
+  const fileScope = resolveNginxErrorFileScope(parsed.configFile, editingPath);
+  if (fileScope !== 'other' || !parsed.configFile) {
+    return { ...parsed, fileScope, externalLocation: null };
+  }
+  const file = parsed.configFile;
+  const line = parsed.line;
+  const location = line ? `${file} 第 ${line} 行` : file;
+  // 原标题形如「第 111 行：路由规则重复声明」，去掉行号前缀，避免误以为是当前文件的第 111 行
+  const baseTitle = parsed.title.replace(/^第\s*\d+\s*行[：:]\s*/, '');
+  const titleHint = /^第\s*\d+\s*行语法校验未通过$/.test(baseTitle) ? '语法校验未通过' : baseTitle;
+  const suggestion = parsed.suggestion.replace(/第\s*(\d+)\s*行/g, '该文件第 $1 行').replace(/当前配置文件/g, '相关配置文件');
+  return {
+    ...parsed,
+    line: null,
+    title: `问题出在其他配置文件：${titleHint}`,
+    suggestion: `报错位置是 ${location}，不在当前编辑的文件里，当前文件的修改没有生效。${suggestion} 如果是当前文件新增的 server_name / location 与该文件冲突，请调整当前文件后再保存。`,
+    fileScope,
+    externalLocation: { file, line },
+  };
 }

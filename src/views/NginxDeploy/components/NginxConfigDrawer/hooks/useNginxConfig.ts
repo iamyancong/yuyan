@@ -3,7 +3,7 @@ import message from 'ant-design-vue/es/message';
 import { readNginxConf, type NginxConfSaveOptions, type NginxConfSaveResult } from '@/api/deploy';
 import { getErrorMessage, normalizeNginxContent } from '../constant';
 import { describeSaveFailure } from '../historyPolicy';
-import { formatShortNginxErrorMessage, parseNginxError } from '../utils/nginxErrorParser';
+import { formatShortNginxErrorMessage, parseNginxError, scopeNginxErrorToFile } from '../utils/nginxErrorParser';
 
 /** 保存冲突（409 NGINX_CONF_CHANGED）时后端返回的线上最新内容 */
 export interface NginxConfConflictDetails {
@@ -192,7 +192,7 @@ export function useNginxConfig(
         return;
       }
       callbacks?.onSaveError?.(error);
-      const parsed = parseNginxError(error);
+      const parsed = scopeNginxErrorToFile(parseNginxError(error), configPath.value);
       if (failure.kind === 'rollback-failed') {
         message.error(failure.headline);
       } else if (failure.kind === 'reload') {

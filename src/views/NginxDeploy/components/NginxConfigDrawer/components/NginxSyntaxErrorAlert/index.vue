@@ -9,14 +9,16 @@ import {
 } from '@ant-design/icons-vue';
 import { copyToClipboard } from '@yss-ui/utils';
 import message from 'ant-design-vue/es/message';
-import type { ParsedNginxError } from '../../utils/nginxErrorParser';
+import type { ParsedNginxError, ScopedNginxError } from '../../utils/nginxErrorParser';
 import type { NginxSaveFailureInfo } from '../../historyPolicy';
 
 defineOptions({ name: 'NginxSyntaxErrorAlert' });
 
 /** 属性定义 */
 const props = defineProps<{
-  error: ParsedNginxError | null;
+  error: (ParsedNginxError & Partial<Pick<ScopedNginxError, 'fileScope' | 'externalLocation'>>) | null;
+  /** 是否可以只读查看报错所在的其他文件（需要知道服务器） */
+  canViewFile?: boolean;
   /** 保存失败的阶段与回滚结果（#43 P1-2），为空时按普通语法错误展示 */
   failure?: NginxSaveFailureInfo | null;
 }>();
@@ -31,7 +33,16 @@ const handleCopyBackup = async () => {
 const emit = defineEmits<{
   (e: 'jump-to-line', line: number): void;
   (e: 'close'): void;
+  (e: 'view-file', file: string, line: number | null): void;
 }>();
+
+/** 复制其他文件的报错位置 */
+const handleCopyLocation = async () => {
+  const loc = props.error?.externalLocation;
+  if (!loc) return;
+  const text = loc.line ? `${loc.file}:${loc.line}` : loc.file;
+  if (await copyToClipboard(text)) message.success('报错位置已复制');
+};
 
 /** 是否展开原始终端日志 */
 const showRaw = ref(false);
@@ -124,6 +135,23 @@ const handleCopyRaw = async () => {
           <CloseOutlined />
         </a-button>
       </div>
+    </div>
+
+    <!-- 报错在其他配置文件（#43 P1-1）：不在当前编辑器标红，指出真实文件 -->
+    <div v-if="error.externalLocation" class="alert-external-file">
+      <span class="label">报错文件：</span>
+      <code class="external-path">{{ error.externalLocation.file }}</code>
+      <a-tag v-if="error.externalLocation.line" color="warning" class="external-line">第 {{ error.externalLocation.line }} 行</a-tag>
+      <span class="external-note">不是当前编辑的文件，编辑器中未标红</span>
+      <a-button
+        v-if="canViewFile"
+        size="small"
+        type="link"
+        @click="emit('view-file', error.externalLocation.file, error.externalLocation.line)"
+      >
+        只读查看该文件
+      </a-button>
+      <a-button size="small" type="link" @click="handleCopyLocation">复制位置</a-button>
     </div>
 
     <!-- 诊断内容：核心原因与解决建议 -->

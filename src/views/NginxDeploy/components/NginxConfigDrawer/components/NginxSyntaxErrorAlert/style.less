@@ -9,6 +9,38 @@
   transition: all 0.25s ease;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 
+  .alert-external-file {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 6px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: rgba(250, 173, 20, 0.1);
+    border: 1px dashed rgba(250, 173, 20, 0.45);
+
+    .label {
+      color: var(--text-color-secondary, #8c8c8c);
+    }
+
+    .external-path {
+      font-family: Menlo, Consolas, monospace;
+      font-size: 12px;
+      word-break: break-all;
+      color: #faad14;
+    }
+
+    .external-line {
+      margin: 0;
+    }
+
+    .external-note {
+      color: var(--text-color-secondary, #8c8c8c);
+      font-size: 12px;
+    }
+  }
+
   .alert-header {
     display: flex;
     align-items: center;

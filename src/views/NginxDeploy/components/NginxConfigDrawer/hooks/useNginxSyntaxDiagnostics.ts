@@ -1,5 +1,5 @@
 import { ref, shallowRef, watch, type Ref } from 'vue';
-import { parseNginxError, type ParsedNginxError } from '../utils/nginxErrorParser';
+import { parseNginxError, scopeNginxErrorToFile, type ScopedNginxError } from '../utils/nginxErrorParser';
 
 /** Monaco 校验 Marker 的统一 Owner 标识 */
 const NGINX_MARKER_OWNER = 'nginx-syntax-validator';
@@ -26,14 +26,16 @@ async function getMonacoApi() {
  * @param content 当前编辑内容 Ref
  * @param diffMode 是否处于 Diff 对比模式
  * @param getDiffEditor 获取 DiffEditor 实例的方法
+ * @param editingPath 当前编辑的配置文件路径：报错在其他文件时不在当前编辑器标红（#43 P1-1）
  */
 export function useNginxSyntaxDiagnostics(
   content: Ref<string>,
   diffMode: Ref<boolean>,
-  getDiffEditor?: () => any
+  getDiffEditor?: () => any,
+  editingPath?: Ref<string>
 ) {
   /** 当前解析出的 Nginx 错误诊断对象 */
-  const syntaxError = ref<ParsedNginxError | null>(null);
+  const syntaxError = ref<ScopedNginxError | null>(null);
 
   /** 单栏普通 Monaco 实例引用 */
   const singleEditorInstance = shallowRef<any>(null);
@@ -84,7 +86,7 @@ export function useNginxSyntaxDiagnostics(
    * 在当前编辑器中对指定错误行打上红波浪线与悬浮提示
    * @param error 诊断对象
    */
-  const applyEditorMarkers = async (error: ParsedNginxError) => {
+  const applyEditorMarkers = async (error: ScopedNginxError) => {
     if (!error.line) return;
     try {
       const editor = getActiveEditor();
@@ -154,8 +156,9 @@ export function useNginxSyntaxDiagnostics(
    * 记录并解析 Nginx 报错，同时触发编辑器联动高亮与定位
    * @param error 错误对象或文本
    */
-  const handleSyntaxError = (error: unknown): ParsedNginxError => {
-    const parsed = parseNginxError(error);
+  const handleSyntaxError = (error: unknown): ScopedNginxError => {
+    // 报错在其他文件时 scopeNginxErrorToFile 会把 line 置空，下面的标红与跳转自然跳过
+    const parsed = scopeNginxErrorToFile(parseNginxError(error), editingPath?.value);
     syntaxError.value = parsed;
 
     // 延迟一小段时间确保 DOM 与编辑器渲染稳定后再打 marker 并跳转
