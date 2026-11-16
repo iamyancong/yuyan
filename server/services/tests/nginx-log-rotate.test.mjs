@@ -9,6 +9,7 @@ import {
   parseLogRotateCronResult,
   renderRuntimeScript,
   resolveNginxLogKeepDays,
+  resolveNginxLogMaxMb,
 } from '../nginx-runtime-service.mjs';
 
 function startFakeMaster(baseDir) {
@@ -152,14 +153,16 @@ test('buildLogRotateCronInstallCommand: 命令快照覆盖 useSudo、% 符号转
   // 1. 命令快照与 sudo 分流
   const configNoSudo = { scriptPath: '/opt/yuyan/nginx/yuyan-nginx.sh', useSudo: false };
   const resultNoSudo = buildLogRotateCronInstallCommand(configNoSudo, 14);
-  assert.match(resultNoSudo.cronLine, /^\d+ 3 \* \* \* '\/opt\/yuyan\/nginx\/yuyan-nginx\.sh' rotate-logs 14 >\/dev\/null 2>&1 # yuyan-nginx-rotate-logs:[a-f0-9]{12}$/);
+  // #42：每小时检查一次，第 2 个参数为按大小轮转阈值（默认 200MB）
+  assert.match(resultNoSudo.cronLine, /^\d+ \* \* \* \* '\/opt\/yuyan\/nginx\/yuyan-nginx\.sh' rotate-logs 14 200 >\/dev\/null 2>&1 # yuyan-nginx-rotate-logs:[a-f0-9]{12}$/);
   assert.ok(resultNoSudo.command.includes('crontab -l'));
   assert.ok(resultNoSudo.command.includes('crontab -'));
   assert.doesNotMatch(resultNoSudo.command, /sudo -n crontab/);
 
   const configSudo = { scriptPath: '/opt/yuyan/nginx/yuyan-nginx.sh', useSudo: true };
   const resultSudo = buildLogRotateCronInstallCommand(configSudo, 7);
-  assert.ok(resultSudo.cronLine.includes('rotate-logs 7'));
+  assert.ok(resultSudo.cronLine.includes('rotate-logs 7 200'));
+  assert.ok(buildLogRotateCronInstallCommand(configSudo, 7, { maxMb: 0 }).cronLine.includes('rotate-logs 7 0 '));
   assert.ok(resultSudo.command.includes('sudo -n crontab -l'));
   assert.ok(resultSudo.command.includes('sudo -n crontab -'));
 
@@ -388,4 +391,91 @@ test('parseLogRotateCronResult: 各种退出码及状态解析与 message 提示
   assert.equal(otherFailRes.status, 'write_failed');
   assert.ok(otherFailRes.message.includes('写入服务器定时任务失败'));
   assert.ok(otherFailRes.message.includes(cronLine));
+});
+
+test('resolveNginxLogMaxMb: 显式参数 > 环境变量 YUYAN_NGINX_LOG_MAX_MB > 默认 200，0 表示只按天轮转', () => {
+  assert.equal(resolveNginxLogMaxMb(), 200);
+  assert.equal(resolveNginxLogMaxMb(50), 50);
+  assert.equal(resolveNginxLogMaxMb(0), 0);
+  assert.equal(resolveNginxLogMaxMb(-1), 200);
+  assert.equal(resolveNginxLogMaxMb('abc'), 200);
+  process.env.YUYAN_NGINX_LOG_MAX_MB = '500';
+  try {
+    assert.equal(resolveNginxLogMaxMb(), 500);
+    assert.equal(resolveNginxLogMaxMb(10), 10);
+    process.env.YUYAN_NGINX_LOG_MAX_MB = 'bad';
+    assert.equal(resolveNginxLogMaxMb(), 200);
+  } finally {
+    delete process.env.YUYAN_NGINX_LOG_MAX_MB;
+  }
+});
+
+test('yuyan-nginx.sh: rotate-logs 按大小轮转（#42）：当天已全量轮转后只轮转超阈值的日志，03 点后首次执行做全量轮转', () => {
+  const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuyan-logrotate-size-'));
+  try {
+    for (const dir of ['sbin', 'conf', 'run', 'logs', 'bin']) fs.mkdirSync(path.join(baseDir, dir));
+    fs.writeFileSync(path.join(baseDir, 'sbin', 'nginx'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(baseDir, 'conf', 'nginx.conf'), 'pid run/nginx.pid;\n');
+    // 用 PATH 里的假 date 固定「今天」与「小时」，其余格式交给系统 date
+    const realDate = execSync('command -v date', { encoding: 'utf8', shell: '/bin/sh' }).trim();
+    const fakeDate = (hour) =>
+      fs.writeFileSync(
+        path.join(baseDir, 'bin', 'date'),
+        `#!/bin/sh\ncase "$1" in\n  +%H) echo ${hour} ;;\n  +%Y%m%d) echo 20261116 ;;\n  *) exec ${realDate} "$@" ;;\nesac\n`,
+        { mode: 0o755 }
+      );
+    const env = { ...process.env, PATH: `${path.join(baseDir, 'bin')}:${process.env.PATH}` };
+    const logsDir = path.join(baseDir, 'logs');
+    const big = path.join(logsDir, 'access.log');
+    const small = path.join(logsDir, 'error.log');
+    const stamp = path.join(logsDir, '.yuyan-last-rotate');
+    const scriptPath = path.join(baseDir, 'yuyan-nginx.sh');
+    fs.writeFileSync(scriptPath, renderRuntimeScript(), { mode: 0o755 });
+    const rotated = (name) => fs.readdirSync(logsDir).filter((f) => f.startsWith(`${name}.`) && f !== name);
+    const run = (...args) => spawnSync('bash', [scriptPath, 'rotate-logs', ...args], { encoding: 'utf8', env });
+
+    // 1. 当天已全量轮转过（stamp = 今天）：只轮转超过 1MB 的 access.log，error.log 原样保留
+    fakeDate('10');
+    fs.writeFileSync(stamp, '20261116\n');
+    fs.writeFileSync(big, 'x'.repeat(1024 * 1024 + 10));
+    fs.writeFileSync(small, 'small error log');
+    let res = run('14', '1');
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(fs.existsSync(big), false, '超阈值的 access.log 应被轮转');
+    assert.equal(rotated('access.log').length, 1);
+    assert.equal(fs.readFileSync(small, 'utf8'), 'small error log', '未超阈值的 error.log 不动');
+    assert.equal(rotated('error.log').length, 0);
+
+    // 2. 阈值为 0 且当天已轮转：直接退出，什么都不动
+    fs.writeFileSync(big, 'x'.repeat(2 * 1024 * 1024));
+    res = run('14', '0');
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(fs.existsSync(big), true, '阈值 0 时不按大小轮转');
+
+    // 3. 03 点前、上次轮转是昨天：仍只按大小检查（不提前做全量）
+    fakeDate('02');
+    fs.writeFileSync(stamp, '20261115\n');
+    fs.writeFileSync(big, 'tiny');
+    res = run('14', '1');
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(fs.readFileSync(big, 'utf8'), 'tiny');
+    assert.equal(fs.readFileSync(small, 'utf8'), 'small error log');
+
+    // 4. 03 点后首次执行、上次轮转是昨天：全量轮转所有非空日志，并记下今天
+    fakeDate('03');
+    res = run('14', '1');
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(fs.existsSync(big), false);
+    assert.equal(fs.existsSync(small), false, '全量轮转时小日志也要轮转');
+    assert.equal(fs.readFileSync(stamp, 'utf8').trim(), '20261116');
+
+    // 5. 旧定时任务（不带 max_mb）保持原行为：每次全量轮转
+    fakeDate('10');
+    fs.writeFileSync(small, 'again');
+    res = run('14');
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(fs.existsSync(small), false, '不带 max_mb 时全量轮转');
+  } finally {
+    fs.rmSync(baseDir, { recursive: true, force: true });
+  }
 });

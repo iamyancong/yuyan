@@ -25,6 +25,7 @@ import {
 import { pullLatestTemplate, validateTemplate } from './services/template-service.mjs';
 import { startCleanupScheduler } from './utils/cleanup-scheduler.mjs';
 import { startWorkspaceCleanupScheduler } from './services/workspace-cleanup-service.mjs';
+import { startDbRetentionScheduler } from './services/db-retention-service.mjs';
 import { deployTaskScheduler } from './services/deploy-task-scheduler.mjs';
 import scaffoldRoutes from './routes/scaffold.mjs';
 import deployRoutes from './routes/deploy.mjs';
@@ -50,6 +51,7 @@ const app = express();
 let httpServer = null;
 let stopCleanupScheduler = null;
 let stopWorkspaceCleanupScheduler = null;
+let stopDbRetentionScheduler = null;
 let stopUpdatePreloadScheduler = null;
 let shuttingDown = false;
 const activeSockets = new Set();
@@ -426,6 +428,8 @@ async function shutdown(reason = 'unknown') {
     stopCleanupScheduler = null;
     stopWorkspaceCleanupScheduler?.();
     stopWorkspaceCleanupScheduler = null;
+    stopDbRetentionScheduler?.();
+    stopDbRetentionScheduler = null;
   } catch (error) {
     console.warn('[shutdown] 停止清理任务失败:', error);
   }
@@ -526,6 +530,8 @@ async function bootstrap() {
     stopWorkspaceCleanupScheduler = startWorkspaceCleanupScheduler({
       isTargetBusy: (targetId) => Boolean(deployTaskScheduler.getTask(targetId)),
     });
+    // 数据库过程数据按保留天数清理，不动发布记录与当前版本（#42 P2）
+    stopDbRetentionScheduler = startDbRetentionScheduler();
     if (!isTauriSubprocess) {
       stopUpdatePreloadScheduler = startAppUpdatePreloadScheduler();
     }

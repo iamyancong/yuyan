@@ -866,7 +866,7 @@ export function renderMainNginxConfig(config, explicitInstanceId = null) {
 export function renderRuntimeScript() {
   return [
     '#!/usr/bin/env bash',
-    '# yuyan-nginx-script-version: 2',
+    `${YUYAN_NGINX_SCRIPT_VERSION_MARKER} ${YUYAN_NGINX_SCRIPT_VERSION}`,
     'set -euo pipefail',
     '',
     'ACTION="${1:-help}"',
@@ -1342,11 +1342,37 @@ export function renderRuntimeScript() {
     '      echo "nginx 进程由其他账号运行，当前账号无法发送 reopen 信号，已跳过本次日志轮转" >&2',
     '      exit 1',
     '    fi',
+    '    # 第二个参数 max_mb（#42）：带上时按小时调度，单个日志超过 max_mb 就轮转；',
+    '    # 每天 03 点后的第一次执行仍做一次全量轮转（以 .yuyan-last-rotate 记录日期）。不带时保持旧行为：每次全量轮转。',
+    '    MAX_MB="${3:-}"',
+    '    FULL_ROTATE=1',
+    '    MAX_BYTES=0',
+    '    TODAY="$(date +%Y%m%d)"',
+    '    STAMP_FILE="$LOGS_DIR/.yuyan-last-rotate"',
+    '    if [ -n "$MAX_MB" ]; then',
+    '      if ! [[ "$MAX_MB" =~ ^[0-9]+$ ]]; then',
+    '        MAX_MB=200',
+    '      fi',
+    '      MAX_BYTES=$((MAX_MB * 1024 * 1024))',
+    '      LAST_ROTATE="$(cat "$STAMP_FILE" 2>/dev/null || true)"',
+    '      HOUR="$(date +%H)"',
+    '      if [ "$LAST_ROTATE" = "$TODAY" ] || [ "${HOUR#0}" -lt 3 ]; then',
+    '        FULL_ROTATE=0',
+    '      fi',
+    '      if [ "$FULL_ROTATE" -eq 0 ] && [ "$MAX_BYTES" -eq 0 ]; then',
+    '        exit 0',
+    '      fi',
+    '    fi',
     '    TIMESTAMP="$(date +%Y%m%d%H%M%S)"',
     '    ROTATED_COUNT=0',
     '    for log_file in "$LOGS_DIR"/*.log; do',
     '      [ -f "$log_file" ] || continue',
     '      [ -s "$log_file" ] || continue',
+    '      if [ "$FULL_ROTATE" -eq 0 ]; then',
+    '        log_size="$(wc -c < "$log_file" 2>/dev/null | tr -d \' \')"',
+    '        [ -n "$log_size" ] || continue',
+    '        [ "$log_size" -ge "$MAX_BYTES" ] || continue',
+    '      fi',
     '      target_file="${log_file}.${TIMESTAMP}"',
     '      if [ -e "$target_file" ]; then',
     '        target_file="${target_file}.$$"',
@@ -1367,6 +1393,9 @@ export function renderRuntimeScript() {
     '      fi',
     '      sleep 1',
     '    fi',
+    '    if [ "$FULL_ROTATE" -eq 1 ]; then',
+    '      printf "%s\\n" "$TODAY" > "$STAMP_FILE" 2>/dev/null || true',
+    '    fi',
     '',
     '    if command -v gzip >/dev/null 2>&1; then',
     '      for uncompressed in "$LOGS_DIR"/*.log.*; do',
@@ -1381,7 +1410,7 @@ export function renderRuntimeScript() {
     '    find "$LOGS_DIR" -maxdepth 1 -type f -name \'*.log.*\' -mtime "+$KEEP_DAYS" -exec rm -f {} + 2>/dev/null || true',
     '    ;;',
     '  help|*)',
-    '    echo "用法: $0 {start|stop|reload|test|status|upgrade|rotate-logs [keep_days]}"',
+    '    echo "用法: $0 {start|stop|reload|test|status|upgrade|rotate-logs [keep_days] [max_mb]}"',
     '    ;;',
     'esac',
     '',
@@ -1488,12 +1517,31 @@ export function parseLogRotateCronResult(result, cronLine, options = {}) {
 }
 
 /**
+ * 解析托管 Nginx 单个日志按大小轮转的阈值（MB，#42）。
+ * 优先级：显式参数 > 环境变量 YUYAN_NGINX_LOG_MAX_MB > 200；0 表示只按天轮转。
+ * @param {number|string} [customMaxMb] - 显式传入的阈值
+ * @returns {number} 阈值（MB）
+ */
+export function resolveNginxLogMaxMb(customMaxMb) {
+  if (customMaxMb !== undefined && customMaxMb !== null && String(customMaxMb).trim() !== '') {
+    const parsedCustom = Number(customMaxMb);
+    if (Number.isInteger(parsedCustom) && parsedCustom >= 0) return parsedCustom;
+  }
+  const envText = String(process.env.YUYAN_NGINX_LOG_MAX_MB ?? '').trim();
+  const envRaw = Number(envText);
+  if (envText && Number.isInteger(envRaw) && envRaw >= 0) return envRaw;
+  return 200;
+}
+
+/**
  * 构建将托管 Nginx 日志轮转任务安装到 crontab 的 Shell 命令。
+ * 定时任务每小时执行一次：超过 YUYAN_NGINX_LOG_MAX_MB 的日志立即轮转，每天 03 点后首次执行做一次全量轮转（#42）。
  * @param {Object} config - 运行时配置
  * @param {number} [keepDays] - 保留天数
+ * @param {{ maxMb?: number }} [options] - 按大小轮转阈值（MB）
  * @returns {{command: string, cronLine: string, marker: string}} 命令及 cron 信息
  */
-export function buildLogRotateCronInstallCommand(config, keepDays) {
+export function buildLogRotateCronInstallCommand(config, keepDays, options = {}) {
   const effectiveKeepDays = resolveNginxLogKeepDays(keepDays);
   const scriptPath = String(config?.scriptPath || '').trim();
   const scriptSha = crypto.createHash('sha256').update(scriptPath).digest('hex');
@@ -1501,8 +1549,9 @@ export function buildLogRotateCronInstallCommand(config, keepDays) {
   const marker = `# yuyan-nginx-rotate-logs:${markerTag}`;
   const minute = parseInt(scriptSha.slice(0, 4), 16) % 60;
   // cron 中 % 会被当作换行符，将命令部分的 % 转义为 \%
-  const commandPart = `${shellQuote(scriptPath)} rotate-logs ${effectiveKeepDays} >/dev/null 2>&1`.replace(/%/g, '\\%');
-  const cronLine = `${minute} 3 * * * ${commandPart} ${marker}`;
+  const maxMb = resolveNginxLogMaxMb(options.maxMb);
+  const commandPart = `${shellQuote(scriptPath)} rotate-logs ${effectiveKeepDays} ${maxMb} >/dev/null 2>&1`.replace(/%/g, '\\%');
+  const cronLine = `${minute} * * * * ${commandPart} ${marker}`;
 
   const crontabCmd = config?.useSudo ? 'sudo -n crontab' : 'crontab';
   const script = [

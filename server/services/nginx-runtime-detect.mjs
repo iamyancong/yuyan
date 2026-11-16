@@ -4,8 +4,9 @@
 
 /**
  * 当前 yuyan-nginx.sh 脚本协议版本。远端缺标记或版本低于此值时应刷新脚本。
+ * v3（#42）：rotate-logs 支持按大小轮转，定时任务改为每小时检查。
  */
-export const YUYAN_NGINX_SCRIPT_VERSION = 2;
+export const YUYAN_NGINX_SCRIPT_VERSION = 3;
 
 /**
  * 脚本中的版本标记前缀。

@@ -6,6 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { Client } from 'ssh2';
 import { __resetTestHooks, __setTestHooks } from '../test-hooks.mjs';
+import { YUYAN_NGINX_SCRIPT_VERSION } from '../nginx-runtime-detect.mjs';
 
 test('pid 自动修复与 upgrade 动作会写入审计钩子', async (t) => {
   process.env.YUYAN_ALLOW_TEST_HOOKS = '1';
@@ -89,7 +90,7 @@ test('pid 自动修复与 upgrade 动作会写入审计钩子', async (t) => {
       } else if (command.includes('test -f') && command.includes('yuyan-nginx.sh')) {
         code = 0;
       } else if (command.includes("sed -n '1,40p'") || command.includes('sed -n')) {
-        stdout = '# yuyan-nginx-script-version: 2\n#!/usr/bin/env bash\n';
+        stdout = `# yuyan-nginx-script-version: ${YUYAN_NGINX_SCRIPT_VERSION}\n#!/usr/bin/env bash\n`;
       } else if (command.includes('yuyan-nginx.sh') && command.includes('status')) {
         stdout =
           'pid_repaired: 1\npid_path: /opt/yuyan/nginx/run/nginx.pid\nrunning: 4242\nrunning_version: nginx/1.24.0\ndisk_version: nginx/1.24.0\nupgrade_pending: 0\n';

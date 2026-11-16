@@ -196,6 +196,9 @@ pnpm build
 | `YUYAN_PNPM_FETCH_TIMEOUT_MS` | `120000` | 发布安装依赖时单个请求超时时间（毫秒）；非法值回退默认值 |
 | `YUYAN_PNPM_FETCH_RETRIES` | `4` | 发布安装依赖时下载失败后的重试次数；非法值回退默认值 |
 | `YUYAN_WORKSPACE_IDLE_DAYS` | `7` | 构建工作区（`${DEPLOY_DATA_DIR}/cache/workspaces/<目标>/<分支>`）超过该天数未使用即自动删除，下次发布会重新拉取代码与安装依赖；运行中/排队中的目标不会被清理；`0` 关闭；非法值回退默认值 |
+| `YUYAN_NGINX_LOG_MAX_MB` | `200` | 托管 Nginx 日志按大小轮转阈值（MB）：定时任务每小时检查一次，单个日志超过该大小立即轮转压缩；每天 03 点后仍做一次全量轮转；保留天数沿用原 `keep_days`；`0` 只做每日轮转；修改后需重新安装托管脚本（或升级后自动刷新）生效 |
+| `YUYAN_DB_LOG_RETENTION_DAYS` | `90` | 数据库过程数据保留天数：定期删除超过该天数的已结束部署任务、已清理（pruned）且非当前的后端版本记录、已过期的制品任务、已失效的登录会话；**发布记录（deploy_records）、当前版本与可回滚版本永不删除**；不执行 VACUUM；`0` 关闭；非法值回退默认值 |
+| `YUYAN_DB_RETENTION_INTERVAL_HOURS` | `24` | 数据库过程数据清理间隔（小时，最低 1）；服务启动约 3 分钟后执行第一次，日志前缀 `[db-retention]` |
 | `YUYAN_WORKSPACE_CLEANUP_INTERVAL_HOURS` | `6` | 构建工作区闲置清理的执行间隔（小时），服务启动约 2 分钟后先执行一次；日志前缀 `[workspace-cleanup]` |
 
 > 打包运行时，Tauri 会自动把部署数据目录与模板缓存目录指向应用数据目录（appData），从平台安全存储读取每设备主密钥并注入 `DEPLOY_SECRET_KEY`，同时注入动态 `PORT`（见 `src-tauri/src/lib.rs`）。macOS 使用 AES-256-GCM 加密的应用本地保险库，Windows 继续使用 Credential Manager；源码和正式桌面包不包含共享默认密钥。
