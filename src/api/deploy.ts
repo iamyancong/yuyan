@@ -933,6 +933,7 @@ export interface DeployTargetCleanupPreview {
 
 import { getApiBase, isTauri } from '@/utils/env';
 import { getCachedSecureAccount } from '@/services/secureAuth';
+import { extractBearerToken, reportCentralSessionInvalid } from '@/services/centralSessionGuard';
 
 const client = axios.create();
 
@@ -1008,8 +1009,15 @@ client.interceptors.request.use(async (config) => {
   return config;
 });
 
-/** 归一化响应错误：回填服务端业务错误码与展示文案，保持网络与取消状态 */
-client.interceptors.response.use((r) => r, (error) => Promise.reject(normalizeDeployHttpError(error)));
+/**
+ * 归一化响应错误：回填服务端业务错误码与展示文案，保持网络与取消状态；
+ * 中央会话失效（401 session_invalid）交给认证层清会话并引导重新登录。
+ */
+client.interceptors.response.use((r) => r, (error) => {
+  const normalized = normalizeDeployHttpError(error);
+  reportCentralSessionInvalid(normalized, extractBearerToken(error?.config?.headers));
+  return Promise.reject(normalized);
+});
 
 /** 提取 API 数据 */
 const unwrap = <T>(response: { data: { data: T } }) => response.data.data;

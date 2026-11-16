@@ -7,8 +7,10 @@ import {
   updateGitLabClient,
 } from '@/api/gitlab';
 import { exchangeGitlabIdentity, logoutCentralSession, refreshCentralSession } from '@/api/centralIdentity';
+import { registerCentralSessionInvalidHandler, shouldResetForCentralSessionInvalid } from '@/services/centralSessionGuard';
 import {
   clearActiveSecureAccount,
+  getCachedSecureAccount,
   getDeviceIdentity,
   loadActiveSecureAccount,
   saveSecureAccount,
@@ -312,11 +314,17 @@ const fetchRemoteUser = async (): Promise<
   }
 };
 
+/** 登出选项。 */
+interface LogoutOptions {
+  /** 中央已判定会话失效时跳过远端注销，避免再用失效令牌请求中央。 */
+  skipRemoteRevoke?: boolean;
+}
+
 /** 登出并清除中央会话、Agent 内存凭据和平台安全存储账号状态。 */
-const logout = async (silent = false) => {
+const logout = async (silent = false, options: LogoutOptions = {}) => {
   ++authGeneration;
   const secureState = await loadActiveSecureAccount().catch(() => null);
-  if (secureState) await logoutCentralSession(secureState).catch(() => undefined);
+  if (secureState && !options.skipRemoteRevoke) await logoutCentralSession(secureState).catch(() => undefined);
   await clearActiveSecureAccount().catch(() => undefined);
   setGitLabToken('');
   setGitLabHost(defaultHost);
@@ -340,6 +348,38 @@ const logout = async (silent = false) => {
   await nextTick();
   if (!silent) message.info('已退出登录');
 };
+
+/** 会话过期提示的固定 key，重复触发时覆盖而不是叠加。 */
+const SESSION_EXPIRED_MESSAGE_KEY = 'yuyan-central-session-expired';
+
+/**
+ * 中央判定会话失效（401 session_invalid）后清会话并打开登录弹窗。
+ * @description 典型场景：App 升级后切到新中央服务器，本地仍保存旧服务器签发的令牌。
+ * 只处理「当前仍在使用」的令牌：未登录、或重新登录后才返回的旧请求都直接忽略，避免误登出和循环。
+ * 登录是全局弹窗，页面停留在原路由，登录成功后各页面按身份切换逻辑自行刷新。
+ * @param usedAccessToken 失败请求携带的访问令牌
+ */
+async function handleCentralSessionInvalid(usedAccessToken: string) {
+  const shouldReset = shouldResetForCentralSessionInvalid({
+    isDesktop: isTauri(),
+    isAuthenticated: authState.value.isAuthenticated,
+    currentAccessToken: getCachedSecureAccount()?.accessToken || authState.value.accessToken,
+    usedAccessToken,
+  });
+  if (!shouldReset) return;
+  await logout(true, { skipRemoteRevoke: true });
+  message.warning({ content: '登录已过期，请重新登录', key: SESSION_EXPIRED_MESSAGE_KEY });
+  window.dispatchEvent(new CustomEvent('show-login-modal'));
+}
+
+let hasSetupSessionInvalidGuard = false;
+
+/** 只注册一次中央会话失效处理器。 */
+function setupSessionInvalidGuard() {
+  if (hasSetupSessionInvalidGuard || typeof window === 'undefined') return;
+  hasSetupSessionInvalidGuard = true;
+  registerCentralSessionInvalidHandler(handleCentralSessionInvalid);
+}
 
 /** 从平台安全存储恢复当前设备的活动账号。 */
 const checkAuth = async () => {
@@ -431,6 +471,7 @@ const setupStorageSync = () => {
 export const useAuth = () => {
   setupWatchers();
   setupSessionRefresh();
+  setupSessionInvalidGuard();
   setupStorageSync();
   nextTick(() => initAuth()).catch((error) => console.error('认证初始化失败:', error));
   return {

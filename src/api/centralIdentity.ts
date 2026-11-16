@@ -3,6 +3,7 @@
 import { getApiBase } from '@/utils/env';
 import { assertAllowedCentralUrl } from '@/utils/centralUrlPolicy';
 import type { DeviceIdentity, SecureAccountState } from '@/services/secureAuth';
+import { extractBearerToken, reportCentralSessionInvalid } from '@/services/centralSessionGuard';
 
 export interface CentralExchangeResult {
   accountId: string;
@@ -68,6 +69,7 @@ async function requestCentral<T>(path: string, options: RequestInit = {}): Promi
     const error = new Error(body?.error?.message || `雨燕中央服务返回 HTTP ${response.status}`) as Error & { code?: string; status?: number };
     error.code = body?.error?.code;
     error.status = response.status;
+    reportCentralSessionInvalid(error, extractBearerToken(options.headers));
     throw error;
   }
   return body.data as T;
