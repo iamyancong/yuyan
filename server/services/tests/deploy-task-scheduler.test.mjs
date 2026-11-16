@@ -8,6 +8,7 @@ import {
   DEFAULT_MAX_RUNNING_DEPLOY_TASKS,
   DeployQueueFullError,
   DeployTargetBusyError,
+  buildDeployTargetBusyMessage,
   deployTaskScheduler,
   estimateQueueWaitMinutes,
   isLightweightDeployAction,
@@ -337,6 +338,7 @@ test('同一部署目标并发提交或绕过队列提交（bypassQueue）时由
       assert.equal(err.status, 409);
       assert.equal(err.code, 'DEPLOY_TARGET_BUSY');
       assert.equal(err.existingTask, runningTask);
+      assert.match(err.message, /^该部署目标正在发布（由「user-601」发起.*），请等待完成后再回滚$/);
       return true;
     }
   );
@@ -355,6 +357,7 @@ test('同一部署目标并发提交或绕过队列提交（bypassQueue）时由
       assert.ok(err instanceof DeployTargetBusyError);
       assert.equal(err.status, 409);
       assert.match(err.message, /可先停止排队中的发布/);
+      assert.match(err.message, /请等待其完成后再回滚/);
       return true;
     }
   );
@@ -590,4 +593,26 @@ test('嵌套目录不再整任务互斥（#61）：同服务器父子/兄弟目�
 
   for (const id of [102, 103, 104]) deferreds.get(id).resolve({ ok: true });
   await Promise.all([p2, p3, p4]);
+});
+
+test('同一目标冲突 409 文案（#49）：写明占用任务、发起人、已进行时长与本次想做的操作', () => {
+  const now = Date.parse('2026-11-16T04:00:00.000Z');
+  const running = { action: 'deploy', operator: '张三', startedAt: '2026-11-16T03:52:30.000Z', currentStage: 'upload' };
+  assert.equal(
+    buildDeployTargetBusyMessage(running, 'rollback', now),
+    '该部署目标正在发布（由「张三」发起，已进行 7 分钟），请等待完成后再回滚'
+  );
+  assert.equal(
+    buildDeployTargetBusyMessage({ ...running, startedAt: '2026-11-16T03:59:40.000Z' }, 'undoRollback', now),
+    '该部署目标正在发布（由「张三」发起，刚开始执行），请等待完成后再撤销回滚'
+  );
+  assert.equal(
+    buildDeployTargetBusyMessage({ action: 'rollback', operator: '' }, 'deploy', now),
+    '该部署目标正在回滚（由其他成员发起），请等待完成后再发布'
+  );
+  assert.equal(
+    buildDeployTargetBusyMessage({ action: 'deploy', operator: '李四', queued: true }, 'rollback', now),
+    '该部署目标已有「李四」发起的发布在排队等待执行，请等待其完成后再回滚，也可先停止排队中的发布后再操作'
+  );
+  assert.equal(buildDeployTargetBusyMessage(null, '', now), '该部署目标正在执行其他任务（由其他成员发起），请等待完成后再操作');
 });

@@ -151,6 +151,7 @@ import {
 import {
   deployTaskScheduler,
   DeployQueueFullError,
+  buildDeployTargetBusyMessage,
   DeployTargetBusyError,
   estimateQueueWaitMinutes,
   isLightweightDeployAction,
@@ -474,7 +475,7 @@ export async function cleanupAndRespondScheduleError(task, error, res) {
   if (error instanceof DeployTargetBusyError || error?.code === 'DEPLOY_TARGET_BUSY') {
     const activeTask = error.existingTask || deployTasksByTargetId.get(task.targetId);
     if (activeTask) {
-      sendDeployTargetBusy(res, activeTask);
+      sendDeployTargetBusy(res, activeTask, task?.action);
       return;
     }
   }
@@ -693,27 +694,13 @@ function sendDeployLimitConflict(res) {
  * 返回部署目标占用冲突。
  * @param {Object} res - Express 响应对象
  * @param {Object} task - 当前执行中的任务
+ * @param {string} [requestedAction] - 本次被拒绝的操作动作（用于提示「请等待完成后再回滚」等）
  */
-function sendDeployTargetBusy(res, task) {
-  const actionMap = {
-    undoRollback: '撤销回滚',
-    rollback: '回滚',
-    start: '启动服务',
-    stop: '停止服务',
-    restart: '重启服务',
-    openapi: 'OpenAPI 生成',
-    deploy: '发布',
-  };
-  const actionText = actionMap[task?.action] || '发布';
-  const operatorText = task?.operator ? `「${task.operator}」` : '其他成员';
-  const startedText = task?.startedAt ? `（开始于 ${task.startedAt}）` : '';
-  const isQueued = Boolean(task?.queued || task?.currentStage === 'queued');
-  const stateVerb = isQueued ? '排队等待' : '执行';
-  const tailHint = isQueued ? '，可先停止排队中的发布后再操作' : '，请稍后重试';
+function sendDeployTargetBusy(res, task, requestedAction = '') {
   res.status(409).json({
     success: false,
     code: 'DEPLOY_TARGET_BUSY',
-    error: `该部署目标正由 ${operatorText} ${stateVerb}${actionText}${startedText}${tailHint}`,
+    error: buildDeployTargetBusyMessage(task, requestedAction),
     data: task ? serializeDeployTask(task) : null,
   });
 }
@@ -1950,7 +1937,7 @@ export async function handleDeployTarget(req, res) {
   const streamMode = isStreamRequest(req);
   if (runningTask) {
     if (runningTask.action !== 'deploy') {
-      sendDeployTargetBusy(res, runningTask);
+      sendDeployTargetBusy(res, runningTask, 'deploy');
       return;
     }
     await sendDeployTaskProgress(req, res, runningTask, streamMode);
@@ -2094,7 +2081,7 @@ async function handleRestoreRecordTask(req, res, action, runner) {
 
   const runningTask = deployTasksByTargetId.get(sourceRecord.targetId);
   if (runningTask) {
-    sendDeployTargetBusy(res, runningTask);
+    sendDeployTargetBusy(res, runningTask, action);
     return;
   }
 
@@ -2694,7 +2681,7 @@ async function handleTargetOperationTask(req, res, targetId, action, runner) {
   const streamMode = isStreamRequest(req);
   if (runningTask) {
     if (runningTask.action !== action) {
-      sendDeployTargetBusy(res, runningTask);
+      sendDeployTargetBusy(res, runningTask, action);
       return;
     }
     await sendDeployTaskProgress(req, res, runningTask, streamMode);

@@ -75,23 +75,53 @@ export class DeployQueueFullError extends Error {
   }
 }
 
+/** 部署任务动作的中文名（用于冲突提示） */
+export const DEPLOY_ACTION_LABELS = Object.freeze({
+  deploy: '发布',
+  rollback: '回滚',
+  undoRollback: '撤销回滚',
+  start: '启动服务',
+  stop: '停止服务',
+  restart: '重启服务',
+  openapi: 'OpenAPI 生成',
+});
+
+/**
+ * 生成「同一部署目标已有任务」的 409 提示（#49）。
+ * @description 同一目标的快速通道操作（回滚等）遇到正在执行/排队的任务时不排队，直接提示用户等待后再操作；
+ * 文案里写清楚占用的是什么任务、谁发起、已进行多久，以及本次想做的操作。不带绝对时间，避免服务端时区与用户不一致。
+ * @param {Object} [existingTask] 当前占用的任务
+ * @param {string} [requestedAction] 本次被拒绝的操作动作
+ * @param {number} [nowMs] 当前时间戳（测试用）
+ * @returns {string}
+ */
+export function buildDeployTargetBusyMessage(existingTask = null, requestedAction = '', nowMs = Date.now()) {
+  const existingLabel = DEPLOY_ACTION_LABELS[existingTask?.action] || '';
+  const requestedLabel = DEPLOY_ACTION_LABELS[requestedAction] || '操作';
+  const operatorText = existingTask?.operator ? `「${existingTask.operator}」` : '其他成员';
+  const isQueued = Boolean(existingTask?.queued || existingTask?.currentStage === 'queued');
+  if (isQueued) {
+    return `该部署目标已有${operatorText}发起的${existingLabel || '任务'}在排队等待执行，请等待其完成后再${requestedLabel}，也可先停止排队中的${existingLabel || '任务'}后再操作`;
+  }
+  const startedMs = Date.parse(existingTask?.startedAt || '');
+  let elapsedText = '';
+  if (Number.isFinite(startedMs) && nowMs >= startedMs) {
+    const minutes = Math.floor((nowMs - startedMs) / 60_000);
+    elapsedText = minutes >= 1 ? `，已进行 ${minutes} 分钟` : '，刚开始执行';
+  }
+  return `该部署目标正在${existingLabel || '执行其他任务'}（由${operatorText}发起${elapsedText}），请等待完成后再${requestedLabel}`;
+}
+
 /** 同一部署目标已有活跃任务（运行中或排队中）时的互斥冲突错误 */
 export class DeployTargetBusyError extends Error {
   /**
    * @param {number} targetId 部署目标 ID
    * @param {Object} [existingTask] 当前占用的任务对象
    * @param {string} [customMessage] 自定义错误信息
+   * @param {string} [requestedAction] 本次被拒绝的操作动作
    */
-  constructor(targetId, existingTask = null, customMessage = '') {
-    if (customMessage) {
-      super(customMessage);
-    } else {
-      const operatorText = existingTask?.operator ? `「${existingTask.operator}」` : '其他成员';
-      const isQueued = Boolean(existingTask?.queued || existingTask?.currentStage === 'queued');
-      const stateVerb = isQueued ? '排队等待' : '执行';
-      const suffix = isQueued ? '，可先停止排队中的发布后再操作' : '，请稍后重试';
-      super(`该部署目标正由 ${operatorText} ${stateVerb}任务${suffix}`);
-    }
+  constructor(targetId, existingTask = null, customMessage = '', requestedAction = '') {
+    super(customMessage || buildDeployTargetBusyMessage(existingTask, requestedAction));
     this.name = 'DeployTargetBusyError';
     this.code = 'DEPLOY_TARGET_BUSY';
     this.status = 409;
@@ -270,7 +300,7 @@ export function createDeployTaskScheduler(options = {}) {
   function scheduleTask(task, runner, hooks = {}) {
     const existingTask = tasksByTargetId.get(task.targetId);
     if (existingTask && existingTask !== task && !existingTask.completed) {
-      throw new DeployTargetBusyError(task.targetId, existingTask);
+      throw new DeployTargetBusyError(task.targetId, existingTask, '', task?.action);
     }
 
     const bypassQueue = Boolean(hooks?.bypassQueue ?? isLightweightDeployAction(task?.action));
