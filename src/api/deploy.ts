@@ -604,7 +604,14 @@ export type DeployProgressEvent = (
       /** SSH 失败详情：原因、修改入口、定位字段等。 */
       failure?: Record<string, unknown>;
       timestamp: string;
-    }) & { taskId?: number; targetId?: number };
+    }) & {
+      taskId?: number;
+      targetId?: number;
+      /** 任务内递增序号（#61），用于去重与 afterSeq 续传 */
+      seq?: number;
+      /** 服务端折叠中间日志后的省略标记 */
+      omittedMarker?: boolean;
+    };
 
 /** 流式发布配置 */
 export interface DeployProgressOptions {
@@ -616,6 +623,8 @@ export interface DeployProgressOptions {
   onConnection?: (recovering: boolean) => void;
   signal?: AbortSignal;
   onEvent?: (event: DeployProgressEvent) => void;
+  /** 已从快照拿到的最大事件序号，流式订阅只补发之后的事件（#61） */
+  afterSeq?: number;
 }
 
 /** 托管 Nginx 初始化进度配置 */
@@ -635,6 +644,8 @@ export interface DeployProgressSnapshot {
   currentStage: string;
   queued?: boolean;
   queuePosition?: number;
+  /** 排队原因（#61）：slot = 同时执行的发布已达上限 */
+  queueReason?: 'slot' | string;
   queuedCount?: number;
   running: boolean;
   result: DeployTaskResult | null;
@@ -644,6 +655,10 @@ export interface DeployProgressSnapshot {
   /** SSH 失败详情。 */
   failure?: Record<string, unknown> | null;
   events: DeployProgressEvent[];
+  /** 快照中最后一条事件序号（#61） */
+  lastSeq?: number;
+  /** 快照之前未返回的事件数（#61） */
+  omittedEventCount?: number;
   maxConcurrent: number;
   runningCount: number;
 }
@@ -1489,6 +1504,7 @@ export async function getTargetDeployProgress(
   targetId: number,
   projectType: DeployTarget['projectType'],
   signal?: AbortSignal,
+  options: { timeout?: number } = {},
 ) {
   if (projectType === 'backend') {
     const data = await client.get('/operations', {
@@ -1505,7 +1521,7 @@ export async function getTargetDeployProgress(
   }
   const url = await getTargetExecutionApiUrl(`/targets/${targetId}/deploy-progress`, projectType);
   try {
-    const response = await axios.get(url, { headers: getDeployApiAuthHeaders(), signal });
+    const response = await axios.get(url, { headers: getDeployApiAuthHeaders(), signal, ...(options.timeout ? { timeout: options.timeout } : {}) });
     return unwrap<DeployProgressSnapshot>(response);
   } catch (error: any) {
     if (Number(error?.status || error?.response?.status || 0) === 404) {
@@ -1948,7 +1964,7 @@ export async function subscribeTargetDeployProgress(
   }
 
   try {
-    const response = await fetchDeployProgress(await getTargetExecutionApiUrl(`/targets/${targetId}/deploy-progress?stream=1${options.taskId ? `&taskId=${options.taskId}` : ''}`, projectType), {
+    const response = await fetchDeployProgress(await getTargetExecutionApiUrl(`/targets/${targetId}/deploy-progress?stream=1${options.taskId ? `&taskId=${options.taskId}` : ''}${options.afterSeq ? `&afterSeq=${options.afterSeq}` : ''}`, projectType), {
       method: 'GET',
       headers: { Accept: 'application/x-ndjson', ...getDeployApiAuthHeaders() },
       signal: options.signal,

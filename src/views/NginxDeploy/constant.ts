@@ -212,6 +212,7 @@ export const DEPLOY_PROGRESS_STAGE_LABEL_MAP: Record<string, string> = {
   validate: '参数校验',
   clone: '拉取代码',
   'waiting-build-slot': '等待构建资源',
+  'waiting-deploy-lock': '等待目录锁',
   install: '安装依赖',
   build: '构建产物',
   upload: '上传产物',
@@ -293,7 +294,34 @@ export const getDeployTargetRuntimeHeadline = (snapshot?: DeployProgressSnapshot
   if (snapshot.currentStage === 'waiting-build-slot') {
     return '等待构建资源';
   }
+  if (snapshot.currentStage === 'waiting-deploy-lock') {
+    return '等待目录锁';
+  }
   return `正在${getDeployProgressActionLabel(snapshot.action)}`;
+};
+
+/**
+ * 获取排队/等待原因说明（#61）。
+ * @param snapshot 运行中任务快照
+ * @returns 原因文案；不在排队或等锁时返回空串
+ */
+export const getDeployQueueReasonText = (snapshot?: DeployProgressSnapshot | null): string => {
+  if (!snapshot?.running) return '';
+  const stageEvent = [...(snapshot.events || [])].reverse().find((event) => event.type === 'stage');
+  if (snapshot.queued || snapshot.currentStage === 'queued') {
+    const position = Number(snapshot.queuePosition || 0);
+    const positionText = position > 0 ? `排队第 ${position} 位` : '排队等待';
+    if (!snapshot.queueReason || snapshot.queueReason === 'slot') {
+      const running = Number(snapshot.runningCount || 0);
+      const max = Number(snapshot.maxConcurrent || 0);
+      return `${positionText} · 原因：并发已满${max ? ` ${running}/${max}` : ''}`;
+    }
+    return `${positionText} · 原因：${snapshot.queueReason}`;
+  }
+  if (snapshot.currentStage === 'waiting-deploy-lock') {
+    return stageEvent?.type === 'stage' ? stageEvent.detail || stageEvent.message : '等待同服务器目录锁';
+  }
+  return '';
 };
 
 /**
@@ -422,6 +450,7 @@ export const publishStages: PublishStage[] = [
   { key: 'waiting-build-slot', title: '等待构建资源', percent: 26 },
   { key: 'install', title: '安装依赖', percent: 30 },
   { key: 'build', title: '构建产物', percent: 48 },
+  { key: 'waiting-deploy-lock', title: '等待目录锁', percent: 64 },
   { key: 'upload', title: '上传产物', percent: 66 },
   { key: 'nginx', title: '校验 Nginx', percent: 82, nginxOption: 'enableNginxTest' },
   { key: 'reload', title: '重载 Nginx', percent: 92, nginxOption: 'enableNginxReload' },

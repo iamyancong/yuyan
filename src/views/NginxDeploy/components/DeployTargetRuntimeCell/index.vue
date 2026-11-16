@@ -6,6 +6,7 @@ import {
   formatDeployDateTime,
   getDeployProgressActionLabel,
   getDeployProgressStageLabel,
+  getDeployQueueReasonText,
   getDeployTargetRuntimeHeadline,
 } from '../../constant';
 import type { RuntimeAwareDeployTarget } from '../../types';
@@ -54,13 +55,20 @@ const runningHeadline = computed(() => getDeployTargetRuntimeHeadline(snapshot.v
 /** 当前任务阶段 */
 const stageLabel = computed(() => getDeployProgressStageLabel(snapshot.value));
 
-/** 运行中阶段与发起人展示文案 */
+/** 排队 / 等锁原因（#61） */
+const queueReasonText = computed(() => getDeployQueueReasonText(snapshot.value));
+
+/** 运行中阶段与发起人展示文案（排队时直接说明原因） */
 const runningDetailText = computed(() => {
   const operator = String(snapshot.value?.operator || '').trim();
+  const isQueued = Boolean(snapshot.value?.queued || snapshot.value?.currentStage === 'queued');
+  const reasonShort = isQueued ? queueReasonText.value.replace(/^排队(第 \d+ 位|等待) · 原因：/, '') : '';
+  const lockHolder = snapshot.value?.currentStage === 'waiting-deploy-lock' ? /被「(.+?)」占用/.exec(stageLabel.value)?.[1] : '';
+  const stageText = reasonShort || (lockHolder ? `等「${lockHolder}」释放目录` : stageLabel.value);
   if (operator) {
-    return `${operator} · ${stageLabel.value}`;
+    return `${operator} · ${stageText}`;
   }
-  return stageLabel.value;
+  return stageText;
 });
 
 /** 当前任务进度百分比 */
@@ -82,7 +90,10 @@ const tooltipTitle = computed(() => {
     return props.record.serviceStatusOutput || `后端服务状态：${serviceState.value.title}`;
   }
   const operator = String(snapshot.value?.operator || '').trim() || '未知操作人';
-  return `${operator}发起${actionLabel.value}，当前阶段：${stageLabel.value}，开始于 ${formatDeployDateTime(snapshot.value?.startedAt)}`;
+  const base = `${operator}发起${actionLabel.value}，当前阶段：${stageLabel.value}，开始于 ${formatDeployDateTime(snapshot.value?.startedAt)}`;
+  const reason = queueReasonText.value;
+  // 阶段文案本身已是排队原因时不再重复
+  return reason && !stageLabel.value.includes(reason) ? `${base}。${reason}。点击查看进度` : `${base}。点击查看进度`;
 });
 const emit = defineEmits<{
   (e: 'click'): void;

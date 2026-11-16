@@ -4002,7 +4002,7 @@ async function deployTargetInLease(targetId, payload, emit) {
         log,
         logStage: 'upload',
         waitHint: '构建已完成，轮到后自动上传',
-        onWait: (wait) => stage('waiting-deploy-lock', 66, wait.message, wait.detail),
+        onWait: (wait) => stage('waiting-deploy-lock', 64, wait.message, wait.detail),
       });
       if (signal?.aborted) {
         await deployRootLock.release();
