@@ -114,7 +114,11 @@ test('恢复中取消会同时清除提示和禁用状态，取消后的 promise
   assert.equal(recovery.unavailable.value, false);
 });
 
-test('缓存 Tab 恢复中切换到已加载 Tab，立即解除禁用并重新查询', { timeout: 2000 }, async () => {
+/**
+ * 8a9b4de 起 Tab 缓存策略（tabRefreshPolicy）：已加载且筛选未变、10s 内切回的 Tab 直接复用缓存不再查询。
+ * 这里刚加载过 servers，切回时只需立即解除禁用/清掉提示，不应再发请求。
+ */
+test('缓存 Tab 恢复中切换到已加载 Tab，立即解除禁用并复用未过期缓存', { timeout: 2000 }, async () => {
   let offline = false;
   let reads = 0;
   const { lifecycle, scope } = createLifecycle(async () => {
@@ -139,7 +143,7 @@ test('缓存 Tab 恢复中切换到已加载 Tab，立即解除禁用并重新�
     assert.equal(lifecycle.refreshError.value, '');
     await pending;
     await new Promise((resolve) => setTimeout(resolve, 250));
-    assert.equal(reads, previousReads + 1);
+    assert.equal(reads, previousReads);
     assert.equal(lifecycle.centralUnavailable.value, false);
   } finally {
     scope.stop();
