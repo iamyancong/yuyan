@@ -195,6 +195,8 @@ pnpm build
 | `YUYAN_PNPM_NETWORK_CONCURRENCY` | `8` | 发布安装依赖时 pnpm 同时下载的连接数，用于降低对内网私服的并发压力；非法值回退默认值 |
 | `YUYAN_PNPM_FETCH_TIMEOUT_MS` | `120000` | 发布安装依赖时单个请求超时时间（毫秒）；非法值回退默认值 |
 | `YUYAN_PNPM_FETCH_RETRIES` | `4` | 发布安装依赖时下载失败后的重试次数；非法值回退默认值 |
+| `YUYAN_WORKSPACE_IDLE_DAYS` | `7` | 构建工作区（`${DEPLOY_DATA_DIR}/cache/workspaces/<目标>/<分支>`）超过该天数未使用即自动删除，下次发布会重新拉取代码与安装依赖；运行中/排队中的目标不会被清理；`0` 关闭；非法值回退默认值 |
+| `YUYAN_WORKSPACE_CLEANUP_INTERVAL_HOURS` | `6` | 构建工作区闲置清理的执行间隔（小时），服务启动约 2 分钟后先执行一次；日志前缀 `[workspace-cleanup]` |
 
 > 打包运行时，Tauri 会自动把部署数据目录与模板缓存目录指向应用数据目录（appData），从平台安全存储读取每设备主密钥并注入 `DEPLOY_SECRET_KEY`，同时注入动态 `PORT`（见 `src-tauri/src/lib.rs`）。macOS 使用 AES-256-GCM 加密的应用本地保险库，Windows 继续使用 Credential Manager；源码和正式桌面包不包含共享默认密钥。
 

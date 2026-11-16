@@ -31,6 +31,7 @@ import {
   syncBackendWorkspace,
 } from './backend-project-service.mjs';
 import { execSsh, shellQuote, uploadFile, withSsh } from './ssh-service.mjs';
+import { withTargetWorkspaceLease } from './workspace-cleanup-service.mjs';
 import { getSshFailureEventExtra, logOperationFailure } from './ssh-errors.mjs';
 import { getOrProbeBackendStatus, invalidateBackendStatus, runWithProbeLimit } from './backend-status-cache.mjs';
 import { getRequestTeamId } from './request-context.mjs';
@@ -112,6 +113,18 @@ async function withBackendBuildSlot(runner, options = {}) {
  * @returns {Promise<{artifactPath:string, artifactName:string, artifactSha256:string, sizeBytes:number, branch:string, commitSha:string, commitMessage:string, commitAuthor:string}>} 构建产物元数据
  */
 export async function buildBackendArtifactOnDevice(target, payload = {}, emit = {}) {
+  // 构建期间持有工作区租约，闲置清理不会删除该目标的构建工作区（#42）
+  return withTargetWorkspaceLease(target?.id, () => buildBackendArtifactOnDeviceInLease(target, payload, emit));
+}
+
+/**
+ * 在工作区租约内构建后端产物。
+ * @param {Object} target 中央返回的脱敏部署目标
+ * @param {Object} payload 构建参数
+ * @param {Object} emit 进度输出器
+ * @returns {Promise<Object>} 构建产物元数据
+ */
+async function buildBackendArtifactOnDeviceInLease(target, payload = {}, emit = {}) {
   if (!target || target.projectType !== 'backend') throw new Error('后端部署目标不存在');
   if (!target.repositoryUrl) throw new Error('后端目标未配置 Git 仓库地址');
   if (!target.buildCommand) throw new Error('后端目标未配置 Maven 构建命令');

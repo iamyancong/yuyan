@@ -71,6 +71,7 @@ import { getTestHooks, __setTestHooks, __resetTestHooks } from './test-hooks.mjs
 export { __setTestHooks, __resetTestHooks };
 import { getSshFailureEventExtra, logOperationFailure } from './ssh-errors.mjs';
 import { deployBackendTarget, restoreBackendRecord } from './backend-runtime-service.mjs';
+import { touchWorkspaceUsed, withTargetWorkspaceLease } from './workspace-cleanup-service.mjs';
 import {
   applyLowProcessPriority,
   buildIsolatedCommandEnv,
@@ -3408,6 +3409,18 @@ export async function testTargetNginx(targetId) {
  * @returns {Promise<Object>} 发布记录
  */
 export async function deployTarget(targetId, payload, emit) {
+  // 发布期间持有工作区租约，闲置清理不会删除该目标的构建工作区（#42）
+  return withTargetWorkspaceLease(targetId, () => deployTargetInLease(targetId, payload, emit));
+}
+
+/**
+ * 在工作区租约内执行发布。
+ * @param {number} targetId - 部署目标 ID
+ * @param {Object} payload - 发布参数
+ * @param {Object} emit - 进度回调
+ * @returns {Promise<Object>} 发布结果
+ */
+async function deployTargetInLease(targetId, payload, emit) {
   const { target, server, nginxInstance } = await getTargetContext(targetId);
   if (target.projectType === 'backend') return deployBackendTarget(targetId, payload, emit);
   const protectedSubDirs = await resolveProtectedSubDirs(target);
@@ -3500,6 +3513,7 @@ export async function deployTarget(targetId, payload, emit) {
     }
 
     await fs.mkdir(workspaceRoot, { recursive: true });
+    await touchWorkspaceUsed(workspaceRoot);
     deployAccess = await effectiveWithSsh(server, async (conn) => resolveDeployRootAccess(conn, server, target, deployUseSudo, log));
 
     if (testHooks?.skipBuild) {

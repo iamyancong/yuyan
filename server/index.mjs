@@ -24,6 +24,8 @@ import {
 } from './config/constants.mjs';
 import { pullLatestTemplate, validateTemplate } from './services/template-service.mjs';
 import { startCleanupScheduler } from './utils/cleanup-scheduler.mjs';
+import { startWorkspaceCleanupScheduler } from './services/workspace-cleanup-service.mjs';
+import { deployTaskScheduler } from './services/deploy-task-scheduler.mjs';
 import scaffoldRoutes from './routes/scaffold.mjs';
 import deployRoutes from './routes/deploy.mjs';
 import healthRoutes from './routes/health.mjs';
@@ -47,6 +49,7 @@ import { isTicketedFsDownloadRequest } from './services/remote-fs-service.mjs';
 const app = express();
 let httpServer = null;
 let stopCleanupScheduler = null;
+let stopWorkspaceCleanupScheduler = null;
 let stopUpdatePreloadScheduler = null;
 let shuttingDown = false;
 const activeSockets = new Set();
@@ -421,6 +424,8 @@ async function shutdown(reason = 'unknown') {
   try {
     stopCleanupScheduler?.();
     stopCleanupScheduler = null;
+    stopWorkspaceCleanupScheduler?.();
+    stopWorkspaceCleanupScheduler = null;
   } catch (error) {
     console.warn('[shutdown] 停止清理任务失败:', error);
   }
@@ -517,6 +522,10 @@ async function bootstrap() {
 
     // 数据库迁移完成后再启动后台调度，避免任务读到迁移中的中间状态
     stopCleanupScheduler = startCleanupScheduler();
+    // 构建工作区闲置清理：运行中/排队中的目标与持有租约的目标不会被清理（#42）
+    stopWorkspaceCleanupScheduler = startWorkspaceCleanupScheduler({
+      isTargetBusy: (targetId) => Boolean(deployTaskScheduler.getTask(targetId)),
+    });
     if (!isTauriSubprocess) {
       stopUpdatePreloadScheduler = startAppUpdatePreloadScheduler();
     }

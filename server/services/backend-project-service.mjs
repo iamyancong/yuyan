@@ -13,6 +13,7 @@ import { withHiddenWindow } from '../utils/child-process.mjs';
 import { resolveStderrLogLevel, splitProcessOutputLines, stripAnsi, TOOL_LOG_SOURCE } from '../utils/process-output.mjs';
 import { buildAuthUrl } from './git-service.mjs';
 import { shellQuote } from './ssh-service.mjs';
+import { touchWorkspaceUsed, withTargetWorkspaceLease } from './workspace-cleanup-service.mjs';
 import {
   createOpenApiArtifact,
   getJdk,
@@ -244,6 +245,7 @@ export async function syncBackendWorkspace(options) {
   const cloneUrl = resolveCloneUrl(target.repositoryUrl, gitlabToken);
   const gitDir = await fs.stat(path.join(repoDir, '.git')).catch(() => null);
   await fs.mkdir(workspaceRoot, { recursive: true });
+  await touchWorkspaceUsed(workspaceRoot);
   if (!gitDir?.isDirectory()) {
     await fs.rm(repoDir, { recursive: true, force: true });
     log('info', '首次创建后端项目工作区', 'clone');
@@ -441,8 +443,10 @@ export async function inspectBackendTarget(targetId, options = {}) {
   const target = await getTarget(targetId);
   if (!target || target.projectType !== 'backend') throw new Error('后端部署目标不存在');
   const branch = options.branch || target.defaultBranch;
-  const workspace = await syncBackendWorkspace({ target, branch, ...options });
-  return { ...(await inspectBackendRepository(workspace.repoDir)), branch, commitSha: workspace.commitSha };
+  return withTargetWorkspaceLease(target.id, async () => {
+    const workspace = await syncBackendWorkspace({ target, branch, ...options });
+    return { ...(await inspectBackendRepository(workspace.repoDir)), branch, commitSha: workspace.commitSha };
+  });
 }
 
 /**
@@ -490,6 +494,11 @@ export async function generateOpenApiFromTargetConfig(target, options = {}) {
 
 /** 使用给定目标配置执行 OpenAPI 领域流程。 */
 async function generateOpenApiForTarget(target, options = {}) {
+  return withTargetWorkspaceLease(target?.id, () => generateOpenApiForTargetInLease(target, options));
+}
+
+/** 在工作区租约内执行 OpenAPI 领域流程。 */
+async function generateOpenApiForTargetInLease(target, options = {}) {
   if (!target.openapiCommand || !target.openapiOutputPath) throw new Error('请先配置 OpenAPI 生成命令和输出路径');
   const branch = options.branch || target.defaultBranch;
   const log = options.log || (() => {});
