@@ -49,7 +49,22 @@ const emit = defineEmits<{
   (e: 'verify-result'): void;
   (e: 'view-record', target: DeployTarget): void;
   (e: 'ssh-action', action: SshFailureAction): void;
+  (e: 'reload-progress'): void;
 }>();
+
+/** 排队 / 等待目录锁时的原因横幅（#61） */
+const waitingBanner = computed(() => {
+  if (!props.started || !props.running || props.progressLoading) return null;
+  const logs = props.logs || [];
+  for (let index = logs.length - 1; index >= 0; index -= 1) {
+    const item = logs[index];
+    if (item.type !== 'stage') continue;
+    if (item.stage === 'queued') return { title: item.message || '排队等待执行', text: item.detail || '' };
+    if (item.stage === 'waiting-deploy-lock') return { title: item.message || '等待同服务器目录锁', text: item.detail || '' };
+    return null;
+  }
+  return null;
+});
 
 /** 是否强制重新安装依赖 */
 const forceInstallDependencies = ref(false);
@@ -459,6 +474,31 @@ watch(
           <strong>协同观察模式：</strong>{{ lockDescription }}
         </span>
       </div>
+
+      <div v-if="progressLoading" class="publish-progress-loading">
+        <SyncOutlined spin class="publish-progress-loading__icon" />
+        <span>正在加载发布进度…{{ operator ? `（${operator} 发起）` : '' }}</span>
+      </div>
+      <a-alert
+        v-else-if="progressError"
+        type="error"
+        show-icon
+        class="publish-cleanup-notice"
+        message="进度加载失败"
+        :description="progressError"
+      >
+        <template #action>
+          <a-button size="small" @click="emit('reload-progress')">重试</a-button>
+        </template>
+      </a-alert>
+      <a-alert
+        v-if="waitingBanner"
+        type="warning"
+        show-icon
+        class="publish-cleanup-notice publish-waiting-banner"
+        :message="waitingBanner.title"
+        :description="waitingBanner.text"
+      />
 
       <div class="publish-target-mini">
         <div v-for="item in targetSummaries" :key="item.label" class="publish-target-mini__item">

@@ -16,6 +16,7 @@ import {
   type DeployTarget,
 } from '@/api/deploy';
 import { DEPLOY_FAILURE_BRIEF, getDeployProgressActionLabel, getDeployProgressFailureTitle, getDeployProgressStageLabel } from '../constant';
+import { createProgressLogBuffer, withOmittedEventsNotice } from './progressLogBuffer';
 import type { DeployProgressMode, RefreshActiveTabOptions } from '../types';
 import { getErrorMessage, isAbortError, isDeployConflictError, isNotFoundError } from '../utils';
 import { extractSshFailure, normalizeSshFailure, type SshFailureInfo } from '../sshFailureGuide';
@@ -26,6 +27,7 @@ const STOPPABLE_PUBLISH_STAGE_KEYS = new Set([
   'validate',
   'clone',
   'waiting-build-slot',
+  'waiting-deploy-lock',
   'install',
   'build',
 ]);
@@ -110,6 +112,19 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     /** SSH 连接阶段失败详情（#47），用于展示修复引导 */
     sshFailure: null as SshFailureInfo | null,
   });
+  /** 进度日志缓冲：Set 去重 + markRaw 数组 + 普通日志合批（#61） */
+  const logBuffer = createProgressLogBuffer({
+    read: () => progressState.logs,
+    write: (logs) => {
+      progressState.logs = logs;
+    },
+  });
+  /** 查看他人任务时进度快照的加载态与错误（#61：抽屉先打开再加载） */
+  const progressLoading = ref(false);
+  const progressLoadError = ref('');
+  let progressLoadToken = 0;
+  /** 读取进度快照的超时时间 */
+  const PROGRESS_SNAPSHOT_TIMEOUT_MS = 10_000;
   /** 最近一次发布参数，「重试」/「重新发布」沿用 */
   let lastPublishOptions: StartPublishOptions = {};
 
@@ -154,8 +169,11 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
 
   /** 当前发布阶段 */
   const currentPublishStageKey = computed(() => {
-    const stageEvent = [...progressState.logs].reverse().find((item) => item.type === 'stage');
-    if (stageEvent?.type === 'stage') return stageEvent.stage;
+    const logs = progressState.logs;
+    for (let index = logs.length - 1; index >= 0; index -= 1) {
+      const item = logs[index];
+      if (item.type === 'stage') return item.stage;
+    }
     return progressState.running ? 'validate' : '';
   });
 
@@ -179,27 +197,36 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
    * @param stage 失败阶段
    */
   const appendProgressErrorLog = (errorMessage: string, stage?: string) => {
+    logBuffer.sync();
+    logBuffer.flush();
     const lastLog = progressState.logs[progressState.logs.length - 1];
     if (lastLog?.type === 'error' && lastLog.message === errorMessage) return;
-    progressState.logs.push({ type: 'error', stage, message: errorMessage, timestamp: new Date().toISOString() });
+    logBuffer.append({ type: 'error', stage, message: errorMessage, timestamp: new Date().toISOString() }, true);
   };
 
   /** 追加发布停止日志 */
   const appendProgressStoppedLog = () => {
+    logBuffer.sync();
+    logBuffer.flush();
     const lastLog = progressState.logs[progressState.logs.length - 1];
     if (lastLog?.type === 'log' && lastLog.stage === 'cancel') return;
-    progressState.logs.push({
-      type: 'log',
-      level: 'warn',
-      stage: 'cancel',
-      message: '用户已停止发布任务',
-      timestamp: new Date().toISOString(),
-    });
+    logBuffer.append(
+      {
+        type: 'log',
+        level: 'warn',
+        stage: 'cancel',
+        message: '用户已停止发布任务',
+        timestamp: new Date().toISOString(),
+      },
+      true
+    );
   };
 
   /** 重置发布进度 */
   const resetPublishProgress = () => {
     connection.reset();
+    progressLoading.value = false;
+    progressLoadError.value = '';
     Object.assign(progressState, {
       percent: 0,
       title: '',
@@ -233,24 +260,6 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
   };
 
   /**
-   * 判断进度日志中是否已经存在相同事件，避免快照恢复和流式订阅重复写入历史事件。
-   * @param event 进度事件
-   * @returns 是否已存在
-   */
-  const hasProgressEvent = (event: DeployProgressEvent) => {
-    return progressState.logs.some((item) => {
-      if (item.timestamp !== event.timestamp || item.type !== event.type) return false;
-      if (item.type === 'stage' && event.type === 'stage') return item.stage === event.stage && item.message === event.message;
-      if (item.type === 'log' && event.type === 'log') return item.stage === event.stage && item.message === event.message;
-      if (item.type === 'error' && event.type === 'error') return item.message === event.message;
-      if (item.type === 'result' && event.type === 'result') {
-        return JSON.stringify(item.data) === JSON.stringify(event.data);
-      }
-      return true;
-    });
-  };
-
-  /**
    * 使用运行中任务快照恢复进度展示。
    * @param snapshot 运行中任务快照
    */
@@ -277,12 +286,13 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
           : stoppedPresentation
             ? stoppedPresentation.detail
             : `${snapshot.operator || '未知操作人'}发起，当前阶段：${getDeployProgressStageLabel(snapshot)}`,
-      logs: [...snapshot.events],
       running: snapshot.running,
       stopped: isStopped,
       operator: snapshot.operator || '',
       startedAt: snapshot.startedAt || '',
     });
+    // 快照只带最近若干条事件，开头补一条说明；后续流式订阅按 afterSeq 续传（#61）
+    logBuffer.replace(withOmittedEventsNotice(snapshot.events || [], snapshot.omittedEventCount || 0, snapshot.startedAt));
     if (snapshot.error && !isStopped) {
       progressState.title = getDeployProgressFailureTitle({
         action: snapshot.action,
@@ -300,7 +310,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
   const handleProgressEvent = (event: DeployProgressEvent) => {
     // 「已连接发布任务」属于传输层握手消息，重连时会以任务开始时间重复下发，不写入业务日志，避免时间乱序
     if (event.type === 'log' && event.stage === 'connection') return;
-    if (!hasProgressEvent(event)) progressState.logs.push(event);
+    logBuffer.append(event);
     if (event.type === 'stage') {
       progressState.percent = event.percent;
       progressState.title = event.message === '排队超时已停止' ? '排队超时' : event.message;
@@ -540,6 +550,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
       const result = await subscribeTargetDeployProgress(target.id, target.projectType, {
         taskId: snapshot.taskId ?? undefined,
         operationId: snapshot.operationId,
+        afterSeq: snapshot.lastSeq || undefined,
         signal: abortController.signal,
         onEvent: createScopedProgressHandler(sessionId),
         onConnection: createScopedConnectionHandler(sessionId),
@@ -823,29 +834,74 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
 
   /**
    * 打开部署目标当前运行任务进度。
+   * @description 发布类任务先打开抽屉显示加载态，再读取快照（10 秒超时），失败时在抽屉内提示并可重试（#61）。
    * @param target 部署目标
    */
   const openTargetProgress = async (target: DeployTarget) => {
     if (!ensureLoggedIn()) return;
+    const runtimeHint = context?.targetRuntimeSnapshots?.value?.[target.id] as DeployProgressSnapshot | undefined;
+    const opensPublishDrawer = !runtimeHint?.action || runtimeHint.action === 'deploy';
+    const loadToken = ++progressLoadToken;
+    if (opensPublishDrawer) {
+      detachPublishProgressStream();
+      progressMode.value = 'deploy';
+      activePublishTarget.value = target;
+      publishStarted.value = true;
+      rollbackProgressOpen.value = false;
+      resetPublishProgress();
+      Object.assign(progressState, {
+        running: true,
+        title: '正在加载发布进度…',
+        detail: runtimeHint?.operator ? `${runtimeHint.operator} 发起的发布，正在读取最新进度` : '正在读取最新进度',
+        operator: runtimeHint?.operator || '',
+        startedAt: runtimeHint?.startedAt || '',
+      });
+      progressLoading.value = true;
+      publishConfirmOpen.value = true;
+    }
+    const handleTaskEnded = () => {
+      clearTargetRuntimeSnapshot?.(target.id);
+      if (opensPublishDrawer) {
+        publishConfirmOpen.value = false;
+        resetPublishWorkbench();
+      }
+      message.info('当前任务已结束，请查看发布历史');
+      scheduleRefreshAfterTask({ resetRecordsPage: true, force: true });
+    };
     try {
-      const runningTask = await getTargetDeployProgress(target.id, target.projectType);
+      const runningTask = await getTargetDeployProgress(target.id, target.projectType, undefined, { timeout: PROGRESS_SNAPSHOT_TIMEOUT_MS });
+      if (loadToken !== progressLoadToken) return;
+      progressLoading.value = false;
       if (!runningTask.running) {
-        clearTargetRuntimeSnapshot?.(target.id);
-        message.info('当前任务已结束，请查看发布历史');
-        scheduleRefreshAfterTask({ resetRecordsPage: true, force: true });
+        handleTaskEnded();
         return;
       }
       detachPublishProgressStream();
       void subscribeRunningTargetProgress(target, runningTask);
     } catch (error: any) {
+      if (loadToken !== progressLoadToken) return;
+      progressLoading.value = false;
       if (isNotFoundError(error)) {
-        clearTargetRuntimeSnapshot?.(target.id);
-        message.info('当前任务已结束，请查看发布历史');
-        scheduleRefreshAfterTask({ resetRecordsPage: true, force: true });
+        handleTaskEnded();
         return;
       }
-      message.error(getErrorMessage(error));
+      const isTimeout = error?.code === 'ECONNABORTED' || /timeout/i.test(String(error?.message || ''));
+      const errorMessage = isTimeout
+        ? `读取发布进度超时（${PROGRESS_SNAPSHOT_TIMEOUT_MS / 1000} 秒），请检查与中央服务的连接后重试`
+        : getErrorMessage(error);
+      if (opensPublishDrawer && publishConfirmOpen.value) {
+        progressLoadError.value = errorMessage;
+        Object.assign(progressState, { running: false, title: '进度加载失败', detail: errorMessage });
+        return;
+      }
+      message.error(errorMessage);
     }
+  };
+
+  /** 抽屉内「重试」重新读取当前目标进度 */
+  const reloadTargetProgress = () => {
+    const target = activePublishTarget.value;
+    if (target) void openTargetProgress(target);
   };
 
   /**
@@ -951,6 +1007,13 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
   };
 
   watch(publishConfirmOpen, (open) => {
+    if (!open && progressLoading.value) {
+      // 加载中关闭抽屉：作废本次加载，避免返回后又自动弹开
+      progressLoadToken += 1;
+      progressLoading.value = false;
+      resetPublishWorkbench();
+      return;
+    }
     if (!open && !progressState.running && !connection.unconfirmed.value) {
       resetPublishWorkbench();
     }
@@ -976,6 +1039,9 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     progressState,
     detachPublishProgressStream,
     openTargetProgress,
+    reloadTargetProgress,
+    progressLoading,
+    progressLoadError,
     openPublishConfirm,
     startPublishFromConfirm,
     republishFromConfirm,

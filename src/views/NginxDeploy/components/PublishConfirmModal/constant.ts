@@ -46,6 +46,10 @@ export interface PublishConfirmModalProps {
   userRole?: string;
   /** SSH 连接阶段失败详情（#47） */
   sshFailure?: SshFailureInfo | null;
+  /** 正在读取他人任务进度快照（#61：抽屉先打开再加载） */
+  progressLoading?: boolean;
+  /** 读取进度快照失败的原因 */
+  progressError?: string;
 }
 
 /** 发布启动选项 */
