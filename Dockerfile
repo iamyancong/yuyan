@@ -19,19 +19,24 @@ RUN pnpm prune --prod && rm -f .npmrc
 
 # runtime stage（需要 git 以便后端执行 git 初始化与推送）
 FROM ${NODE_IMAGE}
-# 兼容多种基础镜像（alpine/debian/centos），安装 git、zip 与证书
+# 兼容多种基础镜像（alpine/debian/centos），安装 git、zip、证书与 tini
+# tini 作为 1 号进程：回收构建子进程（esbuild 等）留下的僵尸进程，并把 SIGTERM/SIGINT 转发给 node 以保持优雅退出（#48）
 RUN set -e; \
   if command -v apk >/dev/null 2>&1; then \
-  apk add --no-cache git zip ca-certificates; \
+  apk add --no-cache git zip ca-certificates tini; \
   elif command -v apt-get >/dev/null 2>&1; then \
-  apt-get update && apt-get install -y git zip ca-certificates && rm -rf /var/lib/apt/lists/*; \
+  apt-get update && apt-get install -y git zip ca-certificates tini && rm -rf /var/lib/apt/lists/*; \
   elif command -v yum >/dev/null 2>&1; then \
-  yum install -y git zip ca-certificates; \
+  yum install -y git zip ca-certificates tini; \
   elif command -v microdnf >/dev/null 2>&1; then \
-  microdnf install -y git zip ca-certificates; \
+  microdnf install -y git zip ca-certificates tini; \
   else \
   echo "No supported package manager found to install git and zip" && exit 1; \
-  fi
+  fi; \
+  TINI_BIN="$(command -v tini || true)"; \
+  if [ -z "$TINI_BIN" ]; then echo "tini not found after install" && exit 1; fi; \
+  if [ "$TINI_BIN" != "/sbin/tini" ]; then ln -sf "$TINI_BIN" /sbin/tini; fi; \
+  /sbin/tini --version
 WORKDIR /app
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 RUN corepack enable
@@ -42,4 +47,5 @@ COPY --from=builder /app/dist ./dist
 ENV PORT=3100
 ENV HOST=0.0.0.0
 EXPOSE 3100
-ENTRYPOINT ["node","server/index.mjs"]
+# 由 tini 托管 node：tini 只把信号转发给 node（不加 -g），构建子进程仍由 node 的 shutdown 流程负责收尾
+ENTRYPOINT ["/sbin/tini","--","node","server/index.mjs"]
