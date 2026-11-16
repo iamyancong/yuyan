@@ -181,8 +181,25 @@ async function requestAgentApi<T>(path: string, options: RequestInit = {}): Prom
   return body.data as T;
 }
 
-/** 将 WebView 当前中央 API 与已有凭据同步到内嵌服务内存。 */
-export async function syncAgentRuntimeSettings(): Promise<void> {
+let agentSettingsSyncSeq = 0;
+let agentSettingsSyncChain: Promise<void> = Promise.resolve();
+
+/**
+ * 将 WebView 当前中央 API 与已有凭据同步到内嵌服务内存。
+ * @description 串行同步运行时设置：登录、会话失效登出、静默续期可能并发触发，
+ * 串行执行并跳过已被更新同步取代的旧快照，保证运行时最终拿到的是最新会话，不会被失效令牌回写覆盖。
+ */
+export function syncAgentRuntimeSettings(): Promise<void> {
+  const seq = ++agentSettingsSyncSeq;
+  const run = agentSettingsSyncChain.then(() => pushAgentRuntimeSettings(seq), () => pushAgentRuntimeSettings(seq));
+  agentSettingsSyncChain = run.catch(() => undefined);
+  /** 本轮被更新同步取代时，等到最新一轮写入后再返回，调用方拿到的始终是最新运行时状态。 */
+  return run.then(() => agentSettingsSyncChain);
+}
+
+/** 读取当前会话与账号审批策略并写入内嵌服务。 */
+async function pushAgentRuntimeSettings(seq: number): Promise<void> {
+  if (seq !== agentSettingsSyncSeq) return;
   const centralApiBase = getApiBase('');
   const secure = getCachedSecureAccount();
   let forcedApprovalTools: string[] = [];
@@ -195,6 +212,7 @@ export async function syncAgentRuntimeSettings(): Promise<void> {
       /** 账号审批策略不可验证时保持失败关闭，所有写操作转为人工审批。 */
     }
   }
+  if (seq !== agentSettingsSyncSeq) return;
   await requestAgentApi('/settings', {
     method: 'POST',
     body: JSON.stringify({

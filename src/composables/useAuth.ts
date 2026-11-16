@@ -7,7 +7,8 @@ import {
   updateGitLabClient,
 } from '@/api/gitlab';
 import { exchangeGitlabIdentity, logoutCentralSession, refreshCentralSession } from '@/api/centralIdentity';
-import { registerCentralSessionInvalidHandler, shouldResetForCentralSessionInvalid } from '@/services/centralSessionGuard';
+import { decideCentralSessionInvalidAction, registerCentralSessionInvalidHandler } from '@/services/centralSessionGuard';
+import { refreshCentralData } from '@/services/centralDataRefresh';
 import {
   clearActiveSecureAccount,
   getCachedSecureAccount,
@@ -249,9 +250,17 @@ function createWebSecureState(token: string, host: string, user: User): SecureAc
   };
 }
 
+/**
+ * 已静默续期过的访问令牌（尝试过的旧令牌 + 静默换来的新令牌）。
+ * @description 每个失效令牌最多静默续期一次；静默换来的新令牌若立刻又被判失效，直接走重新登录，杜绝循环。
+ * 登录、登出时清空。
+ */
+const silentRecoveryTokens = new Set<string>();
+
 /** GitLab PAT 登录；桌面端注册设备，网页端建立会话并按需持久化。 */
 const login = async (token: string, host: string, rememberMe = false): Promise<boolean> => {
   authState.value.loading = true;
+  silentRecoveryTokens.clear();
   const normalizedHost = host.trim().replace(/\/+$/, '');
   try {
     setGitLabToken(token);
@@ -323,6 +332,7 @@ interface LogoutOptions {
 /** 登出并清除中央会话、Agent 内存凭据和平台安全存储账号状态。 */
 const logout = async (silent = false, options: LogoutOptions = {}) => {
   ++authGeneration;
+  silentRecoveryTokens.clear();
   const secureState = await loadActiveSecureAccount().catch(() => null);
   if (secureState && !options.skipRemoteRevoke) await logoutCentralSession(secureState).catch(() => undefined);
   await clearActiveSecureAccount().catch(() => undefined);
@@ -352,24 +362,63 @@ const logout = async (silent = false, options: LogoutOptions = {}) => {
 /** 会话过期提示的固定 key，重复触发时覆盖而不是叠加。 */
 const SESSION_EXPIRED_MESSAGE_KEY = 'yuyan-central-session-expired';
 
+/** 静默续期失败或不允许续期时：清会话、提示并打开登录弹窗。 */
+async function resetToLogin() {
+  await logout(true, { skipRemoteRevoke: true });
+  message.warning({ content: '登录已过期，请重新登录', key: SESSION_EXPIRED_MESSAGE_KEY });
+  window.dispatchEvent(new CustomEvent('show-login-modal'));
+}
+
 /**
- * 中央判定会话失效（401 session_invalid）后清会话并打开登录弹窗。
+ * 使用保存的 GitLab 凭据静默重建中央会话。
+ * @param usedAccessToken 失效的访问令牌
+ * @returns 是否已成功切换到新会话
+ */
+async function tryReestablishSilently(usedAccessToken: string): Promise<boolean> {
+  const generation = authGeneration;
+  const stored = await loadActiveSecureAccount(true).catch(() => null);
+  if (!stored || stored.accessToken !== usedAccessToken || !stored.gitlabToken || !stored.gitlabHost) return false;
+  silentRecoveryTokens.add(usedAccessToken);
+  const next = await reestablishCentralSession(stored);
+  /** 续期期间用户已登出或重新登录：不覆盖新的登录状态；若刚写入的续期会话残留在已登出的存储里则清掉。 */
+  if (generation !== authGeneration || !authState.value.isAuthenticated) {
+    if (!authState.value.isAuthenticated && next.accessToken && getCachedSecureAccount()?.accessToken === next.accessToken) {
+      await clearActiveSecureAccount().catch(() => undefined);
+    }
+    return true;
+  }
+  if (!next.accessToken) return false;
+  silentRecoveryTokens.add(next.accessToken);
+  applySecureState(next, authState.value.user);
+  /** 与正常登录一致：把新令牌同步给本地 Agent Gateway / MCP。 */
+  await syncAgentIdentity();
+  await nextTick();
+  /** 重新拉取当前页面的中央数据（部署中心等注册了刷新处理器的页面），不弹提示。 */
+  void refreshCentralData().catch(() => undefined);
+  return true;
+}
+
+/**
+ * 中央判定会话失效（401 session_invalid）后的处理。
  * @description 典型场景：App 升级后切到新中央服务器，本地仍保存旧服务器签发的令牌。
- * 只处理「当前仍在使用」的令牌：未登录、或重新登录后才返回的旧请求都直接忽略，避免误登出和循环。
+ * 先用保存的 GitLab 凭据静默换新会话（设备被撤销等情况中央会拒绝）；失败、无凭据或同一令牌已试过时，
+ * 才清会话并打开登录弹窗。未登录、网页端或重新登录后才返回的旧请求都直接忽略，避免误登出和循环。
  * 登录是全局弹窗，页面停留在原路由，登录成功后各页面按身份切换逻辑自行刷新。
  * @param usedAccessToken 失败请求携带的访问令牌
  */
 async function handleCentralSessionInvalid(usedAccessToken: string) {
-  const shouldReset = shouldResetForCentralSessionInvalid({
+  const cached = getCachedSecureAccount();
+  const action = decideCentralSessionInvalidAction({
     isDesktop: isTauri(),
     isAuthenticated: authState.value.isAuthenticated,
-    currentAccessToken: getCachedSecureAccount()?.accessToken || authState.value.accessToken,
+    currentAccessToken: cached?.accessToken || authState.value.accessToken,
     usedAccessToken,
+    hasGitlabCredential: Boolean(cached ? cached.gitlabToken && cached.gitlabHost : authState.value.token),
+    silentRecoveryTokens,
   });
-  if (!shouldReset) return;
-  await logout(true, { skipRemoteRevoke: true });
-  message.warning({ content: '登录已过期，请重新登录', key: SESSION_EXPIRED_MESSAGE_KEY });
-  window.dispatchEvent(new CustomEvent('show-login-modal'));
+  if (action === 'ignore') return;
+  if (action === 'reestablish' && await tryReestablishSilently(usedAccessToken)) return;
+  await resetToLogin();
 }
 
 let hasSetupSessionInvalidGuard = false;

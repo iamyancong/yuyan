@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  decideCentralSessionInvalidAction,
   extractBearerToken,
   isCentralSessionInvalidError,
   registerCentralSessionInvalidHandler,
@@ -134,4 +135,60 @@ test('认证层只在桌面端、已登录且失败请求用的是当前令牌�
   /** 网页端不持有中央令牌，保持原行为。 */
   assert.equal(shouldResetForCentralSessionInvalid({ ...base, isDesktop: false }), false);
   assert.equal(shouldResetForCentralSessionInvalid({ ...base, currentAccessToken: '', usedAccessToken: '' }), false);
+});
+
+test('静默续期决策：首次失效先续期，同一令牌或续期换来的新令牌再失效则跳登录', () => {
+  const tried = new Set<string>();
+  const base = {
+    isDesktop: true,
+    isAuthenticated: true,
+    currentAccessToken: 'stale',
+    usedAccessToken: 'stale',
+    hasGitlabCredential: true,
+    silentRecoveryTokens: tried,
+  };
+  assert.equal(decideCentralSessionInvalidAction(base), 'reestablish');
+  /** 认证层开始续期时记录旧令牌，换到新令牌后也记录。 */
+  tried.add('stale');
+  assert.equal(decideCentralSessionInvalidAction(base), 'relogin');
+  tried.add('fresh');
+  /** 静默换来的新令牌立刻又失效：不再续期，避免循环。 */
+  assert.equal(decideCentralSessionInvalidAction({ ...base, currentAccessToken: 'fresh', usedAccessToken: 'fresh' }), 'relogin');
+  /** 续期成功后迟到的旧令牌响应：忽略，不覆盖新会话。 */
+  assert.equal(decideCentralSessionInvalidAction({ ...base, currentAccessToken: 'fresh', usedAccessToken: 'stale' }), 'ignore');
+});
+
+test('静默续期决策：无 GitLab 凭据直接跳登录；网页端与未登录忽略', () => {
+  const base = {
+    isDesktop: true,
+    isAuthenticated: true,
+    currentAccessToken: 'cur',
+    usedAccessToken: 'cur',
+    hasGitlabCredential: false,
+    silentRecoveryTokens: new Set<string>(),
+  };
+  assert.equal(decideCentralSessionInvalidAction(base), 'relogin');
+  assert.equal(decideCentralSessionInvalidAction({ ...base, hasGitlabCredential: true, isDesktop: false }), 'ignore');
+  assert.equal(decideCentralSessionInvalidAction({ ...base, hasGitlabCredential: true, isAuthenticated: false }), 'ignore');
+});
+
+test('并发失效共享同一轮续期：续期进行中的其他失败不会再发起续期', async () => {
+  let attempts = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const unregister = registerCentralSessionInvalidHandler(async () => {
+    attempts += 1;
+    await gate;
+  });
+  try {
+    const failures = Array.from({ length: 5 }, () => axiosError(401, SESSION_INVALID_BODY));
+    failures.forEach((error) => reportCentralSessionInvalid(error, 'stale'));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    reportCentralSessionInvalid(axiosError(401, SESSION_INVALID_BODY), 'stale');
+    release();
+    await waitForCentralSessionInvalidHandling();
+    assert.equal(attempts, 1);
+  } finally {
+    unregister();
+  }
 });

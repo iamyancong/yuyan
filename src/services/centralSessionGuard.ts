@@ -78,6 +78,33 @@ export function shouldResetForCentralSessionInvalid(context: CentralSessionInval
   );
 }
 
+/** 中央会话失效后的处理动作。 */
+export type CentralSessionInvalidAction = 'ignore' | 'reestablish' | 'relogin';
+
+/** 静默续期决策输入。 */
+export interface CentralSessionRecoveryContext extends CentralSessionInvalidContext {
+  /** 本地是否保存了可用于重新换取会话的 GitLab 凭据。 */
+  hasGitlabCredential: boolean;
+  /** 已经静默续期过的令牌（包括尝试过的旧令牌与静默换来的新令牌）。 */
+  silentRecoveryTokens: ReadonlySet<string>;
+}
+
+/**
+ * 决定中央会话失效后的动作（纯函数）。
+ * @description
+ * - 不该处理（网页端、未登录、迟到的旧令牌请求）→ ignore；
+ * - 有 GitLab 凭据且该令牌从未静默续期过 → reestablish（先静默换新会话）；
+ * - 否则（无凭据、已试过、静默换来的新令牌立刻又失效）→ relogin，避免无限续期循环。
+ * @param context 决策输入
+ * @returns 处理动作
+ */
+export function decideCentralSessionInvalidAction(context: CentralSessionRecoveryContext): CentralSessionInvalidAction {
+  if (!shouldResetForCentralSessionInvalid(context)) return 'ignore';
+  if (!context.hasGitlabCredential) return 'relogin';
+  if (context.silentRecoveryTokens.has(context.usedAccessToken)) return 'relogin';
+  return 'reestablish';
+}
+
 /**
  * 注册中央会话失效处理器（全局只保留一个）。
  * @param next 处理器
