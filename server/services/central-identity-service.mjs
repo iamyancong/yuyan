@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 import { DEPLOY_SECRET_KEY } from '../config/constants.mjs';
 import { getDeployDb } from './deploy-store.mjs';
+import { assertGitlabHostAllowed } from './gitlab-host-policy.mjs';
 import { runRequestContext } from './request-context.mjs';
 import { abortCentralOperationsForDevice } from './central-operation-runtime.mjs';
 
@@ -71,6 +72,15 @@ const randomToken = () => crypto.randomBytes(32).toString('base64url');
 
 /** 会话令牌只以 SHA-256 摘要保存。 */
 const tokenHash = (value) => crypto.createHash('sha256').update(String(value || '')).digest('hex');
+
+/**
+ * 列出已有账号登录过的 GitLab 地址（用于未显式配置白名单时推导默认值，#62）。
+ * @returns {Promise<string[]>}
+ */
+export async function listLinkedGitlabHosts() {
+  const db = await ensureCentralIdentitySchema();
+  return db.prepare("SELECT DISTINCT provider_host AS host FROM identity_links WHERE provider = 'gitlab'").all().map((row) => String(row.host || ''));
+}
 
 /** 生成稳定 GitLab 账号 ID。 */
 export function buildAccountId(gitlabHost, gitlabUserId) {
@@ -249,6 +259,8 @@ async function fetchGitlabUser(gitlabHost, gitlabToken) {
 export async function verifyGitlabCredential(input) {
   const parsed = gitlabCredentialSchema.parse(input);
   const gitlabHost = normalizeGitlabHost(parsed.gitlabHost);
+  // 向 GitLab 发请求之前校验白名单，假地址直接拒绝（#62）
+  assertGitlabHostAllowed(gitlabHost, { scene: '网页端 GitLab 鉴权' });
   const user = await fetchGitlabUser(gitlabHost, parsed.gitlabToken);
   return { gitlabHost, user };
 }
@@ -394,6 +406,8 @@ function issueSession(db, { userId, deviceId, teamId }) {
 export async function exchangeGitlabIdentity(input) {
   const parsed = gitlabExchangeSchema.parse(input);
   const gitlabHost = normalizeGitlabHost(parsed.gitlabHost);
+  // 向 GitLab 发请求之前校验白名单，假地址直接拒绝（#62）
+  assertGitlabHostAllowed(gitlabHost, { scene: 'App GitLab 换票' });
   const gitlabUser = await fetchGitlabUser(gitlabHost, parsed.gitlabToken);
   const userId = buildAccountId(gitlabHost, gitlabUser.id);
   const db = await ensureCentralIdentitySchema();

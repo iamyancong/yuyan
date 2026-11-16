@@ -1,3 +1,5 @@
+import { isGitlabHostAllowed } from './gitlab-host-policy.mjs';
+
 /**
  * 校验创建 GitLab 仓库所需的配置。
  * @param {Object} options 创建参数
@@ -24,6 +26,8 @@ export function validateScaffoldGitlabConfig({ createRepo, gitlabHost, gitlabTok
   } catch {
     return 'gitlabHost 格式无效';
   }
+  // 服务端会携带 Token 请求该地址，必须在白名单内（#62）
+  if (!isGitlabHostAllowed(host)) return 'gitlabHost 不在服务端允许的 GitLab 地址列表内';
 
   if (!token) return 'gitlabToken 不能为空';
   if (!namespace) return '创建 GitLab 仓库前必须选择 Namespace';

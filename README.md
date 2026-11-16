@@ -184,6 +184,7 @@ pnpm build
 | `TEMPLATE_REPO_PATH` | `/opt/template` | 模板本地缓存路径（打包后由 Tauri 指向 appData） |
 | `GITLAB_HOST` | 内网 GitLab | GitLab 服务地址 |
 | `GITLAB_TOKEN` | 空 | GitLab 访问 Token（创建仓库 / 推送所需） |
+| `YUYAN_ALLOWED_GITLAB_HOSTS` | 自动推导 | 服务端允许请求的 GitLab 地址白名单（逗号分隔，如 `http://gitlab.example.com,https://gitlab.example.com:8443`；未写协议时同时允许 http/https；尾斜杠与 `/api/v4` 自动去掉）。网页端 GitLab 鉴权、App 换票（`/api/v2/auth/gitlab/exchange`）、提交信息补全、脚手架建仓都只请求白名单内地址，不在列表内直接 403 `gitlab_host_not_allowed`。未配置时按 `GITLAB_HOST`、`VITE_GITLAB_HOST` 与数据库中已有账号登录过的地址推导，启动日志会打印结果；推导为空时，本机模式不限制，非本机中央服务拒绝网页鉴权与换票（服务仍正常启动）。`*` 表示不限制，仅限本地调试。**中央服务建议显式配置** |
 | `GIT_USER_NAME` / `GIT_USER_EMAIL` | `yuyan-ops` / … | Git 提交身份 |
 | `DEPLOY_DATA_DIR` | `.yuyan-deploy` | 部署数据目录（SQLite / 日志 / 备份） |
 | `APP_UPDATE_CACHE_DIR` | `${DEPLOY_DATA_DIR}/app-update-cache` | GitHub Release 安装包的内网缓存目录 |

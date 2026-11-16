@@ -6,6 +6,7 @@
 
 import { GITLAB_HOST, GITLAB_TOKEN } from '../config/constants.mjs';
 import { recordTiming } from './runtime-metrics.mjs';
+import { isGitlabHostAllowed } from './gitlab-host-policy.mjs';
 
 /** 单次 GitLab 请求超时（毫秒） */
 const GITLAB_REQUEST_TIMEOUT_MS = Number(process.env.YUYAN_GITLAB_REQUEST_TIMEOUT_MS || 3000);
@@ -288,6 +289,8 @@ export async function resolveCommitMeta(projectId, commitSha, gitlabToken = '', 
   if (!safeProjectId || !safeCommitSha) return { message: '', author: '', transient: false };
 
   const base = normalizeGitlabHost(gitlabHost || GITLAB_HOST);
+  // 地址来自客户端请求头时可能是任意地址，不在白名单内不发请求，避免 SSRF 与服务端 Token 外发（#62）
+  if (!isGitlabHostAllowed(base, { matchOrigin: true })) return { message: '', author: '', transient: false };
   const cacheKey = `${base}|${safeProjectId}|${safeCommitSha}`;
   const cached = commitMetaCache.get(cacheKey);
   if (cached) return cached;

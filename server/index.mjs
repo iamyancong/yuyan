@@ -24,6 +24,7 @@ import {
 } from './config/constants.mjs';
 import { pullLatestTemplate, validateTemplate } from './services/template-service.mjs';
 import { startCleanupScheduler } from './utils/cleanup-scheduler.mjs';
+import { logGitlabHostPolicy, setLearnedGitlabHosts } from './services/gitlab-host-policy.mjs';
 import { startWorkspaceCleanupScheduler } from './services/workspace-cleanup-service.mjs';
 import { startDbRetentionScheduler } from './services/db-retention-service.mjs';
 import { deployTaskScheduler } from './services/deploy-task-scheduler.mjs';
@@ -32,7 +33,7 @@ import deployRoutes from './routes/deploy.mjs';
 import healthRoutes from './routes/health.mjs';
 import agentRoutes from './routes/agent.mjs';
 import authV2Routes from './routes/auth-v2.mjs';
-import { appendCentralAudit, authorizeCentralV2, verifyGitlabCredential } from './services/central-identity-service.mjs';
+import { appendCentralAudit, authorizeCentralV2, listLinkedGitlabHosts, verifyGitlabCredential } from './services/central-identity-service.mjs';
 import { guardCentralDeployRequest } from './services/central-deploy-guard.mjs';
 import { getRequestContext, useSharedDeployWorkspace } from './services/request-context.mjs';
 import { closeDeployDb, getDeployDb, migrateCentralDeployWorkspace } from './services/deploy-store.mjs';
@@ -519,6 +520,15 @@ async function bootstrap() {
       }
     }
     console.log(`[bootstrap] ✅ 独立服务器部署数据库已就绪: ${DEPLOY_DB_PATH}`);
+    // GitLab 地址白名单：未显式配置时用已有账号登录过的地址兜底，保证现网用户升级后不被拦（#62）
+    if (!isTauriSubprocess) {
+      try {
+        setLearnedGitlabHosts(await listLinkedGitlabHosts());
+      } catch (error) {
+        console.warn('[bootstrap] 读取已有账号的 GitLab 地址失败，白名单仅使用环境变量:', error?.message || error);
+      }
+    }
+    logGitlabHostPolicy();
     if (isTauriSubprocess && AGENT_SESSION_TOKEN) {
       getAgentDb();
       console.log('[bootstrap] ✅ AI 控制平面数据库与 Agent Gateway 已就绪');

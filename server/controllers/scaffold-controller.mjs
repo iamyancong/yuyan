@@ -16,6 +16,7 @@ import { initAndPushRepo } from '../services/git-service.mjs';
 import { pullLatestTemplate, getTemplateScriptPath } from '../services/template-service.mjs';
 import { redactAgentValue } from '../services/agent-security.mjs';
 import { validateScaffoldGitlabConfig } from '../services/scaffold-validation.mjs';
+import { isGitlabHostAllowed } from '../services/gitlab-host-policy.mjs';
 import { getScaffoldArchivePath, registerScaffoldDownload } from './download-controller.mjs';
 
 function isProgressStreamRequest(req) {
@@ -643,6 +644,10 @@ export async function handleBackfillTopics(req, res) {
     }
     if (!gitlabToken) {
       return res.status(400).json({ error: 'gitlabToken 不能为空（可传入或设置环境变量 GITLAB_TOKEN）' });
+    }
+    // 服务端会携带 Token 请求该地址，必须在白名单内（#62）
+    if (!isGitlabHostAllowed(gitlabHost)) {
+      return res.status(403).json({ error: 'gitlabHost 不在服务端允许的 GitLab 地址列表内', code: 'gitlab_host_not_allowed' });
     }
 
     // 解析 ID 列表
