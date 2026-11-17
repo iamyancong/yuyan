@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  CENTRAL_RECOVERY_LOOP_WINDOW_MS,
   decideCentralSessionInvalidAction,
   extractBearerToken,
   isCentralSessionInvalidError,
@@ -137,39 +138,22 @@ test('认证层只在桌面端、已登录且失败请求用的是当前令牌�
   assert.equal(shouldResetForCentralSessionInvalid({ ...base, currentAccessToken: '', usedAccessToken: '' }), false);
 });
 
-test('静默续期决策：首次失效先续期，同一令牌或续期换来的新令牌再失效则跳登录', () => {
-  const tried = new Set<string>();
-  const base = {
-    isDesktop: true,
-    isAuthenticated: true,
-    currentAccessToken: 'stale',
-    usedAccessToken: 'stale',
-    hasGitlabCredential: true,
-    silentRecoveryTokens: tried,
-  };
-  assert.equal(decideCentralSessionInvalidAction(base), 'reestablish');
-  /** 认证层开始续期时记录旧令牌，换到新令牌后也记录。 */
-  tried.add('stale');
-  assert.equal(decideCentralSessionInvalidAction(base), 'relogin');
-  tried.add('fresh');
-  /** 静默换来的新令牌立刻又失效：不再续期，避免循环。 */
-  assert.equal(decideCentralSessionInvalidAction({ ...base, currentAccessToken: 'fresh', usedAccessToken: 'fresh' }), 'relogin');
-  /** 续期成功后迟到的旧令牌响应：忽略，不覆盖新会话。 */
-  assert.equal(decideCentralSessionInvalidAction({ ...base, currentAccessToken: 'fresh', usedAccessToken: 'stale' }), 'ignore');
+test('恢复决策：令牌已轮换的迟到请求忽略，当前令牌失效先恢复', () => {
+  const base = { isDesktop: true, isAuthenticated: true, currentAccessToken: 'cur', usedAccessToken: 'cur', now: 1_000_000 };
+  assert.equal(decideCentralSessionInvalidAction(base), 'recover');
+  /** 定时器已把令牌轮换成 next：轮换窗口内的旧请求不能触发恢复或登出。 */
+  assert.equal(decideCentralSessionInvalidAction({ ...base, currentAccessToken: 'next' }), 'ignore');
+  assert.equal(decideCentralSessionInvalidAction({ ...base, isDesktop: false }), 'ignore');
+  assert.equal(decideCentralSessionInvalidAction({ ...base, isAuthenticated: false }), 'ignore');
 });
 
-test('静默续期决策：无 GitLab 凭据直接跳登录；网页端与未登录忽略', () => {
-  const base = {
-    isDesktop: true,
-    isAuthenticated: true,
-    currentAccessToken: 'cur',
-    usedAccessToken: 'cur',
-    hasGitlabCredential: false,
-    silentRecoveryTokens: new Set<string>(),
-  };
-  assert.equal(decideCentralSessionInvalidAction(base), 'relogin');
-  assert.equal(decideCentralSessionInvalidAction({ ...base, hasGitlabCredential: true, isDesktop: false }), 'ignore');
-  assert.equal(decideCentralSessionInvalidAction({ ...base, hasGitlabCredential: true, isAuthenticated: false }), 'ignore');
+test('恢复决策：恢复换来的令牌只在窗口内再失效才跳登录，窗口外（正常轮换）照常恢复', () => {
+  const base = { isDesktop: true, isAuthenticated: true, currentAccessToken: 'fresh', usedAccessToken: 'fresh', now: 1_000_000 };
+  /** 刚换来立刻又失效：循环，跳登录。 */
+  assert.equal(decideCentralSessionInvalidAction({ ...base, recoveredAt: base.now - 5_000 }), 'relogin');
+  /** 1.3.25 回归：恢复换来的令牌 13 分钟后在正常轮换窗口遇到 401，不能被登出。 */
+  assert.equal(decideCentralSessionInvalidAction({ ...base, recoveredAt: base.now - CENTRAL_RECOVERY_LOOP_WINDOW_MS }), 'recover');
+  assert.equal(decideCentralSessionInvalidAction({ ...base, recoveredAt: base.now - 13 * 60_000 }), 'recover');
 });
 
 test('并发失效共享同一轮续期：续期进行中的其他失败不会再发起续期', async () => {

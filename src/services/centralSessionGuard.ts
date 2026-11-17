@@ -2,7 +2,7 @@
  * 中央会话失效守卫（纯逻辑，无框架依赖）。
  * @description 中央 v2 鉴权中间件在访问令牌不被认可时返回 `401 + session_invalid`
  * （例如 App 升级后切到新中央服务器，本地仍保存旧服务器签发的令牌）。
- * 这种失效重试无意义，需要由认证层清理本地会话并引导重新登录。
+ * 也可能只是令牌轮换窗口内的旧请求；由认证层判断是忽略、静默恢复还是引导重新登录。
  * - 只认「HTTP 401 且业务码 session_invalid」，部署目标服务器、Agent Gateway、网页 PAT 的鉴权失败都不匹配；
  * - 同一时间只处理一次，并发失败的请求共享同一轮处理，避免重复提示/重复登出；
  * - 带上发出请求时使用的访问令牌，处理器据此忽略重新登录后才返回的旧请求。
@@ -79,30 +79,38 @@ export function shouldResetForCentralSessionInvalid(context: CentralSessionInval
 }
 
 /** 中央会话失效后的处理动作。 */
-export type CentralSessionInvalidAction = 'ignore' | 'reestablish' | 'relogin';
+export type CentralSessionInvalidAction = 'ignore' | 'recover' | 'relogin';
 
-/** 静默续期决策输入。 */
+/**
+ * 「恢复换来的新令牌立刻又失效」判定窗口。
+ * @description 只把恢复后短时间内再次失效视为循环；超过窗口的失效（例如 15 分钟后的正常轮换窗口）照常恢复。
+ * 1.3.25 没有时间窗口，恢复换来的令牌在下一次正常轮换时必然命中「已续期过」而被登出。
+ */
+export const CENTRAL_RECOVERY_LOOP_WINDOW_MS = 60_000;
+
+/** 恢复决策输入。 */
 export interface CentralSessionRecoveryContext extends CentralSessionInvalidContext {
-  /** 本地是否保存了可用于重新换取会话的 GitLab 凭据。 */
-  hasGitlabCredential: boolean;
-  /** 已经静默续期过的令牌（包括尝试过的旧令牌与静默换来的新令牌）。 */
-  silentRecoveryTokens: ReadonlySet<string>;
+  /** 失败请求所用令牌若是失效恢复换来的，记录换到它的时间。 */
+  recoveredAt?: number;
+  /** 当前时间（测试注入）。 */
+  now?: number;
 }
 
 /**
  * 决定中央会话失效后的动作（纯函数）。
  * @description
- * - 不该处理（网页端、未登录、迟到的旧令牌请求）→ ignore；
- * - 有 GitLab 凭据且该令牌从未静默续期过 → reestablish（先静默换新会话）；
- * - 否则（无凭据、已试过、静默换来的新令牌立刻又失效）→ relogin，避免无限续期循环。
+ * - 不该处理（网页端、未登录、令牌已被轮换的迟到请求）→ ignore；
+ * - 失败令牌是刚由恢复换来的（窗口内）→ relogin，避免无限续期循环；
+ * - 其余 → recover（先 refresh、被拒再换票，只有明确身份拒绝才登录）。
+ * 调用方需先等待进行中的续期落盘，再读取当前令牌。
  * @param context 决策输入
  * @returns 处理动作
  */
 export function decideCentralSessionInvalidAction(context: CentralSessionRecoveryContext): CentralSessionInvalidAction {
   if (!shouldResetForCentralSessionInvalid(context)) return 'ignore';
-  if (!context.hasGitlabCredential) return 'relogin';
-  if (context.silentRecoveryTokens.has(context.usedAccessToken)) return 'relogin';
-  return 'reestablish';
+  const now = context.now ?? Date.now();
+  if (context.recoveredAt !== undefined && now - context.recoveredAt < CENTRAL_RECOVERY_LOOP_WINDOW_MS) return 'relogin';
+  return 'recover';
 }
 
 /**

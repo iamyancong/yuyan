@@ -8,6 +8,7 @@ import {
 } from '@/api/gitlab';
 import { exchangeGitlabIdentity, logoutCentralSession, refreshCentralSession } from '@/api/centralIdentity';
 import { decideCentralSessionInvalidAction, registerCentralSessionInvalidHandler } from '@/services/centralSessionGuard';
+import { classifyCentralAuthError, createSerialTaskQueue, recoverCentralSession } from '@/services/centralSessionRecovery';
 import { refreshCentralData } from '@/services/centralDataRefresh';
 import {
   clearActiveSecureAccount,
@@ -128,11 +129,59 @@ async function syncAgentIdentity() {
 }
 
 /**
- * 使用平台安全存储中保存的 GitLab PAT 重新建立中央设备会话。
- * @description 刷新令牌过期或被服务端撤销时无需用户重新登录；恢复失败则保存只读兼容状态，
- * 避免后续请求继续携带已经失效的访问令牌。
+ * 所有中央会话续期（定时刷新、启动恢复、失效恢复）的串行队列。
+ * @description refresh 会让旧访问令牌立即失效、换票会吊销设备上全部会话，并发执行会互相作废刚换到的令牌。
+ */
+const sessionQueue = createSerialTaskQueue();
+
+/**
+ * 用 GitLab PAT 重新换取中央设备会话（会吊销该设备旧会话），失败时抛出带 status/code 的错误。
  * @param state - 当前安全账号状态
- * @returns 已恢复或已降级的安全账号状态
+ * @returns 新会话状态（未保存）
+ */
+async function exchangeSessionWithGitlab(state: SecureAccountState): Promise<SecureAccountState> {
+  if (!isTauri()) throw new Error('设备会话仅在雨燕桌面端可用');
+  const device = await getDeviceIdentity();
+  const session = await exchangeGitlabIdentity(state.gitlabHost, state.gitlabToken, device);
+  return {
+    ...state,
+    accountId: session.accountId,
+    deviceId: session.deviceId,
+    accessToken: session.accessToken,
+    refreshToken: session.refreshToken,
+    teamId: session.teamId,
+    role: session.role,
+    accessExpiresAt: session.accessExpiresAt,
+    refreshExpiresAt: session.refreshExpiresAt,
+  };
+}
+
+/**
+ * 用设备签名 + refresh 令牌轮换会话（不吊销其他会话），失败时抛错。
+ * @param state - 当前安全账号状态
+ * @returns 新会话状态（未保存）
+ */
+async function rotateSessionWithRefreshToken(state: SecureAccountState): Promise<SecureAccountState> {
+  const timestamp = Date.now();
+  const nonce = crypto.randomUUID();
+  const payload = `${state.deviceId}.${timestamp}.${nonce}.${state.refreshToken}`;
+  const signed = await signDeviceChallenge(payload);
+  const refreshed = await refreshCentralSession({
+    deviceId: state.deviceId,
+    refreshToken: state.refreshToken,
+    timestamp,
+    nonce,
+    signature: signed.signature,
+  });
+  return { ...state, ...refreshed };
+}
+
+/**
+ * 使用平台安全存储中保存的 GitLab PAT 重新建立中央设备会话。
+ * @description 刷新令牌过期或被服务端撤销时无需用户重新登录；身份被明确拒绝时保存只读兼容状态，
+ * 避免后续请求继续携带已经失效的访问令牌；网络、超时等临时错误保持原状态，下次再试。
+ * @param state - 当前安全账号状态
+ * @returns 已恢复、已降级或保持原样的安全账号状态
  */
 async function reestablishCentralSession(state: SecureAccountState): Promise<SecureAccountState> {
   const fallbackState: SecureAccountState = {
@@ -145,50 +194,28 @@ async function reestablishCentralSession(state: SecureAccountState): Promise<Sec
   if (!isTauri() || !state.gitlabHost || !state.gitlabToken) return fallbackState;
 
   try {
-    const device = await getDeviceIdentity();
-    const session = await exchangeGitlabIdentity(state.gitlabHost, state.gitlabToken, device);
-    const next: SecureAccountState = {
-      ...state,
-      accountId: session.accountId,
-      deviceId: session.deviceId,
-      accessToken: session.accessToken,
-      refreshToken: session.refreshToken,
-      teamId: session.teamId,
-      role: session.role,
-      accessExpiresAt: session.accessExpiresAt,
-      refreshExpiresAt: session.refreshExpiresAt,
-    };
+    const next = await exchangeSessionWithGitlab(state);
     await saveSecureAccount(next);
     return next;
-  } catch {
+  } catch (error) {
+    if (classifyCentralAuthError(error) === 'transient') return state;
     await saveSecureAccount(fallbackState);
     return fallbackState;
   }
 }
 
-/** 在访问令牌临近过期时使用设备签名轮换。 */
+/** 在访问令牌临近过期时使用设备签名轮换。调用方需在 sessionQueue 内执行。 */
 async function refreshSecureSessionIfNeeded(state: SecureAccountState): Promise<SecureAccountState> {
   if (state.accessToken && Date.parse(state.accessExpiresAt) > Date.now() + 2 * 60_000) return state;
   if (!state.refreshToken || Date.parse(state.refreshExpiresAt) <= Date.now()) {
     return reestablishCentralSession(state);
   }
-  const timestamp = Date.now();
-  const nonce = crypto.randomUUID();
-  const payload = `${state.deviceId}.${timestamp}.${nonce}.${state.refreshToken}`;
   try {
-    const signed = await signDeviceChallenge(payload);
-    const refreshed = await refreshCentralSession({
-      deviceId: state.deviceId,
-      refreshToken: state.refreshToken,
-      timestamp,
-      nonce,
-      signature: signed.signature,
-    });
-    const next = { ...state, ...refreshed };
+    const next = await rotateSessionWithRefreshToken(state);
     await saveSecureAccount(next);
     return next;
   } catch (error: any) {
-    if (error?.status === 401 || error?.code === 'session_expired') {
+    if (classifyCentralAuthError(error) === 'rejected') {
       return reestablishCentralSession(state);
     }
     return state;
@@ -196,27 +223,31 @@ async function refreshSecureSessionIfNeeded(state: SecureAccountState): Promise<
 }
 
 /** 在应用常驻和设备休眠恢复后提前轮换短期访问令牌。 */
-async function maintainCentralSession() {
-  const stored = await loadActiveSecureAccount(true).catch(() => null);
-  if (!stored) return;
-  const refreshed = await refreshSecureSessionIfNeeded(stored);
-  const changed = refreshed.accessToken !== stored.accessToken
-    || refreshed.refreshToken !== stored.refreshToken
-    || refreshed.teamId !== stored.teamId
-    || refreshed.role !== stored.role;
-  if (!changed) return;
-  await saveSecureAccount(refreshed);
-  applySecureState(refreshed, authState.value.user);
-  await syncAgentIdentity();
+function maintainCentralSession() {
+  return sessionQueue.run(async () => {
+    const stored = await loadActiveSecureAccount(true).catch(() => null);
+    if (!stored) return;
+    const refreshed = await refreshSecureSessionIfNeeded(stored);
+    const changed = refreshed.accessToken !== stored.accessToken
+      || refreshed.refreshToken !== stored.refreshToken
+      || refreshed.teamId !== stored.teamId
+      || refreshed.role !== stored.role;
+    if (!changed) return;
+    await saveSecureAccount(refreshed);
+    /** 续期期间已登出：不把会话写回界面。 */
+    if (!authState.value.isAuthenticated) return;
+    applySecureState(refreshed, authState.value.user);
+    await syncAgentIdentity();
+  });
 }
 
 /** 只注册一次会话续期定时器。 */
 function setupSessionRefresh() {
   if (hasSetupSessionRefresh || typeof window === 'undefined') return;
   hasSetupSessionRefresh = true;
-  window.setInterval(() => void maintainCentralSession(), 60_000);
+  window.setInterval(() => void maintainCentralSession().catch(() => undefined), 60_000);
   window.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') void maintainCentralSession();
+    if (document.visibilityState === 'visible') void maintainCentralSession().catch(() => undefined);
   });
 }
 
@@ -251,16 +282,16 @@ function createWebSecureState(token: string, host: string, user: User): SecureAc
 }
 
 /**
- * 已静默续期过的访问令牌（尝试过的旧令牌 + 静默换来的新令牌）。
- * @description 每个失效令牌最多静默续期一次；静默换来的新令牌若立刻又被判失效，直接走重新登录，杜绝循环。
- * 登录、登出时清空。
+ * 失效恢复换来的访问令牌 → 换到的时间。
+ * @description 恢复换来的新令牌若在 CENTRAL_RECOVERY_LOOP_WINDOW_MS 内又被判失效，直接走重新登录，杜绝循环；
+ * 超过窗口后的失效（正常轮换窗口）照常恢复。登录、登出时清空。
  */
-const silentRecoveryTokens = new Set<string>();
+const recoveredTokens = new Map<string, number>();
 
 /** GitLab PAT 登录；桌面端注册设备，网页端建立会话并按需持久化。 */
 const login = async (token: string, host: string, rememberMe = false): Promise<boolean> => {
   authState.value.loading = true;
-  silentRecoveryTokens.clear();
+  recoveredTokens.clear();
   const normalizedHost = host.trim().replace(/\/+$/, '');
   try {
     setGitLabToken(token);
@@ -276,25 +307,29 @@ const login = async (token: string, host: string, rememberMe = false): Promise<b
       message.success(`欢迎回来，${user.name}！`);
       return true;
     }
-    const device = await getDeviceIdentity();
-    const session = await exchangeGitlabIdentity(normalizedHost, token, device);
-    const secureState: SecureAccountState = {
-      accountId: session.accountId,
-      deviceId: session.deviceId,
-      gitlabHost: normalizedHost,
-      gitlabUserId: user.id,
-      gitlabUsername: user.username,
-      gitlabDisplayName: user.name,
-      gitlabAvatarUrl: user.avatar_url,
-      gitlabToken: token,
-      accessToken: session.accessToken,
-      refreshToken: session.refreshToken,
-      teamId: session.teamId,
-      role: session.role,
-      accessExpiresAt: session.accessExpiresAt,
-      refreshExpiresAt: session.refreshExpiresAt,
-    };
-    await saveSecureAccount(secureState);
+    /** 与定时刷新、失效恢复串行：避免旧会话的续期在登录换票后把新会话吊销或覆盖。 */
+    const secureState = await sessionQueue.run(async () => {
+      const device = await getDeviceIdentity();
+      const session = await exchangeGitlabIdentity(normalizedHost, token, device);
+      const next: SecureAccountState = {
+        accountId: session.accountId,
+        deviceId: session.deviceId,
+        gitlabHost: normalizedHost,
+        gitlabUserId: user.id,
+        gitlabUsername: user.username,
+        gitlabDisplayName: user.name,
+        gitlabAvatarUrl: user.avatar_url,
+        gitlabToken: token,
+        accessToken: session.accessToken,
+        refreshToken: session.refreshToken,
+        teamId: session.teamId,
+        role: session.role,
+        accessExpiresAt: session.accessExpiresAt,
+        refreshExpiresAt: session.refreshExpiresAt,
+      };
+      await saveSecureAccount(next);
+      return next;
+    });
     applySecureState(secureState, user);
     await syncAgentIdentity();
     await nextTick();
@@ -332,7 +367,7 @@ interface LogoutOptions {
 /** 登出并清除中央会话、Agent 内存凭据和平台安全存储账号状态。 */
 const logout = async (silent = false, options: LogoutOptions = {}) => {
   ++authGeneration;
-  silentRecoveryTokens.clear();
+  recoveredTokens.clear();
   const secureState = await loadActiveSecureAccount().catch(() => null);
   if (secureState && !options.skipRemoteRevoke) await logoutCentralSession(secureState).catch(() => undefined);
   await clearActiveSecureAccount().catch(() => undefined);
@@ -362,63 +397,105 @@ const logout = async (silent = false, options: LogoutOptions = {}) => {
 /** 会话过期提示的固定 key，重复触发时覆盖而不是叠加。 */
 const SESSION_EXPIRED_MESSAGE_KEY = 'yuyan-central-session-expired';
 
-/** 静默续期失败或不允许续期时：清会话、提示并打开登录弹窗。 */
-async function resetToLogin() {
+/** 静默续期被明确拒绝时：清会话、提示并打开登录弹窗。 */
+async function resetToLogin(reason = '') {
   await logout(true, { skipRemoteRevoke: true });
-  message.warning({ content: '登录已过期，请重新登录', key: SESSION_EXPIRED_MESSAGE_KEY });
+  message.warning({ content: reason ? `登录已失效：${reason}，请重新登录` : '登录已过期，请重新登录', key: SESSION_EXPIRED_MESSAGE_KEY });
   window.dispatchEvent(new CustomEvent('show-login-modal'));
 }
 
-/**
- * 使用保存的 GitLab 凭据静默重建中央会话。
- * @param usedAccessToken 失效的访问令牌
- * @returns 是否已成功切换到新会话
- */
-async function tryReestablishSilently(usedAccessToken: string): Promise<boolean> {
-  const generation = authGeneration;
-  const stored = await loadActiveSecureAccount(true).catch(() => null);
-  if (!stored || stored.accessToken !== usedAccessToken || !stored.gitlabToken || !stored.gitlabHost) return false;
-  silentRecoveryTokens.add(usedAccessToken);
-  const next = await reestablishCentralSession(stored);
-  /** 续期期间用户已登出或重新登录：不覆盖新的登录状态；若刚写入的续期会话残留在已登出的存储里则清掉。 */
-  if (generation !== authGeneration || !authState.value.isAuthenticated) {
-    if (!authState.value.isAuthenticated && next.accessToken && getCachedSecureAccount()?.accessToken === next.accessToken) {
-      await clearActiveSecureAccount().catch(() => undefined);
-    }
-    return true;
-  }
-  if (!next.accessToken) return false;
-  silentRecoveryTokens.add(next.accessToken);
-  applySecureState(next, authState.value.user);
-  /** 与正常登录一致：把新令牌同步给本地 Agent Gateway / MCP。 */
-  await syncAgentIdentity();
-  await nextTick();
-  /** 重新拉取当前页面的中央数据（部署中心等注册了刷新处理器的页面），不弹提示。 */
-  void refreshCentralData().catch(() => undefined);
-  return true;
-}
+/** GitLab 地址白名单拒绝提示的固定 key。 */
+const GITLAB_HOST_REJECTED_MESSAGE_KEY = 'yuyan-gitlab-host-not-allowed';
 
 /**
  * 中央判定会话失效（401 session_invalid）后的处理。
- * @description 典型场景：App 升级后切到新中央服务器，本地仍保存旧服务器签发的令牌。
- * 先用保存的 GitLab 凭据静默换新会话（设备被撤销等情况中央会拒绝）；失败、无凭据或同一令牌已试过时，
- * 才清会话并打开登录弹窗。未登录、网页端或重新登录后才返回的旧请求都直接忽略，避免误登出和循环。
- * 登录是全局弹窗，页面停留在原路由，登录成功后各页面按身份切换逻辑自行刷新。
+ * @description 访问令牌每 15 分钟由定时器轮换一次，服务端轮换后旧令牌立即失效，轮换落盘前仍在路上的请求会拿到 401，
+ * 这是正常现象。所以先等进行中的续期落盘：令牌已变 → 忽略；否则在串行队列里先 refresh、被拒才用 GitLab 凭据换票。
+ * 只有身份被明确拒绝（GitLab 令牌失效、设备被撤销等）才清会话并打开登录弹窗；
+ * 网络/5xx 等临时错误保持登录；GitLab 地址不在服务端白名单时给出明确提示，不当作登录过期。
+ * 未登录、网页端或重新登录后才返回的旧请求都直接忽略，避免误登出和循环。
  * @param usedAccessToken 失败请求携带的访问令牌
  */
 async function handleCentralSessionInvalid(usedAccessToken: string) {
-  const cached = getCachedSecureAccount();
+  if (!isTauri() || !authState.value.isAuthenticated || !usedAccessToken) return;
+  /** 等定时刷新/启动恢复把新令牌落盘，再判断失败请求是不是轮换窗口里的旧请求。 */
+  await sessionQueue.idle();
   const action = decideCentralSessionInvalidAction({
     isDesktop: isTauri(),
     isAuthenticated: authState.value.isAuthenticated,
-    currentAccessToken: cached?.accessToken || authState.value.accessToken,
+    currentAccessToken: getCachedSecureAccount()?.accessToken || authState.value.accessToken,
     usedAccessToken,
-    hasGitlabCredential: Boolean(cached ? cached.gitlabToken && cached.gitlabHost : authState.value.token),
-    silentRecoveryTokens,
+    recoveredAt: recoveredTokens.get(usedAccessToken),
   });
   if (action === 'ignore') return;
-  if (action === 'reestablish' && await tryReestablishSilently(usedAccessToken)) return;
-  await resetToLogin();
+  if (action === 'relogin') {
+    await resetToLogin();
+    return;
+  }
+
+  const generation = authGeneration;
+  const outcome = await sessionQueue.run(() => recoverCentralSession<SecureAccountState>(usedAccessToken, {
+    loadStored: () => loadActiveSecureAccount(true).catch(() => null),
+    refresh: rotateSessionWithRefreshToken,
+    exchange: exchangeSessionWithGitlab,
+    save: (state) => saveSecureAccount(state),
+  }));
+  /** 恢复期间用户已登出或重新登录：不覆盖新的登录状态；若刚写入的会话残留在已登出的存储里则清掉。 */
+  if (generation !== authGeneration || !authState.value.isAuthenticated) {
+    if (outcome.kind === 'recovered' && !authState.value.isAuthenticated
+      && getCachedSecureAccount()?.accessToken === outcome.state.accessToken) {
+      await clearActiveSecureAccount().catch(() => undefined);
+    }
+    return;
+  }
+
+  switch (outcome.kind) {
+    case 'rotated': {
+      /** 令牌已由其他续期换掉：界面若还停在旧令牌，同步到存储里的最新会话。 */
+      const latest = getCachedSecureAccount();
+      if (latest?.accessToken && latest.accessToken !== authState.value.accessToken) {
+        applySecureState(latest, authState.value.user);
+        await syncAgentIdentity();
+      }
+      return;
+    }
+    case 'recovered':
+      recoveredTokens.set(outcome.state.accessToken, Date.now());
+      applySecureState(outcome.state, authState.value.user);
+      /** 与正常登录一致：把新令牌同步给本地 Agent Gateway / MCP。 */
+      await syncAgentIdentity();
+      await nextTick();
+      /** 重新拉取当前页面的中央数据（部署中心等注册了刷新处理器的页面），不弹提示。 */
+      void refreshCentralData().catch(() => undefined);
+      return;
+    case 'transient':
+      /** 网络抖动、服务重启等：保持登录，下一次请求或定时器会再续期。 */
+      console.warn('[CentralSession] 会话续期暂时失败，保持登录稍后重试', outcome.error);
+      return;
+    case 'host_not_allowed': {
+      /** 服务端白名单拒绝（#62）：不是登录过期。清掉失效的中央令牌避免反复 401，保留登录，管理员配置后定时器自动恢复。 */
+      const stored = getCachedSecureAccount();
+      if (stored) {
+        const degraded = { ...stored, accessToken: '', refreshToken: '', accessExpiresAt: '', refreshExpiresAt: '' };
+        await saveSecureAccount(degraded).catch(() => undefined);
+        applySecureState(degraded, authState.value.user);
+        await syncAgentIdentity();
+      }
+      message.error({
+        content: `雨燕服务端未允许当前 GitLab 地址（${stored?.gitlabHost || authState.value.host}），暂时无法连接中央服务。`
+          + '请联系管理员在服务端配置 YUYAN_ALLOWED_GITLAB_HOSTS，配置后无需重新登录即可自动恢复。',
+        key: GITLAB_HOST_REJECTED_MESSAGE_KEY,
+        duration: 8,
+      });
+      return;
+    }
+    case 'rejected':
+    default: {
+      const err = (outcome as { error?: { code?: string; message?: string } }).error;
+      const showReason = err?.code === 'device_revoked' || err?.code === 'device_key_mismatch';
+      await resetToLogin(showReason ? String(err?.message || '') : '');
+    }
+  }
 }
 
 let hasSetupSessionInvalidGuard = false;
@@ -443,7 +520,11 @@ const checkAuth = async () => {
     setGitLabHost(stored.gitlabHost);
     updateGitLabClient(stored.gitlabHost);
 
-    const refreshed = await refreshSecureSessionIfNeeded(stored);
+    /** 与定时刷新、失效恢复串行，并在队列内重新读取最新会话，避免用已轮换的 refresh 令牌触发换票。 */
+    const refreshed = await sessionQueue.run(async () => {
+      const latest = await loadActiveSecureAccount(true).catch(() => null);
+      return refreshSecureSessionIfNeeded(latest || stored);
+    });
     if (shouldAbortAuthGeneration(gen, authGeneration)) return false;
 
     const remote = await fetchRemoteUser();
