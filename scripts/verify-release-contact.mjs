@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 import { pathToFileURL } from 'node:url';
 
-/** 正式安装包必须注入的技术支持字段；公司和职责允许沿用通用文案。 */
+/**
+ * 正式安装包必须注入的技术支持字段及禁止使用的占位值；公司和职责允许沿用通用文案。
+ * 组件已不再为工号/邮箱提供默认值（未配置即为空，空值在此被拦截），
+ * 这里继续拒绝旧版 .env.example 中的示例工号/邮箱，防止误把示例值当正式配置。
+ */
 const CONTACT_FIELDS = {
   VITE_CONTACT_NAME: '雨燕技术支持',
   VITE_CONTACT_WORK_NO: '80000000',

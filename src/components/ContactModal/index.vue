@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons-vue';
 import qrCodeImg from '@/assets/contact/wecom-qrcode.png';
 import { useContact } from './hooks/useContact';
+import { CONTACT_EMPTY_HINT, resolveContactVisibility } from './contactPolicy';
 
 defineOptions({ name: 'ContactModal' });
 
@@ -37,6 +38,9 @@ const {
   handleCopyEmail,
   handleCopyWorkNo,
 } = useContact();
+
+/** 未配置的联系方式整项隐藏，避免展示占位值 */
+const visibility = computed(() => resolveContactVisibility(contactInfo.value));
 
 /** 关闭弹窗 */
 const handleClose = () => {
@@ -78,10 +82,10 @@ const handleClose = () => {
         </div>
       </div>
 
-      <!-- 信息条目 -->
-      <div class="contact-info-list">
+      <!-- 信息条目：仅展示已配置项 -->
+      <div v-if="visibility.showEmail || visibility.showWorkNo" class="contact-info-list">
         <!-- 邮箱（主搜索项） -->
-        <div class="info-item">
+        <div v-if="visibility.showEmail" class="info-item">
           <span class="item-label">
             <MailOutlined />
             <span>邮箱</span>
@@ -93,7 +97,7 @@ const handleClose = () => {
         </div>
 
         <!-- 工号 -->
-        <div class="info-item">
+        <div v-if="visibility.showWorkNo" class="info-item">
           <span class="item-label">
             <IdcardOutlined />
             <span>工号</span>
@@ -105,10 +109,14 @@ const handleClose = () => {
         </div>
       </div>
 
+      <!-- 文字联系方式全部未配置：中性提示 -->
+      <div v-if="visibility.showEmptyHint" class="contact-empty-hint">{{ CONTACT_EMPTY_HINT }}</div>
+
       <!-- 操作按钮区域 -->
-      <div class="contact-actions">
-        <!-- 核心推荐：直接唤起企业微信 -->
+      <div v-if="visibility.showEmail || visibility.showCardUrl" class="contact-actions">
+        <!-- 核心推荐：直接唤起企业微信（依赖邮箱） -->
         <a-button
+          v-if="visibility.showEmail"
           type="primary"
           block
           class="btn-wecom-direct"
@@ -123,14 +131,14 @@ const handleClose = () => {
 
         <!-- 辅助操作行 -->
         <div class="secondary-action-row">
-          <a-button class="btn-secondary" @click="handleOpenCardUrl">
+          <a-button v-if="visibility.showCardUrl" class="btn-secondary" @click="handleOpenCardUrl">
             <template #icon>
               <GlobalOutlined />
             </template>
             网页名片
           </a-button>
 
-          <a-button class="btn-secondary" @click="handleCopyEmail">
+          <a-button v-if="visibility.showEmail" class="btn-secondary" @click="handleCopyEmail">
             <template #icon>
               <CopyOutlined />
             </template>

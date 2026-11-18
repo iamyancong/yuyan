@@ -242,6 +242,23 @@ pnpm build
   正式构建在 Windows、macOS ARM 与 macOS Intel 三端并发运行，使用 `TAURI_SIGNING_PRIVATE_KEY` 生成 Updater 签名并反向校验，发布 DMG/EXE、签名 Updater 资源和 `latest.json`，并将新版本号以 `chore(release): bump version to x.y.z [skip ci]` 自动推回分支。
 - **技术支持联系人**：
   仓库 Actions Secrets 必须配置 `VITE_CONTACT_NAME`、`VITE_CONTACT_WORK_NO`、`VITE_CONTACT_COMPANY`、`VITE_CONTACT_ROLE`、`VITE_CONTACT_EMAIL`、`VITE_CONTACT_CARD_URL`。流水线通过构建任务的 `env` 直接注入全部字段；版本准备（含 dry-run）及各平台构建前会拦截空值、姓名/工号/邮箱占位值和无效邮箱、HTTP(S) 名片地址。公司和职责可沿用示例文案。联系人在 **Vite 编译时写入安装包**，修改 Secrets 后必须重新打包，已安装版本不会自动变更；本地开发继续读取 `.env.local`。企微二维码仍使用静态图片。
+- **网页版技术支持联系人（Docker 镜像）**：
+  网页版同样在 **Vite 编译期** 写入联系人，只重启容器无效，修改后必须重新 `docker build` 并部署。工号、邮箱、名片链接未配置时，弹窗隐藏对应行和按钮（「复制邮箱」「在电脑企微中联系我」「网页名片」），全部未配置时显示「暂未配置邮箱等联系方式」提示；姓名/公司/职责未配置时显示通用标题。内网 GitLab 在 **Settings → CI/CD → Variables** 添加 `VITE_CONTACT_NAME`、`VITE_CONTACT_WORK_NO`、`VITE_CONTACT_COMPANY`、`VITE_CONTACT_ROLE`、`VITE_CONTACT_EMAIL`、`VITE_CONTACT_CARD_URL`（纯文本，不加引号；勾选 Protected 时构建分支必须是受保护分支），并在镜像构建命令中逐个传入：
+
+  ```bash
+  docker build --network host \
+    --build-arg NODE_IMAGE="$NODE_IMAGE" \
+    --build-arg VITE_DEPLOY_API_TOKEN="$DEPLOY_API_TOKEN" \
+    --build-arg VITE_CONTACT_NAME="$VITE_CONTACT_NAME" \
+    --build-arg VITE_CONTACT_WORK_NO="$VITE_CONTACT_WORK_NO" \
+    --build-arg VITE_CONTACT_COMPANY="$VITE_CONTACT_COMPANY" \
+    --build-arg VITE_CONTACT_ROLE="$VITE_CONTACT_ROLE" \
+    --build-arg VITE_CONTACT_EMAIL="$VITE_CONTACT_EMAIL" \
+    --build-arg VITE_CONTACT_CARD_URL="$VITE_CONTACT_CARD_URL" \
+    -t "$IMAGE_TAG" .
+  ```
+
+  未传或传空的 build-arg 在构建前被 unset，不会覆盖构建上下文中 `.env.production` / `.env.production.local` 的同名值（Vite 中进程环境变量优先于 .env 文件）。`.dockerignore` 排除 `.env.local`、`.env.development*` 等本地文件，只保留生产构建读取的 `.env`、`.env.production`、`.env.production.local`；若内网分支原先把联系人写在 `.env.local`，请改用上面的 build-arg（推荐）或改名为 `.env.production.local`。GitLab 的 CI 变量不会自动进入 `docker build`，必须显式 `--build-arg`。
 
 更新能力发布时必须先把服务端签名清单与缓存逻辑部署到 `yuyan-4.0`，再发布包含新客户端逻辑的桌面版本。首次从旧客户端迁移到该版本可能仍需按旧流程安装一次；此后版本即可在应用内完成覆盖并自动重启。
 

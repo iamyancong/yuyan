@@ -1,6 +1,4 @@
 # 使用官方公共 Node 基础镜像
-# syntax=docker/dockerfile:1.6
-# 使用官方公共 Node 基础镜像
 ARG NODE_IMAGE=node:22-alpine
 
 # build stage
@@ -14,7 +12,20 @@ COPY . .
 # 仅执行 vite build 产出前端静态资源，跳过 vue-tsc 类型检查
 # （yuyan-app 从桌面端迁移而来，部分模块的类型声明包未纳入 devDependencies，
 #   类型检查会失败，但不影响 vite 正常编译产物）
-RUN npx vite build
+# 网页版技术支持联系人（Vite 编译期写入产物）：docker build --build-arg VITE_CONTACT_EMAIL=... 传入。
+# 只导出非空值：Vite 中进程环境变量优先于 .env 文件，空串会覆盖 .env.production(.local) 里的配置，
+# 所以未传或传空的 build-arg 在构建前 unset，交由 .env 文件或组件的未配置态处理。
+ARG VITE_CONTACT_NAME
+ARG VITE_CONTACT_WORK_NO
+ARG VITE_CONTACT_COMPANY
+ARG VITE_CONTACT_ROLE
+ARG VITE_CONTACT_EMAIL
+ARG VITE_CONTACT_CARD_URL
+RUN for key in VITE_CONTACT_NAME VITE_CONTACT_WORK_NO VITE_CONTACT_COMPANY VITE_CONTACT_ROLE VITE_CONTACT_EMAIL VITE_CONTACT_CARD_URL; do \
+  eval "value=\${$key:-}"; \
+  if [ -z "$(printf '%s' "$value" | tr -d '[:space:]')" ]; then unset "$key"; fi; \
+  done; \
+  npx vite build
 RUN pnpm prune --prod && rm -f .npmrc
 
 # runtime stage（需要 git 以便后端执行 git 初始化与推送）

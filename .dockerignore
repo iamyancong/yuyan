@@ -7,3 +7,8 @@ node_modules
 coverage
 *.log
 /tmp
+# 本地/开发环境文件可能含个人令牌（如 VITE_DEV_ACCESS_TOKEN），不进镜像。
+# 生产构建会读取的 .env、.env.production、.env.production.local 保留，兼容内网分支已有的注入方式。
+.env.*
+!.env.production
+!.env.production.local
