@@ -421,8 +421,6 @@ export const recordColumns: YTableColumn[] = [
   { field: 'serverName', title: '服务器', minWidth: 160, showOverflow: false, slots: { default: 'serverName' } },
   { field: 'operator', title: '发布人', width: 90, formatter: ({ row }) => getDeployRecordOperator(row) },
   { field: 'branch', title: '分支', width: 120 },
-  // #43 P2-2：后端落库的失败根因，放在前面不用横向滚动就能看到
-  { field: 'errorSummary', title: '失败原因', minWidth: 220, showOverflow: false, slots: { default: 'errorSummary' } },
   { field: 'commitMessage', title: '当前生效提交信息', minWidth: 280, showOverflow: false, slots: { default: 'commitMessage' } },
   { field: 'commitAuthor', title: '提交人', width: 80, formatter: ({ row }) => getDeployRecordCommitAuthor(row) },
   { field: 'releasePath', title: '发布目录', minWidth: 240, showOverflow: false, slots: { default: 'releasePath' } },
@@ -430,7 +428,7 @@ export const recordColumns: YTableColumn[] = [
   { field: 'duration', width: 90, title: '耗时', align: 'center', formatter: ({ row }) => formatDeployDuration(row.startedAt, row.finishedAt) },
   { field: 'action', title: '操作类型', width: 100, align: 'center', formatter: ({ row }) => getDeployRecordActionLabel(row) },
   { field: 'sourceRecordId', title: '回滚来源', width: 80, align: 'center', formatter: ({ row }) => getDeployRecordSourceText(row) },
-  { field: 'status', title: '状态', minWidth: 80, align: 'center', showOverflow: false, fixed: 'right' },
+  { field: 'status', title: '状态', minWidth: 80, align: 'center', showOverflow: false, fixed: 'right', slots: { default: 'status' } },
   // { field: 'envName', title: '环境', width: 90, align: 'center' },
 ];
 

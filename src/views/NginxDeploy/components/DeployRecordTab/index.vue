@@ -5,7 +5,7 @@ import type { YTableActionConfig } from '@yss-ui/components/lite';
 import type { DeployRecord } from '@/api/deploy';
 import { describeRecordFailureReason, getDeployRecordStatusColor, getDeployRecordStatusLabel, recordColumns } from '../../constant';
 import type { RecordProjectOption, RecordServerOption } from '../../types';
-import { TABLE_CELL_CONFIG, TABLE_HEADER_HEIGHT, TABLE_MIN_HEIGHT } from './constant';
+import { TABLE_CELL_CONFIG, TABLE_HEADER_HEIGHT, TABLE_MIN_HEIGHT, TABLE_VIRTUAL_X_CONFIG, TABLE_VIRTUAL_Y_CONFIG } from './constant';
 import { useDeployRecordTab } from './hooks/useDeployRecordTab';
 import DeployRecordFilterBar from './components/DeployRecordFilterBar.vue';
 import NginxProjectNameCell from '../NginxProjectNameCell/index.vue';
@@ -87,7 +87,6 @@ const { tableAreaRef, tableHeight, getCommitUrl } = useDeployRecordTab({
       @refresh="emit('refresh')"
     />
     <div ref="tableAreaRef" class="nginx-deploy-table-area">
-      <!-- 不强制虚拟滚动。显式 min-height 关掉 YTable 在仅有 max-height 时的反复 recalculate，否则切 Tab 会卡住数秒。 -->
       <YTable
         :data="records"
         :columns="recordColumns"
@@ -97,6 +96,8 @@ const { tableAreaRef, tableHeight, getCommitUrl } = useDeployRecordTab({
         :min-height="TABLE_MIN_HEIGHT"
         :cell-config="TABLE_CELL_CONFIG"
         :header-height="TABLE_HEADER_HEIGHT"
+        :virtual-x-config="TABLE_VIRTUAL_X_CONFIG"
+        :virtual-y-config="TABLE_VIRTUAL_Y_CONFIG"
         :row-config="{ keyField: 'id', useKey: true }"
         :pageable="true"
         :auto-flex-column="false"
@@ -115,19 +116,21 @@ const { tableAreaRef, tableHeight, getCommitUrl } = useDeployRecordTab({
           <DeployCommitMessageCell :record="row" :commit-url="getCommitUrl(row)" />
         </template>
         <template #status="{ row }">
-          <a-tag :color="getDeployRecordStatusColor(row.status)">
+          <a-tooltip
+            v-if="row.status === 'failed'"
+            placement="topLeft"
+            :overlay-style="{ maxWidth: '520px', whiteSpace: 'pre-line' }"
+          >
+            <template #title>
+              {{ describeRecordFailureReason(row)?.tooltip || row.message || '执行失败，详情请查看操作日志' }}
+            </template>
+            <a-tag :color="getDeployRecordStatusColor(row.status)" class="record-status-tag-failed">
+              {{ getDeployRecordStatusLabel(row.status) }}
+            </a-tag>
+          </a-tooltip>
+          <a-tag v-else :color="getDeployRecordStatusColor(row.status)">
             {{ getDeployRecordStatusLabel(row.status) }}
           </a-tag>
-        </template>
-        <template #errorSummary="{ row }">
-          <a-tooltip v-if="describeRecordFailureReason(row)" placement="topLeft" :overlay-style="{ maxWidth: '520px', whiteSpace: 'pre-line' }">
-            <template #title>{{ describeRecordFailureReason(row)?.tooltip }}</template>
-            <div class="record-failure-reason">
-              <a-tag color="error" class="record-failure-category">{{ describeRecordFailureReason(row)?.category }}</a-tag>
-              <span class="record-failure-title">{{ describeRecordFailureReason(row)?.title }}</span>
-            </div>
-          </a-tooltip>
-          <span v-else class="record-failure-empty">-</span>
         </template>
         <template #releasePath="{ row }">
           <MiddleEllipsisText :text="row.releasePath" />

@@ -13,6 +13,12 @@ export const TABLE_CELL_CONFIG = { height: 58 };
 /** 表头高度 */
 export const TABLE_HEADER_HEIGHT = 42;
 
+/** 横向虚拟滚动配置 */
+export const TABLE_VIRTUAL_X_CONFIG = { enabled: true, gt: 0 };
+
+/** 纵向虚拟滚动配置 */
+export const TABLE_VIRTUAL_Y_CONFIG = { enabled: true, gt: 0 };
+
 /**
  * 构建 GitLab 提交记录页面链接。
  * @param record 发布记录

@@ -2,10 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { describeRecordFailureReason, recordColumns } from '../constant.ts';
 
-test('发布记录列表带「失败原因」列（#43 P2-2）', () => {
+test('发布记录列表不设独立「失败原因」列，原因改由状态列悬浮展示', () => {
   const column = recordColumns.find((item) => item.field === 'errorSummary');
-  assert.ok(column, '应有失败原因列');
-  assert.equal(column?.title, '失败原因');
+  assert.equal(column, undefined, '不应有独立的失败原因列');
+  const statusColumn = recordColumns.find((item) => item.field === 'status');
+  assert.ok(statusColumn, '应有状态列');
 });
 
 test('失败记录展示后端落库的分类与原因，悬浮提示带细节', () => {
