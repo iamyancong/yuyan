@@ -26,6 +26,10 @@ import {
   handleListNginxInstanceArchiveSites,
   handleSaveNginxInstanceArchive,
   handleGetNextNginxInstancePort,
+  handleInspectNginxInstanceStorage,
+  handlePruneNginxInstanceBackups,
+  handlePreviewTargetOrphanAssets,
+  handleCleanTargetOrphanAssets,
   handleGetTargetDeployProgress,
   handleGetDeployTaskReconciliation,
   handleGetRecord,
@@ -177,6 +181,8 @@ router.post('/nginx-instances/:id/init', handleInitNginxInstance);
 router.post('/nginx-instances/:id/refresh-script', handleRefreshNginxInstanceScript);
 router.post('/nginx-instances/:id/actions/:action', handleRunNginxInstanceAction);
 router.get('/nginx-instances/:id/next-port', handleGetNextNginxInstancePort);
+router.get('/nginx-instances/:id/storage/inspect', handleInspectNginxInstanceStorage);
+router.post('/nginx-instances/:id/storage/prune-backups', handlePruneNginxInstanceBackups);
 
 router.get('/targets', handleListTargets);
 router.get('/targets/runtime-snapshots', handleListTargetRuntimeSnapshots);
@@ -185,6 +191,8 @@ router.post('/targets', handleCreateTarget);
 router.put('/targets/:id', handleUpdateTarget);
 router.delete('/targets/:id', handleDeleteTarget);
 router.get('/targets/:id/cleanup-preview', handleGetTargetCleanupPreview);
+router.post('/targets/:id/storage/orphan-assets/preview', handlePreviewTargetOrphanAssets);
+router.post('/targets/:id/storage/orphan-assets/clean', handleCleanTargetOrphanAssets);
 router.post('/targets/:id/nginx-site/sync', handleSyncTargetNginxSite);
 router.get('/targets/:id/nginx-conf', handleReadNginxConfig);
 router.get('/targets/:id/nginx-conf/history', handleListNginxConfigHistory);

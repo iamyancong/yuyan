@@ -262,6 +262,14 @@ export interface DeployTarget {
   artifactDir: string;
   preserveSubDirs: string;
   uploadStrategy: DeployUploadStrategy;
+  /** 备份保留份数上限（null 表示按策略默认：清空替换 3 份 / 覆盖上传 6 份） */
+  backupKeepCount?: number | null;
+  /** 备份空间配额上限（MB，null 表示默认 200MB，0 表示不限） */
+  backupMaxSizeMb?: number | null;
+  /** 备份保留天数 TTL（null 表示默认 14 天，0 表示不限） */
+  backupTtlDays?: number | null;
+  /** 额外带哈希静态资源目录（逗号分隔，默认始终包含 assets） */
+  hashedAssetDirs?: string;
   visitUrl: string;
   remark?: string;
   createdAt: string;
@@ -335,6 +343,14 @@ export interface DeployTargetPayload {
   artifactDir: string;
   preserveSubDirs?: string;
   uploadStrategy?: DeployUploadStrategy;
+  /** 备份保留份数上限（1-50，null 表示跟随默认） */
+  backupKeepCount?: number | null;
+  /** 备份空间上限（MB，0-102400，0 表示不限，null 表示默认 200MB） */
+  backupMaxSizeMb?: number | null;
+  /** 备份过期天数 TTL（0-3650，0 表示不限，null 表示默认 14 天） */
+  backupTtlDays?: number | null;
+  /** 额外带哈希静态资源目录（逗号分隔） */
+  hashedAssetDirs?: string;
   /** 用户已知晓浅层或特殊目录风险并二次确认保存 */
   deployRootRiskConfirmed?: boolean;
   visitUrl?: string;
@@ -850,6 +866,8 @@ export interface NginxArchiveSelection {
   siteIds: string[];
   revision: string;
   includeHidden?: boolean;
+  /** 纯净迁移模式：按各应用当前发布清单 current.txt 剥离带哈希目录中的历史回滚 chunk */
+  cleanExport?: boolean;
 }
 
 /** 原生文件下载实时进度。 */
@@ -1243,8 +1261,164 @@ export interface RefreshNginxInstanceScriptResult {
     cronLine: string;
     message: string;
   };
+  backupGcCron?: {
+    status: 'installed' | 'unchanged' | 'no_crontab' | 'read_failed' | 'write_failed';
+    cronLine: string;
+    message: string;
+  };
   status: NginxRuntimeStatus;
 }
+
+/** 单条远程备份快照信息 */
+export interface StorageBackupItem {
+  storageMode: 'inline' | 'external';
+  slug: string;
+  appRoot: string;
+  backupPath: string;
+  name: string;
+  kind: string;
+  createdAtEpoch: number;
+  createdAt: string;
+  physicalBytes: number;
+  logicalBytes: number;
+  referencedByDb: boolean;
+  recordId: number;
+  branch: string;
+  commitSha: string;
+}
+
+/** 单个应用目录的存储诊断明细 */
+export interface StorageAppInspectionItem {
+  key: string;
+  deployRoot: string;
+  slug: string;
+  displayName: string;
+  targetId: number;
+  envName: string;
+  uploadStrategy: string;
+  managed: boolean;
+  isSharedRoot: boolean;
+  exists: boolean;
+  hasCurrentManifest: boolean;
+  hasExternalManifest: boolean;
+  hasInlineManifest: boolean;
+  totalBytes: number;
+  runtimeBytes: number;
+  assetsBytes: number;
+  inlineBackupBytes: number;
+  inlineBackupCount: number;
+  inlineManifestBytes: number;
+  stagingBytes: number;
+  externalBackupCount: number;
+  externalLogicalBytes: number;
+  unreferencedBackupCount: number;
+  backups: StorageBackupItem[];
+}
+
+/** Nginx 实例存储诊断报告 */
+export interface NginxStorageInspectionReport {
+  instanceId: number;
+  instanceName: string;
+  serverId: number;
+  serverName: string;
+  scannedAt: string;
+  htmlRoot: { path: string; exists: boolean; totalBytes: number };
+  stateRoot: { path: string; exists: boolean; totalBytes: number; objectsBytes: number; objectsCount: number };
+  summary: {
+    htmlTotalBytes: number;
+    htmlRuntimeBytes: number;
+    inlineBackupTotalBytes: number;
+    inlineBackupTotalCount: number;
+    inlineManifestTotalBytes: number;
+    inlineStagingTotalBytes: number;
+    externalObjectsBytes: number;
+    externalObjectsCount: number;
+    externalLogicalTotalBytes: number;
+    externalBackupTotalCount: number;
+    dedupSavedBytes: number;
+    dedupSavedPercent: number;
+    unreferencedBackupBytes: number;
+    unreferencedBackupCount: number;
+    reclaimableHtmlBytes: number;
+  };
+  apps: StorageAppInspectionItem[];
+}
+
+/** 实例备份清理请求参数 */
+export interface PruneNginxStorageBackupsPayload {
+  inlineAction?: 'none' | 'keep_latest_1' | 'purge_unreferenced' | 'purge_all';
+  applyRetentionPolicy?: boolean;
+  runCasGc?: boolean;
+  gcGraceMinutes?: number;
+  targetRoots?: string[];
+  operator?: string;
+}
+
+/** 实例备份清理结果 */
+export interface PruneNginxStorageBackupsResult {
+  deletedBackups: number;
+  freedBytes: number;
+  clearedDbRecords: number;
+  deletedPaths: string[];
+  casGc: {
+    status: string;
+    scannedObjects: number;
+    liveObjects: number;
+    deletedObjects: number;
+    freedBytes: number;
+    skippedGrace: number;
+  } | null;
+}
+
+/** 无主历史静态资源候选文件 */
+export interface OrphanAssetCandidate {
+  relativePath: string;
+  sizeBytes: number;
+  mtimeEpoch: number;
+  modifiedAt: string;
+}
+
+/** 无主历史静态资源预览响应 */
+export interface OrphanAssetsPreviewResult {
+  targetId: number;
+  projectName: string;
+  realRoot: string;
+  status: string;
+  reason: string;
+  minAgeDays: number;
+  hashedAssetDirs: string[];
+  previewToken: string;
+  hashedCandidates: OrphanAssetCandidate[];
+  otherCandidates: OrphanAssetCandidate[];
+  totalCandidateBytes: number;
+  hashedCandidateBytes: number;
+  otherCandidateBytes: number;
+}
+
+/** 无主历史静态资源清理结果 */
+export interface CleanOrphanAssetsResult {
+  deletedCount: number;
+  freedBytes: number;
+  skippedCount: number;
+}
+
+/** 扫描 Nginx 实例存储与备份占用情况 */
+export const inspectNginxInstanceStorage = (instanceId: number) =>
+  client.get(`/nginx-instances/${instanceId}/storage/inspect`, { timeout: 60_000 }).then(unwrap<NginxStorageInspectionReport>);
+
+/** 执行 Nginx 实例级备份清理、策略瘦身与 CAS 对象池 GC */
+export const pruneNginxInstanceBackups = (instanceId: number, payload: PruneNginxStorageBackupsPayload) =>
+  client.post(`/nginx-instances/${instanceId}/storage/prune-backups`, payload, { timeout: 120_000 }).then(unwrap<PruneNginxStorageBackupsResult>);
+
+/** 预览单个部署目标带哈希目录下的无主历史静态资源 */
+export const previewTargetOrphanAssets = (targetId: number, payload?: { minAgeDays?: number }) =>
+  client.post(`/targets/${targetId}/storage/orphan-assets/preview`, payload || {}, { timeout: 60_000 }).then(unwrap<OrphanAssetsPreviewResult>);
+
+/** 清理单个部署目标已二次确认的无主历史静态资源 */
+export const cleanTargetOrphanAssets = (
+  targetId: number,
+  payload: { previewToken: string; relativePaths: string[]; operator?: string }
+) => client.post(`/targets/${targetId}/storage/orphan-assets/clean`, payload, { timeout: 120_000 }).then(unwrap<CleanOrphanAssetsResult>);
 
 /** 更新托管 Nginx 实例管理脚本与定时任务 */
 export const refreshNginxInstanceScript = (instanceId: number) =>
@@ -1259,12 +1433,13 @@ export const refreshNginxInstanceScript = (instanceId: number) =>
 export const getNginxInstanceArchiveDownloadUrl = async (
   instanceId: number,
   type: NginxArchiveDownloadType = 'all',
-  selection?: Pick<NginxArchiveSelection, 'siteIds' | 'revision' | 'includeHidden'>
+  selection?: Pick<NginxArchiveSelection, 'siteIds' | 'revision' | 'includeHidden' | 'cleanExport'>
 ) => {
   const query = new URLSearchParams({ type });
   if (selection?.siteIds?.length) query.set('siteIds', selection.siteIds.join(','));
   if (selection?.revision) query.set('revision', selection.revision);
   if (selection?.includeHidden) query.set('includeHidden', 'true');
+  if (selection?.cleanExport) query.set('cleanExport', 'true');
   return getActiveDeployApiUrl(`/nginx-instances/${instanceId}/archive?${query.toString()}`);
 };
 
@@ -1290,7 +1465,7 @@ export async function downloadNginxInstanceArchive(
   type: NginxArchiveDownloadType = 'all',
   onProgress?: (loaded: number) => void,
   signal?: AbortSignal,
-  selection?: Pick<NginxArchiveSelection, 'siteIds' | 'revision' | 'includeHidden'>
+  selection?: Pick<NginxArchiveSelection, 'siteIds' | 'revision' | 'includeHidden' | 'cleanExport'>
 ): Promise<NginxInstanceArchiveDownload> {
   const response = await fetch(await getNginxInstanceArchiveDownloadUrl(instanceId, type, selection), {
     signal,

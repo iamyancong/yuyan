@@ -69,7 +69,7 @@ test('parseRuntimeScriptStatusOutput + formatNginxVersionDisplay', () => {
 test('renderRuntimeScript: 含协议版本标记且不再写死仅 run/nginx.pid', () => {
   const script = renderRuntimeScript();
   assert.equal(parseRemoteScriptVersion(script), YUYAN_NGINX_SCRIPT_VERSION);
-  assert.match(script, /yuyan-nginx-script-version:\s*3/);
+  assert.match(script, /yuyan-nginx-script-version:\s*4/);
   assert.doesNotMatch(script, /^PID="\$BASE_DIR\/run\/nginx\.pid"$/m);
   assert.match(script, /find_master_by_proc/);
   assert.match(script, /KILL_BIN.*-HUP|"\$KILL_BIN" -HUP/);

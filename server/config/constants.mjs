@@ -156,8 +156,38 @@ export const DEPLOY_BIND_HOST = String(process.env.HOST || '127.0.0.1').trim();
 /** 每个项目保留的发布记录数 */
 export const DEPLOY_RECORD_KEEP_PER_PROJECT = process.env.DEPLOY_RECORD_KEEP_PER_PROJECT ? Number(process.env.DEPLOY_RECORD_KEEP_PER_PROJECT) : 20;
 
-/** 每个部署目标保留的远程备份版本数 */
-export const DEPLOY_BACKUP_KEEP_PER_TARGET = process.env.DEPLOY_BACKUP_KEEP_PER_TARGET ? Number(process.env.DEPLOY_BACKUP_KEEP_PER_TARGET) : 8;
+/**
+ * 每个部署目标保留的远程备份版本数（历史全局覆盖项）
+ * @description 未显式配置时返回 null，由分层默认策略（full=3 / entry-only=6）接管；显式配置时作为全局兜底份数。
+ */
+export const DEPLOY_BACKUP_KEEP_PER_TARGET = process.env.DEPLOY_BACKUP_KEEP_PER_TARGET
+  ? Math.max(1, Number(process.env.DEPLOY_BACKUP_KEEP_PER_TARGET))
+  : null;
+
+/** 清空后替换（full 备份）默认保留份数 */
+export const DEPLOY_BACKUP_KEEP_FULL = process.env.DEPLOY_BACKUP_KEEP_FULL
+  ? Math.max(1, Number(process.env.DEPLOY_BACKUP_KEEP_FULL))
+  : 3;
+
+/** 覆盖保留旧资源（entry-only 备份）默认保留份数 */
+export const DEPLOY_BACKUP_KEEP_ENTRY = process.env.DEPLOY_BACKUP_KEEP_ENTRY
+  ? Math.max(1, Number(process.env.DEPLOY_BACKUP_KEEP_ENTRY))
+  : 6;
+
+/** 单部署目标备份默认空间上限（MB，0 表示不限） */
+export const DEPLOY_BACKUP_MAX_SIZE_MB = process.env.DEPLOY_BACKUP_MAX_SIZE_MB !== undefined && process.env.DEPLOY_BACKUP_MAX_SIZE_MB !== ''
+  ? Math.max(0, Number(process.env.DEPLOY_BACKUP_MAX_SIZE_MB))
+  : 200;
+
+/** 单部署目标备份默认保留天数 TTL（天，0 表示不限） */
+export const DEPLOY_BACKUP_TTL_DAYS = process.env.DEPLOY_BACKUP_TTL_DAYS !== undefined && process.env.DEPLOY_BACKUP_TTL_DAYS !== ''
+  ? Math.max(0, Number(process.env.DEPLOY_BACKUP_TTL_DAYS))
+  : 14;
+
+/** 无主历史静态资源清理默认安全宽限天数（天） */
+export const DEPLOY_ORPHAN_ASSET_MIN_AGE_DAYS = process.env.DEPLOY_ORPHAN_ASSET_MIN_AGE_DAYS !== undefined && process.env.DEPLOY_ORPHAN_ASSET_MIN_AGE_DAYS !== ''
+  ? Math.max(1, Number(process.env.DEPLOY_ORPHAN_ASSET_MIN_AGE_DAYS))
+  : 7;
 
 /** 内置 Nginx 运行时资源总目录（包含多个变体子目录） */
 export const NGINX_RUNTIME_ASSET_DIR = process.env.NGINX_RUNTIME_ASSET_DIR || path.join(PROJECT_ROOT, 'server', 'assets', 'nginx-runtime');

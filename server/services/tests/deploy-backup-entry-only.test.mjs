@@ -44,10 +44,16 @@ const createMockConn = (stdoutText = '', exitCode = 0) => ({
 });
 
 test('resolveDeployRetentionCounts: 强制保证清单保留份数大于等于备份保留份数', () => {
-  // 1. 默认情况
+  // 1. 默认情况（覆盖保留旧资源默认 6 份，清空后替换默认 3 份；默认 200MB / 14天）
   const defaultResult = resolveDeployRetentionCounts();
-  assert.equal(defaultResult.backupKeepCount, 8);
-  assert.equal(defaultResult.manifestKeepCount, 8);
+  assert.equal(defaultResult.backupKeepCount, 6);
+  assert.equal(defaultResult.manifestKeepCount, 6);
+  assert.equal(defaultResult.backupMaxSizeMb, 200);
+  assert.equal(defaultResult.backupTtlDays, 14);
+
+  const cleanReplaceDefault = resolveDeployRetentionCounts({ uploadStrategy: 'cleanReplace' });
+  assert.equal(cleanReplaceDefault.backupKeepCount, 3);
+  assert.equal(cleanReplaceDefault.manifestKeepCount, 3);
 
   // 2. 清单保留份数小于备份保留份数时，代码层面强制调整相等
   const conflictResult = resolveDeployRetentionCounts({
@@ -65,13 +71,17 @@ test('resolveDeployRetentionCounts: 强制保证清单保留份数大于等于�
   assert.equal(customResult.backupKeepCount, 5);
   assert.equal(customResult.manifestKeepCount, 12);
 
-  // 4. 非法输入兜底
+  // 4. 非法输入兜底（0 对 maxSize/ttl 表示不限，对 keepCount 回落默认）
   const fallbackResult = resolveDeployRetentionCounts({
     backupKeepCount: -1,
     manifestKeepCount: 0,
+    backupMaxSizeMb: 0,
+    backupTtlDays: 0,
   });
-  assert.equal(fallbackResult.backupKeepCount, 8);
-  assert.equal(fallbackResult.manifestKeepCount, 8);
+  assert.equal(fallbackResult.backupKeepCount, 6);
+  assert.equal(fallbackResult.manifestKeepCount, 6);
+  assert.equal(fallbackResult.backupMaxSizeMb, 0);
+  assert.equal(fallbackResult.backupTtlDays, 0);
 });
 
 test('buildBackupDeployRootCommand: 覆盖保留旧资源模式下生成 entry-only 轻量备份逻辑', () => {

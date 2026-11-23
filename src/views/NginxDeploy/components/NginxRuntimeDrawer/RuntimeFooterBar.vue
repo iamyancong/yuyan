@@ -3,6 +3,7 @@ import { YButton } from '@yss-ui/components/lite';
 import {
   CheckCircleOutlined,
   CloseOutlined,
+  DatabaseOutlined,
   PoweroffOutlined,
   ReloadOutlined,
   ScheduleOutlined,
@@ -33,6 +34,7 @@ const emit = defineEmits<{
   (e: 'close'): void;
   (e: 'init'): void;
   (e: 'refresh-script'): void;
+  (e: 'open-storage-governance'): void;
 }>();
 </script>
 
@@ -83,6 +85,14 @@ const emit = defineEmits<{
       >
         <template #icon><ScheduleOutlined /></template>
         更新管理脚本与定时任务
+      </YButton>
+      <YButton
+        v-if="activeInstance"
+        :disabled="initializing || !!actionLoading"
+        @click="emit('open-storage-governance')"
+      >
+        <template #icon><DatabaseOutlined /></template>
+        存储治理
       </YButton>
     </a-space>
 

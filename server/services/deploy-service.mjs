@@ -21,6 +21,7 @@ import {
   listPhysicalServerTargets,
   pruneProjectRecords,
   pruneTargetBackupReferences,
+  syncTargetBackupReferences,
   updateRecord,
   updateTargetBuildMemoryMb,
   updateTargetBuildPeakMb,
@@ -28,7 +29,43 @@ import {
   getManagedNginxInstanceByServerId,
   getJdk,
 } from './deploy-store.mjs';
-import { DEPLOY_BACKUP_KEEP_PER_TARGET, DEPLOY_DATA_DIR, DEPLOY_RECORD_KEEP_PER_PROJECT } from '../config/constants.mjs';
+import {
+  DEPLOY_BACKUP_KEEP_PER_TARGET,
+  DEPLOY_DATA_DIR,
+  DEPLOY_RECORD_KEEP_PER_PROJECT,
+} from '../config/constants.mjs';
+import {
+  DEFAULT_HASHED_ASSET_DIRS,
+  LEGACY_BACKUP_DIR_NAME,
+  LEGACY_MANIFEST_DIR_NAME,
+  parseExternalBackupPath,
+  resolveDeployRetentionPolicy,
+  resolveDeployStateLocation,
+  toInlineStateLayout,
+} from './deploy-state-layout.mjs';
+import {
+  BACKUP_KIND_FILE_NAME,
+  BACKUP_MANIFEST_FILE_NAME,
+  BACKUP_META_FILE_NAME,
+  BACKUP_NAMES_FILE_NAME,
+  buildCasBackupDeployRootCommand,
+  buildCasObjectPoolGcCommand,
+  buildCasPreflightCheckRollbackCommand,
+  buildCasRestoreDeployRootCommand,
+  buildProbeStateRootCommand,
+  buildPruneBackupsCommand,
+  buildWriteTargetStateMetaCommand,
+  CAS_BACKUP_KINDS,
+  CAS_INDEX_FILE_NAME,
+  DEFAULT_CAS_GC_GRACE_MINUTES,
+  DEPLOY_CURRENT_MANIFEST_NAME,
+  isCasBackupKind,
+  isEntryOnlyBackupKind,
+  parseCasBackupOutput,
+  parseCasGcOutput,
+  parseProbeStateRootOutput,
+  parsePruneBackupsOutput,
+} from './deploy-cas-backup.mjs';
 import { withHiddenWindow } from '../utils/child-process.mjs';
 import { resolveStderrLogLevel, splitProcessOutputLines, stripAnsi, TOOL_LOG_SOURCE } from '../utils/process-output.mjs';
 import {
@@ -138,47 +175,39 @@ const DEPLOY_UPLOAD_STRATEGIES = {
 };
 
 /** 发布产物清单目录名 */
-const DEPLOY_MANIFEST_DIR_NAME = '.yuyan-manifests';
+const DEPLOY_MANIFEST_DIR_NAME = LEGACY_MANIFEST_DIR_NAME;
 
-/** 默认带哈希静态资源目录名 */
-export const DEFAULT_HASHED_ASSET_DIRS = ['assets'];
-
-/** 部署备份类型 */
-export const BACKUP_KINDS = {
-  entryOnly: 'entry-only',
-  full: 'full',
+/** 默认带哈希静态资源目录名（向后兼容导出） */
+export {
+  DEFAULT_HASHED_ASSET_DIRS,
+  BACKUP_KIND_FILE_NAME,
+  BACKUP_NAMES_FILE_NAME,
+  BACKUP_MANIFEST_FILE_NAME,
+  BACKUP_META_FILE_NAME,
+  CAS_INDEX_FILE_NAME,
+  DEPLOY_CURRENT_MANIFEST_NAME,
+  resolveDeployRetentionPolicy,
 };
 
-/** 部署备份类型标记文件名 */
-export const BACKUP_KIND_FILE_NAME = '.backup-kind';
-
-/** 部署备份包含顶层条目记录文件名 */
-export const BACKUP_NAMES_FILE_NAME = '.backup-names';
-
-/** 部署备份清单文件名 */
-export const BACKUP_MANIFEST_FILE_NAME = '.manifest.txt';
-
-/** 当前生效产物清单指针文件名 */
-export const DEPLOY_CURRENT_MANIFEST_NAME = 'current.txt';
+/** 部署备份类型 */
+export const BACKUP_KINDS = CAS_BACKUP_KINDS;
 
 /**
- * 解析部署目标的保留份数配置，强制保证清单保留份数 >= 备份保留份数。
+ * 解析部署目标的保留策略配置，强制保证清单保留份数 >= 备份保留份数。
+ * 保持历史导出名向后兼容，同时透出三维策略字段（空间上限、TTL、带哈希目录）。
  * @param {Object} [target] - 部署目标对象
- * @returns {{ backupKeepCount: number, manifestKeepCount: number }} 保留份数配置
+ * @returns {{
+ *   backupKeepCount: number,
+ *   manifestKeepCount: number,
+ *   backupMaxSizeMb: number,
+ *   backupTtlDays: number,
+ *   hashedAssetDirs: string[],
+ *   orphanAssetMinAgeDays: number,
+ *   minKeepCount: number,
+ * }} 保留策略配置
  */
 export function resolveDeployRetentionCounts(target = {}) {
-  const defaultKeep = Math.max(1, Number(DEPLOY_BACKUP_KEEP_PER_TARGET || 8));
-  const configuredBackup = Number(target?.backupKeepCount);
-  const backupKeepCount = Number.isInteger(configuredBackup) && configuredBackup > 0 ? configuredBackup : defaultKeep;
-
-  const configuredManifest = Number(target?.manifestKeepCount);
-  let manifestKeepCount = Number.isInteger(configuredManifest) && configuredManifest > 0 ? configuredManifest : backupKeepCount;
-
-  if (manifestKeepCount < backupKeepCount) {
-    manifestKeepCount = backupKeepCount;
-  }
-
-  return { backupKeepCount, manifestKeepCount };
+  return resolveDeployRetentionPolicy(target);
 }
 
 /**
@@ -811,19 +840,25 @@ export async function createArtifactManifestFile(workspaceRoot, releaseName, rel
 }
 
 /**
- * 上传发布产物清单到部署目录。
+ * 上传发布产物清单到部署状态目录（优先外置仓 manifests/，降级内嵌 .yuyan-manifests/）。
  * @param {Object} conn - SSH 连接
  * @param {string} manifestPath - 本地清单路径
  * @param {Object} target - 部署目标
  * @param {string} releaseName - 发布版本号
- * @param {boolean} useSudo - 是否使用 sudo
+ * @param {boolean} [useSudo=false] - 是否使用 sudo
+ * @param {Object} [options={}] - 扩展选项
+ * @param {string} [options.manifestDir=''] - 指定远程清单目录
  * @returns {Promise<string>} 远程清单路径
  */
-async function uploadArtifactManifest(conn, manifestPath, target, releaseName, useSudo = false) {
-  const manifestDir = path.posix.join(target.deployRoot, DEPLOY_MANIFEST_DIR_NAME);
+async function uploadArtifactManifest(conn, manifestPath, target, releaseName, useSudo = false, options = {}) {
+  const manifestDir = options.manifestDir || path.posix.join(target.deployRoot, DEPLOY_MANIFEST_DIR_NAME);
   const remoteManifestPath = path.posix.join(manifestDir, `${releaseName}.txt`);
   const currentManifestPath = path.posix.join(manifestDir, DEPLOY_CURRENT_MANIFEST_NAME);
   if (!useSudo) {
+    await execSsh(conn, buildRemoteMkdirCommand(manifestDir, false), {
+      allowFailure: true,
+      label: '确保产物清单目录存在',
+    }).catch(() => {});
     await uploadFile(conn, manifestPath, remoteManifestPath);
     await execSsh(conn, `cp -f ${shellQuote(remoteManifestPath)} ${shellQuote(currentManifestPath)}`, {
       allowFailure: true,
@@ -857,19 +892,31 @@ async function uploadArtifactManifest(conn, manifestPath, target, releaseName, u
 
 /**
  * 构建按发布清单与现存备份快照清理旧静态资源的远程 shell 命令。
- * 保护白名单包含：最近 keepCount 份清单、当前运行清单 current.txt、以及所有现存备份目录下的 .manifest.txt。
- * 彻底解决「备份存上一版清单、清单比备份早一个版本」导致的差一误删 chunk 问题。
+ * 保护白名单包含：最近 keepCount 份清单、当前运行清单 current.txt、以及外置仓与历史内嵌目录中所有现存备份下的 .manifest.txt。
+ * 彻底解决「备份存上一版清单、清单比备份早一个版本」以及「外置仓过渡期新旧备份并存」导致的误删 chunk 问题。
  * @param {string} deployRoot - 部署根目录
  * @param {number} keepCount - 清单保留数量
  * @param {boolean} [useSudo=false] - 是否使用 sudo
+ * @param {Object} [options={}] - 外置状态仓目录选项
+ * @param {string} [options.manifestDir=''] - 主清单目录（默认 deployRoot/.yuyan-manifests）
+ * @param {string} [options.backupRoot=''] - 主备份目录（默认 deployRoot/.yuyan-backups）
+ * @param {string} [options.legacyManifestDir=''] - 历史内嵌清单目录
+ * @param {string} [options.legacyBackupRoot=''] - 历史内嵌备份目录
  * @returns {string} 远程命令
  */
-export function buildPruneRemoteArtifactManifestsCommand(deployRoot, keepCount, useSudo = false) {
+export function buildPruneRemoteArtifactManifestsCommand(deployRoot, keepCount, useSudo = false, options = {}) {
+  const manifestDir = options.manifestDir || path.posix.join(deployRoot, DEPLOY_MANIFEST_DIR_NAME);
+  const backupRoot = options.backupRoot || path.posix.join(deployRoot, LEGACY_BACKUP_DIR_NAME);
+  const legacyManifestDir = options.legacyManifestDir || path.posix.join(deployRoot, DEPLOY_MANIFEST_DIR_NAME);
+  const legacyBackupRoot = options.legacyBackupRoot || path.posix.join(deployRoot, LEGACY_BACKUP_DIR_NAME);
   const script = [
     'set -eu',
     'root="$1"',
     'keep="$2"',
-    `manifest_dir="$root/${DEPLOY_MANIFEST_DIR_NAME}"`,
+    'manifest_dir="$3"',
+    'backup_root="$4"',
+    'legacy_manifest_dir="$5"',
+    'legacy_backup_root="$6"',
     'if [ ! -d "$manifest_dir" ]; then echo "deleted_files=0 deleted_manifests=0"; exit 0; fi',
     'tmp_all=$(mktemp)',
     'tmp_recent_raw=$(mktemp)',
@@ -887,8 +934,16 @@ export function buildPruneRemoteArtifactManifestsCommand(deployRoot, keepCount, 
     `if [ -f "$manifest_dir/${DEPLOY_CURRENT_MANIFEST_NAME}" ]; then`,
     `  cat "$manifest_dir/${DEPLOY_CURRENT_MANIFEST_NAME}" >> "$tmp_recent_raw"`,
     'fi',
-    'if [ -d "$root/.yuyan-backups" ]; then',
-    `  find "$root/.yuyan-backups" -mindepth 2 -maxdepth 2 -type f -name "${BACKUP_MANIFEST_FILE_NAME}" 2>/dev/null | while IFS= read -r b_manifest; do`,
+    'if [ -n "$legacy_manifest_dir" ] && [ "$legacy_manifest_dir" != "$manifest_dir" ] && [ -f "$legacy_manifest_dir/' + DEPLOY_CURRENT_MANIFEST_NAME + '" ]; then',
+    `  cat "$legacy_manifest_dir/${DEPLOY_CURRENT_MANIFEST_NAME}" >> "$tmp_recent_raw"`,
+    'fi',
+    'if [ -n "$backup_root" ] && [ -d "$backup_root" ]; then',
+    `  find "$backup_root" -mindepth 2 -maxdepth 2 -type f -name "${BACKUP_MANIFEST_FILE_NAME}" 2>/dev/null | while IFS= read -r b_manifest; do`,
+    '    [ -f "$b_manifest" ] && cat "$b_manifest"',
+    '  done >> "$tmp_recent_raw"',
+    'fi',
+    'if [ -n "$legacy_backup_root" ] && [ "$legacy_backup_root" != "$backup_root" ] && [ -d "$legacy_backup_root" ]; then',
+    `  find "$legacy_backup_root" -mindepth 2 -maxdepth 2 -type f -name "${BACKUP_MANIFEST_FILE_NAME}" 2>/dev/null | while IFS= read -r b_manifest; do`,
     '    [ -f "$b_manifest" ] && cat "$b_manifest"',
     '  done >> "$tmp_recent_raw"',
     'fi',
@@ -905,7 +960,11 @@ export function buildPruneRemoteArtifactManifestsCommand(deployRoot, keepCount, 
     'while IFS= read -r manifest; do rm -f "$manifest" && deleted_manifests=$((deleted_manifests + 1)); done < "$tmp_stale_manifests"',
     'echo "deleted_files=$deleted_files deleted_manifests=$deleted_manifests"',
   ].join('\n');
-  return buildRemoteShellCommand(script, [deployRoot, String(keepCount)], useSudo);
+  return buildRemoteShellCommand(
+    script,
+    [deployRoot, String(keepCount), manifestDir, backupRoot, legacyManifestDir, legacyBackupRoot],
+    useSudo
+  );
 }
 
 /**
@@ -913,12 +972,19 @@ export function buildPruneRemoteArtifactManifestsCommand(deployRoot, keepCount, 
  * @param {Object} conn - SSH 连接
  * @param {Object} target - 部署目标
  * @param {(level: string, message: string, stage?: string) => void} log - 日志函数
- * @param {boolean} useSudo - 是否使用 sudo
+ * @param {boolean} [useSudo=false] - 是否使用 sudo
+ * @param {Object} [options={}] - 外置状态仓布局选项
  * @returns {Promise<boolean>} 是否清理成功
  */
-async function pruneRemoteArtifactManifests(conn, target, log, useSudo = false) {
+async function pruneRemoteArtifactManifests(conn, target, log, useSudo = false, options = {}) {
   const { manifestKeepCount: keepCount } = resolveDeployRetentionCounts(target);
-  const command = buildPruneRemoteArtifactManifestsCommand(target.deployRoot, keepCount, useSudo);
+  const layout = options.stateLayout || null;
+  const command = buildPruneRemoteArtifactManifestsCommand(target.deployRoot, keepCount, useSudo, {
+    manifestDir: layout?.manifestDir || '',
+    backupRoot: layout?.backupRoot || '',
+    legacyManifestDir: layout?.legacyManifestDir || '',
+    legacyBackupRoot: layout?.legacyBackupRoot || '',
+  });
   const result = await execSsh(conn, command, {
     allowFailure: true,
     label: `保留最近 ${keepCount} 次发布及现存备份静态资源`,
@@ -1850,16 +1916,21 @@ export async function assertDeployTargetSafety(target, options = {}) {
  */
 /**
  * 生成探测远程部署根目录的远程 Shell 命令。
+ * 支持优先读取平级外置仓清单，若不存在则自动回退读取历史内嵌 .yuyan-manifests。
  * @param {string} deployRoot - 目标部署目录
  * @param {boolean} [ensureDir=true] - 是否确保目录存在
  * @param {boolean} [useSudo=false] - 是否使用 sudo
+ * @param {Object} [options={}] - 扩展选项
+ * @param {string} [options.externalManifestDir=''] - 候选外置清单目录
  * @returns {string} 远程命令
  */
-export function buildDetectDeployRootCommand(deployRoot, ensureDir = true, useSudo = false) {
+export function buildDetectDeployRootCommand(deployRoot, ensureDir = true, useSudo = false, options = {}) {
+  const externalManifestDir = String(options.externalManifestDir || '');
   const script = [
     'set -eu',
     'root="$1"',
     'ensure_dir="$2"',
+    'ext_manifest_dir="$3"',
     'if [ "$ensure_dir" = "0" ] && [ ! -d "$root" ] && [ ! -L "$root" ]; then',
     '  echo "===EXISTS===0"',
     '  exit 0',
@@ -1877,20 +1948,25 @@ export function buildDetectDeployRootCommand(deployRoot, ensureDir = true, useSu
     'done',
     'printf \'\\n===END_ENTRIES===\\n\'',
     'echo "===MANIFEST==="',
-    `manifest_dir="$real_root/${DEPLOY_MANIFEST_DIR_NAME}"`,
     'current_manifest=""',
-    `if [ -f "$manifest_dir/${DEPLOY_CURRENT_MANIFEST_NAME}" ]; then`,
-    `  current_manifest="$manifest_dir/${DEPLOY_CURRENT_MANIFEST_NAME}"`,
-    'elif [ -d "$manifest_dir" ]; then',
-    `  latest=$(ls -1 "$manifest_dir"/*.txt 2>/dev/null | grep -v "/${DEPLOY_CURRENT_MANIFEST_NAME}$" | sort | tail -n 1 || true)`,
-    '  if [ -n "$latest" ] && [ -f "$latest" ]; then current_manifest="$latest"; fi',
-    'fi',
+    'pick_manifest() {',
+    '  mdir="$1"',
+    '  [ -n "$mdir" ] || return 0',
+    `  if [ -f "$mdir/${DEPLOY_CURRENT_MANIFEST_NAME}" ]; then`,
+    `    current_manifest="$mdir/${DEPLOY_CURRENT_MANIFEST_NAME}"`,
+    '  elif [ -d "$mdir" ]; then',
+    `    latest=$(ls -1 "$mdir"/*.txt 2>/dev/null | grep -v "/${DEPLOY_CURRENT_MANIFEST_NAME}$" | sort | tail -n 1 || true)`,
+    '    if [ -n "$latest" ] && [ -f "$latest" ]; then current_manifest="$latest"; fi',
+    '  fi',
+    '}',
+    'if [ -n "$ext_manifest_dir" ]; then pick_manifest "$ext_manifest_dir"; fi',
+    `if [ -z "$current_manifest" ]; then pick_manifest "$real_root/${DEPLOY_MANIFEST_DIR_NAME}"; fi`,
     'if [ -n "$current_manifest" ] && [ -f "$current_manifest" ]; then',
     '  cat "$current_manifest"',
     'fi',
   ].join('\n');
 
-  return buildRemoteShellCommand(script, [deployRoot, ensureDir ? '1' : '0'], useSudo);
+  return buildRemoteShellCommand(script, [deployRoot, ensureDir ? '1' : '0', externalManifestDir], useSudo);
 }
 
 /**
@@ -1973,7 +2049,7 @@ export function parseDetectDeployRootOutput(raw, deployRoot, options = {}) {
  * @returns {Promise<{ exists: boolean, realRoot: string, existingNames: string[], manifestText: string }>} 探测结果
  */
 export async function detectDeployRoot(conn, deployRoot, useSudo = false, options = {}) {
-  const { ensureDir = true, log = null } = options;
+  const { ensureDir = true, log = null, nginxInstance = null, externalManifestDir = '' } = options;
 
   if (ensureDir) {
     await execSsh(conn, buildRemoteMkdirCommand(deployRoot, useSudo), {
@@ -1981,7 +2057,17 @@ export async function detectDeployRoot(conn, deployRoot, useSudo = false, option
     });
   }
 
-  const cmd = buildDetectDeployRootCommand(deployRoot, ensureDir, useSudo);
+  let candidateExtManifestDir = externalManifestDir;
+  if (!candidateExtManifestDir && nginxInstance) {
+    const preLayout = resolveDeployStateLocation({ realRoot: deployRoot, nginxInstance });
+    if (preLayout.mode === 'external') {
+      candidateExtManifestDir = preLayout.manifestDir;
+    }
+  }
+
+  const cmd = buildDetectDeployRootCommand(deployRoot, ensureDir, useSudo, {
+    externalManifestDir: candidateExtManifestDir,
+  });
   const result = await execSsh(conn, cmd, {
     label: '探测部署根目录与清单',
   });
@@ -1989,7 +2075,110 @@ export async function detectDeployRoot(conn, deployRoot, useSudo = false, option
     throw new Error(`探测部署根目录失败：${result.stderr || result.stdout || `退出码 ${result.code}`}`);
   }
 
-  return parseDetectDeployRootOutput(String(result.stdout || ''), deployRoot, { log });
+  const parsed = parseDetectDeployRootOutput(String(result.stdout || ''), deployRoot, { log });
+
+  // 若部署目录为软链接且解析后的真实路径对应不同的外置仓 slug，则按 realRoot 补查一次外置清单
+  if (parsed.exists && !parsed.manifestText && parsed.realRoot && parsed.realRoot !== deployRoot) {
+    const realLayout = resolveDeployStateLocation({ realRoot: parsed.realRoot, nginxInstance });
+    if (realLayout.mode === 'external' && realLayout.manifestDir !== candidateExtManifestDir) {
+      const readManifestScript = [
+        'mdir="$1"',
+        `if [ -f "$mdir/${DEPLOY_CURRENT_MANIFEST_NAME}" ]; then`,
+        `  cat "$mdir/${DEPLOY_CURRENT_MANIFEST_NAME}"`,
+        'elif [ -d "$mdir" ]; then',
+        `  latest=$(ls -1 "$mdir"/*.txt 2>/dev/null | grep -v "/${DEPLOY_CURRENT_MANIFEST_NAME}$" | sort | tail -n 1 || true)`,
+        '  if [ -n "$latest" ] && [ -f "$latest" ]; then cat "$latest"; fi',
+        'fi',
+      ].join('\n');
+      const fallbackRes = await execSsh(conn, buildRemoteShellCommand(readManifestScript, [realLayout.manifestDir], useSudo), {
+        allowFailure: true,
+        label: '读取外置仓发布清单',
+      }).catch(() => ({ code: 1, stdout: '' }));
+      if (fallbackRes.code === 0 && String(fallbackRes.stdout || '').trim()) {
+        parsed.manifestText = String(fallbackRes.stdout || '').trim();
+      }
+    }
+  }
+
+  return parsed;
+}
+
+/**
+ * 探测并解析当前部署目标生效的状态仓布局（优先托管 Nginx 平级外置仓，无权限时自动降级回内嵌目录）。
+ * @param {Object} conn - SSH 连接
+ * @param {Object} params - 探测参数
+ * @param {string} params.realRoot - 目标真实部署根目录
+ * @param {Object|null} [params.nginxInstance=null] - 关联的 Nginx 实例
+ * @param {boolean} [params.useSudo=false] - 是否 sudo
+ * @param {(level: string, message: string, stage?: string) => void} [params.log] - 日志函数
+ * @returns {Promise<{ layout: Object, casSupported: boolean, sameFs: boolean, hashTool: string }>}
+ */
+export async function resolveActiveDeployStateLayout(conn, { realRoot, nginxInstance = null, useSudo = false, log = null } = {}) {
+  let realBaseRoot = '';
+  let realHtmlRoot = '';
+  if (nginxInstance) {
+    const toResolve = [];
+    if (nginxInstance.baseRoot) toResolve.push(nginxInstance.baseRoot);
+    if (nginxInstance.htmlRoot) toResolve.push(nginxInstance.htmlRoot);
+    if (toResolve.length > 0) {
+      const resolved = await batchDetectRealRoots(conn, toResolve, useSudo).catch(() => toResolve);
+      let idx = 0;
+      if (nginxInstance.baseRoot) {
+        realBaseRoot = resolved[idx] || nginxInstance.baseRoot;
+        idx += 1;
+      }
+      if (nginxInstance.htmlRoot) {
+        realHtmlRoot = resolved[idx] || nginxInstance.htmlRoot;
+      }
+    }
+  }
+
+  const candidate = resolveDeployStateLocation({ realRoot, nginxInstance, realBaseRoot, realHtmlRoot });
+  if (candidate.mode !== 'external') {
+    return {
+      layout: candidate,
+      casSupported: false,
+      sameFs: true,
+      hashTool: 'none',
+    };
+  }
+
+  const probeResult = await execSsh(conn, buildProbeStateRootCommand(candidate, useSudo), {
+    allowFailure: true,
+    label: '探测外置状态仓可写性',
+  }).catch((err) => ({ code: 1, stdout: '', stderr: err?.message || String(err) }));
+
+  if (probeResult.code !== 0) {
+    log?.('warn', `外置状态仓探测失败，已自动降级使用目录内嵌备份：${probeResult.stderr || `退出码 ${probeResult.code}`}`, 'upload');
+    return {
+      layout: toInlineStateLayout(candidate, 'probe-failed'),
+      casSupported: false,
+      sameFs: true,
+      hashTool: 'none',
+    };
+  }
+
+  const parsed = parseProbeStateRootOutput(probeResult.stdout);
+  if (!parsed.writable) {
+    log?.('warn', `外置状态仓 ${candidate.stateRoot} 不可写（${parsed.reason}），已自动降级使用目录内嵌备份`, 'upload');
+    return {
+      layout: toInlineStateLayout(candidate, parsed.reason),
+      casSupported: false,
+      sameFs: true,
+      hashTool: parsed.hashTool,
+    };
+  }
+
+  if (!parsed.casSupported) {
+    log?.('warn', `外置状态仓已启用（${candidate.stateRoot}），但目标机缺少 sha256 工具，本次备份将回退普通复制模式`, 'upload');
+  }
+
+  return {
+    layout: candidate,
+    casSupported: parsed.casSupported,
+    sameFs: parsed.sameFs,
+    hashTool: parsed.hashTool,
+  };
 }
 
 /**
@@ -2512,14 +2701,23 @@ export function buildBackupDeployRootCommand(target, backupPath, protectedSubDir
     '  done',
     'fi',
     '',
-    // full 和 entry-only 统一保存当时的发布清单
-    `manifest_dir="$root/${DEPLOY_MANIFEST_DIR_NAME}"`,
+    // full 和 entry-only 统一保存当时的发布清单（优先外置仓，兜底内嵌目录）
+    `ext_manifest_dir=${shellQuote(String(options.manifestDir || ''))}`,
+    `legacy_manifest_dir="$root/${DEPLOY_MANIFEST_DIR_NAME}"`,
     'current_manifest=""',
-    `if [ -f "$manifest_dir/${DEPLOY_CURRENT_MANIFEST_NAME}" ]; then`,
-    `  current_manifest="$manifest_dir/${DEPLOY_CURRENT_MANIFEST_NAME}"`,
-    'elif [ -d "$manifest_dir" ]; then',
-    `  latest=$(ls -1 "$manifest_dir"/*.txt 2>/dev/null | grep -v "/${DEPLOY_CURRENT_MANIFEST_NAME}$" | sort | tail -n 1 || true)`,
+    `if [ -n "$ext_manifest_dir" ] && [ -f "$ext_manifest_dir/${DEPLOY_CURRENT_MANIFEST_NAME}" ]; then`,
+    `  current_manifest="$ext_manifest_dir/${DEPLOY_CURRENT_MANIFEST_NAME}"`,
+    'elif [ -n "$ext_manifest_dir" ] && [ -d "$ext_manifest_dir" ]; then',
+    `  latest=$(ls -1 "$ext_manifest_dir"/*.txt 2>/dev/null | grep -v "/${DEPLOY_CURRENT_MANIFEST_NAME}$" | sort | tail -n 1 || true)`,
     '  if [ -n "$latest" ] && [ -f "$latest" ]; then current_manifest="$latest"; fi',
+    'fi',
+    'if [ -z "$current_manifest" ]; then',
+    `  if [ -f "$legacy_manifest_dir/${DEPLOY_CURRENT_MANIFEST_NAME}" ]; then`,
+    `    current_manifest="$legacy_manifest_dir/${DEPLOY_CURRENT_MANIFEST_NAME}"`,
+    '  elif [ -d "$legacy_manifest_dir" ]; then',
+    `    latest=$(ls -1 "$legacy_manifest_dir"/*.txt 2>/dev/null | grep -v "/${DEPLOY_CURRENT_MANIFEST_NAME}$" | sort | tail -n 1 || true)`,
+    '    if [ -n "$latest" ] && [ -f "$latest" ]; then current_manifest="$latest"; fi',
+    '  fi',
     'fi',
     'if [ -n "$current_manifest" ] && [ -f "$current_manifest" ]; then',
     `  cp -a "$current_manifest" "$backup/${BACKUP_MANIFEST_FILE_NAME}"`,
@@ -2825,10 +3023,12 @@ export function buildRestoreDeployRootCommand(target, backupPath, protectedSubDi
     '  fi',
     'done',
     '',
-    // 恢复时只要备份里有 .manifest.txt，就写回 current.txt
+    // 恢复时只要备份里有 .manifest.txt，就写回当前生效的清单目录（优先外置仓，回退内嵌）
+    `target_manifest_dir=${shellQuote(String(options.manifestDir || ''))}`,
+    `if [ -z "$target_manifest_dir" ]; then target_manifest_dir="$root/${DEPLOY_MANIFEST_DIR_NAME}"; fi`,
     `if [ -f "$backup/${BACKUP_MANIFEST_FILE_NAME}" ]; then`,
-    `  mkdir -p "$root/${DEPLOY_MANIFEST_DIR_NAME}"`,
-    `  cp -a "$backup/${BACKUP_MANIFEST_FILE_NAME}" "$root/${DEPLOY_MANIFEST_DIR_NAME}/${DEPLOY_CURRENT_MANIFEST_NAME}"`,
+    '  mkdir -p "$target_manifest_dir"',
+    `  cp -a "$backup/${BACKUP_MANIFEST_FILE_NAME}" "$target_manifest_dir/${DEPLOY_CURRENT_MANIFEST_NAME}"`,
     'fi',
   ].join('\n');
 
@@ -2863,11 +3063,13 @@ export function buildRestoreDeployRootCommand(target, backupPath, protectedSubDi
  * @param {boolean} [useSudo=false] - 是否使用 sudo
  * @returns {string} 远程命令
  */
-export function buildDetectBackupRestorePlanCommand(rootPath, backupPath, useSudo = false) {
+export function buildDetectBackupRestorePlanCommand(rootPath, backupPath, useSudo = false, options = {}) {
+  const externalManifestDir = String(options.manifestDir || '');
   const detectScript = [
     'set -eu',
     'root="$1"',
     'backup="$2"',
+    'ext_manifest_dir="$3"',
     'if [ ! -d "$backup" ]; then',
     '  echo "===BACKUP_EXISTS===0"',
     '  exit 0',
@@ -2919,11 +3121,15 @@ export function buildDetectBackupRestorePlanCommand(rootPath, backupPath, useSud
     'done',
     'printf \'\\n===END_ROOT_DIRS===\\n\'',
     'echo "===CURRENT_MANIFEST==="',
-    `if [ -f "$root/${DEPLOY_MANIFEST_DIR_NAME}/${DEPLOY_CURRENT_MANIFEST_NAME}" ]; then cat "$root/${DEPLOY_MANIFEST_DIR_NAME}/${DEPLOY_CURRENT_MANIFEST_NAME}"; fi`,
+    `if [ -n "$ext_manifest_dir" ] && [ -f "$ext_manifest_dir/${DEPLOY_CURRENT_MANIFEST_NAME}" ]; then`,
+    `  cat "$ext_manifest_dir/${DEPLOY_CURRENT_MANIFEST_NAME}"`,
+    `elif [ -f "$root/${DEPLOY_MANIFEST_DIR_NAME}/${DEPLOY_CURRENT_MANIFEST_NAME}" ]; then`,
+    `  cat "$root/${DEPLOY_MANIFEST_DIR_NAME}/${DEPLOY_CURRENT_MANIFEST_NAME}"`,
+    'fi',
     'echo "===END_CURRENT_MANIFEST==="',
   ].join('\n');
 
-  return buildRemoteShellCommand(detectScript, [rootPath, backupPath], useSudo);
+  return buildRemoteShellCommand(detectScript, [rootPath, backupPath, externalManifestDir], useSudo);
 }
 
 /**
@@ -2964,7 +3170,14 @@ export function parseDetectBackupRestorePlanOutput(stdout, options = {}) {
   const rootDirsBlock = parseSection('===ROOT_DIRS===\n', '\n===END_ROOT_DIRS===');
   const currentManifestRaw = parseSection('===CURRENT_MANIFEST===\n', '===END_CURRENT_MANIFEST===').trim();
 
-  const backupKind = backupKindRaw === BACKUP_KINDS.entryOnly ? BACKUP_KINDS.entryOnly : BACKUP_KINDS.full;
+  const backupKind = [
+    BACKUP_KINDS.casFull,
+    BACKUP_KINDS.casEntryOnly,
+    BACKUP_KINDS.entryOnly,
+    BACKUP_KINDS.full,
+  ].includes(backupKindRaw)
+    ? backupKindRaw
+    : BACKUP_KINDS.full;
 
   let backupNames = null;
   let discardedNamesCount = 0;
@@ -3077,7 +3290,9 @@ export function parseDetectBackupRestorePlanOutput(stdout, options = {}) {
  */
 export async function detectBackupRestorePlan(conn, target, backupPath, protectedSubDirs = [], useSudo = false, options = {}) {
   const rootPath = options.realRoot || (typeof target === 'object' ? target.deployRoot : target);
-  const cmd = buildDetectBackupRestorePlanCommand(rootPath, backupPath, useSudo);
+  const extInfo = parseExternalBackupPath(backupPath);
+  const manifestDir = options.manifestDir || options.stateLayout?.manifestDir || (extInfo.isExternal ? path.posix.join(extInfo.targetStateDir, 'manifests') : '');
+  const cmd = buildDetectBackupRestorePlanCommand(rootPath, backupPath, useSudo, { manifestDir });
   const result = await execSsh(conn, cmd, { label: '探测恢复备份元信息', allowFailure: true });
   if (result.code !== 0) {
     throw new Error(`探测恢复备份失败（退出码 ${result.code}）：${result.stderr || result.stdout || '未知错误'}`);
@@ -3087,7 +3302,7 @@ export async function detectBackupRestorePlan(conn, target, backupPath, protecte
     backupPath,
     protectedSubDirs,
     extraRemoveNames: options.extraRemoveNames || [],
-    hashedDirs: options.hashedDirs || DEFAULT_HASHED_ASSET_DIRS,
+    hashedDirs: options.hashedDirs || resolveDeployRetentionPolicy(typeof target === 'object' ? target : {}).hashedAssetDirs,
     log: options.log,
   });
 }
@@ -3147,9 +3362,23 @@ export function buildPreflightCheckRollbackCommand(target, backupPath, hashedDir
  * @param {string[]} [hashedDirs=DEFAULT_HASHED_ASSET_DIRS] - 带哈希目录
  * @returns {Promise<{ passed: boolean, kind: string, missingCount: number }>}
  */
-export async function preflightCheckRollback(conn, target, backupPath, log, useSudo = false, hashedDirs = DEFAULT_HASHED_ASSET_DIRS) {
+export async function preflightCheckRollback(conn, target, backupPath, log, useSudo = false, hashedDirs = null, options = {}) {
+  const effectiveHashedDirs = Array.isArray(hashedDirs) && hashedDirs.length > 0
+    ? hashedDirs
+    : resolveDeployRetentionPolicy(target || {}).hashedAssetDirs;
+  const extInfo = parseExternalBackupPath(backupPath);
+  const objectsDir = options.objectsDir || options.stateLayout?.objectsDir || extInfo.objectsDir || '';
+
   log('info', `正在执行回滚前静态资源完整性预检：${backupPath}`, 'validate');
-  const command = buildPreflightCheckRollbackCommand(target, backupPath, hashedDirs, useSudo);
+  const command = objectsDir
+    ? buildCasPreflightCheckRollbackCommand({
+        rootPath: target.deployRoot,
+        backupPath,
+        objectsDir,
+        hashedDirs: effectiveHashedDirs,
+        useSudo,
+      })
+    : buildPreflightCheckRollbackCommand(target, backupPath, effectiveHashedDirs, useSudo);
   const result = await execSsh(conn, command, {
     allowFailure: true,
     label: '回滚资源完整性预检',
@@ -3158,11 +3387,16 @@ export async function preflightCheckRollback(conn, target, backupPath, log, useS
   const stdout = String(result.stdout || '').trim();
   const kindMatch = stdout.match(/kind=([a-zA-Z0-9_-]+)/);
   const countMatch = stdout.match(/missing_count=(-?\d+)/);
+  const errorMatch = stdout.match(/error=([a-zA-Z0-9_-]+)/);
   const kind = kindMatch ? kindMatch[1] : 'unknown';
   const missingCount = countMatch ? Number(countMatch[1]) : 0;
+  const errorType = errorMatch ? errorMatch[1] : '';
 
   if (missingCount === -1) {
-    throw new Error('回滚预检失败：该轻量备份损坏，未找到依赖清单文件（.manifest.txt），无法保证回滚安全性');
+    const detail = errorType === 'missing_cas_index'
+      ? '未找到 CAS 快照索引文件（.cas-index.tsv）'
+      : '未找到依赖清单文件（.manifest.txt）';
+    throw new Error(`回滚预检失败：该备份快照损坏，${detail}，无法保证回滚安全性`);
   }
 
   if (missingCount > 0) {
@@ -3177,7 +3411,7 @@ export async function preflightCheckRollback(conn, target, backupPath, log, useS
         .slice(0, 10)
         .join('、');
     }
-    const errMessage = `回滚预检失败：备份所依赖的静态资源已在当前部署目录中缺失（共缺失 ${missingCount} 个文件${missingPreview ? `，例如：${missingPreview}` : ''}）。为避免页面出现白屏故障，已终止回滚。建议重新构建并发布该版本。`;
+    const errMessage = `回滚预检失败：备份所依赖的静态资源或备份对象缺失（共缺失 ${missingCount} 个文件${missingPreview ? `，例如：${missingPreview}` : ''}）。为避免页面出现白屏故障，已终止回滚。建议重新构建并发布该版本。`;
     log('error', errMessage, 'validate');
     throw new Error(errMessage);
   }
@@ -3187,7 +3421,7 @@ export async function preflightCheckRollback(conn, target, backupPath, log, useS
 }
 
 /**
- * 从远程备份恢复部署根目录。
+ * 从远程备份恢复部署根目录（自动兼容历史 cp -a 备份与新 CAS 去重快照）。
  * @param {Object} conn - SSH 连接
  * @param {Object} target - 部署目标
  * @param {string} backupPath - 备份目录
@@ -3211,11 +3445,28 @@ async function restoreDeployRootFromBackup(conn, target, backupPath, label, prot
         'cleanup'
       );
     }
-    const cmd = buildRestoreDeployRootCommand(target, backupPath, protectedSubDirs, useSudo, {
-      restoreNames: plan.restoreNames,
-      removeNames: plan.removeNames,
-      isEntryOnly: plan.kind === BACKUP_KINDS.entryOnly,
-    });
+    const rootPath = options.realRoot || (typeof target === 'object' ? target.deployRoot : target);
+    const extInfo = parseExternalBackupPath(backupPath);
+    const objectsDir = options.objectsDir || options.stateLayout?.objectsDir || extInfo.objectsDir || '';
+    const manifestDir = options.manifestDir || options.stateLayout?.manifestDir || (extInfo.isExternal ? path.posix.join(extInfo.targetStateDir, 'manifests') : '');
+
+    const cmd = isCasBackupKind(plan.kind) && objectsDir
+      ? buildCasRestoreDeployRootCommand({
+          rootPath,
+          backupPath,
+          objectsDir,
+          manifestDir,
+          protectedSubDirs,
+          restoreNames: plan.restoreNames,
+          removeNames: plan.removeNames,
+          useSudo,
+        })
+      : buildRestoreDeployRootCommand(target, backupPath, protectedSubDirs, useSudo, {
+          restoreNames: plan.restoreNames,
+          removeNames: plan.removeNames,
+          isEntryOnly: isEntryOnlyBackupKind(plan.kind),
+          manifestDir,
+        });
     const result = await execSsh(conn, cmd, {
       allowFailure: true,
       label,
@@ -3230,48 +3481,100 @@ async function restoreDeployRootFromBackup(conn, target, backupPath, label, prot
 }
 
 /**
- * 清理部署目标超过保留数量的远程备份目录
+ * 按三维保留策略（份数 + 去重物理容量 + TTL，硬保底留最新 1 份）清理远程备份目录，并在外置仓启用时顺带触发轻量对象池 GC。
  * @param {Object} conn - SSH 连接
  * @param {Object} target - 部署目标
  * @param {(level: string, message: string, stage?: string) => void} log - 日志函数
- * @param {boolean} useSudo - 是否使用 sudo
- * @returns {Promise<boolean>} 是否清理成功
+ * @param {boolean} [useSudo=false] - 是否使用 sudo
+ * @param {Object} [options={}] - 扩展选项（stateLayout 等）
+ * @returns {Promise<{ ok: boolean, deletedCount: number, survivingCount: number, effectiveBytes: number, deletedPaths: string[], survivingPaths: string[] }>}
  */
-async function pruneRemoteBackups(conn, target, log, useSudo = false) {
-  const { backupKeepCount: keepCount } = resolveDeployRetentionCounts(target);
-  const backupRoot = path.posix.join(target.deployRoot, '.yuyan-backups');
-  const script = [
-    'if [ -d "$1" ]; then',
-    `old_dirs=$(ls -1dt "$1"/* 2>/dev/null | tail -n +${keepCount + 1});`,
-    'if [ -n "$old_dirs" ]; then printf \'%s\\n\' "$old_dirs" | while IFS= read -r old_dir; do rm -rf "$old_dir"; done; fi;',
-    'fi',
-  ].join(' ');
-  const command = useSudo
-    ? `sudo -n sh -c ${shellQuote(script)} sh ${shellQuote(backupRoot)}`
-    : `sh -c ${shellQuote(script)} sh ${shellQuote(backupRoot)}`;
+async function pruneRemoteBackups(conn, target, log, useSudo = false, options = {}) {
+  const policy = resolveDeployRetentionPolicy(target);
+  const layout = options.stateLayout || null;
+  const primaryBackupRoot = layout?.backupRoot || path.posix.join(target.deployRoot, LEGACY_BACKUP_DIR_NAME);
+  const legacyBackupRoot = layout?.mode === 'external' ? layout.legacyBackupRoot : '';
+
+  const command = buildPruneBackupsCommand({
+    primaryBackupRoot,
+    legacyBackupRoot,
+    keepCount: policy.backupKeepCount,
+    maxSizeMb: policy.backupMaxSizeMb,
+    ttlDays: policy.backupTtlDays,
+    minKeepCount: policy.minKeepCount,
+    useSudo,
+  });
+
+  const policyDesc = [
+    `最多 ${policy.backupKeepCount} 份`,
+    policy.backupMaxSizeMb > 0 ? `上限 ${policy.backupMaxSizeMb}MB` : '空间不限',
+    policy.backupTtlDays > 0 ? `${policy.backupTtlDays} 天` : '时间不限',
+  ].join(' / ');
+
   const result = await execSsh(conn, command, {
     allowFailure: true,
-    label: `保留最近 ${keepCount} 个部署备份`,
+    label: `执行备份保留策略（${policyDesc}）`,
   });
-  if (result.code === 0) {
-    log('info', `已执行备份保留策略：最多保留最近 ${keepCount} 个版本`, 'cleanup');
-    return true;
+
+  if (result.code !== 0) {
+    log('warn', `备份保留策略执行失败，本次不隐藏旧回滚入口：${result.stderr || result.stdout || `退出码 ${result.code}`}`, 'cleanup');
+    return { ok: false, deletedCount: 0, survivingCount: 0, effectiveBytes: 0, deletedPaths: [], survivingPaths: [] };
   }
-  log('warn', `备份保留策略执行失败，本次不隐藏旧回滚入口：${result.stderr || result.stdout || `退出码 ${result.code}`}`, 'cleanup');
-  return false;
+
+  const parsed = parsePruneBackupsOutput(result.stdout);
+  const mbText = `${(parsed.effectiveBytes / (1024 * 1024)).toFixed(1)} MB`;
+  log(
+    'info',
+    `已执行备份保留策略（${policyDesc}，硬保底留 1 份）：淘汰 ${parsed.deletedCount} 份，保留 ${parsed.survivingCount} 份（有效占用约 ${mbText}）`,
+    'cleanup'
+  );
+
+  // 若启用了外置状态仓且本次有淘汰或对象池存在，顺带触发一次带 10 分钟宽限期的轻量对象池 GC
+  if (layout?.mode === 'external' && layout.stateRoot) {
+    try {
+      const gcRes = await execSsh(
+        conn,
+        buildCasObjectPoolGcCommand(layout.stateRoot, { graceMinutes: DEFAULT_CAS_GC_GRACE_MINUTES, useSudo }),
+        { allowFailure: true, label: '回收外置仓孤儿备份对象' }
+      );
+      if (gcRes.code === 0) {
+        const gc = parseCasGcOutput(gcRes.stdout);
+        if (gc.deletedObjects > 0) {
+          log(
+            'info',
+            `外置对象池 GC 完成：回收 ${gc.deletedObjects} 个孤儿对象，释放 ${(gc.freedBytes / (1024 * 1024)).toFixed(2)} MB（活跃对象 ${gc.liveObjects} 个）`,
+            'cleanup'
+          );
+        }
+      }
+    } catch {
+      // GC 异常绝不阻断发布或回滚主流程
+    }
+  }
+
+  return { ok: true, ...parsed };
 }
 
 /**
- * 清理本地超过备份保留上限的回滚引用
+ * 同步清理本地发布记录中的失效回滚引用（优先按远程实际淘汰/存活路径精确对齐）。
  * @param {number} targetId - 部署目标 ID
  * @param {(level: string, message: string, stage?: string) => void} log - 日志函数
  * @param {Object} [target=null] - 部署目标对象
+ * @param {Object|null} [pruneOutcome=null] - 远程 pruneRemoteBackups 返回结果
  */
-async function pruneLocalBackupReferences(targetId, log, target = null) {
-  const { backupKeepCount: keepCount } = resolveDeployRetentionCounts(target || { id: targetId });
-  const result = await pruneTargetBackupReferences(targetId, keepCount);
+async function pruneLocalBackupReferences(targetId, log, target = null, pruneOutcome = null) {
+  let result;
+  if (pruneOutcome && pruneOutcome.ok && (Array.isArray(pruneOutcome.survivingPaths) || Array.isArray(pruneOutcome.deletedPaths))) {
+    result = await syncTargetBackupReferences(targetId, {
+      deletedPaths: pruneOutcome.deletedPaths || [],
+      survivingPaths: pruneOutcome.survivingPaths || null,
+    });
+  } else {
+    const { backupKeepCount: keepCount } = resolveDeployRetentionCounts(target || { id: targetId });
+    result = await pruneTargetBackupReferences(targetId, keepCount);
+  }
   if (result.clearedRecords > 0) {
-    log('info', `已隐藏 ${result.clearedRecords} 条旧记录的回滚入口，当前目标最多保留最近 ${keepCount} 个可回滚版本`, 'cleanup');
+    log('info', `已精确隐藏 ${result.clearedRecords} 条已淘汰/失效记录的回滚入口`, 'cleanup');
   }
   return result;
 }
@@ -3642,6 +3945,9 @@ async function deployTargetInLease(targetId, payload, emit) {
   let commitMessage = '';
   let commitAuthor = '';
   let backupRetentionSynced = false;
+  let backupPruneOutcome = null;
+  let activeStateLayout = null;
+  let activeCasSupported = false;
   let backupCreated = false;
   let stagedRetireCreated = false;
   let deployRootRestored = false;
@@ -3959,7 +4265,7 @@ async function deployTargetInLease(targetId, payload, emit) {
       });
 
       // 1. 先做只读探测以获取初始 realRoot，并探测同物理服务器目标以计算最外层 lockRoot
-      const initialProbe = await detectDeployRoot(conn, target.deployRoot, deployUseSudo, { ensureDir: false });
+      const initialProbe = await detectDeployRoot(conn, target.deployRoot, deployUseSudo, { ensureDir: false, nginxInstance });
       const currentRealRoot = initialProbe.realRoot || target.deployRoot;
       const candidateRoots = [currentRealRoot];
 
@@ -4018,10 +4324,41 @@ async function deployTargetInLease(targetId, payload, emit) {
           // 拿到锁之后、探测之前，清理过期的暂存与垃圾箱目录（超过 60 分钟）
           await cleanupExpiredStagingAndTrash(conn, currentRealRoot, deployUseSudo, log);
 
-          // 加锁后重新探测部署根目录的真实路径与顶层条目
-          const probe = await detectDeployRoot(conn, target.deployRoot, deployUseSudo);
+          // 加锁后重新探测部署根目录的真实路径与顶层条目（优先读取外置仓清单）
+          const probe = await detectDeployRoot(conn, target.deployRoot, deployUseSudo, { nginxInstance });
           realRoot = probe.realRoot || target.deployRoot;
           releasePath = realRoot;
+
+          // 解析当前目标生效的状态仓布局（优先托管 Nginx 平级外置仓，无权限自动降级）
+          const stateState = await resolveActiveDeployStateLayout(conn, {
+            realRoot,
+            nginxInstance,
+            useSudo: deployUseSudo,
+            log,
+          });
+          activeStateLayout = stateState.layout;
+          activeCasSupported = stateState.casSupported;
+          if (activeStateLayout.mode === 'external') {
+            log(
+              'info',
+              `已启用平级外置状态仓：${activeStateLayout.targetStateDir}（对象池去重：${activeCasSupported ? '开启' : '降级复制'}）`,
+              'upload'
+            );
+            await execSsh(
+              conn,
+              buildWriteTargetStateMetaCommand(
+                activeStateLayout,
+                {
+                  projectName: target.projectName,
+                  targetId: target.id,
+                  envName: target.envName,
+                  uploadStrategy,
+                },
+                deployUseSudo
+              ),
+              { allowFailure: true, label: '写入外置状态仓目标元信息' }
+            ).catch(() => {});
+          }
           let normConfig = target.deployRoot;
           try { normConfig = normalizeDeployRootPath(target.deployRoot); } catch {}
           let normReal = realRoot;
@@ -4139,47 +4476,85 @@ async function deployTargetInLease(targetId, payload, emit) {
             extraCleanupNames,
           });
 
-          // 3. 计算备份包含的顶层条目
-          backupPath = path.posix.join(realRoot, '.yuyan-backups', releaseName);
-          let backupKind = BACKUP_KINDS.full;
+          // 3. 计算备份包含的顶层条目（支持扩展带哈希静态目录与外置 CAS 去重）
+          const retentionPolicy = resolveDeployRetentionPolicy(target);
+          const hashedDirs = retentionPolicy.hashedAssetDirs;
+          const useCasBackup = activeStateLayout?.mode === 'external' && activeCasSupported;
+          const effectiveBackupRoot = activeStateLayout?.backupRoot || path.posix.join(realRoot, LEGACY_BACKUP_DIR_NAME);
+          backupPath = path.posix.join(effectiveBackupRoot, releaseName);
+          let backupKind = useCasBackup ? BACKUP_KINDS.casFull : BACKUP_KINDS.full;
           let namesToBackup = [];
           if (isOverlayUpload) {
             if (lastManifestTops.length > 0) {
-              backupKind = BACKUP_KINDS.entryOnly;
+              backupKind = useCasBackup ? BACKUP_KINDS.casEntryOnly : BACKUP_KINDS.entryOnly;
               const candidateBackup = new Set([...filteredArtifactTopNames, ...lastManifestTops]);
-              const hashedSet = new Set(DEFAULT_HASHED_ASSET_DIRS);
+              const hashedSet = new Set(hashedDirs);
               namesToBackup = existingNames.filter(
                 (name) => candidateBackup.has(name) && !protectedSubDirs.includes(name) && !isReservedDeployEntry(name) && !hashedSet.has(name)
               );
             } else {
-              backupKind = BACKUP_KINDS.full;
+              backupKind = useCasBackup ? BACKUP_KINDS.casFull : BACKUP_KINDS.full;
               const candidateBackup = new Set([...filteredArtifactTopNames, ...lastManifestTops]);
               namesToBackup = existingNames.filter(
                 (name) => candidateBackup.has(name) && !protectedSubDirs.includes(name) && !isReservedDeployEntry(name)
               );
             }
           } else {
-            backupKind = BACKUP_KINDS.full;
+            backupKind = useCasBackup ? BACKUP_KINDS.casFull : BACKUP_KINDS.full;
             namesToBackup = cleanupPlan.deleteNames;
           }
 
           // 4. 拆成两次独立执行：备份成功后立刻置 backupCreated = true，再执行暂存/清空
-          await execSsh(
-            conn,
-            [
-              buildRemoteMkdirCommand(backupPath, deployUseSudo),
-              buildBackupDeployRootCommand(realRoot, backupPath, protectedSubDirs, deployUseSudo, {
+          if (useCasBackup) {
+            const casRes = await execSsh(
+              conn,
+              buildCasBackupDeployRootCommand({
+                rootPath: realRoot,
+                backupPath,
+                objectsDir: activeStateLayout.objectsDir,
+                manifestDir: activeStateLayout.manifestDir,
+                legacyManifestDir: activeStateLayout.legacyManifestDir,
                 kind: backupKind,
+                protectedSubDirs,
                 namesToBackup,
-                isOverlayUpload,
+                hashedDirs,
+                meta: { releaseName, branch, commitSha },
+                useSudo: deployUseSudo,
               }),
-            ].join(' && '),
-            {
-              label: '备份部署目录',
-            }
-          );
-          backupCreated = true;
-          log('info', `备份已完成（路径：${backupPath}，包含顶层条目：${namesToBackup.join('、') || '无'}）`, 'upload');
+              { label: '执行外置 CAS 去重备份' }
+            );
+            backupCreated = true;
+            const casStats = parseCasBackupOutput(casRes.stdout);
+            const logicalMb = (casStats.logicalBytes / (1024 * 1024)).toFixed(2);
+            const newMb = (casStats.newObjectBytes / (1024 * 1024)).toFixed(2);
+            const savedPct = casStats.logicalBytes > 0
+              ? Math.round((casStats.dedupSavedBytes / casStats.logicalBytes) * 100)
+              : 0;
+            log(
+              'info',
+              `CAS 备份已完成（类型：${backupKind}，路径：${backupPath}，条目：${namesToBackup.join('、') || '无'}，逻辑体积 ${logicalMb} MB / 新增对象 ${newMb} MB / 去重节省 ${savedPct}%）`,
+              'upload'
+            );
+          } else {
+            await execSsh(
+              conn,
+              [
+                buildRemoteMkdirCommand(backupPath, deployUseSudo),
+                buildBackupDeployRootCommand(realRoot, backupPath, protectedSubDirs, deployUseSudo, {
+                  kind: backupKind,
+                  namesToBackup,
+                  isOverlayUpload,
+                  hashedDirs,
+                  manifestDir: activeStateLayout?.manifestDir || '',
+                }),
+              ].join(' && '),
+              {
+                label: '备份部署目录',
+              }
+            );
+            backupCreated = true;
+            log('info', `备份已完成（路径：${backupPath}，包含顶层条目：${namesToBackup.join('、') || '无'}）`, 'upload');
+          }
 
           if (!isOverlayUpload) {
             if (cleanupPlan.deleteNames.length > 0) {
@@ -4255,7 +4630,14 @@ async function deployTargetInLease(targetId, payload, emit) {
 
           if (artifactManifestPath) {
             try {
-              const remoteManifestPath = await uploadArtifactManifest(conn, artifactManifestPath, { ...target, deployRoot: realRoot }, releaseName, deployUseSudo);
+              const remoteManifestPath = await uploadArtifactManifest(
+                conn,
+                artifactManifestPath,
+                { ...target, deployRoot: realRoot },
+                releaseName,
+                deployUseSudo,
+                { manifestDir: activeStateLayout?.manifestDir || '' }
+              );
               log('info', `已写入发布产物清单：${remoteManifestPath}`, 'cleanup');
             } catch (manifestError) {
               log('warn', `发布产物清单写入失败，本次发布不回滚：${manifestError.message || manifestError}`, 'cleanup');
@@ -4263,22 +4645,31 @@ async function deployTargetInLease(targetId, payload, emit) {
           }
         }
 
-        // 1. 先清理超出保留上限的旧备份目录，淘汰最老版本
-        backupRetentionSynced = await pruneRemoteBackups(conn, { ...target, deployRoot: realRoot }, log, deployUseSudo);
+        // 1. 先按三维策略清理旧备份（外置仓 + 存量内嵌统一排序淘汰，硬保底留 1 份）并触发轻量对象池 GC
+        backupPruneOutcome = await pruneRemoteBackups(conn, { ...target, deployRoot: realRoot }, log, deployUseSudo, {
+          stateLayout: activeStateLayout,
+        });
+        backupRetentionSynced = Boolean(backupPruneOutcome?.ok);
 
-        // 2. 再按现存备份目录下的 .manifest.txt 以及最近清单清理静态资源，确保所有存活备份依赖的 chunk 绝不误删
+        // 2. 再按现存备份目录下的 .manifest.txt（外置+内嵌双扫）以及最近清单清理静态资源，确保所有存活备份依赖的 chunk 绝不误删
         if (artifactManifestPath) {
           try {
-            await pruneRemoteArtifactManifests(conn, { ...target, deployRoot: realRoot }, log, deployUseSudo);
+            await pruneRemoteArtifactManifests(conn, { ...target, deployRoot: realRoot }, log, deployUseSudo, {
+              stateLayout: activeStateLayout,
+            });
           } catch (manifestError) {
             log('warn', `旧静态资源清理失败，本次发布不回滚：${manifestError.message || manifestError}`, 'cleanup');
           }
         }
 
         try {
+          const statsTargetBackupRoot = activeStateLayout?.mode === 'external'
+            ? activeStateLayout.objectsDir
+            : path.posix.join(realRoot, LEGACY_BACKUP_DIR_NAME);
           const statsScript = [
             'root="$1"',
             'backup="$2"',
+            'all_backup_dir="$3"',
             'get_size() {',
             '  val=""',
             '  if command -v timeout >/dev/null 2>&1; then',
@@ -4289,14 +4680,18 @@ async function deployTargetInLease(targetId, payload, emit) {
             '  if [ -n "$val" ]; then echo "$val"; else echo "-"; fi',
             '}',
             'b_size=$(get_size "$backup")',
-            'all_b_size=$(get_size "$root/.yuyan-backups")',
+            'all_b_size=$(get_size "$all_backup_dir")',
             'assets_size=$(get_size "$root/assets")',
             'echo "backup=$b_size all_backups=$all_b_size assets=$assets_size"',
           ].join('\n');
-          const statsResult = await execSsh(conn, buildRemoteShellCommand(statsScript, [realRoot, backupPath], deployUseSudo), {
-            allowFailure: true,
-            label: '采集备份与存储占用统计',
-          });
+          const statsResult = await execSsh(
+            conn,
+            buildRemoteShellCommand(statsScript, [realRoot, backupPath, statsTargetBackupRoot], deployUseSudo),
+            {
+              allowFailure: true,
+              label: '采集备份与存储占用统计',
+            }
+          );
           if (statsResult.code === 0) {
             const out = String(statsResult.stdout || '');
             const bMatch = out.match(/backup=([^\s]+)/);
@@ -4305,7 +4700,8 @@ async function deployTargetInLease(targetId, payload, emit) {
             const bSize = bMatch ? bMatch[1] : '-';
             const allSize = allMatch ? allMatch[1] : '-';
             const assetsSize = assetsMatch ? assetsMatch[1] : '-';
-            log('info', `存储可观测：本次备份体积 ${bSize}，备份目录总体积 ${allSize}，静态资源(assets)体积 ${assetsSize}`, 'cleanup');
+            const poolLabel = activeStateLayout?.mode === 'external' ? '共享对象池总物理体积' : '备份目录总体积';
+            log('info', `存储可观测：本次备份目录 ${bSize}，${poolLabel} ${allSize}，静态资源(assets)体积 ${assetsSize}`, 'cleanup');
           }
         } catch {
           // 可观测性统计采集异常不影响发布主流程
@@ -4361,7 +4757,7 @@ async function deployTargetInLease(targetId, payload, emit) {
             '恢复失败发布前目录',
             protectedSubDirs,
             deployUseSudo,
-            { extraRemoveNames: filteredArtifactTopNames, realRoot, log }
+            { extraRemoveNames: filteredArtifactTopNames, realRoot, log, stateLayout: activeStateLayout }
           ).catch(() => false);
           if (deployRootRestored) {
             log('warn', `发布失败，已恢复部署目录到失败前状态：${backupPath}`, 'cleanup');
@@ -4390,7 +4786,7 @@ async function deployTargetInLease(targetId, payload, emit) {
     });
     let shouldSyncLogs = false;
     if (backupRetentionSynced) {
-      const backupReferenceResult = await pruneLocalBackupReferences(target.id, log, target);
+      const backupReferenceResult = await pruneLocalBackupReferences(target.id, log, target, backupPruneOutcome);
       shouldSyncLogs = shouldSyncLogs || backupReferenceResult.clearedRecords > 0;
     }
     const pruneResult = await pruneLocalRecords(target.projectId, log);
@@ -4421,7 +4817,7 @@ async function deployTargetInLease(targetId, payload, emit) {
     logOperationFailure(log, error, 'error');
     if (backupCreated && !deployRootRestored && !recoveryAttempted) {
       deployRootRestored = await effectiveWithSsh(server, async (conn) =>
-        restoreDeployRootFromBackup(conn, { ...target, deployRoot: realRoot || target.deployRoot }, backupPath, '恢复失败发布前目录', protectedSubDirs, deployUseSudo, { extraRemoveNames: filteredArtifactTopNames, realRoot, log })
+        restoreDeployRootFromBackup(conn, { ...target, deployRoot: realRoot || target.deployRoot }, backupPath, '恢复失败发布前目录', protectedSubDirs, deployUseSudo, { extraRemoveNames: filteredArtifactTopNames, realRoot, log, stateLayout: activeStateLayout })
       ).catch(() => false);
       if (deployRootRestored) {
         log('warn', `发布失败，已恢复部署目录到失败前状态：${backupPath}`, 'cleanup');
@@ -4531,6 +4927,9 @@ async function restoreRecordVersion(recordId, payload, emit, action) {
   let currentBackupCreated = false;
   let targetRestoreNames = [];
   let backupRetentionSynced = false;
+  let backupPruneOutcome = null;
+  let activeStateLayout = null;
+  let activeCasSupported = false;
   let rollbackRootRestored = false;
   let rollbackRecoveryAttempted = false;
   let currentStage = 'rollback';
@@ -4573,7 +4972,7 @@ async function restoreRecordVersion(recordId, payload, emit, action) {
     emit?.stage('rollback', 40, meta.progressTitle, `恢复目录备份 ${sourceRecord.backupPath}`);
     await effectiveWithSsh(server, async (conn) => {
       await ensureDeployRootOperable(conn, server, target, deployUseSudo);
-      const probe = await detectDeployRoot(conn, target.deployRoot, deployUseSudo);
+      const probe = await detectDeployRoot(conn, target.deployRoot, deployUseSudo, { nginxInstance });
       realRoot = probe.realRoot || target.deployRoot;
       if (realRoot !== target.deployRoot) {
         log('info', `检测到部署目录为软链接或存在重定向，真实路径为 ${realRoot}（配置路径为 ${target.deployRoot}），后续操作将在真实路径下执行`, 'validate');
@@ -4627,10 +5026,31 @@ async function restoreRecordVersion(recordId, payload, emit, action) {
           throw new Error(`探测到的真实部署根目录 ${realRoot} 存在高危风险（${realRootRisk.reason}），操作已中止`);
         }
 
-        await preflightCheckRollback(conn, { ...target, deployRoot: realRoot }, sourceRecord.backupPath, log, deployUseSudo);
+        // 解析当前目标生效的状态仓布局（优先托管 Nginx 平级外置仓）
+        const stateState = await resolveActiveDeployStateLayout(conn, {
+          realRoot,
+          nginxInstance,
+          useSudo: deployUseSudo,
+          log,
+        });
+        activeStateLayout = stateState.layout;
+        activeCasSupported = stateState.casSupported;
+        const retentionPolicy = resolveDeployRetentionPolicy(target);
+        const hashedDirs = retentionPolicy.hashedAssetDirs;
 
-        // 先算 restorePlan，再备份待变更项，kind 与 restorePlan.kind 相同
-        const restorePlan = await detectBackupRestorePlan(conn, { ...target, deployRoot: realRoot }, sourceRecord.backupPath, protectedSubDirs, deployUseSudo, { realRoot });
+        await preflightCheckRollback(conn, { ...target, deployRoot: realRoot }, sourceRecord.backupPath, log, deployUseSudo, hashedDirs, {
+          stateLayout: activeStateLayout,
+        });
+
+        // 先算 restorePlan，再备份待变更项，kind 与 restorePlan.kind 对齐
+        const restorePlan = await detectBackupRestorePlan(
+          conn,
+          { ...target, deployRoot: realRoot },
+          sourceRecord.backupPath,
+          protectedSubDirs,
+          deployUseSudo,
+          { realRoot, stateLayout: activeStateLayout, hashedDirs }
+        );
         targetRestoreNames = restorePlan.restoreNames || [];
         if (restorePlan.warningMessage) {
           log('warn', restorePlan.warningMessage, 'cleanup');
@@ -4654,24 +5074,69 @@ async function restoreRecordVersion(recordId, payload, emit, action) {
         }
         const namesToBackup = [...namesToBackupSet].sort();
 
-        currentBackup = path.posix.join(realRoot, '.yuyan-backups', `${meta.branchPrefix}-${createReleaseName()}`);
-        await execSsh(conn, buildRemoteMkdirCommand(currentBackup, deployUseSudo), {
-          label: '创建操作前备份目录',
-        });
-        await execSsh(conn, buildBackupDeployRootCommand(realRoot, currentBackup, protectedSubDirs, deployUseSudo, {
-          kind: restorePlan.kind,
-          namesToBackup,
-          isOverlayUpload: restorePlan.kind === BACKUP_KINDS.entryOnly,
-        }), {
-          label: '备份当前目录',
-        });
+        const useCasForCurrent = activeStateLayout?.mode === 'external' && activeCasSupported;
+        const currentBackupRoot = activeStateLayout?.backupRoot || path.posix.join(realRoot, LEGACY_BACKUP_DIR_NAME);
+        const currentReleaseName = `${meta.branchPrefix}-${createReleaseName()}`;
+        currentBackup = path.posix.join(currentBackupRoot, currentReleaseName);
+        const restoreIsEntryOnly = isEntryOnlyBackupKind(restorePlan.kind);
+
+        if (useCasForCurrent) {
+          const currentKind = restoreIsEntryOnly ? BACKUP_KINDS.casEntryOnly : BACKUP_KINDS.casFull;
+          await execSsh(
+            conn,
+            buildCasBackupDeployRootCommand({
+              rootPath: realRoot,
+              backupPath: currentBackup,
+              objectsDir: activeStateLayout.objectsDir,
+              manifestDir: activeStateLayout.manifestDir,
+              legacyManifestDir: activeStateLayout.legacyManifestDir,
+              kind: currentKind,
+              protectedSubDirs,
+              namesToBackup,
+              hashedDirs,
+              meta: { releaseName: currentReleaseName, branch: `${meta.branchPrefix}-${sourceRecord.id}` },
+              useSudo: deployUseSudo,
+            }),
+            { label: '执行操作前 CAS 备份' }
+          );
+        } else {
+          await execSsh(conn, buildRemoteMkdirCommand(currentBackup, deployUseSudo), {
+            label: '创建操作前备份目录',
+          });
+          await execSsh(
+            conn,
+            buildBackupDeployRootCommand(realRoot, currentBackup, protectedSubDirs, deployUseSudo, {
+              kind: restoreIsEntryOnly ? BACKUP_KINDS.entryOnly : BACKUP_KINDS.full,
+              namesToBackup,
+              isOverlayUpload: restoreIsEntryOnly,
+              hashedDirs,
+              manifestDir: activeStateLayout?.manifestDir || '',
+            }),
+            { label: '备份当前目录' }
+          );
+        }
         currentBackupCreated = true;
 
-        const restoreCmd = buildRestoreDeployRootCommand(realRoot, sourceRecord.backupPath, protectedSubDirs, deployUseSudo, {
-          restoreNames: restorePlan.restoreNames,
-          removeNames: restorePlan.removeNames,
-          isEntryOnly: restorePlan.kind === BACKUP_KINDS.entryOnly,
-        });
+        const sourceExtInfo = parseExternalBackupPath(sourceRecord.backupPath);
+        const sourceObjectsDir = sourceExtInfo.objectsDir || activeStateLayout?.objectsDir || '';
+        const targetManifestDir = activeStateLayout?.manifestDir || '';
+        const restoreCmd = isCasBackupKind(restorePlan.kind) && sourceObjectsDir
+          ? buildCasRestoreDeployRootCommand({
+              rootPath: realRoot,
+              backupPath: sourceRecord.backupPath,
+              objectsDir: sourceObjectsDir,
+              manifestDir: targetManifestDir,
+              protectedSubDirs,
+              restoreNames: restorePlan.restoreNames,
+              removeNames: restorePlan.removeNames,
+              useSudo: deployUseSudo,
+            })
+          : buildRestoreDeployRootCommand(realRoot, sourceRecord.backupPath, protectedSubDirs, deployUseSudo, {
+              restoreNames: restorePlan.restoreNames,
+              removeNames: restorePlan.removeNames,
+              isEntryOnly: restoreIsEntryOnly,
+              manifestDir: targetManifestDir,
+            });
         await execSsh(conn, restoreCmd, {
           label: '恢复目录备份',
         });
@@ -4680,7 +5145,10 @@ async function restoreRecordVersion(recordId, payload, emit, action) {
         log('success', `${testResult.stderr || testResult.stdout}`.trim() || 'nginx -t 校验通过', 'nginx');
         await reloadNginx(conn, server, nginxInstance);
         log('success', 'Nginx 重载完成', 'reload');
-        backupRetentionSynced = await pruneRemoteBackups(conn, { ...target, deployRoot: realRoot }, log, deployUseSudo);
+        backupPruneOutcome = await pruneRemoteBackups(conn, { ...target, deployRoot: realRoot }, log, deployUseSudo, {
+          stateLayout: activeStateLayout,
+        });
+        backupRetentionSynced = Boolean(backupPruneOutcome?.ok);
       } catch (rollbackError) {
         rollbackRecoveryAttempted = true;
         if (currentBackupCreated && currentBackup && !rollbackRootRestored) {
@@ -4688,6 +5156,7 @@ async function restoreRecordVersion(recordId, payload, emit, action) {
             realRoot,
             log,
             extraRemoveNames: targetRestoreNames,
+            stateLayout: activeStateLayout,
           }).catch(() => false);
           if (rollbackRootRestored) {
             log('warn', `${meta.operationText}失败，已恢复部署目录到操作前状态：${currentBackup}`, 'cleanup');
@@ -4717,7 +5186,7 @@ async function restoreRecordVersion(recordId, payload, emit, action) {
     });
     let shouldSyncLogs = false;
     if (backupRetentionSynced) {
-      const backupReferenceResult = await pruneLocalBackupReferences(target.id, log, target);
+      const backupReferenceResult = await pruneLocalBackupReferences(target.id, log, target, backupPruneOutcome);
       shouldSyncLogs = shouldSyncLogs || backupReferenceResult.clearedRecords > 0;
     }
     const pruneResult = await pruneLocalRecords(target.projectId, log);
@@ -4737,6 +5206,7 @@ async function restoreRecordVersion(recordId, payload, emit, action) {
           realRoot,
           log,
           extraRemoveNames: targetRestoreNames,
+          stateLayout: activeStateLayout,
         })
       ).catch(() => false);
       if (rollbackRootRestored) {

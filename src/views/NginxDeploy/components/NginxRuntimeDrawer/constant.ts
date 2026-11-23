@@ -64,7 +64,7 @@ export type NginxRuntimeDrawerEmits = {
   (e: 'downloadArchive', type: 'all' | 'html' | 'conf'): void;
   (e: 'update:archiveSelectionOpen', value: boolean): void;
   (e: 'refreshArchiveSites'): void;
-  (e: 'confirmArchiveDownload', value: { type: NginxArchiveDownloadType; siteIds: string[]; includeHidden?: boolean }): void;
+  (e: 'confirmArchiveDownload', value: { type: NginxArchiveDownloadType; siteIds: string[]; includeHidden?: boolean; cleanExport?: boolean }): void;
   (e: 'refresh'): void;
   /** 扫描时 SSH 失败：打开编辑服务器并聚焦字段（#47） */
   (e: 'editServer', value: { focusField?: string; failure: unknown }): void;

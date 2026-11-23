@@ -11,7 +11,7 @@ import {
 interface ArchiveSelectionModalEmit {
   (e: 'update:open', value: boolean): void;
   (e: 'refresh'): void;
-  (e: 'confirm', value: { type: NginxArchiveDownloadType; siteIds: string[]; includeHidden?: boolean }): void;
+  (e: 'confirm', value: { type: NginxArchiveDownloadType; siteIds: string[]; includeHidden?: boolean; cleanExport?: boolean }): void;
 }
 
 /**
@@ -27,6 +27,7 @@ export const useArchiveSelection = (
   const selectedType = ref<NginxArchiveDownloadType>('all');
   const selectedSiteIds = ref<string[]>([]);
   const includeHidden = ref(false);
+  const cleanExport = ref(true);
   const selectableSites = computed(() => getSelectableArchiveSites(props.sites, selectedType.value));
   const canConfirm = computed(() => canSubmitArchiveSelection(
     selectedSiteIds.value,
@@ -45,6 +46,7 @@ export const useArchiveSelection = (
       selectedType.value = props.type;
       selectedSiteIds.value = [];
       includeHidden.value = false;
+      cleanExport.value = true;
     }
   );
 
@@ -74,11 +76,13 @@ export const useArchiveSelection = (
       type: selectedType.value,
       siteIds: selectedSiteIds.value,
       includeHidden: includeHidden.value,
+      cleanExport: selectedType.value !== 'conf' && cleanExport.value,
     });
   };
 
   return {
     canConfirm,
+    cleanExport,
     clearAll,
     confirmSelection,
     includeHidden,

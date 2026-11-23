@@ -10,6 +10,7 @@ export const RESERVED_DEPLOY_ENTRIES = Object.freeze([
   '.yuyan-backups',
   '.yuyan-manifests',
   '.yuyan-deploy.lock',
+  '.yuyan-state',
 ]);
 
 /**
@@ -217,8 +218,8 @@ export function planRestore(params = {}) {
       !protectedSet.has(name) &&
       !reservedSet.has(name)
     ) {
-      // entry-only 时再排除 hashedDirs
-      if (backupKind === 'entry-only' && hashedSet.has(name)) {
+      // entry-only / cas-entry-only 时再排除 hashedDirs
+      if ((backupKind === 'entry-only' || backupKind === 'cas-entry-only') && hashedSet.has(name)) {
         continue;
       }
       removeNames.push(name);

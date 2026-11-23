@@ -1136,6 +1136,92 @@ export const targetFormSchema = {
                 fulfill: { state: { visible: '{{$deps[0] !== "backend"}}' } },
               },
             },
+            backupKeepCount: {
+              type: 'number',
+              title: '备份保留份数',
+              required: false,
+              'x-decorator': 'FormItem',
+              'x-decorator-props': {
+                tooltip:
+                  '最多保留的可回滚备份份数（1-50）。留空跟随系统推荐默认：清空后替换保留 3 份、覆盖上传保留 6 份。硬保底始终留最新 1 份。',
+              },
+              'x-component': 'InputNumber',
+              'x-component-props': {
+                min: 1,
+                max: 50,
+                precision: 0,
+                placeholder: '留空自动（清空替换 3 份 / 覆盖 6 份）',
+                style: { width: '100%' },
+              },
+              'x-reactions': {
+                dependencies: ['projectType'],
+                fulfill: { state: { visible: '{{$deps[0] !== "backend"}}' } },
+              },
+            },
+            backupMaxSizeMb: {
+              type: 'number',
+              title: '备份空间上限 (MB)',
+              required: false,
+              'x-decorator': 'FormItem',
+              'x-decorator-props': {
+                tooltip:
+                  '单目标去重后的备份空间配额上限（MB）。留空默认 200 MB，填 0 表示不限制。超限时优先淘汰最老版本，硬保底留最新 1 份。',
+              },
+              'x-component': 'InputNumber',
+              'x-component-props': {
+                min: 0,
+                max: 102400,
+                step: 50,
+                precision: 0,
+                placeholder: '留空默认 200 MB（0 表示不限）',
+                style: { width: '100%' },
+              },
+              'x-reactions': {
+                dependencies: ['projectType'],
+                fulfill: { state: { visible: '{{$deps[0] !== "backend"}}' } },
+              },
+            },
+            backupTtlDays: {
+              type: 'number',
+              title: '备份保留天数 (TTL)',
+              required: false,
+              'x-decorator': 'FormItem',
+              'x-decorator-props': {
+                tooltip:
+                  '超过指定天数的旧备份自动淘汰，防止长期不发布的微应用堆积僵尸备份。留空默认 14 天，填 0 表示不限制（硬保底留最新 1 份）。',
+              },
+              'x-component': 'InputNumber',
+              'x-component-props': {
+                min: 0,
+                max: 3650,
+                precision: 0,
+                placeholder: '留空默认 14 天（0 表示不限）',
+                style: { width: '100%' },
+              },
+              'x-reactions': {
+                dependencies: ['projectType'],
+                fulfill: { state: { visible: '{{$deps[0] !== "backend"}}' } },
+              },
+            },
+            hashedAssetDirs: {
+              type: 'string',
+              title: '带哈希静态目录',
+              required: false,
+              'x-decorator': 'FormItem',
+              'x-decorator-props': {
+                tooltip:
+                  '除默认的 assets 外，如构建产物还有其他带内容哈希的顶层静态目录（如 static、chunks），可用逗号分隔填写，便于覆盖上传轻量备份与无主资源扫描识别。',
+              },
+              'x-component': 'Input',
+              'x-component-props': {
+                allowClear: true,
+                placeholder: '默认包含 assets，额外目录逗号分隔（可选）',
+              },
+              'x-reactions': {
+                dependencies: ['projectType'],
+                fulfill: { state: { visible: '{{$deps[0] !== "backend"}}' } },
+              },
+            },
             springProfiles: {
               type: 'string',
               title: 'Spring Profiles',

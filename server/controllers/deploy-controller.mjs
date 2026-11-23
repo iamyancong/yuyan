@@ -83,6 +83,13 @@ import {
   diffCleanupScope,
   RESERVED_DEPLOY_ENTRIES,
 } from '../services/deploy-cleanup-policy.mjs';
+import { normalizeHashedAssetDirsInput } from '../services/deploy-state-layout.mjs';
+import {
+  cleanTargetOrphanAssets,
+  inspectNginxInstanceStorage,
+  previewTargetOrphanAssets,
+  pruneNginxInstanceBackups,
+} from '../services/storage-governance-service.mjs';
 import {
   getNextNginxRuntimePort,
   getNextNginxInstancePort,
@@ -854,6 +861,30 @@ export async function validateTargetPayload(body) {
   if (String(body.artifactDir || '').includes('\n')) throw new Error('产物目录不能包含换行');
   if (String(body.preserveSubDirs || '').includes('\n')) throw new Error('保留子目录请使用逗号分隔，不能包含换行');
   if (body.uploadStrategy && !['cleanReplace', 'overlayKeepAssets'].includes(String(body.uploadStrategy))) throw new Error('资源上传策略不合法');
+  if (!isBackend) {
+    if (body.backupKeepCount !== undefined && body.backupKeepCount !== null && body.backupKeepCount !== '') {
+      const keep = Number(body.backupKeepCount);
+      if (!Number.isInteger(keep) || keep < 1 || keep > 50) {
+        throw new Error('备份保留份数必须是 1-50 之间的整数');
+      }
+    }
+    if (body.backupMaxSizeMb !== undefined && body.backupMaxSizeMb !== null && body.backupMaxSizeMb !== '') {
+      const maxSize = Number(body.backupMaxSizeMb);
+      if (!Number.isInteger(maxSize) || maxSize < 0 || maxSize > 102400) {
+        throw new Error('备份空间上限（MB）必须是 0-102400 之间的整数');
+      }
+    }
+    if (body.backupTtlDays !== undefined && body.backupTtlDays !== null && body.backupTtlDays !== '') {
+      const ttlDays = Number(body.backupTtlDays);
+      if (!Number.isInteger(ttlDays) || ttlDays < 0 || ttlDays > 3650) {
+        throw new Error('备份保留天数必须是 0-3650 之间的整数');
+      }
+    }
+    if (body.hashedAssetDirs !== undefined && body.hashedAssetDirs !== null && String(body.hashedAssetDirs).trim() !== '') {
+      if (String(body.hashedAssetDirs).includes('\n')) throw new Error('静态资源目录请使用逗号分隔，不能包含换行');
+      body.hashedAssetDirs = normalizeHashedAssetDirsInput(body.hashedAssetDirs);
+    }
+  }
   if (!isBackend && body.nginxSiteManaged) {
     const listenPort = Number(body.listenPort || 0);
     if (!Number.isInteger(listenPort) || listenPort < 1 || listenPort > 65535) throw new Error('托管站点监听端口必须在 1-65535 之间');
@@ -1082,6 +1113,7 @@ export async function handleDownloadNginxInstanceArchive(req, res) {
     const siteIds = String(req.query.siteIds || '').split(',').map((value) => value.trim()).filter(Boolean);
     const revision = String(req.query.revision || '').trim();
     const includeHidden = req.query.includeHidden === 'true';
+    const cleanExport = req.query.cleanExport === 'true' || req.query.cleanExport === '1';
     await streamNginxInstanceArchive(Number(req.params.id), type, res, ({ fileName, baseRoot, scriptPath, whitelistCount }) => {
       res.status(200);
       const contentType = type === 'conf' ? 'text/plain; charset=utf-8' : 'application/octet-stream';
@@ -1097,7 +1129,7 @@ export async function handleDownloadNginxInstanceArchive(req, res) {
         res.setHeader('X-Nginx-Archive-Whitelist-Count', String(whitelistCount));
       }
       res.flushHeaders?.();
-    }, { siteIds, revision, includeHidden });
+    }, { siteIds, revision, includeHidden, cleanExport });
     if (!res.writableEnded) res.end();
   } catch (error) {
     if (res.headersSent) {
@@ -1123,7 +1155,7 @@ export async function handleListNginxInstanceArchiveSites(req, res) {
  * 另存为直写：导出托管 Nginx 实例运行包并保存到指定绝对物理路径，实时输出 SSE 进度。
  */
 export async function handleSaveNginxInstanceArchive(req, res) {
-  const { filePath, type, includeHidden } = req.body;
+  const { filePath, type, includeHidden, cleanExport } = req.body;
   if (!filePath) {
     return sendError(res, new Error('缺少保存文件路径'), 400);
   }
@@ -1162,6 +1194,7 @@ export async function handleSaveNginxInstanceArchive(req, res) {
 
     const meta = await saveNginxInstanceArchiveToPath(Number(req.params.id), type || 'all', filePath, writeArchiveEvent, () => isAborted, {
       includeHidden: Boolean(includeHidden),
+      cleanExport: Boolean(cleanExport),
     });
     
     if (!isAborted) {
@@ -1678,7 +1711,7 @@ export async function handleGetTargetCleanupPreview(req, res) {
     const effectiveWithSsh = testHooks?.withSsh || withSsh;
     let otherRealRootsMap = new Map();
     const probe = await effectiveWithSsh(server, async (conn) => {
-      const rootProbe = await detectDeployRoot(conn, target.deployRoot, deployUseSudo, { ensureDir: false });
+      const rootProbe = await detectDeployRoot(conn, target.deployRoot, deployUseSudo, { ensureDir: false, nginxInstance });
       try {
         const physicalTargets = await listPhysicalServerTargets({ serverId: target.serverId });
         const otherTargets = physicalTargets.filter((t) => Number(t.id) !== Number(target.id));
@@ -3213,5 +3246,75 @@ export async function handleDownloadServerFsEntry(req, res) {
     sendError(res, error, Number(error?.status || 400));
   }
 }
+
+/**
+ * 扫描托管/接入 Nginx 实例的静态运行目录与外置状态仓存储占用情况（只读）。
+ */
+export async function handleInspectNginxInstanceStorage(req, res) {
+  try {
+    const data = await inspectNginxInstanceStorage(Number(req.params.id));
+    res.json({ success: true, data });
+  } catch (error) {
+    sendError(res, error, Number(error?.statusCode || error?.status || 400));
+  }
+}
+
+/**
+ * 执行 Nginx 实例级存量内嵌备份清理、三维策略瘦身与 CAS 对象池 GC。
+ */
+export async function handlePruneNginxInstanceBackups(req, res) {
+  try {
+    const body = req.body || {};
+    const operator = String(body.operator || req.headers['x-yuyan-operator'] || '').trim();
+    const data = await pruneNginxInstanceBackups(Number(req.params.id), {
+      inlineAction: body.inlineAction,
+      applyRetentionPolicy: body.applyRetentionPolicy,
+      runCasGc: body.runCasGc,
+      gcGraceMinutes: body.gcGraceMinutes,
+      targetRoots: Array.isArray(body.targetRoots) ? body.targetRoots : [],
+      operator,
+    });
+    if (data.clearedDbRecords > 0 || data.deletedBackups > 0) {
+      publishDeployEvent({ teamId: getRequestTeamId(), domains: ['records'] });
+    }
+    res.json({ success: true, data });
+  } catch (error) {
+    sendError(res, error, Number(error?.statusCode || error?.status || 400));
+  }
+}
+
+/**
+ * 只读预览单个部署目标带哈希目录下的无主历史静态资源。
+ */
+export async function handlePreviewTargetOrphanAssets(req, res) {
+  try {
+    const body = req.body || {};
+    const data = await previewTargetOrphanAssets(Number(req.params.id), {
+      minAgeDays: body.minAgeDays,
+    });
+    res.json({ success: true, data });
+  } catch (error) {
+    sendError(res, error, Number(error?.statusCode || error?.status || 400));
+  }
+}
+
+/**
+ * 清理经二次确认的单个部署目标无主历史静态资源。
+ */
+export async function handleCleanTargetOrphanAssets(req, res) {
+  try {
+    const body = req.body || {};
+    const operator = String(body.operator || req.headers['x-yuyan-operator'] || '').trim();
+    const data = await cleanTargetOrphanAssets(Number(req.params.id), {
+      previewToken: body.previewToken,
+      relativePaths: Array.isArray(body.relativePaths) ? body.relativePaths : [],
+      operator,
+    });
+    res.json({ success: true, data });
+  } catch (error) {
+    sendError(res, error, Number(error?.statusCode || error?.status || 400));
+  }
+}
+
 
 

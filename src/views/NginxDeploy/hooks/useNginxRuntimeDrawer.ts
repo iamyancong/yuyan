@@ -531,15 +531,19 @@ export function useNginxRuntimeDrawer(params: UseNginxRuntimeDrawerParams) {
 
     Modal.confirm({
       title: '更新管理脚本与定时任务',
-      content: '只重新上传 yuyan-nginx.sh 并写入每天日志轮转定时任务，不会重启或重载 Nginx、不改配置和站点。确认继续？',
+      content: '只重新上传 yuyan-nginx.sh 并写入日志轮转与每日备份巡检（gc-backups）定时任务，不会重启或重载 Nginx、不改配置和站点。确认继续？',
       onOk: async () => {
         refreshScriptLoading.value = true;
         try {
           const result = await refreshNginxInstanceScript(instance.id);
           applyRuntimeStatus(result.status);
           const scriptText = result.script?.skipped ? '管理脚本已是最新' : '管理脚本已更新';
-          if (result.cron?.status === 'installed' || result.cron?.status === 'unchanged') {
-            const cronText = result.cron?.status === 'installed' ? '定时任务已写入' : '定时任务已存在无需更新';
+          const logCronOk = result.cron?.status === 'installed' || result.cron?.status === 'unchanged';
+          const gcCronOk = !result.backupGcCron || result.backupGcCron.status === 'installed' || result.backupGcCron.status === 'unchanged';
+          if (logCronOk && gcCronOk) {
+            const cronText = (result.cron?.status === 'installed' || result.backupGcCron?.status === 'installed')
+              ? '日志轮转与备份巡检定时任务已写入'
+              : '定时任务已存在无需更新';
             message.success(`${scriptText}，${cronText}`);
           } else {
             Modal.warning({

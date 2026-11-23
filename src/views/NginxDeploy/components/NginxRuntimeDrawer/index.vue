@@ -16,6 +16,8 @@ import { useNginxRuntimeDrawerView } from './hooks/useNginxRuntimeDrawerView';
 const RuntimeProgressPanel = defineAsyncComponent(() => import('./RuntimeProgressPanel.vue'));
 /** 归档站点选择弹窗按需异步加载 */
 const ArchiveSiteSelectionModal = defineAsyncComponent(() => import('./components/ArchiveSiteSelectionModal/index.vue'));
+/** 存储与备份治理抽屉按需异步加载 */
+const StorageGovernanceDrawer = defineAsyncComponent(() => import('../StorageGovernanceDrawer/index.vue'));
 
 defineOptions({ name: 'NginxRuntimeDrawer' });
 
@@ -60,6 +62,8 @@ interface NginxInstanceFormRef {
 
 /** Nginx 实例编辑表单引用。 */
 const instanceFormRef = ref<NginxInstanceFormRef | null>(null);
+/** 存储治理抽屉打开态。 */
+const storageGovernanceOpen = ref(false);
 
 /** 校验实例表单并提交给业务 Hook。 */
 const submitInstanceForm = async () => {
@@ -182,6 +186,7 @@ const openConnectedNginx = (instanceId: number) => {
         @refresh="emit('refresh')"
         @action="(value) => emit('action', value)"
         @refresh-script="emit('refresh-script')"
+        @open-storage-governance="storageGovernanceOpen = true"
         @close="visible = false"
         @init="emit('init')"
       />
@@ -232,6 +237,13 @@ const openConnectedNginx = (instanceId: number) => {
     @update:open="(value) => emit('update:archiveSelectionOpen', value)"
     @refresh="emit('refreshArchiveSites')"
     @confirm="(value) => emit('confirmArchiveDownload', value)"
+  />
+
+  <StorageGovernanceDrawer
+    v-if="storageGovernanceOpen"
+    v-model:open="storageGovernanceOpen"
+    :instance="activeInstance"
+    :server-name="server?.name || server?.host || ''"
   />
 </template>
 

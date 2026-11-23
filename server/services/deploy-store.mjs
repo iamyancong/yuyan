@@ -15,6 +15,7 @@ import { getRequestContext, getRequestTeamId, SHARED_DEPLOY_WORKSPACE_ID } from 
 import { isSshConnectionError, normalizeHostKeyFingerprint, SSH_CONNECTION_STATUS_CODES } from './ssh-errors.mjs';
 import { setSshConnectionHooks } from './ssh-service.mjs';
 import { normalizeDeployRootPath } from './deploy-cleanup-policy.mjs';
+import { normalizeHashedAssetDirsInput } from './deploy-state-layout.mjs';
 import { parseErrorSummary, serializeErrorSummary, summarizeFailedRecordLogs } from './deploy-error-summary.mjs';
 
 /** 兼容旧调用方：提交元信息查询已迁移到独立服务（带超时、缓存与并发合并） */
@@ -861,6 +862,10 @@ function mapTarget(row) {
     artifactDir: row.artifact_dir,
     preserveSubDirs: row.preserve_sub_dirs || '',
     uploadStrategy: row.upload_strategy || 'overlayKeepAssets',
+    backupKeepCount: row.backup_keep_count === null || row.backup_keep_count === undefined ? null : Number(row.backup_keep_count),
+    backupMaxSizeMb: row.backup_max_size_mb === null || row.backup_max_size_mb === undefined ? null : Number(row.backup_max_size_mb),
+    backupTtlDays: row.backup_ttl_days === null || row.backup_ttl_days === undefined ? null : Number(row.backup_ttl_days),
+    hashedAssetDirs: row.hashed_asset_dirs || '',
     visitUrl: row.visit_url || '',
     remark: row.remark || '',
     createdBy: row.created_by || '',
@@ -1865,6 +1870,10 @@ export async function getDeployDb() {
       artifact_dir TEXT NOT NULL DEFAULT 'dist',
       preserve_sub_dirs TEXT NOT NULL DEFAULT '',
       upload_strategy TEXT NOT NULL DEFAULT 'overlayKeepAssets',
+      backup_keep_count INTEGER,
+      backup_max_size_mb INTEGER,
+      backup_ttl_days INTEGER,
+      hashed_asset_dirs TEXT,
       visit_url TEXT,
       remark TEXT,
       created_by TEXT,
@@ -2031,6 +2040,18 @@ export async function getDeployDb() {
   }
   if (!targetColumns.includes('cleanup_confirmed_scope')) {
     dbInstance.exec('ALTER TABLE deploy_targets ADD COLUMN cleanup_confirmed_scope TEXT');
+  }
+  if (!targetColumns.includes('backup_keep_count')) {
+    dbInstance.exec('ALTER TABLE deploy_targets ADD COLUMN backup_keep_count INTEGER');
+  }
+  if (!targetColumns.includes('backup_max_size_mb')) {
+    dbInstance.exec('ALTER TABLE deploy_targets ADD COLUMN backup_max_size_mb INTEGER');
+  }
+  if (!targetColumns.includes('backup_ttl_days')) {
+    dbInstance.exec('ALTER TABLE deploy_targets ADD COLUMN backup_ttl_days INTEGER');
+  }
+  if (!targetColumns.includes('hashed_asset_dirs')) {
+    dbInstance.exec('ALTER TABLE deploy_targets ADD COLUMN hashed_asset_dirs TEXT');
   }
   const runtimeColumns = getTableColumns(dbInstance, 'nginx_runtimes');
   if (!runtimeColumns.includes('package_variant')) {
@@ -3605,6 +3626,25 @@ function upsertBackendTargetConfig(db, targetId, payload) {
 }
 
 /**
+ * 规范化可选的整数保留策略字段（区分 undefined 保留原值、null/空串重置默认、0 表示不限）。
+ * @param {unknown} rawValue - 原始输入
+ * @param {Object} options - 范围与回退配置
+ * @param {number} options.min - 最小允许值
+ * @param {number} options.max - 最大允许值
+ * @param {number|null} [options.fallback=null] - 未传入（undefined）时的保留值
+ * @returns {number|null} 规范化整数或 null
+ */
+function normalizeOptionalRetentionInt(rawValue, { min, max, fallback = null }) {
+  if (rawValue === undefined) return fallback;
+  if (rawValue === null || rawValue === '') return null;
+  const parsed = Number(rawValue);
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+    return fallback;
+  }
+  return parsed;
+}
+
+/**
  * 创建部署目标
  * @param {Object} payload - 部署目标参数
  * @returns {Promise<Object>} 创建后的部署目标
@@ -3656,14 +3696,18 @@ export async function createTarget(payload) {
   const nextApplicationKind = !isBackend && (payload.applicationKind === 'main' || payload.applicationKind === 'micro')
     ? payload.applicationKind
     : '';
+  const nextBackupKeepCount = normalizeOptionalRetentionInt(payload.backupKeepCount, { min: 1, max: 50, fallback: null });
+  const nextBackupMaxSizeMb = normalizeOptionalRetentionInt(payload.backupMaxSizeMb, { min: 0, max: 102400, fallback: null });
+  const nextBackupTtlDays = normalizeOptionalRetentionInt(payload.backupTtlDays, { min: 0, max: 3650, fallback: null });
+  const nextHashedAssetDirs = isBackend ? '' : normalizeHashedAssetDirsInput(payload.hashedAssetDirs);
   const result = db
     .prepare(
       `INSERT INTO deploy_targets
        (project_id, project_source, project_name, project_description, project_path, repository_url, default_branch, env_name, application_kind, server_id, deploy_root,
         nginx_instance_id, nginx_conf_path, nginx_site_managed, listen_port, server_name, enable_nginx_test, enable_nginx_reload, install_command, build_command, build_memory_mb, artifact_dir,
-        preserve_sub_dirs, upload_strategy, visit_url, remark, created_by, created_at, updated_at,
+        preserve_sub_dirs, upload_strategy, backup_keep_count, backup_max_size_mb, backup_ttl_days, hashed_asset_dirs, visit_url, remark, created_by, created_at, updated_at,
         project_type, jdk_id, stop_command, start_command, health_check_url)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       Number(safePayload.projectId),
@@ -3690,6 +3734,10 @@ export async function createTarget(payload) {
       payload.artifactDir || '',
       payload.preserveSubDirs || '',
       payload.uploadStrategy || 'overlayKeepAssets',
+      nextBackupKeepCount,
+      nextBackupMaxSizeMb,
+      nextBackupTtlDays,
+      nextHashedAssetDirs,
       payload.visitUrl || '',
       payload.remark || '',
       payload.createdBy || '',
@@ -3715,7 +3763,7 @@ export async function createTarget(payload) {
 export async function updateTarget(id, payload) {
   const db = await getDeployDb();
   const teamId = getRequestTeamId();
-  const currentTargetRow = db.prepare('SELECT id, build_memory_mb, deploy_root, upload_strategy, cleanup_confirmed_fingerprint, cleanup_confirmed_at, cleanup_confirmed_by, cleanup_confirmed_scope, application_kind FROM deploy_targets WHERE id = ? AND team_id = ?').get(Number(id), teamId);
+  const currentTargetRow = db.prepare('SELECT id, build_memory_mb, deploy_root, upload_strategy, backup_keep_count, backup_max_size_mb, backup_ttl_days, hashed_asset_dirs, cleanup_confirmed_fingerprint, cleanup_confirmed_at, cleanup_confirmed_by, cleanup_confirmed_scope, application_kind FROM deploy_targets WHERE id = ? AND team_id = ?').get(Number(id), teamId);
   if (!currentTargetRow) return null;
   if (!hasServer(db, payload.serverId)) {
     throw new Error('部署服务器不存在，请先新增独立服务器');
@@ -3770,12 +3818,33 @@ export async function updateTarget(id, payload) {
   const nextConfirmedBy = shouldClearConfirmed ? null : (currentTargetRow.cleanup_confirmed_by || null);
   const nextConfirmedScope = shouldClearConfirmed ? null : (currentTargetRow.cleanup_confirmed_scope || null);
 
+  const nextBackupKeepCount = normalizeOptionalRetentionInt(payload.backupKeepCount, {
+    min: 1,
+    max: 50,
+    fallback: currentTargetRow.backup_keep_count === null || currentTargetRow.backup_keep_count === undefined ? null : Number(currentTargetRow.backup_keep_count),
+  });
+  const nextBackupMaxSizeMb = normalizeOptionalRetentionInt(payload.backupMaxSizeMb, {
+    min: 0,
+    max: 102400,
+    fallback: currentTargetRow.backup_max_size_mb === null || currentTargetRow.backup_max_size_mb === undefined ? null : Number(currentTargetRow.backup_max_size_mb),
+  });
+  const nextBackupTtlDays = normalizeOptionalRetentionInt(payload.backupTtlDays, {
+    min: 0,
+    max: 3650,
+    fallback: currentTargetRow.backup_ttl_days === null || currentTargetRow.backup_ttl_days === undefined ? null : Number(currentTargetRow.backup_ttl_days),
+  });
+  const nextHashedAssetDirs = isBackend
+    ? ''
+    : (payload.hashedAssetDirs !== undefined
+      ? normalizeHashedAssetDirsInput(payload.hashedAssetDirs)
+      : (currentTargetRow.hashed_asset_dirs || ''));
+
   db.prepare(
     `UPDATE deploy_targets
      SET project_id = ?, project_source = ?, project_name = ?, project_description = ?, project_path = ?, repository_url = ?, default_branch = ?, env_name = ?, application_kind = ?,
          server_id = ?, nginx_instance_id = ?, deploy_root = ?, nginx_conf_path = ?, nginx_site_managed = ?, listen_port = ?, server_name = ?,
          enable_nginx_test = ?, enable_nginx_reload = ?, install_command = ?, build_command = ?, build_memory_mb = ?,
-         artifact_dir = ?, preserve_sub_dirs = ?, upload_strategy = ?, visit_url = ?, remark = ?, updated_at = ?,
+         artifact_dir = ?, preserve_sub_dirs = ?, upload_strategy = ?, backup_keep_count = ?, backup_max_size_mb = ?, backup_ttl_days = ?, hashed_asset_dirs = ?, visit_url = ?, remark = ?, updated_at = ?,
          project_type = ?, jdk_id = ?, stop_command = ?, start_command = ?, health_check_url = ?,
          cleanup_confirmed_fingerprint = ?, cleanup_confirmed_at = ?, cleanup_confirmed_by = ?, cleanup_confirmed_scope = ?
      WHERE id = ? AND team_id = ?`
@@ -3804,6 +3873,10 @@ export async function updateTarget(id, payload) {
     safePayload.artifactDir || '',
     safePayload.preserveSubDirs || '',
     safePayload.uploadStrategy || 'overlayKeepAssets',
+    nextBackupKeepCount,
+    nextBackupMaxSizeMb,
+    nextBackupTtlDays,
+    nextHashedAssetDirs,
     safePayload.visitUrl || '',
     safePayload.remark || '',
     now(),
@@ -4168,6 +4241,118 @@ export async function pruneTargetBackupReferences(targetId, keepCount) {
   const ids = rows.map((row) => Number(row.id)).filter(Boolean);
   db.prepare(`UPDATE deploy_records SET backup_path = '', backup_record_id = NULL WHERE id IN (${ids.map(() => '?').join(',')})`).run(...ids);
   return { clearedRecords: ids.length };
+}
+
+/**
+ * 按远程实际删除的备份路径精确清理发布记录中的回滚引用。
+ * @param {number} targetId - 部署目标 ID（传 0 时按精确路径全局匹配当前团队）
+ * @param {string[]} deletedPaths - 远程已被删除的备份目录绝对路径列表
+ * @returns {Promise<{clearedRecords: number}>} 清理结果
+ */
+export async function clearTargetBackupReferencesByPaths(targetId, deletedPaths = []) {
+  const db = await getDeployDb();
+  const safePaths = [...new Set((deletedPaths || []).map((p) => String(p || '').trim()).filter(Boolean))];
+  if (!safePaths.length) return { clearedRecords: 0 };
+
+  const safeTargetId = Number(targetId || 0);
+  const placeholders = safePaths.map(() => '?').join(',');
+  let rows;
+  if (safeTargetId > 0) {
+    rows = db
+      .prepare(
+        `SELECT id
+         FROM deploy_records
+         WHERE target_id = ? AND status != 'running' AND backup_path IN (${placeholders})`
+      )
+      .all(safeTargetId, ...safePaths);
+  } else {
+    const teamId = getRequestTeamId();
+    rows = db
+      .prepare(
+        `SELECT id
+         FROM deploy_records
+         WHERE team_id = ? AND status != 'running' AND backup_path IN (${placeholders})`
+      )
+      .all(teamId, ...safePaths);
+  }
+
+  if (!rows.length) return { clearedRecords: 0 };
+  const ids = rows.map((row) => Number(row.id)).filter(Boolean);
+  db.prepare(`UPDATE deploy_records SET backup_path = '', backup_record_id = NULL WHERE id IN (${ids.map(() => '?').join(',')})`).run(...ids);
+  return { clearedRecords: ids.length };
+}
+
+/**
+ * 按远程真实存活备份路径集合校准目标回滚引用，自动隐藏远程已被删除或淘汰的死回滚入口。
+ * @param {number} targetId - 部署目标 ID
+ * @param {Object} options - 校准选项
+ * @param {string[]} [options.deletedPaths=[]] - 本次明确删除的备份路径
+ * @param {string[]|null} [options.survivingPaths=null] - 远程全量存活的备份绝对路径（非 null 时执行全集对齐）
+ * @returns {Promise<{clearedRecords: number}>} 校准结果
+ */
+export async function syncTargetBackupReferences(targetId, options = {}) {
+  const db = await getDeployDb();
+  const safeTargetId = Number(targetId || 0);
+  if (!safeTargetId) return { clearedRecords: 0 };
+
+  const deletedSet = new Set((options.deletedPaths || []).map((p) => String(p || '').trim()).filter(Boolean));
+  const survivingSet = Array.isArray(options.survivingPaths)
+    ? new Set(options.survivingPaths.map((p) => String(p || '').trim()).filter(Boolean))
+    : null;
+
+  const rows = db
+    .prepare(
+      `SELECT id, backup_path
+       FROM deploy_records
+       WHERE target_id = ? AND status != 'running' AND backup_path != ''`
+    )
+    .all(safeTargetId);
+
+  const idsToClear = [];
+  for (const row of rows) {
+    const bp = String(row.backup_path || '').trim();
+    if (!bp) continue;
+    if (deletedSet.has(bp)) {
+      idsToClear.push(Number(row.id));
+      continue;
+    }
+    if (survivingSet !== null && !survivingSet.has(bp)) {
+      idsToClear.push(Number(row.id));
+    }
+  }
+
+  if (!idsToClear.length) return { clearedRecords: 0 };
+  db.prepare(`UPDATE deploy_records SET backup_path = '', backup_record_id = NULL WHERE id IN (${idsToClear.map(() => '?').join(',')})`).run(...idsToClear);
+  return { clearedRecords: idsToClear.length };
+}
+
+/**
+ * 查询指定部署目标集合下仍指向非空 backup_path 的发布记录（用于存储治理扫描比对孤儿备份）。
+ * @param {number[]} targetIds - 部署目标 ID 列表
+ * @returns {Promise<Array<{id: number, targetId: number, backupPath: string, branch: string, commitSha: string, finishedAt: string, action: string}>>}
+ */
+export async function listBackupReferencesByTargetIds(targetIds = []) {
+  const db = await getDeployDb();
+  const ids = [...new Set((targetIds || []).map((id) => Number(id || 0)).filter((id) => id > 0))];
+  if (!ids.length) return [];
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = db
+    .prepare(
+      `SELECT id, target_id, backup_path, branch, commit_sha, finished_at, started_at, action
+       FROM deploy_records
+       WHERE target_id IN (${placeholders}) AND backup_path != ''
+       ORDER BY started_at DESC, id DESC`
+    )
+    .all(...ids);
+  return rows.map((row) => ({
+    id: Number(row.id),
+    targetId: Number(row.target_id),
+    backupPath: String(row.backup_path || ''),
+    branch: String(row.branch || ''),
+    commitSha: String(row.commit_sha || ''),
+    finishedAt: String(row.finished_at || row.started_at || ''),
+    action: String(row.action || 'deploy'),
+  }));
 }
 
 /**

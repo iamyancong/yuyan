@@ -56,6 +56,7 @@ export interface NginxArchiveSelectionSubmit {
   type: NginxArchiveDownloadType;
   siteIds: string[];
   includeHidden?: boolean;
+  cleanExport?: boolean;
 }
 
 /**
@@ -386,6 +387,7 @@ export function useNginxArchiveDownload(params: UseNginxArchiveDownloadParams) {
       siteIds: [...new Set(submit.siteIds)],
       revision: archiveRevision.value,
       includeHidden: Boolean(submit.includeHidden),
+      cleanExport: Boolean(submit.cleanExport),
     };
     const selectedSites = archiveSites.value.filter((site) => selection.siteIds.includes(site.id));
     const actionLabel = isManaged ? '下载' : '导出';

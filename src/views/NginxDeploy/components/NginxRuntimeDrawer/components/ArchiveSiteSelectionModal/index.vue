@@ -12,11 +12,11 @@ const props = defineProps<ArchiveSiteSelectionModalProps>();
 const emit = defineEmits<{
   (e: 'update:open', value: boolean): void;
   (e: 'refresh'): void;
-  (e: 'confirm', value: { type: 'all' | 'html' | 'conf'; siteIds: string[]; includeHidden?: boolean }): void;
+  (e: 'confirm', value: { type: 'all' | 'html' | 'conf'; siteIds: string[]; includeHidden?: boolean; cleanExport?: boolean }): void;
 }>();
 
 const {
-  canConfirm, clearAll, confirmSelection, includeHidden,
+  canConfirm, cleanExport, clearAll, confirmSelection, includeHidden,
   selectableSites, selectedArchiveOption, selectedSiteIds,
   selectedType, selectAll, updateSelectedSiteIds,
 } = useArchiveSelection(props, emit);
@@ -125,6 +125,12 @@ const {
           </span>
         </div>
         <div class="archive-selection-footer__actions">
+          <div v-if="selectedType !== 'conf'" class="archive-hidden-toggle">
+            <span class="archive-hidden-toggle__label">纯净迁移</span>
+            <a-tooltip title="推荐开启：仅按各微应用当前生效清单（current.txt）导出，自动剥离 assets 中为历史回滚保留的旧 chunk，大幅缩小迁移包体积。">
+              <a-switch v-model:checked="cleanExport" size="small" :disabled="downloading" />
+            </a-tooltip>
+          </div>
           <div class="archive-hidden-toggle">
             <span class="archive-hidden-toggle__label">包含隐藏文件</span>
             <a-tooltip title="默认排除 .git、.vite、.DS_Store 等文件，保留 .well-known 与配置引用的点文件。特殊场景可开启。">
