@@ -579,7 +579,7 @@ test('存储治理：安全路径校验、构建哈希识别、扫描统计、�
   }
 });
 
-test('yuyan-nginx.sh gc-backups 定时巡检命令与 crontab 安装：跳过发布锁目录、清理超期备份/暂存垃圾与孤儿对象', async () => {
+test('yuyan-nginx.sh gc-backups 定时巡检命令与 crontab 安装：不静默裁活跃备份、跳过发布锁目录、清理过期暂存垃圾与孤儿对象', async () => {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yuyan-ngx-gc-'));
   try {
     const baseRoot = path.join(tmpDir, 'frontend');
@@ -598,7 +598,7 @@ test('yuyan-nginx.sh gc-backups 定时巡检命令与 crontab 安装：跳过发
     const oldTime = new Date((nowSec - 20 * 86400) * 1000);
     const oldStagingTime = new Date((nowSec - 7200) * 1000);
 
-    // 1. 构造未加锁微应用（含 2 份内嵌备份，旧的 20 天前，以及超过 60 分钟的暂存垃圾）
+    // 1. 构造活跃未加锁微应用（含 2 份内嵌备份与超过 60 分钟的暂存垃圾）：活跃备份应保留（防与 DB 失步），仅清理暂存垃圾
     const freeApp = path.join(htmlDir, 'free-app');
     const freeNewBk = path.join(freeApp, '.yuyan-backups', '20261123100000');
     const freeOldBk = path.join(freeApp, '.yuyan-backups', '20261101100000');
@@ -609,14 +609,15 @@ test('yuyan-nginx.sh gc-backups 定时巡检命令与 crontab 安装：跳过发
     await fs.utimes(freeOldBk, oldTime, oldTime);
     await fs.utimes(freeStaging, oldStagingTime, oldStagingTime);
 
-    // 2. 构造正在发布（持有未过期 .yuyan-deploy.lock）的微应用，其旧备份必须被完全跳过
+    // 2. 构造正在发布（持有未过期 .yuyan-deploy.lock）的微应用，连过期暂存也必须完全跳过
     const lockedApp = path.join(htmlDir, 'locked-app');
     const lockedOldBk = path.join(lockedApp, '.yuyan-backups', '20261101100000');
-    const lockedNewBk = path.join(lockedApp, '.yuyan-backups', '20261123100000');
+    const lockedStaging = path.join(lockedApp, '.yuyan-retiring-locked');
     await fs.mkdir(lockedOldBk, { recursive: true });
-    await fs.mkdir(lockedNewBk, { recursive: true });
+    await fs.mkdir(lockedStaging, { recursive: true });
     await fs.mkdir(path.join(lockedApp, '.yuyan-deploy.lock'), { recursive: true });
     await fs.utimes(lockedOldBk, oldTime, oldTime);
+    await fs.utimes(lockedStaging, oldStagingTime, oldStagingTime);
 
     // 3. 构造外置仓孤儿 CAS 对象（超过宽限期）
     const orphanHash = 'c'.repeat(64);
@@ -627,14 +628,14 @@ test('yuyan-nginx.sh gc-backups 定时巡检命令与 crontab 安装：跳过发
 
     const out = execFileSync('bash', [scriptPath, 'gc-backups', '14', '200', '6', '10'], { encoding: 'utf8' });
     assert.match(out, /gc_backups_ok=1/);
-    assert.match(out, /deleted_backups=1/);
+    assert.match(out, /deleted_backups=0/);
     assert.match(out, /deleted_objects=1/);
     assert.match(out, /cleaned_staging=1/);
 
-    assert.equal(await fs.stat(freeOldBk).catch(() => null), null, '超期旧备份应被清理');
-    assert.ok(await fs.stat(freeNewBk).catch(() => null), '最新备份应硬保底保留');
+    assert.ok(await fs.stat(freeOldBk).catch(() => null), '活跃目标历史备份不由 cron 静默裁剪，保证与 DB 一致（#63）');
+    assert.ok(await fs.stat(freeNewBk).catch(() => null), '最新备份应保留');
     assert.equal(await fs.stat(freeStaging).catch(() => null), null, '超过 60 分钟的暂存垃圾应被清理');
-    assert.ok(await fs.stat(lockedOldBk).catch(() => null), '持有发布锁的目录绝不能被巡检脚本干扰');
+    assert.ok(await fs.stat(lockedStaging).catch(() => null), '持有发布锁的目录绝不能被巡检脚本干扰');
     assert.equal(await fs.stat(orphanObjPath).catch(() => null), null, '外置仓孤儿对象应被回收');
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true });
@@ -989,21 +990,19 @@ test('yuyan-nginx.sh gc-backups v5：按 target.json 目标级策略执行，并
 
     const out = execFileSync('bash', [scriptPath, 'gc-backups', '14', '200', '6', '10'], { encoding: 'utf8' });
     assert.match(out, /gc_backups_ok=1/);
-    assert.match(out, /deleted_backups=4/); // bkA3 + bkD1 + inlineEBk + bkF1
-    assert.match(out, /reclaimed_targets=3/); // tdirD + inlineE + tdirF
-    assert.match(out, /deleted_objects=3/); // hash3 + hashD + hashF
+    assert.match(out, /deleted_backups=2/); // 仅回收明确带 .retired 且超期的 bkD1 + inlineEBk（#63）
+    assert.match(out, /reclaimed_targets=2/); // tdirD + inlineE
+    assert.match(out, /deleted_objects=1/); // hashD
 
-    // 校验场景 A
+    // 校验场景 A & B：活跃目标不受定时脚本静默裁剪（由发布与手动治理负责以保持 DB 同步）
     assert.ok(await fs.stat(bkA1).catch(() => null), '场景 A 最新备份应保留');
-    assert.ok(await fs.stat(bkA2).catch(() => null), '场景 A 20 天备份应按目标 30 天 TTL 保留');
-    assert.equal(await fs.stat(bkA3).catch(() => null), null, '场景 A 第 3 份备份应按目标 keepCount=2 淘汰');
-
-    // 校验场景 B
+    assert.ok(await fs.stat(bkA2).catch(() => null), '场景 A 备份应保留');
+    assert.ok(await fs.stat(bkA3).catch(() => null), '场景 A 活跃目标历史备份不由 cron 静默删除');
     assert.ok(await fs.stat(bkB1).catch(() => null));
-    assert.ok(await fs.stat(bkB2).catch(() => null), '场景 B ttl=0 应保留 28 天备份');
+    assert.ok(await fs.stat(bkB2).catch(() => null), '场景 B 活跃目标备份应保留');
 
     // 校验场景 C
-    assert.ok(await fs.stat(bkC1).catch(() => null), '场景 C 退役未满 14 天应保留最后 1 份');
+    assert.ok(await fs.stat(bkC1).catch(() => null), '场景 C 退役未满 14 天应保留');
 
     // 校验场景 D
     assert.equal(await fs.stat(tdirD).catch(() => null), null, '场景 D 超期退役目标目录应整份回收');
@@ -1016,22 +1015,19 @@ test('yuyan-nginx.sh gc-backups v5：按 target.json 目标级策略执行，并
     // 校验场景 E
     assert.equal(await fs.stat(inlineE).catch(() => null), null, '场景 E 超期退役内嵌 .yuyan-backups 应整份清除');
 
-    // 校验场景 F
-    assert.equal(await fs.stat(tdirF).catch(() => null), null, '场景 F 目录已删且超期目标应整份回收');
-    assert.equal(
+    // 校验场景 F & G：无 .retired 标记时，即便 mapped_root 不存在（如挂载丢失/无权限）也绝不整份误删（P1-3）
+    assert.ok(await fs.stat(tdirF).catch(() => null), '场景 F 无 .retired 标记绝不能因目录不可见而误删');
+    assert.ok(
       await fs.stat(path.join(stateDir, 'objects', hashF.slice(0, 2), hashF)).catch(() => null),
-      null,
-      '场景 F 孤儿 CAS 对象应在同一次 GC 中回收'
+      '场景 F 关联 CAS 对象仍应保留'
     );
-
-    // 校验场景 G
-    assert.ok(await fs.stat(bkG1).catch(() => null), '场景 G 目录已删但备份仍在 14 天内应继续保留');
+    assert.ok(await fs.stat(bkG1).catch(() => null), '场景 G 目录失联但无 .retired 标记继续保留');
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
 });
 
-test('storage-governance: retireTargetBackupState 共享目录防误伤与 syncTargetRetentionMeta 同步策略', async () => {
+test('storage-governance: 共享目录防误伤、迁移后的新回滚引用保护与保留策略同步', async () => {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yuyan-retire-svc-'));
   const verifyScript = `
     import assert from 'node:assert/strict';
@@ -1043,7 +1039,12 @@ test('storage-governance: retireTargetBackupState 共享目录防误伤与 syncT
       createServer,
       createNginxInstance,
       createTarget,
+      createRecord,
       deleteTarget,
+      getRecord,
+      getTarget,
+      updateTarget,
+      updateTargetStateRoot,
       closeDeployDb,
     } from './server/services/deploy-store.mjs';
     import { __setTestHooks, __resetTestHooks } from './server/services/test-hooks.mjs';
@@ -1175,6 +1176,43 @@ test('storage-governance: retireTargetBackupState 共享目录防误伤与 syncT
     assert.equal(doRetire.marked, 2);
     assert.ok(await fs.stat(path.join(layout.targetStateDir, '.retired')).catch(() => null));
     assert.ok(await fs.stat(path.join(layout.legacyBackupRoot, '.retired')).catch(() => null));
+
+    const migrating = await createTarget({ ...t2, deployRoot: appDir });
+    await updateTargetStateRoot(migrating.id, layout.stateRoot);
+    const previous = await getTarget(migrating.id);
+    const saveRecord = (releasePath, backupPath) => createRecord({
+      targetId: migrating.id,
+      projectId: migrating.projectId,
+      projectName: migrating.projectName,
+      envName: migrating.envName,
+      branch: 'main',
+      status: 'success',
+      releasePath,
+      backupPath,
+    });
+    const oldExternal = await saveRecord(appDir, path.join(layout.backupRoot, 'old-release'));
+    const oldInline = await saveRecord(appDir, path.join(layout.legacyBackupRoot, 'old-release'));
+
+    const aliasTarget = await updateTarget(migrating.id, { ...migrating, deployRoot: appDirLink });
+    const aliasRetire = await retireTargetBackupState({ target: previous, server, nginxInstance: inst }, {
+      reason: 'root-changed', nextDeployRoot: appDirLink, nextTargetId: migrating.id,
+    });
+    assert.equal(aliasRetire.reason, 'same-real-root');
+    assert.equal((await getRecord(oldExternal.id)).backupPath, oldExternal.backupPath);
+    const oldAliasInline = await saveRecord(appDirLink, path.join(appDirLink, '.yuyan-backups', 'old-alias-release'));
+
+    const nextRoot = path.join(htmlRoot, 'new-root');
+    await fs.mkdir(nextRoot, { recursive: true });
+    await updateTarget(migrating.id, { ...aliasTarget, deployRoot: nextRoot });
+    const newLayout = resolveDeployStateLocation({ realRoot: nextRoot, nginxInstance: inst });
+    const newRecord = await saveRecord(nextRoot, path.join(newLayout.backupRoot, 'new-release'));
+    const rootOptions = { reason: 'root-changed', nextDeployRoot: nextRoot, nextTargetId: migrating.id };
+    await retireTargetBackupState({ target: aliasTarget, server, nginxInstance: inst }, rootOptions);
+    assert.equal((await getRecord(oldExternal.id)).backupPath, '');
+    assert.equal((await getRecord(oldInline.id)).backupPath, '');
+    assert.equal((await getRecord(oldAliasInline.id)).backupPath, '');
+    assert.equal((await getRecord(newRecord.id)).backupPath, newRecord.backupPath);
+    assert.equal((await getTarget(migrating.id)).stateRoot, newLayout.stateRoot, '共享状态仓路径时保留新目标的固定仓');
 
     __resetTestHooks();
     await closeDeployDb();

@@ -1297,6 +1297,8 @@ export interface StorageAppInspectionItem {
   envName: string;
   uploadStrategy: string;
   managed: boolean;
+  otherTeamManaged?: boolean;
+  ownership?: 'managed_self' | 'managed_other_team' | 'unmanaged';
   isSharedRoot: boolean;
   exists: boolean;
   hasCurrentManifest: boolean;
@@ -1311,7 +1313,19 @@ export interface StorageAppInspectionItem {
   stagingBytes: number;
   externalBackupCount: number;
   externalLogicalBytes: number;
+  referencedInlineBackupCount?: number;
+  referencedExternalBackupCount?: number;
+  referencedBackupCount?: number;
   unreferencedBackupCount: number;
+  retentionPolicy?: {
+    backupKeepCount: number;
+    manifestKeepCount: number;
+    backupMaxSizeMb: number;
+    backupTtlDays: number;
+    hashedAssetDirs: string[];
+    orphanAssetMinAgeDays: number;
+    minKeepCount: number;
+  } | null;
   backups: StorageBackupItem[];
 }
 

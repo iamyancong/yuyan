@@ -15,6 +15,7 @@ import {
   type StorageAppInspectionItem,
   type StoragePruneJobSnapshot,
 } from '@/api/deploy';
+import type { StoragePruneImpactSummary } from '../components/StoragePruneConfirmModal.vue';
 import { formatStorageBytes } from '../constant';
 import type { StorageGovernanceDrawerEmits, StorageGovernanceDrawerProps } from '../type';
 
@@ -51,6 +52,7 @@ export const useStorageGovernance = (
   const inlineAction = ref<NonNullable<PruneNginxStorageBackupsPayload['inlineAction']>>('keep_latest_1');
   const applyRetentionPolicy = ref(true);
   const runCasGc = ref(true);
+  const pruneConfirmOpen = ref(false);
 
   const orphanModalOpen = ref(false);
   const orphanLoading = ref(false);
@@ -71,6 +73,88 @@ export const useStorageGovernance = (
   const cleaning = computed(() => startingPrune.value || pruneJob.value?.status === 'running');
   const cleaningAll = computed(() => cleaning.value && pruneJob.value?.scope !== 'single');
 
+  /** 计算全实例「一键安全瘦身」的影响预览摘要（含内嵌备份与三维保留策略预计裁剪数，仅计入本团队已纳管应用） */
+  const pruneImpactSummary = computed<StoragePruneImpactSummary>(() => {
+    let managedAppCount = 0;
+    let skippedUnmanagedCount = 0;
+    let skippedOtherTeamCount = 0;
+    let estimatedInlineDeleteCount = 0;
+    let estimatedInlineFreeBytes = 0;
+    let estimatedRetentionDeleteCount = 0;
+    let estimatedInvalidatedRollbackCount = 0;
+    let migratedAppsClearingInline = 0;
+    const nowSec = Math.floor(Date.now() / 1000);
+
+    for (const app of apps.value) {
+      if (app.ownership === 'managed_other_team' || app.otherTeamManaged) {
+        skippedOtherTeamCount += 1;
+        continue;
+      }
+      if (!app.managed) {
+        skippedUnmanagedCount += 1;
+        continue;
+      }
+      managedAppCount += 1;
+
+      const deletedPaths = new Set<string>();
+      const inlineBackups = (app.backups || [])
+        .filter((b) => b.storageMode === 'inline')
+        .sort((a, b) => b.createdAtEpoch - a.createdAtEpoch);
+
+      if (inlineBackups.length > 0 && inlineAction.value !== 'none') {
+        let toDelete = inlineBackups;
+        if (inlineAction.value === 'keep_latest_1') {
+          const startIdx = app.externalBackupCount > 0 ? 0 : 1;
+          toDelete = inlineBackups.slice(startIdx);
+          if (startIdx === 0 && toDelete.length > 0) {
+            migratedAppsClearingInline += 1;
+          }
+        } else if (inlineAction.value === 'purge_unreferenced') {
+          toDelete = inlineBackups.filter((b) => !b.referencedByDb);
+        }
+        estimatedInlineDeleteCount += toDelete.length;
+        estimatedInlineFreeBytes += toDelete.reduce((sum, b) => sum + Number(b.physicalBytes || 0), 0);
+        for (const b of toDelete) {
+          deletedPaths.add(b.backupPath);
+          if (b.referencedByDb) estimatedInvalidatedRollbackCount += 1;
+        }
+      }
+
+      if (applyRetentionPolicy.value && app.retentionPolicy) {
+        const policy = app.retentionPolicy;
+        const remaining = (app.backups || [])
+          .filter((b) => !deletedPaths.has(b.backupPath))
+          .sort((a, b) => b.createdAtEpoch - a.createdAtEpoch);
+        const minKeep = Math.max(1, Number(policy.minKeepCount || 1));
+        const keepCount = Math.max(minKeep, Number(policy.backupKeepCount || 6));
+        const ttlSec = Math.max(0, Number(policy.backupTtlDays || 0)) * 86400;
+        let kept = 0;
+        for (const b of remaining) {
+          const ageSec = b.createdAtEpoch > 0 ? Math.max(0, nowSec - b.createdAtEpoch) : 0;
+          const shouldPrune =
+            kept >= minKeep && (kept >= keepCount || (ttlSec > 0 && ageSec > ttlSec));
+          if (shouldPrune) {
+            estimatedRetentionDeleteCount += 1;
+            if (b.referencedByDb) estimatedInvalidatedRollbackCount += 1;
+          } else {
+            kept += 1;
+          }
+        }
+      }
+    }
+
+    return {
+      managedAppCount,
+      skippedUnmanagedCount,
+      skippedOtherTeamCount,
+      estimatedInlineDeleteCount,
+      estimatedInlineFreeBytes,
+      estimatedRetentionDeleteCount,
+      estimatedInvalidatedRollbackCount,
+      migratedAppsClearingInline,
+    };
+  });
+
   /** 停止后台任务轮询定时器 */
   const stopPrunePolling = () => {
     pollGeneration += 1;
@@ -80,7 +164,7 @@ export const useStorageGovernance = (
     }
   };
 
-  /** 拉取当前实例存储诊断报告 */
+  /** 拉取当前实例存储诊断报告（纯只读扫描） */
   const loadInspection = async () => {
     const instanceId = props.instance?.id;
     if (!instanceId) return;
@@ -93,6 +177,18 @@ export const useStorageGovernance = (
     } finally {
       inspecting.value = false;
     }
+  };
+
+  /** 打开全实例清理确认弹窗 */
+  const openPruneConfirmModal = () => {
+    if (cleaning.value || inspecting.value) return;
+    pruneConfirmOpen.value = true;
+  };
+
+  /** 确认执行全实例一键安全瘦身 */
+  const confirmPruneAllBackups = async () => {
+    pruneConfirmOpen.value = false;
+    await executePruneBackups();
   };
 
   /** 处理异步清理任务终态提示与列表刷新 */
@@ -125,7 +221,10 @@ export const useStorageGovernance = (
     }
 
     if (snapshot.status === 'failed') {
-      message.error(snapshot.error || '执行备份清理失败');
+      const partialDesc = snapshot.deletedBackups > 0
+        ? `（中断前已删 ${snapshot.deletedBackups} 份并已同步更新回滚记录）`
+        : '';
+      message.error(`${snapshot.error || '执行备份清理失败'}${partialDesc}`);
       if (snapshot.deletedBackups > 0 || snapshot.clearedDbRecords > 0) {
         emit('cleaned');
         await loadInspection();
@@ -309,11 +408,12 @@ export const useStorageGovernance = (
         type: 'link',
         isConfirm: true,
         confirmProps: {
-          title: '确认清理该目录存量内嵌 .yuyan-backups（已迁外置仓将全清，否则保底留最新 1 份）？',
-          okText: '立即清理',
+          title: '确认清理该目录存量内嵌 .yuyan-backups？删除不可恢复；若已迁移外置仓，迁移前的旧回滚点将一并失效。',
+          okText: '确认清理',
           cancelText: '取消',
         },
         hideFn: ({ row }: { row: StorageAppInspectionItem }) =>
+          Boolean(row.otherTeamManaged || row.ownership === 'managed_other_team') ||
           isRowMatchedByJob(row, pruneJob.value) ||
           (row.inlineBackupCount <= 0 && row.inlineManifestBytes <= 0),
         disabledFn: () => cleaning.value,
@@ -330,7 +430,8 @@ export const useStorageGovernance = (
         key: 'scanOrphan',
         text: '扫描无主资源',
         type: 'link',
-        hideFn: ({ row }: { row: StorageAppInspectionItem }) => row.targetId <= 0,
+        hideFn: ({ row }: { row: StorageAppInspectionItem }) =>
+          Boolean(row.otherTeamManaged || row.ownership === 'managed_other_team') || row.targetId <= 0,
         disabledFn: () => cleaning.value,
         clickFn: ({ row }: { row: StorageAppInspectionItem }) => {
           void openOrphanAssetsPreview(row, 7);
@@ -369,16 +470,20 @@ export const useStorageGovernance = (
     cleaning,
     cleaningAll,
     confirmCleanOrphanAssets,
+    confirmPruneAllBackups,
     dismissPruneBanner,
     executePruneBackups,
     inlineAction,
     inspecting,
     loadInspection,
+    openPruneConfirmModal,
     orphanCleaning,
     orphanLoading,
     orphanMinAgeDays,
     orphanModalOpen,
     orphanPreview,
+    pruneConfirmOpen,
+    pruneImpactSummary,
     pruneJob,
     reloadOrphanPreview,
     report,

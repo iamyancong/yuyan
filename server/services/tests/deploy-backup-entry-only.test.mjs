@@ -19,6 +19,7 @@ import {
   buildPruneRemoteArtifactManifestsCommand,
   preflightCheckRollback,
 } from '../deploy-service.mjs';
+import { buildTargetStateSlug } from '../deploy-state-layout.mjs';
 
 const execAsync = promisify(exec);
 
@@ -184,6 +185,45 @@ test('preflightCheckRollback: 历史 full 备份直接通过预检', async () =>
   assert.equal(result.kind, 'full');
   assert.equal(result.missingCount, 0);
   assert.ok(logs.some((l) => l.msg.includes('依赖静态资源完好')));
+});
+
+test('preflightCheckRollback: 外置快照按真实目录 slug 校验，拒绝旧目录的外置和内嵌备份', async () => {
+  const oldRoot = '/srv/old/site';
+  const target = { deployRoot: '/srv/new/site' };
+  const backupPathFor = (root) => `/srv/shared/.yuyan-state/targets/${buildTargetStateSlug(root)}/backups/v1`;
+  for (const backupPath of [backupPathFor(oldRoot), `${oldRoot}/.yuyan-backups/v1`]) {
+    await assert.rejects(
+      () => preflightCheckRollback(null, target, backupPath, () => {}),
+      /备份不属于当前部署目录/
+    );
+  }
+
+  const conn = createMockConn('kind=cas-full missing_count=0\n', 0);
+  const result = await preflightCheckRollback(conn, target, backupPathFor(target.deployRoot), () => {});
+  assert.equal(result.kind, 'cas-full');
+});
+
+test('preflightCheckRollback: 当前软链配置路径兼容早期内嵌备份，外置 slug 仍按真实路径校验', async () => {
+  const target = { deployRoot: '/srv/releases/site' };
+  const configuredRoot = '/srv/sites/link';
+  const legacyBackupPath = `${configuredRoot}/.yuyan-backups/old-release`;
+  const conn = createMockConn('kind=full missing_count=0\n', 0);
+  const result = await preflightCheckRollback(conn, target, legacyBackupPath, () => {}, false, null, {
+    extraInlineRoots: [configuredRoot],
+  });
+  assert.equal(result.passed, true);
+
+  const externalAliasPath = `/srv/shared/.yuyan-state/targets/${buildTargetStateSlug(configuredRoot)}/backups/v1`;
+  await assert.rejects(
+    () => preflightCheckRollback(null, target, externalAliasPath, () => {}, false, null, { extraInlineRoots: [configuredRoot] }),
+    /备份不属于当前部署目录/
+  );
+  await assert.rejects(
+    () => preflightCheckRollback(null, { deployRoot: '/srv/releases/new-site' }, legacyBackupPath, () => {}, false, null, {
+      extraInlineRoots: ['/srv/sites/new-link'],
+    }),
+    /备份不属于当前部署目录/
+  );
 });
 
 test('preflightCheckRollback: entry-only 备份静态资源完好时预检通过', async () => {

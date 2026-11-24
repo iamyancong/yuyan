@@ -15,7 +15,7 @@ import { getRequestContext, getRequestTeamId, SHARED_DEPLOY_WORKSPACE_ID } from 
 import { isSshConnectionError, normalizeHostKeyFingerprint, SSH_CONNECTION_STATUS_CODES } from './ssh-errors.mjs';
 import { setSshConnectionHooks } from './ssh-service.mjs';
 import { normalizeDeployRootPath } from './deploy-cleanup-policy.mjs';
-import { normalizeHashedAssetDirsInput } from './deploy-state-layout.mjs';
+import { backupPathBelongsToDeployRoot, normalizeHashedAssetDirsInput } from './deploy-state-layout.mjs';
 import { parseErrorSummary, serializeErrorSummary, summarizeFailedRecordLogs } from './deploy-error-summary.mjs';
 
 /** 兼容旧调用方：提交元信息查询已迁移到独立服务（带超时、缓存与并发合并） */
@@ -866,6 +866,7 @@ function mapTarget(row) {
     backupMaxSizeMb: row.backup_max_size_mb === null || row.backup_max_size_mb === undefined ? null : Number(row.backup_max_size_mb),
     backupTtlDays: row.backup_ttl_days === null || row.backup_ttl_days === undefined ? null : Number(row.backup_ttl_days),
     hashedAssetDirs: row.hashed_asset_dirs || '',
+    stateRoot: row.state_root || '',
     visitUrl: row.visit_url || '',
     remark: row.remark || '',
     createdBy: row.created_by || '',
@@ -1874,6 +1875,7 @@ export async function getDeployDb() {
       backup_max_size_mb INTEGER,
       backup_ttl_days INTEGER,
       hashed_asset_dirs TEXT,
+      state_root TEXT NOT NULL DEFAULT '',
       visit_url TEXT,
       remark TEXT,
       created_by TEXT,
@@ -2052,6 +2054,9 @@ export async function getDeployDb() {
   }
   if (!targetColumns.includes('hashed_asset_dirs')) {
     dbInstance.exec('ALTER TABLE deploy_targets ADD COLUMN hashed_asset_dirs TEXT');
+  }
+  if (!targetColumns.includes('state_root')) {
+    dbInstance.exec("ALTER TABLE deploy_targets ADD COLUMN state_root TEXT NOT NULL DEFAULT ''");
   }
   const runtimeColumns = getTableColumns(dbInstance, 'nginx_runtimes');
   if (!runtimeColumns.includes('package_variant')) {
@@ -3331,13 +3336,14 @@ export async function listPhysicalServerTargets(params = {}) {
 
   if (!host) {
     if (params.serverId) {
-      const rows = db.prepare('SELECT id, server_id, team_id, deploy_root, project_name FROM deploy_targets WHERE server_id = ?').all(Number(params.serverId));
+      const rows = db.prepare('SELECT id, server_id, team_id, deploy_root, project_name, project_type FROM deploy_targets WHERE server_id = ?').all(Number(params.serverId));
       return rows.map((r) => ({
         id: Number(r.id),
         serverId: Number(r.server_id),
         teamId: r.team_id,
         deployRoot: r.deploy_root,
         projectName: r.project_name,
+        projectType: r.project_type || 'frontend',
       }));
     }
     return [];
@@ -3349,7 +3355,7 @@ export async function listPhysicalServerTargets(params = {}) {
 
   const placeholders = serverIds.map(() => '?').join(', ');
   const targetRows = db.prepare(
-    `SELECT id, server_id, team_id, deploy_root, project_name
+    `SELECT id, server_id, team_id, deploy_root, project_name, project_type
      FROM deploy_targets
      WHERE server_id IN (${placeholders})`
   ).all(...serverIds);
@@ -3360,6 +3366,7 @@ export async function listPhysicalServerTargets(params = {}) {
     teamId: r.team_id,
     deployRoot: r.deploy_root,
     projectName: r.project_name,
+    projectType: r.project_type || 'frontend',
   }));
 }
 
@@ -4280,6 +4287,61 @@ export async function clearTargetBackupReferencesByPaths(targetId, deletedPaths 
   const ids = rows.map((row) => Number(row.id)).filter(Boolean);
   db.prepare(`UPDATE deploy_records SET backup_path = '', backup_record_id = NULL WHERE id IN (${ids.map(() => '?').join(',')})`).run(...ids);
   return { clearedRecords: ids.length };
+}
+
+/**
+ * 清空指定部署目标全部非运行中发布记录的回滚引用（用于目标切换服务器时使旧回滚点失效，#63）。
+ * @param {number} targetId - 部署目标 ID
+ * @returns {Promise<{clearedRecords: number}>} 清理结果
+ */
+export async function clearAllTargetBackupReferences(targetId) {
+  const db = await getDeployDb();
+  const safeTargetId = Number(targetId || 0);
+  if (!safeTargetId) return { clearedRecords: 0 };
+  const result = db
+    .prepare(
+      `UPDATE deploy_records
+       SET backup_path = '', backup_record_id = NULL
+       WHERE target_id = ? AND status != 'running' AND backup_path != ''`
+    )
+    .run(safeTargetId);
+  return { clearedRecords: Number(result?.changes || 0) };
+}
+
+/** 目标仍指向预期新目录时，清理旧真实目录及旧配置路径对应的回滚引用。 */
+export async function clearRetiredRootBackupReferences(targetId, { realRoot, previousDeployRoot, nextDeployRoot, serverId }) {
+  const db = await getDeployDb();
+  const rows = db.prepare(
+    `SELECT id, backup_path FROM deploy_records
+     WHERE target_id = ? AND status != 'running' AND backup_path != ''`
+  ).all(targetId);
+  const ids = rows
+    .filter((row) => backupPathBelongsToDeployRoot(row.backup_path, realRoot, [previousDeployRoot]))
+    .map((row) => row.id);
+  if (!ids.length) return;
+
+  db.prepare(
+    `UPDATE deploy_records SET backup_path = '', backup_record_id = NULL
+     WHERE id IN (${ids.map(() => '?').join(',')}) AND status != 'running'
+       AND EXISTS (SELECT 1 FROM deploy_targets WHERE id = ? AND deploy_root = ? AND server_id = ?)`
+  ).run(...ids, targetId, nextDeployRoot, serverId);
+}
+
+/**
+ * 持久化固定部署目标生效的外置状态仓根路径（首次建仓/发布后固化，防止增删父目标导致状态仓漂移，#63）。
+ * @param {number} targetId - 部署目标 ID
+ * @param {string} stateRoot - 外置状态仓绝对路径（传空串表示重置）
+ * @returns {Promise<boolean>} 是否更新成功
+ */
+export async function updateTargetStateRoot(targetId, stateRoot = '') {
+  const db = await getDeployDb();
+  const safeTargetId = Number(targetId || 0);
+  if (!safeTargetId) return false;
+  const cleanRoot = String(stateRoot || '').trim();
+  const result = db
+    .prepare('UPDATE deploy_targets SET state_root = ? WHERE id = ?')
+    .run(cleanRoot, safeTargetId);
+  return Number(result?.changes || 0) > 0;
 }
 
 /**

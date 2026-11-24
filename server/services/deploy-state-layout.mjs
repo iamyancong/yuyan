@@ -28,6 +28,9 @@ export const STATE_TARGETS_DIR_NAME = 'targets';
 /** 外置仓对象池 GC 互斥锁目录名 */
 export const STATE_GC_LOCK_NAME = '.gc.lock';
 
+/** 外置仓 CAS 活跃读/写租约目录名（备份写入与回滚读取注册于此，GC 见活跃租约自动让步） */
+export const STATE_CAS_USERS_DIR_NAME = '.cas-users';
+
 /** 外置仓版本元信息文件名 */
 export const STATE_META_FILE_NAME = 'state-meta.json';
 
@@ -238,6 +241,7 @@ function buildExternalLayout({ realRoot, stateRoot, source }) {
     stateRoot: normStateRoot,
     objectsDir: path.posix.join(normStateRoot, STATE_OBJECTS_DIR_NAME),
     gcLockDir: path.posix.join(normStateRoot, STATE_GC_LOCK_NAME),
+    casUsersDir: path.posix.join(normStateRoot, STATE_CAS_USERS_DIR_NAME),
     metaFilePath: path.posix.join(normStateRoot, STATE_META_FILE_NAME),
     targetStateDir,
     targetMetaFilePath: path.posix.join(targetStateDir, TARGET_META_FILE_NAME),
@@ -269,6 +273,7 @@ export function toInlineStateLayout(layoutOrRoot, reason = 'inline-fallback') {
     stateRoot: '',
     objectsDir: '',
     gcLockDir: '',
+    casUsersDir: '',
     metaFilePath: '',
     targetStateDir: '',
     targetMetaFilePath: '',
@@ -280,18 +285,44 @@ export function toInlineStateLayout(layoutOrRoot, reason = 'inline-fallback') {
 }
 
 /**
- * 解析部署目标对应的状态仓布局（优先托管 Nginx 平级外置仓）。
+ * 解析部署目标对应的状态仓布局（优先目标固定 stateRoot → 托管 Nginx 平级外置仓 → 外部 Nginx → 启发式外置）。
  * @param {Object} params - 解析参数
  * @param {string} params.realRoot - 目标真实部署根目录
  * @param {Object|null} [params.nginxInstance=null] - 关联的 Nginx 实例
  * @param {string} [params.realBaseRoot=''] - 托管 Nginx 真实 baseRoot（穿透软链后，可选）
  * @param {string} [params.realHtmlRoot=''] - Nginx 实例真实 htmlRoot（穿透软链后，可选）
+ * @param {string[]} [params.otherTargetRoots=[]] - 同物理机其他部署目标的真实根目录（防止启发式外置仓落入上级站点 web 根）
+ * @param {string} [params.pinnedStateRoot=''] - 已持久化固定在目标记录上的 stateRoot（优先级最高，彻底杜绝增删父目标导致漂移）
  * @returns {Object} 状态仓布局对象
  */
-export function resolveDeployStateLocation({ realRoot, nginxInstance = null, realBaseRoot = '', realHtmlRoot = '' } = {}) {
+export function resolveDeployStateLocation({
+  realRoot,
+  nginxInstance = null,
+  realBaseRoot = '',
+  realHtmlRoot = '',
+  otherTargetRoots = [],
+  pinnedStateRoot = '',
+} = {}) {
   const normRealRoot = normalizePosixAbsPath(realRoot);
   if (!normRealRoot || !normRealRoot.startsWith('/')) {
     return toInlineStateLayout(normRealRoot || '/', 'invalid-root');
+  }
+
+  // 0. 最高优先级：已持久化固定在目标上的 stateRoot（增删父目标、多层嵌套均绝不漂移，#63）
+  const normPinned = normalizePosixAbsPath(pinnedStateRoot || '');
+  if (
+    normPinned &&
+    normPinned.startsWith('/') &&
+    path.posix.basename(normPinned) === STATE_ROOT_DIR_NAME
+  ) {
+    const pinnedParent = path.posix.dirname(normPinned);
+    if (isSafeStateParentDir(pinnedParent, normRealRoot)) {
+      return buildExternalLayout({
+        realRoot: normRealRoot,
+        stateRoot: normPinned,
+        source: 'pinned-target-state',
+      });
+    }
   }
 
   // 1. 优先：托管 Nginx 实例平级外置（<baseRoot>/.yuyan-state）
@@ -325,6 +356,11 @@ export function resolveDeployStateLocation({ realRoot, nginxInstance = null, rea
   }
 
   // 3. 启发式平级外置：识别常见 html/www/htdocs/webroot 层级，确保状态仓落在 webRoot 之外
+  const normalizedOthers = (otherTargetRoots || [])
+    .map(normalizePosixAbsPath)
+    .filter((p) => p && p.startsWith('/') && p !== normRealRoot);
+  const isInsideAnyWebRoot = (dir) => normalizedOthers.some((otherRoot) => isSameOrSubPath(dir, otherRoot));
+
   const segments = normRealRoot.split('/').filter(Boolean);
   let candidateParent = '';
   for (let i = segments.length - 1; i >= 1; i -= 1) {
@@ -336,7 +372,18 @@ export function resolveDeployStateLocation({ realRoot, nginxInstance = null, rea
   if (!candidateParent) {
     candidateParent = path.posix.dirname(normRealRoot);
   }
-  if (isSafeStateParentDir(candidateParent, normRealRoot)) {
+  // 嵌套项目防护（#63）：若推导出的候选父目录本身是上级站点部署根（或其子目录），继续向上跳出上级 web 根
+  let guard = 0;
+  while (candidateParent && isInsideAnyWebRoot(candidateParent) && guard < 8) {
+    const upper = path.posix.dirname(candidateParent);
+    if (!upper || upper === candidateParent) {
+      candidateParent = '';
+      break;
+    }
+    candidateParent = upper;
+    guard += 1;
+  }
+  if (candidateParent && !isInsideAnyWebRoot(candidateParent) && isSafeStateParentDir(candidateParent, normRealRoot)) {
     return buildExternalLayout({
       realRoot: normRealRoot,
       stateRoot: path.posix.join(candidateParent, STATE_ROOT_DIR_NAME),
@@ -346,6 +393,73 @@ export function resolveDeployStateLocation({ realRoot, nginxInstance = null, rea
 
   // 4. 安全兜底：回落内嵌模式
   return toInlineStateLayout(normRealRoot, 'inline-fallback');
+}
+
+/**
+ * 解析目标的首选外置状态仓布局及全部可能的历史兼容候选布局（支持固定 stateRoot + 向上多层祖先仓枚举，#63）。
+ * @description
+ * 1. 若传入合法 pinnedStateRoot，primary 即为固定仓；
+ * 2. 同时枚举不带 pinned/otherTargetRoots 的默认推算仓，以及沿 dirname(realRoot) 向上逐级（最多 8 层）
+ *    所有合法安全父目录下的 `.yuyan-state`，彻底覆盖「三层嵌套新建父目标」与「删除父目标反向漂移」的历史老仓。
+ * @param {Object} params - 同 resolveDeployStateLocation
+ * @returns {{ primary: Object, legacyCandidates: Array<Object>, allExternal: Array<Object> }}
+ */
+export function resolveCandidateDeployStateLocations(params = {}) {
+  const primary = resolveDeployStateLocation(params);
+  const normRealRoot = normalizePosixAbsPath(params?.realRoot || '');
+  const seen = new Set();
+  const allExternal = [];
+  const legacyCandidates = [];
+
+  const registerLayout = (layout, isPrimary = false) => {
+    if (!layout || layout.mode !== 'external' || !layout.stateRoot) return;
+    const sr = normalizePosixAbsPath(layout.stateRoot);
+    if (!sr || seen.has(sr)) return;
+    seen.add(sr);
+    allExternal.push(layout);
+    if (!isPrimary) legacyCandidates.push(layout);
+  };
+
+  registerLayout(primary, true);
+
+  // 兼容：不带 pinnedStateRoot 的当前规则推导
+  const unpinnedPrimary = params?.pinnedStateRoot
+    ? resolveDeployStateLocation({ ...params, pinnedStateRoot: '' })
+    : primary;
+  if (params?.pinnedStateRoot) {
+    registerLayout(unpinnedPrimary);
+  }
+
+  // 兼容：不带 otherTargetRoots 的历史规则推导（优先排在 legacyCandidates 首位，覆盖最常见的新增父目标粘性仓）
+  if (Array.isArray(params?.otherTargetRoots) && params.otherTargetRoots.length > 0) {
+    registerLayout(resolveDeployStateLocation({ ...params, pinnedStateRoot: '', otherTargetRoots: [] }));
+  }
+
+  // 兼容：仅对非托管/启发式布局，沿 dirname(realRoot) 向上枚举合法安全父目录（最多 6 层），
+  // 覆盖「三层嵌套新建父目标」与「删除父目标反向漂移」的历史老仓；托管 Nginx / htmlRoot 内目标路径恒定无需漫游祖先。
+  const isHeuristicFlow =
+    unpinnedPrimary.source !== 'managed-nginx-base' && unpinnedPrimary.source !== 'nginx-html-parent';
+  if (isHeuristicFlow && normRealRoot && normRealRoot.startsWith('/')) {
+    let anc = path.posix.dirname(normRealRoot);
+    let depth = 0;
+    while (anc && anc !== '/' && depth < 6) {
+      if (isSafeStateParentDir(anc, normRealRoot)) {
+        registerLayout(
+          buildExternalLayout({
+            realRoot: normRealRoot,
+            stateRoot: path.posix.join(anc, STATE_ROOT_DIR_NAME),
+            source: 'ancestor-legacy-candidate',
+          })
+        );
+      }
+      const next = path.posix.dirname(anc);
+      if (!next || next === anc) break;
+      anc = next;
+      depth += 1;
+    }
+  }
+
+  return { primary, legacyCandidates, allExternal };
 }
 
 /**
@@ -373,6 +487,7 @@ export function resolveNginxInstanceStatePaths(nginxInstance) {
     objectsDir: path.posix.join(stateRoot, STATE_OBJECTS_DIR_NAME),
     targetsDir: path.posix.join(stateRoot, STATE_TARGETS_DIR_NAME),
     gcLockDir: path.posix.join(stateRoot, STATE_GC_LOCK_NAME),
+    casUsersDir: path.posix.join(stateRoot, STATE_CAS_USERS_DIR_NAME),
   };
 }
 
@@ -400,6 +515,23 @@ export function parseExternalBackupPath(backupPath) {
     objectsDir: path.posix.join(stateRoot, STATE_OBJECTS_DIR_NAME),
     targetStateDir: path.posix.join(stateRoot, STATE_TARGETS_DIR_NAME, slug),
   };
+}
+
+/** 判断备份归属。历史内嵌备份也可沿用调用方传入的配置路径。 */
+export function backupPathBelongsToDeployRoot(backupPath, realRoot, extraInlineRoots = []) {
+  const backup = normalizePosixAbsPath(backupPath);
+  const root = normalizePosixAbsPath(realRoot);
+  if (!backup.startsWith('/') || !root.startsWith('/')) return false;
+
+  const backupParent = path.posix.dirname(backup);
+  const external = parseExternalBackupPath(backup);
+  if (external.isExternal) {
+    return path.posix.basename(external.targetStateDir) === buildTargetStateSlug(root) &&
+      backupParent === path.posix.join(external.targetStateDir, 'backups');
+  }
+  const inlineRoot = path.posix.dirname(backupParent);
+  return path.posix.basename(backupParent) === LEGACY_BACKUP_DIR_NAME &&
+    (inlineRoot === root || extraInlineRoots.some((candidate) => normalizePosixAbsPath(candidate) === inlineRoot));
 }
 
 /**

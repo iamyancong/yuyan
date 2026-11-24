@@ -4,6 +4,7 @@
  */
 
 import {
+  clearAllTargetBackupReferences,
   createTarget,
   createNginxInstance,
   deleteNginxInstance,
@@ -23,6 +24,7 @@ import {
   listTargetRuntimeIndex,
   updateNginxInstance,
   updateTarget,
+  updateTargetStateRoot,
   closeDeployDb,
   getDeployDb,
   listJdks,
@@ -88,14 +90,15 @@ import {
   cleanTargetOrphanAssets,
   inspectNginxInstanceStorage,
   previewTargetOrphanAssets,
-  pruneNginxInstanceBackups,
   scheduleRetireTargetBackupState,
   scheduleSyncTargetRetentionMeta,
 } from '../services/storage-governance-service.mjs';
 import {
+  buildPhysicalPruneKey,
   cancelNginxStoragePruneJob,
   getLatestNginxStoragePruneJob,
   getNginxStoragePruneJob,
+  runNginxStoragePruneSynchronously,
   startNginxStoragePruneJob,
 } from '../services/storage-prune-jobs.mjs';
 import {
@@ -1663,7 +1666,17 @@ export async function handleUpdateTarget(req, res) {
       const rootOrServerChanged =
         prevRoot !== nextRoot || Number(prevContext.target.serverId) !== Number(target.serverId);
       if (rootOrServerChanged) {
-        scheduleRetireTargetBackupState(prevContext, { reason: 'root-changed' });
+        // 切换服务器时立即失效旧回滚引用和固定仓；同服务器迁移按真实目录校验备份和固定仓的归属（#63）
+        const serverChanged = Number(prevContext.target.serverId) !== Number(target.serverId);
+        if (serverChanged) {
+          await clearAllTargetBackupReferences(target.id).catch(() => {});
+          await updateTargetStateRoot(target.id, '').catch(() => {});
+        }
+        scheduleRetireTargetBackupState(prevContext, {
+          reason: 'root-changed',
+          nextDeployRoot: serverChanged ? '' : nextRoot,
+          nextTargetId: target.id,
+        });
       } else if (target.projectType !== 'backend') {
         const retentionChanged =
           prevContext.target.backupKeepCount !== target.backupKeepCount ||
@@ -1747,10 +1760,11 @@ export async function handleGetTargetCleanupPreview(req, res) {
     const effectiveWithSsh = testHooks?.withSsh || withSsh;
     let otherRealRootsMap = new Map();
     const probe = await effectiveWithSsh(server, async (conn) => {
-      const rootProbe = await detectDeployRoot(conn, target.deployRoot, deployUseSudo, { ensureDir: false, nginxInstance });
       try {
         const physicalTargets = await listPhysicalServerTargets({ serverId: target.serverId });
-        const otherTargets = physicalTargets.filter((t) => Number(t.id) !== Number(target.id));
+        const otherTargets = physicalTargets.filter(
+          (t) => Number(t.id) !== Number(target.id) && t.projectType !== 'backend' && t.deployRoot
+        );
         if (otherTargets.length > 0) {
           const otherPaths = otherTargets.map((t) => t.deployRoot);
           const detectedOthers = await batchDetectRealRoots(conn, otherPaths, deployUseSudo).catch(() => otherPaths);
@@ -1761,7 +1775,12 @@ export async function handleGetTargetCleanupPreview(req, res) {
       } catch (error) {
         console.warn(`[Deploy] 查询物理服务器同宿主目标失败，降级使用配置路径：${error.message || error}`);
       }
-      return rootProbe;
+      return detectDeployRoot(conn, target.deployRoot, deployUseSudo, {
+        ensureDir: false,
+        nginxInstance,
+        otherTargetRoots: [...otherRealRootsMap.values()],
+        pinnedStateRoot: target.stateRoot || '',
+      });
     });
 
     const realRoot = probe.realRoot || target.deployRoot;
@@ -3296,7 +3315,36 @@ export async function handleInspectNginxInstanceStorage(req, res) {
 }
 
 /**
- * 执行 Nginx 实例级存量内嵌备份清理、三维策略瘦身与 CAS 对象池 GC（同步兼容接口，支持客户端断连中止）。
+ * 解析存储治理操作人身份：中央认证模式下强制优先使用服务端会话身份防伪造，仅本地兼容模式回退请求体/头（#63）。
+ * @param {import('express').Request} req - 请求对象
+ * @returns {string} 操作人标识
+ */
+function resolveGovernanceOperator(req) {
+  const ctx = getRequestContext();
+  if (ctx && !ctx.legacy) {
+    const fromSession = String(ctx.displayName || ctx.username || ctx.userId || ctx.accountId || '').trim();
+    if (fromSession) return fromSession;
+  }
+  const body = req?.body || {};
+  return String(body.operator || req?.headers?.['x-yuyan-operator'] || '').trim();
+}
+
+/**
+ * 解析 Nginx 实例对应的物理机存储清理互斥键（失败时降级为空，不影响主流程）。
+ * @param {number} instanceId - 实例 ID
+ * @returns {Promise<string>}
+ */
+async function resolveInstancePhysicalPruneKey(instanceId) {
+  try {
+    const ctx = await getNginxInstanceContext(Number(instanceId));
+    return buildPhysicalPruneKey(ctx?.server, ctx?.instance);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * 执行 Nginx 实例级存量内嵌备份清理、三维策略瘦身与 CAS 对象池 GC（同步兼容接口，纳入统一互斥与审计，支持客户端断连中止）。
  */
 export async function handlePruneNginxInstanceBackups(req, res) {
   const abortController = new AbortController();
@@ -3310,19 +3358,22 @@ export async function handlePruneNginxInstanceBackups(req, res) {
   res.on('close', handleClose);
   try {
     const body = req.body || {};
-    const operator = String(body.operator || req.headers['x-yuyan-operator'] || '').trim();
-    const data = await pruneNginxInstanceBackups(Number(req.params.id), {
-      inlineAction: body.inlineAction,
-      applyRetentionPolicy: body.applyRetentionPolicy,
-      runCasGc: body.runCasGc,
-      gcGraceMinutes: body.gcGraceMinutes,
-      targetRoots: Array.isArray(body.targetRoots) ? body.targetRoots : [],
-      operator,
-      signal: abortController.signal,
-    });
-    if (data.clearedDbRecords > 0 || data.deletedBackups > 0) {
-      publishDeployEvent({ teamId: getRequestTeamId(), domains: ['records'] });
-    }
+    const instanceId = Number(req.params.id);
+    const operator = resolveGovernanceOperator(req);
+    const physicalKey = await resolveInstancePhysicalPruneKey(instanceId);
+    const data = await runNginxStoragePruneSynchronously(
+      instanceId,
+      {
+        inlineAction: body.inlineAction,
+        applyRetentionPolicy: body.applyRetentionPolicy,
+        runCasGc: body.runCasGc,
+        gcGraceMinutes: body.gcGraceMinutes,
+        targetRoots: Array.isArray(body.targetRoots) ? body.targetRoots : [],
+        operator,
+        signal: abortController.signal,
+      },
+      { physicalKey }
+    );
     if (!res.writableEnded) {
       res.json({ success: true, data });
     }
@@ -3341,15 +3392,21 @@ export async function handlePruneNginxInstanceBackups(req, res) {
 export async function handleStartNginxStoragePruneJob(req, res) {
   try {
     const body = req.body || {};
-    const operator = String(body.operator || req.headers['x-yuyan-operator'] || '').trim();
-    const data = startNginxStoragePruneJob(Number(req.params.id), {
-      inlineAction: body.inlineAction,
-      applyRetentionPolicy: body.applyRetentionPolicy,
-      runCasGc: body.runCasGc,
-      gcGraceMinutes: body.gcGraceMinutes,
-      targetRoots: Array.isArray(body.targetRoots) ? body.targetRoots : [],
-      operator,
-    });
+    const instanceId = Number(req.params.id);
+    const operator = resolveGovernanceOperator(req);
+    const physicalKey = await resolveInstancePhysicalPruneKey(instanceId);
+    const data = startNginxStoragePruneJob(
+      instanceId,
+      {
+        inlineAction: body.inlineAction,
+        applyRetentionPolicy: body.applyRetentionPolicy,
+        runCasGc: body.runCasGc,
+        gcGraceMinutes: body.gcGraceMinutes,
+        targetRoots: Array.isArray(body.targetRoots) ? body.targetRoots : [],
+        operator,
+      },
+      { physicalKey }
+    );
     res.json({ success: true, data });
   } catch (error) {
     sendError(res, error, Number(error?.statusCode || error?.status || 400));
@@ -3413,7 +3470,7 @@ export async function handlePreviewTargetOrphanAssets(req, res) {
 export async function handleCleanTargetOrphanAssets(req, res) {
   try {
     const body = req.body || {};
-    const operator = String(body.operator || req.headers['x-yuyan-operator'] || '').trim();
+    const operator = resolveGovernanceOperator(req);
     const data = await cleanTargetOrphanAssets(Number(req.params.id), {
       previewToken: body.previewToken,
       relativePaths: Array.isArray(body.relativePaths) ? body.relativePaths : [],

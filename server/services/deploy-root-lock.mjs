@@ -1,13 +1,69 @@
 /**
- * 同服务器部署目录的进程内等待型互斥锁（#61）。
- * @description 远程写入（上传、清理、切换、失败恢复、回滚）按「物理服务器 + 最外层部署目录」互斥。
- * 同一进程内的任务在这里按 FIFO 排队等待，不再撞上远程 `.yuyan-deploy.lock` 直接失败；
- * 等待可随任务停止信号取消，持有者在 finally 中释放。每个任务只取一把锁，
- * 父子/兄弟目标解析出的最外层目录一致，因此不会出现交叉等待导致的死锁。
+ * 同服务器部署目录的进程内等待型互斥锁（#61 / #63）。
+ * @description 远程写入（上传、清理、切换、失败恢复、回滚、存储治理）按「物理服务器 + 目录层级」互斥。
+ * 同一物理机下，相同目录或父子包含关系（祖先/子孙）自动互斥并按 FIFO 排队等待，
+ * 无包含关系的兄弟目录仍允许并发执行；等待可随任务停止信号取消，持有者在 finally 中释放。
  */
 
-/** @type {Map<string, {holder: Object|null, waiters: Array<Object>}>} */
-const lockStates = new Map();
+import path from 'node:path';
+
+/** @type {Array<{key: string, serverKey: string, root: string, owner: Object, released: boolean}>} */
+const activeHolders = [];
+
+/** @type {Array<{key: string, serverKey: string, root: string, owner: Object, resolve: Function, reject: Function, onWait?: Function, signal?: AbortSignal, onAbort?: Function}>} */
+const waitQueue = [];
+
+/**
+ * 规范化 POSIX 目录路径，消除 `.`、`..`、多余斜杠导致的进程内锁绕过。
+ * @param {string} rawRoot - 原始目录路径
+ * @returns {string} 规范化后的路径
+ */
+function normalizeLockRootPath(rawRoot) {
+  const cleaned = String(rawRoot || '').trim().replace(/\\/g, '/');
+  if (!cleaned) return '/';
+  const normalized = path.posix.normalize(cleaned);
+  return normalized.length > 1 ? normalized.replace(/\/+$/, '') : (normalized || '/');
+}
+
+/**
+ * 解析锁键为物理服务器标识与规范化目录路径。
+ * @param {string} key 锁键
+ * @returns {{serverKey: string, root: string}}
+ */
+function parseLockKey(key) {
+  const raw = String(key || '');
+  const sepIndex = raw.indexOf('|');
+  if (sepIndex === -1) {
+    return { serverKey: '', root: raw };
+  }
+  const serverKey = raw.slice(0, sepIndex).trim().toLowerCase();
+  const root = normalizeLockRootPath(raw.slice(sepIndex + 1));
+  return { serverKey, root };
+}
+
+/**
+ * 判断两个锁键是否冲突（同物理服务器且目录相等或存在祖先/子孙包含关系）。
+ * @param {{key: string, serverKey: string, root: string}} a 锁 A
+ * @param {{key: string, serverKey: string, root: string}} b 锁 B
+ * @returns {boolean}
+ */
+function isLockConflict(a, b) {
+  if (a.key === b.key) return true;
+  if (!a.serverKey || !b.serverKey || a.serverKey !== b.serverKey) return false;
+  if (!a.root || !b.root) return false;
+  if (a.root === b.root) return true;
+  if (a.root === '/' || b.root === '/') return true;
+  return a.root.startsWith(`${b.root}/`) || b.root.startsWith(`${a.root}/`);
+}
+
+/**
+ * 查找当前活跃持有者中第一个与目标锁键冲突的持有者。
+ * @param {{key: string, serverKey: string, root: string}} target 目标锁信息
+ * @returns {Object|null}
+ */
+function findConflictingHolder(target) {
+  return activeHolders.find((holder) => !holder.released && isLockConflict(holder, target)) || null;
+}
 
 /**
  * 生成目录锁键：物理服务器（host:port，缺失时回退 serverId）+ 规范化后的最外层目录。
@@ -20,30 +76,34 @@ export function buildDeployRootLockKey(server, lockRoot) {
   const serverKey = host
     ? `${host}:${Number(server?.port || 22)}`
     : `server#${Number(server?.serverId ?? server?.id ?? 0)}`;
-  const root = String(lockRoot || '').trim().replace(/\/+$/, '') || '/';
+  const root = normalizeLockRootPath(lockRoot);
   return `${serverKey}|${root}`;
 }
 
 /**
- * 读取某个锁键当前持有者（只读快照，供诊断与测试）。
+ * 读取某个锁键当前持有者（只读快照，供诊断与测试；优先精确匹配，其次返回冲突祖先/子孙持有者）。
  * @param {string} key 锁键
  * @returns {Object|null} 持有者信息
  */
 export function getDeployRootLockHolder(key) {
-  return lockStates.get(key)?.holder?.owner || null;
+  const exact = activeHolders.find((h) => !h.released && h.key === key);
+  if (exact) return exact.owner || null;
+  const parsed = { key, ...parseLockKey(key) };
+  return findConflictingHolder(parsed)?.owner || null;
 }
 
 /**
- * 读取某个锁键当前等待数量。
+ * 读取某个锁键当前等待数量（与该锁键冲突的等待者数）。
  * @param {string} key 锁键
  * @returns {number} 等待数
  */
 export function getDeployRootLockWaitingCount(key) {
-  return lockStates.get(key)?.waiters.length || 0;
+  const parsed = { key, ...parseLockKey(key) };
+  return waitQueue.filter((w) => isLockConflict(w, parsed)).length;
 }
 
 /**
- * 获取目录锁；被占用时 FIFO 等待。
+ * 获取目录锁；被同目录或父子目录占用时按 FIFO 等待。
  * @param {string} key 锁键（buildDeployRootLockKey）
  * @param {Object} [options] 选项
  * @param {Object} [options.owner] 持有者信息（projectName、targetId、recordId、operator 等），用于等待提示
@@ -56,27 +116,38 @@ export function acquireDeployRootLock(key, options = {}) {
   if (signal?.aborted) {
     return Promise.reject(signal.reason || createAbortError());
   }
-  let state = lockStates.get(key);
-  if (!state) {
-    state = { holder: null, waiters: [] };
-    lockStates.set(key, state);
-  }
+  const parsed = { key, ...parseLockKey(key) };
+  const conflictingHolder = findConflictingHolder(parsed);
+  const conflictingWaiter = waitQueue.find((w) => isLockConflict(w, parsed));
 
-  if (!state.holder) {
-    return Promise.resolve(grant(key, state, owner));
+  if (!conflictingHolder && !conflictingWaiter) {
+    return Promise.resolve(grant(parsed, owner));
   }
 
   return new Promise((resolve, reject) => {
-    const waiter = { owner, resolve, reject, onWait, signal, onAbort: null };
+    const waiter = {
+      key: parsed.key,
+      serverKey: parsed.serverKey,
+      root: parsed.root,
+      owner,
+      resolve,
+      reject,
+      onWait,
+      signal,
+      onAbort: null,
+    };
     waiter.onAbort = () => {
-      const index = state.waiters.indexOf(waiter);
-      if (index >= 0) state.waiters.splice(index, 1);
-      notifyWaiters(state);
+      const index = waitQueue.indexOf(waiter);
+      if (index >= 0) waitQueue.splice(index, 1);
+      drainWaitQueue();
+      notifyWaiters();
       reject(signal.reason || createAbortError());
     };
     signal?.addEventListener?.('abort', waiter.onAbort, { once: true });
-    state.waiters.push(waiter);
-    safeNotify(waiter, state.holder?.owner || null, state.waiters.length);
+    waitQueue.push(waiter);
+    const position = computeWaiterPosition(waiter);
+    const blockerOwner = (findConflictingHolder(waiter) || conflictingWaiter)?.owner || null;
+    safeNotify(waiter, blockerOwner, position);
   });
 }
 
@@ -99,36 +170,79 @@ export async function withDeployRootLock(key, fn, options = {}) {
 
 /**
  * 把锁交给指定持有者并返回幂等释放函数。
- * @param {string} key 锁键
- * @param {{holder: Object|null, waiters: Array<Object>}} state 锁状态
+ * @param {{key: string, serverKey: string, root: string}} parsed 锁键信息
  * @param {Object} owner 持有者信息
  * @returns {() => void}
  */
-function grant(key, state, owner) {
-  const holder = { owner, released: false };
-  state.holder = holder;
+function grant(parsed, owner) {
+  const holder = {
+    key: parsed.key,
+    serverKey: parsed.serverKey,
+    root: parsed.root,
+    owner,
+    released: false,
+  };
+  activeHolders.push(holder);
   return () => {
     if (holder.released) return;
     holder.released = true;
-    if (state.holder !== holder) return;
-    state.holder = null;
-    const next = state.waiters.shift();
-    if (!next) {
-      lockStates.delete(key);
-      return;
-    }
-    next.signal?.removeEventListener?.('abort', next.onAbort);
-    next.resolve(grant(key, state, next.owner));
-    notifyWaiters(state);
+    const idx = activeHolders.indexOf(holder);
+    if (idx >= 0) activeHolders.splice(idx, 1);
+    drainWaitQueue();
+    notifyWaiters();
   };
 }
 
 /**
- * 通知剩余等待者新的持有者与名次。
- * @param {{holder: Object|null, waiters: Array<Object>}} state 锁状态
+ * 按 FIFO 顺序唤醒当前所有不再冲突的等待者（互不冲突的兄弟目录可同时唤醒，同时防止先到父锁被饥饿）。
  */
-function notifyWaiters(state) {
-  state.waiters.forEach((waiter, index) => safeNotify(waiter, state.holder?.owner || null, index + 1));
+function drainWaitQueue() {
+  let i = 0;
+  while (i < waitQueue.length) {
+    const candidate = waitQueue[i];
+    const blockedByActive = Boolean(findConflictingHolder(candidate));
+    let blockedByEarlierWaiter = false;
+    if (!blockedByActive) {
+      for (let j = 0; j < i; j += 1) {
+        if (isLockConflict(waitQueue[j], candidate)) {
+          blockedByEarlierWaiter = true;
+          break;
+        }
+      }
+    }
+    if (!blockedByActive && !blockedByEarlierWaiter) {
+      waitQueue.splice(i, 1);
+      candidate.signal?.removeEventListener?.('abort', candidate.onAbort);
+      candidate.resolve(grant(candidate, candidate.owner));
+      continue;
+    }
+    i += 1;
+  }
+}
+
+/**
+ * 计算某个等待者在与自己冲突的队列中的名次（从 1 开始）。
+ * @param {Object} waiter 等待者
+ * @returns {number}
+ */
+function computeWaiterPosition(waiter) {
+  let pos = 1;
+  for (const other of waitQueue) {
+    if (other === waiter) break;
+    if (isLockConflict(other, waiter)) pos += 1;
+  }
+  return pos;
+}
+
+/**
+ * 通知剩余等待者新的持有者与名次。
+ */
+function notifyWaiters() {
+  for (const waiter of waitQueue) {
+    const holder = findConflictingHolder(waiter)?.owner || null;
+    const position = computeWaiterPosition(waiter);
+    safeNotify(waiter, holder, position);
+  }
 }
 
 /**

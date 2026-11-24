@@ -2,13 +2,10 @@
 import { ClearOutlined, DatabaseOutlined, ReloadOutlined } from '@ant-design/icons-vue';
 import { YButton, YTable } from '@yss-ui/components/lite';
 import OrphanAssetsPreviewModal from './components/OrphanAssetsPreviewModal.vue';
+import StoragePruneConfirmModal from './components/StoragePruneConfirmModal.vue';
 import StoragePruneProgressBanner from './components/StoragePruneProgressBanner.vue';
 import StorageSummaryCards from './components/StorageSummaryCards.vue';
-import {
-  formatStorageBytes,
-  INLINE_BACKUP_CLEAN_OPTIONS,
-  storageAppColumns,
-} from './constant';
+import { formatStorageBytes, INLINE_BACKUP_CLEAN_OPTIONS, storageAppColumns } from './constant';
 import { useStorageGovernance } from './hooks/useStorageGovernance';
 import type { StorageGovernanceDrawerEmits, StorageGovernanceDrawerProps } from './type';
 
@@ -17,95 +14,74 @@ defineOptions({ name: 'StorageGovernanceDrawer' });
 const props = defineProps<StorageGovernanceDrawerProps>();
 const emit = defineEmits<StorageGovernanceDrawerEmits>();
 
-const {
-  actionConfig,
-  applyRetentionPolicy,
-  apps,
-  cancelPruneBackups,
-  cleaning,
-  cleaningAll,
-  confirmCleanOrphanAssets,
-  dismissPruneBanner,
-  executePruneBackups,
-  inlineAction,
-  inspecting,
-  loadInspection,
-  orphanCleaning,
-  orphanLoading,
-  orphanMinAgeDays,
-  orphanModalOpen,
-  orphanPreview,
-  pruneJob,
-  reloadOrphanPreview,
-  report,
-  runCasGc,
-  summary,
-  visible,
-} = useStorageGovernance(props, emit);
+const gov = useStorageGovernance(props, emit);
 </script>
 
 <template>
   <a-drawer
-    v-model:open="visible"
+    v-model:open="gov.visible.value"
     width="min(1080px, 94vw)"
     :title="`存储与备份治理 · ${instance?.name || ''}${serverName ? ` (${serverName})` : ''}`"
     class="storage-governance-drawer"
     :destroy-on-close="false"
   >
-    <a-spin :spinning="inspecting">
-      <StorageSummaryCards v-if="summary" :summary="summary" />
+    <a-spin :spinning="gov.inspecting.value">
+      <StorageSummaryCards v-if="gov.summary.value" :summary="gov.summary.value" />
 
       <div class="sg-action-panel">
         <div class="sg-action-panel__controls">
           <a-select
-            v-model:value="inlineAction"
+            v-model:value="gov.inlineAction.value"
             :options="[...INLINE_BACKUP_CLEAN_OPTIONS]"
             style="min-width: 310px"
-            :disabled="cleaning"
+            :disabled="gov.cleaning.value"
           />
-          <a-checkbox v-model:checked="applyRetentionPolicy" :disabled="cleaning">执行三维策略裁剪（份数/200MB/14天）</a-checkbox>
-          <a-checkbox v-model:checked="runCasGc" :disabled="cleaning">回收外置仓 CAS 孤儿对象</a-checkbox>
+          <a-checkbox v-model:checked="gov.applyRetentionPolicy.value" :disabled="gov.cleaning.value">
+            按各目标保留策略裁剪（份数/空间/TTL）
+          </a-checkbox>
+          <a-checkbox v-model:checked="gov.runCasGc.value" :disabled="gov.cleaning.value">
+            回收外置仓 CAS 孤儿对象
+          </a-checkbox>
         </div>
         <a-space>
-          <YButton :loading="inspecting" :disabled="cleaning" @click="loadInspection">
+          <YButton :loading="gov.inspecting.value" :disabled="gov.cleaning.value" @click="gov.loadInspection">
             <template #icon><ReloadOutlined /></template>
             重新扫描
           </YButton>
-          <a-popconfirm
-            title="确认按所选策略执行存储清理？清理过程会持目录锁，不会中断正在发布的任务。"
-            ok-text="立即清理"
-            cancel-text="取消"
-            @confirm="executePruneBackups()"
+          <YButton
+            type="primary"
+            :danger="gov.inlineAction.value === 'purge_all'"
+            :loading="gov.cleaningAll.value"
+            :disabled="gov.inspecting.value || gov.cleaning.value"
+            @click="gov.openPruneConfirmModal"
           >
-            <YButton type="primary" :loading="cleaningAll" :disabled="inspecting || cleaning">
-              <template #icon><ClearOutlined /></template>
-              一键安全瘦身
-            </YButton>
-          </a-popconfirm>
+            <template #icon><ClearOutlined /></template>
+            一键安全瘦身
+          </YButton>
         </a-space>
       </div>
 
       <StoragePruneProgressBanner
-        v-if="pruneJob"
-        :job="pruneJob"
-        @cancel="cancelPruneBackups"
-        @dismiss="dismissPruneBanner"
+        v-if="gov.pruneJob.value"
+        :job="gov.pruneJob.value"
+        @cancel="gov.cancelPruneBackups"
+        @dismiss="gov.dismissPruneBanner"
       />
 
-      <div v-if="report?.stateRoot?.path" class="sg-path-bar">
-        <span><DatabaseOutlined /> 外置状态仓：<code>{{ report.stateRoot.path }}</code></span>
-        <span v-if="report.htmlRoot?.path">
-          运行根目录：<code>{{ report.htmlRoot.path }}</code>
-          <span v-if="!report.htmlRoot.exists" class="sg-muted">（未创建，已按实际应用目录汇总）</span>
+      <div v-if="gov.report.value?.stateRoot?.path" class="sg-path-bar">
+        <span><DatabaseOutlined /> 外置状态仓：<code>{{ gov.report.value.stateRoot.path }}</code></span>
+        <span v-if="gov.report.value.htmlRoot?.path">
+          运行根目录：<code>{{ gov.report.value.htmlRoot.path }}</code>
+          <span v-if="!gov.report.value.htmlRoot.exists" class="sg-muted">（未创建，已按实际应用目录汇总）</span>
         </span>
       </div>
 
       <div class="sg-table-wrap">
         <YTable
-          :data="apps"
+          :data="gov.apps.value"
           :columns="storageAppColumns"
-          :action-config="actionConfig"
-          :loading="inspecting"
+          :action-config="gov.actionConfig.value"
+          :loading="gov.inspecting.value"
           :pageable="false"
           :min-height="260"
           :max-height="460"
@@ -118,12 +94,15 @@ const {
           </template>
           <template #managed="{ row }">
             <a-tag v-if="row.managed" color="processing">已纳管</a-tag>
-            <a-tag v-else color="warning">未纳管目录</a-tag>
+            <a-tooltip v-else-if="row.otherTeamManaged" title="归属其他团队部署目标，已自动隔离禁止清理">
+              <a-tag color="default">其他团队</a-tag>
+            </a-tooltip>
+            <a-tooltip v-else title="未纳管目录不参与一键全量瘦身，仅可逐个确认清理">
+              <a-tag color="warning">未纳管目录</a-tag>
+            </a-tooltip>
           </template>
           <template #inlineBackupBytes="{ row }">
-            <span :class="{ 'sg-text-warn': row.inlineBackupBytes > 0 }">
-              {{ formatStorageBytes(row.inlineBackupBytes) }}
-            </span>
+            <span :class="{ 'sg-text-warn': row.inlineBackupBytes > 0 }">{{ formatStorageBytes(row.inlineBackupBytes) }}</span>
             <span v-if="row.inlineBackupCount > 0" class="sg-muted"> ({{ row.inlineBackupCount }}份)</span>
           </template>
           <template #externalBackupCount="{ row }">
@@ -137,14 +116,24 @@ const {
       </div>
     </a-spin>
 
+    <StoragePruneConfirmModal
+      v-model:open="gov.pruneConfirmOpen.value"
+      :loading="gov.cleaningAll.value"
+      :inline-action="gov.inlineAction.value"
+      :apply-retention-policy="gov.applyRetentionPolicy.value"
+      :run-cas-gc="gov.runCasGc.value"
+      :impact="gov.pruneImpactSummary.value"
+      @confirm="gov.confirmPruneAllBackups"
+    />
+
     <OrphanAssetsPreviewModal
-      v-model:open="orphanModalOpen"
-      :loading="orphanLoading"
-      :cleaning="orphanCleaning"
-      :min-age-days="orphanMinAgeDays"
-      :preview="orphanPreview"
-      @reload="reloadOrphanPreview"
-      @confirm="confirmCleanOrphanAssets"
+      v-model:open="gov.orphanModalOpen.value"
+      :loading="gov.orphanLoading.value"
+      :cleaning="gov.orphanCleaning.value"
+      :min-age-days="gov.orphanMinAgeDays.value"
+      :preview="gov.orphanPreview.value"
+      @reload="gov.reloadOrphanPreview"
+      @confirm="gov.confirmCleanOrphanAssets"
     />
   </a-drawer>
 </template>

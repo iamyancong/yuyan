@@ -9,6 +9,7 @@ import {
   buildCasObjectPoolGcCommand,
   parseCasGcOutput,
 } from '../deploy-cas-backup.mjs';
+import { buildTargetStateSlug } from '../deploy-state-layout.mjs';
 import {
   buildDeleteBackupEntriesCommand,
   buildInspectNginxStorageCommand,
@@ -36,25 +37,43 @@ async function runShell(command) {
   return execAsync(command, { maxBuffer: 10 * 1024 * 1024 });
 }
 
-test('resolveGovernanceLockRoots：严格兼容雨燕托管 Nginx 与原有 Nginx 接入两类目录拓扑', () => {
-  // 1. 雨燕托管 Nginx（htmlRoot 真实存在）→ 全部收敛到唯一 htmlRoot 锁
-  const managed = resolveGovernanceLockRoots({
+test('resolveGovernanceLockRoots：与发布/回滚保持同一锁根规则（非目标 htmlRoot 不强锁，主应用与嵌套目录精确收敛）', () => {
+  // 1. 托管 Nginx 下 htmlRoot 不是部署目标，仅有两个独立兄弟微应用 → 锁各自目录，与发布锁根 100% 一致（P0-1）
+  const managedSiblings = resolveGovernanceLockRoots({
     inspection: {
       htmlRoot: { path: '/opt/yuyan/html', exists: true },
       apps: [
-        { key: '/opt/yuyan/html/app-a', deployRoot: '/opt/yuyan/html/app-a', exists: true },
-        { key: '/opt/yuyan/html/app-b', deployRoot: '/opt/yuyan/html/app-b', exists: true },
+        { key: '/opt/yuyan/html/app-a', deployRoot: '/opt/yuyan/html/app-a', exists: true, managed: true },
+        { key: '/opt/yuyan/html/app-b', deployRoot: '/opt/yuyan/html/app-b', exists: true, managed: true },
       ],
     },
     selectedApps: [
-      { key: '/opt/yuyan/html/app-a', deployRoot: '/opt/yuyan/html/app-a', exists: true },
-      { key: '/opt/yuyan/html/app-b', deployRoot: '/opt/yuyan/html/app-b', exists: true },
+      { key: '/opt/yuyan/html/app-a', deployRoot: '/opt/yuyan/html/app-a', exists: true, managed: true },
+      { key: '/opt/yuyan/html/app-b', deployRoot: '/opt/yuyan/html/app-b', exists: true, managed: true },
     ],
   });
-  assert.deepEqual(managed.lockRoots, ['/opt/yuyan/html']);
-  assert.equal(managed.groups.length, 1);
-  assert.equal(managed.groups[0].apps.length, 2);
-  assert.equal(managed.locklessApps.length, 0);
+  assert.deepEqual(managedSiblings.lockRoots, ['/opt/yuyan/html/app-a', '/opt/yuyan/html/app-b']);
+  assert.equal(managedSiblings.groups.length, 2);
+  assert.equal(managedSiblings.locklessApps.length, 0);
+
+  // 1b. 当 /opt/yuyan/html 本身是已纳管主应用目标时 → 所有子目录与发布一致收敛到 /opt/yuyan/html
+  const managedWithMain = resolveGovernanceLockRoots({
+    inspection: {
+      htmlRoot: { path: '/opt/yuyan/html', exists: true },
+      apps: [
+        { key: '/opt/yuyan/html', deployRoot: '/opt/yuyan/html', exists: true, managed: true },
+        { key: '/opt/yuyan/html/app-a', deployRoot: '/opt/yuyan/html/app-a', exists: true, managed: true },
+        { key: '/opt/yuyan/html/app-b', deployRoot: '/opt/yuyan/html/app-b', exists: true, managed: true },
+      ],
+    },
+    selectedApps: [
+      { key: '/opt/yuyan/html/app-a', deployRoot: '/opt/yuyan/html/app-a', exists: true, managed: true },
+      { key: '/opt/yuyan/html/app-b', deployRoot: '/opt/yuyan/html/app-b', exists: true, managed: true },
+    ],
+  });
+  assert.deepEqual(managedWithMain.lockRoots, ['/opt/yuyan/html']);
+  assert.equal(managedWithMain.groups.length, 1);
+  assert.equal(managedWithMain.groups[0].apps.length, 2);
 
   // 2. 原有 Nginx 接入：默认 /opt/yuyan/html 不存在，真实目录在 /home/app/frontend/html 及其子目录
   const externalShared = resolveGovernanceLockRoots({
@@ -106,7 +125,8 @@ test('原有 Nginx 接入：collectInstanceStateRoots 补齐启发式外置仓�
 
   const stateRoots = collectInstanceStateRoots(externalInstance, targets);
   assert.equal(stateRoots.primaryStateRoot, '/opt/yuyan/.yuyan-state');
-  assert.deepEqual(stateRoots.extraStateRoots, ['/home/app/frontend/.yuyan-state']);
+  assert.equal(stateRoots.candidateTargetStateDirs[0], `/home/app/frontend/.yuyan-state/targets/${buildTargetStateSlug(targets[0].deployRoot)}`);
+  assert.ok(stateRoots.candidateTargetStateDirs.includes(`/home/app/frontend/html/.yuyan-state/targets/${buildTargetStateSlug(targets[1].deployRoot)}`));
 
   const fakeStdout = [
     'HTML_ROOT\t/opt/yuyan/html\t0\t0',
@@ -246,10 +266,19 @@ test('storage-prune-jobs：异步启动、实时进度更新、单实例并发�
     assert.equal(mid.percent, 55);
     assert.equal(mid.deletedBackups, 4);
 
-    // 同实例并发触发应复用正在运行中的任务
-    const reused = startNginxStoragePruneJob(42, { inlineAction: 'purge_all' });
+    // 同实例同范围并发触发应复用正在运行中的任务
+    const reused = startNginxStoragePruneJob(42, {
+      inlineAction: 'keep_latest_1',
+      targetRoots: ['/home/app/frontend/html/dm-source'],
+    });
     assert.equal(reused.jobId, job1.jobId);
     assert.equal(reused.reused, true);
+
+    // 同实例不同范围（single 运行中被全量 all 请求）应拒绝静默误复用并抛出 409 冲突（#63）
+    assert.throws(
+      () => startNginxStoragePruneJob(42, { inlineAction: 'purge_all' }),
+      (err) => err?.statusCode === 409 && err?.code === 'PRUNE_JOB_CONFLICT'
+    );
 
     const latestRunning = getLatestNginxStoragePruneJob(42);
     assert.equal(latestRunning?.jobId, job1.jobId);
@@ -304,6 +333,24 @@ test('端到端 HTTP 路由集成：原有 Nginx 无 htmlRoot 时扫出真实体
     await fs.mkdir(bdir, { recursive: true });
     await fs.writeFile(path.join(bdir, 'index.html'), `backup-${i}`.repeat(256));
   }
+
+  const physicalRoot = await fs.realpath(realAppRoot);
+  const webParent = path.dirname(path.dirname(physicalRoot));
+  const ownedStateRoot = path.join(webParent, '.yuyan-state');
+  const unrelatedStateRoot = path.join(path.dirname(webParent), '.yuyan-state');
+  await fs.mkdir(path.join(ownedStateRoot, 'targets', buildTargetStateSlug(physicalRoot)), { recursive: true });
+  await fs.mkdir(path.join(unrelatedStateRoot, 'targets', 'other-team-app'), { recursive: true });
+  const writeOldObject = async (root, char) => {
+    const hash = char.repeat(64);
+    const objectPath = path.join(root, 'objects', hash.slice(0, 2), hash);
+    await fs.mkdir(path.dirname(objectPath), { recursive: true });
+    await fs.writeFile(objectPath, '未被快照引用的测试对象');
+    const old = new Date(Date.now() - 86400_000);
+    await fs.utimes(objectPath, old, old);
+    return objectPath;
+  };
+  const ownedObject = await writeOldObject(ownedStateRoot, 'a');
+  const unrelatedObject = await writeOldObject(unrelatedStateRoot, 'b');
 
   const fakeConn = {
     exec(cmd, cb) {
@@ -379,6 +426,7 @@ test('端到端 HTTP 路由集成：原有 Nginx 无 htmlRoot 时扫出真实体
     assert.equal(insResp.data.apps.length, 1);
     assert.equal(insResp.data.apps[0].inlineBackupCount, 5);
     assert.ok(insResp.data.summary.htmlTotalBytes > 0, '无 htmlRoot 时应汇总真实应用占用');
+    assert.deepEqual(insResp.data.existingStateRoots.map(({ path: root }) => root), [ownedStateRoot]);
 
     const startResp = await fetch(`${base}/nginx-instances/${inst.id}/storage/prune-jobs`, {
       method: 'POST',
@@ -386,7 +434,7 @@ test('端到端 HTTP 路由集成：原有 Nginx 无 htmlRoot 时扫出真实体
       body: JSON.stringify({
         inlineAction: 'keep_latest_1',
         applyRetentionPolicy: true,
-        runCasGc: false,
+        runCasGc: true,
         targetRoots: [realAppRoot],
       }),
     }).then((r) => r.json());
@@ -410,6 +458,8 @@ test('端到端 HTTP 路由集成：原有 Nginx 无 htmlRoot 时扫出真实体
 
     const remaining = await fs.readdir(path.join(realAppRoot, '.yuyan-backups'));
     assert.equal(remaining.length, 1, '保底留最新 1 份内嵌备份');
+    await assert.rejects(fs.access(ownedObject), { code: 'ENOENT' });
+    await fs.access(unrelatedObject);
 
     const latestResp = await fetch(`${base}/nginx-instances/${inst.id}/storage/prune-jobs/latest`).then((r) => r.json());
     assert.equal(latestResp.success, true);

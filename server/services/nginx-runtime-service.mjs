@@ -19,8 +19,9 @@ import {
 } from '../config/constants.mjs';
 import {
   isSameOrSubPath,
+  normalizePosixAbsPath,
+  resolveCandidateDeployStateLocations,
   resolveDeployRetentionPolicy,
-  resolveDeployStateLocation,
 } from './deploy-state-layout.mjs';
 import {
   DEFAULT_NGINX_RUNTIME_BASE_ROOT,
@@ -30,6 +31,7 @@ import {
   getNginxRuntimeByServerId,
   getServerWithCredential,
   getTarget,
+  listPhysicalServerTargets,
   listTargets,
   resolveNextManagedListenPortByInstance,
   resolveNextManagedListenPort,
@@ -373,30 +375,38 @@ export function buildArchiveExcludeTarScript({
     scriptParts.push(': > "$YUYAN_KEEP"', ': > "$YUYAN_EXCLUDE"');
   }
 
-  // 纯净迁移过滤：对具备 current.txt 的微应用，剥离其带哈希目录中不在当前生效清单内的历史回滚 chunk
+  // 纯净迁移过滤：对具备 current.txt 的微应用，剥离其带哈希目录中不在当前生效清单内的历史回滚 chunk（支持多候选外置仓合并保护，防粘性仓漏读，#63）
   if (validCleanScopes.length > 0) {
     for (const scope of validCleanScopes) {
       const appRoot = String(scope.rootPath).replace(/\/+$/, '');
       const relPrefix = appRoot.replace(/^\/+/, '');
-      const extManifest = scope.manifestDir ? `${String(scope.manifestDir).replace(/\/+$/, '')}/current.txt` : '';
+      const candidateManifestDirs = [
+        ...new Set([
+          ...(Array.isArray(scope.manifestDirs) ? scope.manifestDirs : []),
+          ...(scope.manifestDir ? [scope.manifestDir] : []),
+        ].filter(Boolean)),
+      ];
+      const extManifestFiles = candidateManifestDirs.map((d) => `${String(d).replace(/\/+$/, '')}/current.txt`);
       const legacyManifest = scope.legacyManifestDir
         ? `${String(scope.legacyManifestDir).replace(/\/+$/, '')}/current.txt`
         : `${appRoot}/.yuyan-manifests/current.txt`;
       const hdirs = scope.hashedDirs.map(shellQuote).join(' ');
+      const extChecks = extManifestFiles
+        .map((mf) => `if [ -f ${shellQuote(mf)} ] && [ -s ${shellQuote(mf)} ]; then cat ${shellQuote(mf)} >> "$cur_mf"; has_ext=1; fi;`)
+        .join(' ');
       scriptParts.push(
         [
-          `{ cur_mf="";`,
-          extManifest ? `if [ -f ${shellQuote(extManifest)} ]; then cur_mf=${shellQuote(extManifest)}; fi;` : '',
-          `if [ -z "$cur_mf" ] && [ -f ${shellQuote(legacyManifest)} ]; then cur_mf=${shellQuote(legacyManifest)}; fi;`,
-          `if [ -n "$cur_mf" ] && [ -s "$cur_mf" ] && [ -d ${shellQuote(appRoot)} ]; then`,
+          `{ cur_mf=$(mktemp 2>/dev/null || true); has_ext=0;`,
+          `if [ -n "$cur_mf" ]; then`,
+          extChecks,
+          `if [ "$has_ext" -eq 0 ] && [ -f ${shellQuote(legacyManifest)} ] && [ -s ${shellQuote(legacyManifest)} ]; then cat ${shellQuote(legacyManifest)} >> "$cur_mf"; fi;`,
+          `if [ -s "$cur_mf" ] && [ -d ${shellQuote(appRoot)} ]; then`,
           `  for hdir in ${hdirs}; do`,
           `    if [ -d ${shellQuote(appRoot)}"/$hdir" ]; then`,
-          `      (cd ${shellQuote(appRoot)} && find "$hdir" -type f) \\`,
-          `        | { grep -Fvx -f "$cur_mf" || true; } \\`,
-          `        | sed -e "s#^#${relPrefix.replace(/[&/\\]/g, '\\$&')}/#" -e "s#[\\*?\\[]#\\\\&#g" >> "$YUYAN_EXCLUDE";`,
+          `      (cd ${shellQuote(appRoot)} && find "$hdir" -type f) | { grep -Fvx -f "$cur_mf" || true; } | sed -e "s#^#${relPrefix.replace(/[&/\\]/g, '\\$&')}/#" -e "s#[\\*?\\[]#\\\\&#g" >> "$YUYAN_EXCLUDE";`,
           `    fi;`,
           `  done;`,
-          `fi; }`,
+          `fi; rm -f "$cur_mf" 2>/dev/null || true; fi; }`,
         ]
           .filter(Boolean)
           .join(' ')
@@ -890,6 +900,12 @@ export function renderMainNginxConfigBody(config) {
     '',
     `        root ${config.webRoot};`,
     '        index index.html index.htm;',
+    '',
+    '        location ~ /\\.(?!well-known) {',
+    '            deny all;',
+    '            access_log off;',
+    '            log_not_found off;',
+    '        }',
     '',
     '        location ~* \\.html$ {',
     '            expires -1;',
@@ -1495,7 +1511,6 @@ export function renderRuntimeScript() {
     '    HTML_DIR="$INSTANCE_ROOT/html"',
     '    NOW_EPOCH="$(date +%s)"',
     '    TTL_SEC=$((TTL_DAYS * 86400))',
-    '    MAX_BYTES=$((MAX_MB * 1024 * 1024))',
     '    GRACE_SEC=$((GRACE_MINUTES * 60))',
     '    TAB="$(printf \'\\t\')"',
     '    if stat -c "%s" / >/dev/null 2>&1; then',
@@ -1516,6 +1531,63 @@ export function renderRuntimeScript() {
     '      fi',
     '      return 1',
     '    }',
+    '    # 检查目录自身及直到 HTML_DIR/INSTANCE_ROOT 之间的所有嵌套祖先目录是否存在活跃发布锁（支持排除自身防 HTML_DIR 自锁，#63）',
+    '    gc_has_ancestor_lock() {',
+    '      local cur="$1"',
+    '      local exclude_dir="${2:-}"',
+    '      local depth=0',
+    '      while [ -n "$cur" ] && [ "$cur" != "/" ] && [ "$depth" -lt 16 ]; do',
+    '        if [ "$cur" != "$exclude_dir" ] && gc_is_deploy_locked "$cur"; then return 0; fi',
+    '        if [ "$cur" = "$HTML_DIR" ] || [ "$cur" = "$INSTANCE_ROOT" ]; then break; fi',
+    '        local parent="$(dirname "$cur")"',
+    '        [ "$parent" = "$cur" ] && break',
+    '        cur="$parent"',
+    '        depth=$((depth + 1))',
+    '      done',
+    '      if [ -d "$HTML_DIR" ] && [ "$HTML_DIR" != "$exclude_dir" ] && gc_is_deploy_locked "$HTML_DIR"; then return 0; fi',
+    '      return 1',
+    '    }',
+    '    GC_HELD_DIR_LOCK=""',
+    '    gc_release_dir_lock() {',
+    '      if [ -n "$GC_HELD_DIR_LOCK" ]; then',
+    '        rm -f "$GC_HELD_DIR_LOCK/owner" 2>/dev/null || true',
+    '        rmdir "$GC_HELD_DIR_LOCK" 2>/dev/null || true',
+    '        GC_HELD_DIR_LOCK=""',
+    '      fi',
+    '    }',
+    '    # 检查目标目录子孙下是否存在未过期的活跃发布锁（与发布侧双向互斥，#63）',
+    '    gc_has_descendant_lock() {',
+    '      local root_dir="$1"',
+    '      [ -d "$root_dir" ] || return 1',
+    '      while IFS= read -r dlock; do',
+    '        [ -d "$dlock" ] || continue',
+    '        local dmtime="$(gc_file_mtime "$dlock")"',
+    '        [[ "$dmtime" =~ ^[0-9]+$ ]] || dmtime=0',
+    '        if [ "$dmtime" -gt 0 ] && [ $((NOW_EPOCH - dmtime)) -lt 7200 ]; then',
+    '          return 0',
+    '        fi',
+    '      done < <(find "$root_dir" -mindepth 2 -maxdepth 6 \\( -name ".yuyan-backups" -o -name ".yuyan-manifests" -o -name ".yuyan-state" -o -name "node_modules" \\) -prune -o -type d -name ".yuyan-deploy.lock" -print 2>/dev/null)',
+    '      return 1',
+    '    }',
+    '    # 与雨燕发布共用 mkdir 原子目录锁，双向复查祖先与子孙锁（拿不到立即跳过，不强删）',
+    '    gc_try_acquire_dir_lock() {',
+    '      local target_dir="$1"',
+    '      [ -d "$target_dir" ] || return 0',
+    '      if gc_has_ancestor_lock "$target_dir" || gc_has_descendant_lock "$target_dir"; then return 1; fi',
+    '      local lock_dir="$target_dir/.yuyan-deploy.lock"',
+    '      if mkdir "$lock_dir" 2>/dev/null; then',
+    '        printf "host=cron-gc pid=%s record=0 at=%s\\n" "$$" "$NOW_EPOCH" > "$lock_dir/owner" 2>/dev/null || true',
+    '        GC_HELD_DIR_LOCK="$lock_dir"',
+    '        # 双检祖先与子孙锁（排除 target_dir 自身，避免 target_dir == HTML_DIR 时把自己刚建的锁误当冲突，#63）',
+    '        local parent="$(dirname "$target_dir")"',
+    '        if { [ "$parent" != "$target_dir" ] && gc_has_ancestor_lock "$parent" "$target_dir"; } || gc_has_descendant_lock "$target_dir"; then',
+    '          gc_release_dir_lock',
+    '          return 1',
+    '        fi',
+    '        return 0',
+    '      fi',
+    '      return 1',
+    '    }',
     '    gc_read_retired_age() {',
     '      local mfile="$1"',
     '      [ -f "$mfile" ] || { echo "-1"; return 1; }',
@@ -1527,180 +1599,98 @@ export function renderRuntimeScript() {
     '      echo "$rage"',
     '      return 0',
     '    }',
-    '    gc_dir_has_backups() {',
-    '      local broot="$1" item bname',
-    '      [ -d "$broot" ] || return 1',
+    '    gc_count_backups() {',
+    '      local broot="$1" item bname cnt=0',
+    '      [ -d "$broot" ] || { echo 0; return 0; }',
     '      for item in "$broot"/*; do',
-    '        [ -d "$item" ] || continue',
+    '        [ -d "$item" ] && [ ! -L "$item" ] || continue',
     '        bname="$(basename "$item")"',
     '        case "$bname" in ""|"."|".."|"*"|.*) continue ;; esac',
-    '        return 0',
+    '        cnt=$((cnt + 1))',
     '      done',
-    '      return 1',
-    '    }',
-    '    gc_prune_backup_root() {',
-    '      local broot="$1"',
-    '      local min_keep="${2:-1}"',
-    '      local eff_keep="${3:-$KEEP_COUNT}"',
-    '      local eff_max_bytes="${4:-$MAX_BYTES}"',
-    '      local eff_ttl_sec="${5:-$TTL_SEC}"',
-    '      [ -d "$broot" ] || return 0',
-    '      local tmp_c tmp_s tmp_seen item bname ts snap_dir',
-    '      tmp_c="$(mktemp)"',
-    '      tmp_s="$(mktemp)"',
-    '      tmp_seen="$(mktemp)"',
-    '      for item in "$broot"/*; do',
-    '        [ -d "$item" ] || continue',
-    '        bname="$(basename "$item")"',
-    '        case "$bname" in ""|"."|".."|"*"|.*) continue ;; esac',
-    '        ts=0',
-    '        if [ -f "$item/.backup-meta.json" ]; then',
-    '          ts="$(sed -n \'s/.*"createdAtEpoch":\\([0-9][0-9]*\\).*/\\1/p\' "$item/.backup-meta.json" | head -n 1 || true)"',
-    '        fi',
-    '        if ! [[ "$ts" =~ ^[1-9][0-9]*$ ]]; then ts="$(gc_file_mtime "$item")"; fi',
-    '        [[ "$ts" =~ ^[0-9]+$ ]] || ts=0',
-    '        printf "%s\\t%s\\t%s\\n" "$ts" "$bname" "$item" >> "$tmp_c"',
-    '      done',
-    '      if [ -s "$tmp_c" ]; then',
-    '        sort -t "$TAB" -k1,1nr -k2,2r "$tmp_c" > "$tmp_s"',
-    '        local kept=0 eff_bytes=0',
-    '        while IFS="$TAB" read -r ts bname snap_dir; do',
-    '          [ -n "$snap_dir" ] || continue',
-    '          local age=$((NOW_EPOCH - ts))',
-    '          [ "$age" -lt 0 ] && age=0',
-    '          local inc_bytes=0 tmp_new',
-    '          tmp_new="$(mktemp)"',
-    '          if [ -f "$snap_dir/.cas-index.tsv" ]; then',
-    '            local tmp_snap="$(mktemp)"',
-    '            awk -F"\\t" \'$1=="f" && $4!="" { if (!seen[$4]++) print $4 "\\t" $3 }\' "$snap_dir/.cas-index.tsv" > "$tmp_snap"',
-    '            if [ -s "$tmp_seen" ]; then',
-    '              awk -F"\\t" \'NR==FNR { seen[$1]=1; next } !($1 in seen) { print $1 "\\t" $2 }\' "$tmp_seen" "$tmp_snap" > "$tmp_new"',
-    '            else',
-    '              cp "$tmp_snap" "$tmp_new"',
-    '            fi',
-    '            inc_bytes="$(awk -F"\\t" \'{ s += $2 } END { printf "%.0f", s + 0 }\' "$tmp_new")"',
-    '            rm -f "$tmp_snap"',
-    '          else',
-    '            local kb="$(du -sk "$snap_dir" 2>/dev/null | awk \'{print $1}\')"',
-    '            [[ "$kb" =~ ^[0-9]+$ ]] || kb=0',
-    '            inc_bytes=$((kb * 1024))',
-    '          fi',
-    '          local del=0',
-    '          if [ "$kept" -ge "$min_keep" ]; then',
-    '            if [ "$kept" -ge "$eff_keep" ]; then del=1',
-    '            elif [ "$eff_ttl_sec" -gt 0 ] && [ "$age" -gt "$eff_ttl_sec" ]; then del=1',
-    '            elif [ "$eff_max_bytes" -gt 0 ] && [ $((eff_bytes + inc_bytes)) -gt "$eff_max_bytes" ]; then del=1',
-    '            fi',
-    '          fi',
-    '          if [ "$del" -eq 1 ]; then',
-    '            rm -rf "$snap_dir" 2>/dev/null || true',
-    '            GC_DELETED_BACKUPS=$((GC_DELETED_BACKUPS + 1))',
-    '          else',
-    '            kept=$((kept + 1))',
-    '            eff_bytes=$((eff_bytes + inc_bytes))',
-    '            if [ -s "$tmp_new" ]; then awk -F"\\t" \'{ print $1 }\' "$tmp_new" >> "$tmp_seen"; fi',
-    '          fi',
-    '          rm -f "$tmp_new"',
-    '        done < "$tmp_s"',
-    '      fi',
-    '      rm -f "$tmp_c" "$tmp_s" "$tmp_seen"',
+    '      echo "$cnt"',
     '    }',
     '    GC_DELETED_BACKUPS=0',
     '    GC_DELETED_OBJECTS=0',
     '    GC_CLEANED_STAGING=0',
     '    GC_RECLAIMED_TARGETS=0',
-    '    # 1. 巡检外置仓 targets/*（优先按 target.json 目标级保留策略执行；已退役或目录已消失的孤儿目标超期后整份回收）',
+    '    GC_CAS_LOCK=""',
+    '    GC_TMP_FILES=""',
+    '    gc_cleanup_all() {',
+    '      for _tf in $GC_TMP_FILES; do rm -f "$_tf" 2>/dev/null || true; done',
+    '      if [ -n "$GC_CAS_LOCK" ]; then',
+    '        rm -f "$GC_CAS_LOCK/owner" 2>/dev/null || true',
+    '        rmdir "$GC_CAS_LOCK" 2>/dev/null || true',
+    '        GC_CAS_LOCK=""',
+    '      fi',
+    '      gc_release_dir_lock',
+    '    }',
+    '    trap gc_cleanup_all EXIT',
+    '    # 1. 外置仓 targets/*：仅回收明确带 .retired 退役标记且超宽限期的目录（#63）',
+    '    # 不再后台静默裁剪活跃目标历史备份（由发布与手动治理负责以保证 DB 100% 同步），亦绝不因挂载丢失目录不存在而误删',
     '    if [ -d "$STATE_DIR/targets" ]; then',
     '      for tdir in "$STATE_DIR/targets"/*; do',
-    '        [ -d "$tdir" ] || continue',
+    '        [ -d "$tdir" ] && [ ! -L "$tdir" ] || continue',
     '        tname="$(basename "$tdir")"',
     '        case "$tname" in ""|"."|".."|"*"|.*) continue ;; esac',
+    '        [ -f "$tdir/.retired" ] || continue',
     '        mapped_root=""',
-    '        t_keep="$KEEP_COUNT"',
-    '        t_max_bytes="$MAX_BYTES"',
     '        t_ttl_sec="$TTL_SEC"',
     '        if [ -f "$tdir/target.json" ]; then',
     '          mapped_root="$(sed -n \'s/.*"realRoot"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p\' "$tdir/target.json" | head -n 1 || true)"',
-    '          raw_keep="$(sed -n \'s/.*"retentionKeepCount"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p\' "$tdir/target.json" | head -n 1 || true)"',
-    '          raw_max_mb="$(sed -n \'s/.*"retentionMaxSizeMb"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p\' "$tdir/target.json" | head -n 1 || true)"',
     '          raw_ttl="$(sed -n \'s/.*"retentionTtlDays"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p\' "$tdir/target.json" | head -n 1 || true)"',
-    '          if [[ "$raw_keep" =~ ^[1-9][0-9]*$ ]]; then t_keep="$raw_keep"; fi',
-    '          if [[ "$raw_max_mb" =~ ^[0-9]+$ ]]; then t_max_bytes=$((raw_max_mb * 1024 * 1024)); fi',
-    '          if [[ "$raw_ttl" =~ ^[0-9]+$ ]]; then t_ttl_sec=$((raw_ttl * 86400)); fi',
+    '          if [[ "$raw_ttl" =~ ^[1-9][0-9]*$ ]]; then t_ttl_sec=$((raw_ttl * 86400)); fi',
     '        fi',
-    '        if [ -n "$mapped_root" ] && gc_is_deploy_locked "$mapped_root"; then continue; fi',
-    '        if gc_is_deploy_locked "$HTML_DIR"; then continue; fi',
-    '        is_orphan=0',
-    '        orphan_by_marker=0',
-    '        t_min_keep=1',
-    '        prune_ttl_sec="$t_ttl_sec"',
     '        retire_ttl_sec="$t_ttl_sec"',
     '        if [ "$retire_ttl_sec" -le 0 ]; then retire_ttl_sec="$TTL_SEC"; fi',
+    '        rage="$(gc_read_retired_age "$tdir/.retired" || echo 0)"',
+    '        if [ "$retire_ttl_sec" -le 0 ] || [ "$rage" -le "$retire_ttl_sec" ]; then continue; fi',
+    '        if [ -n "$mapped_root" ] && [ -d "$mapped_root" ]; then',
+    '          if ! gc_try_acquire_dir_lock "$mapped_root"; then continue; fi',
+    '        elif gc_has_ancestor_lock "$HTML_DIR"; then',
+    '          continue',
+    '        fi',
+    '        # 持锁后二次确认 .retired 仍在（防并发刚重新发布清掉了退役标记）',
     '        if [ -f "$tdir/.retired" ]; then',
-    '          rage="$(gc_read_retired_age "$tdir/.retired" || echo 0)"',
-    '          if [ "$retire_ttl_sec" -gt 0 ] && [ "$rage" -gt "$retire_ttl_sec" ]; then',
-    '            is_orphan=1',
-    '            orphan_by_marker=1',
-    '            t_min_keep=0',
-    '            prune_ttl_sec="$retire_ttl_sec"',
-    '          fi',
-    '        elif [ -n "$mapped_root" ] && [[ "$mapped_root" == /* ]] && [ ! -d "$mapped_root" ]; then',
-    '          if [ "$retire_ttl_sec" -gt 0 ]; then',
-    '            is_orphan=1',
-    '            t_min_keep=0',
-    '            prune_ttl_sec="$retire_ttl_sec"',
+    '          b_cnt="$(gc_count_backups "$tdir/backups")"',
+    '          if rm -rf "$tdir" 2>/dev/null; then',
+    '            GC_DELETED_BACKUPS=$((GC_DELETED_BACKUPS + b_cnt))',
+    '            GC_RECLAIMED_TARGETS=$((GC_RECLAIMED_TARGETS + 1))',
     '          fi',
     '        fi',
-    '        if [ -d "$tdir/backups" ]; then',
-    '          gc_prune_backup_root "$tdir/backups" "$t_min_keep" "$t_keep" "$t_max_bytes" "$prune_ttl_sec"',
-    '        fi',
-    '        if [ "$is_orphan" -eq 1 ] && ! gc_dir_has_backups "$tdir/backups"; then',
-    '          can_reclaim="$orphan_by_marker"',
-    '          if [ "$can_reclaim" -eq 0 ]; then',
-    '            meta_ref="$tdir"',
-    '            [ -f "$tdir/target.json" ] && meta_ref="$tdir/target.json"',
-    '            mmtime="$(gc_file_mtime "$meta_ref")"',
-    '            [[ "$mmtime" =~ ^[0-9]+$ ]] || mmtime=0',
-    '            mage=$((NOW_EPOCH - mmtime))',
-    '            if [ "$mage" -gt "$retire_ttl_sec" ]; then can_reclaim=1; fi',
-    '          fi',
-    '          if [ "$can_reclaim" -eq 1 ]; then',
-    '            if rm -rf "$tdir" 2>/dev/null; then GC_RECLAIMED_TARGETS=$((GC_RECLAIMED_TARGETS + 1)); fi',
-    '          fi',
-    '        fi',
+    '        gc_release_dir_lock',
     '      done',
     '    fi',
-    '    # 2. 巡检 html 下存量内嵌 .yuyan-backups 与过期暂存目录（跳过正在发布的目录；活跃目标保底留 1 份，已退役超期整份回收）',
-    '    if [ -d "$HTML_DIR" ] && ! gc_is_deploy_locked "$HTML_DIR"; then',
+    '    # 2. html 下仅回收带 .retired 退役标记且超宽限期的内嵌 .yuyan-backups 及超过 60 分钟的过期暂存目录',
+    '    if [ -d "$HTML_DIR" ]; then',
     '      while IFS= read -r bdir; do',
-    '        [ -d "$bdir" ] || continue',
+    '        [ -d "$bdir" ] && [ ! -L "$bdir" ] || continue',
+    '        [ -f "$bdir/.retired" ] || continue',
+    '        rage="$(gc_read_retired_age "$bdir/.retired" || echo 0)"',
+    '        if [ "$TTL_SEC" -le 0 ] || [ "$rage" -le "$TTL_SEC" ]; then continue; fi',
     '        app_parent="$(dirname "$bdir")"',
-    '        if gc_is_deploy_locked "$app_parent"; then continue; fi',
-    '        b_min_keep=1',
-    '        b_retired_expired=0',
+    '        if ! gc_try_acquire_dir_lock "$app_parent"; then continue; fi',
     '        if [ -f "$bdir/.retired" ]; then',
-    '          rage="$(gc_read_retired_age "$bdir/.retired" || echo 0)"',
-    '          if [ "$TTL_SEC" -gt 0 ] && [ "$rage" -gt "$TTL_SEC" ]; then',
-    '            b_min_keep=0',
-    '            b_retired_expired=1',
+    '          b_cnt="$(gc_count_backups "$bdir")"',
+    '          if rm -rf "$bdir" 2>/dev/null; then',
+    '            GC_DELETED_BACKUPS=$((GC_DELETED_BACKUPS + b_cnt))',
+    '            GC_RECLAIMED_TARGETS=$((GC_RECLAIMED_TARGETS + 1))',
     '          fi',
     '        fi',
-    '        gc_prune_backup_root "$bdir" "$b_min_keep" "$KEEP_COUNT" "$MAX_BYTES" "$TTL_SEC"',
-    '        if [ "$b_retired_expired" -eq 1 ] && ! gc_dir_has_backups "$bdir"; then',
-    '          rm -f "$bdir/.retired" 2>/dev/null || true',
-    '          if rmdir "$bdir" 2>/dev/null; then GC_RECLAIMED_TARGETS=$((GC_RECLAIMED_TARGETS + 1)); fi',
-    '        fi',
+    '        gc_release_dir_lock',
     '      done < <(find "$HTML_DIR" -maxdepth 3 -type d -name ".yuyan-backups" 2>/dev/null)',
     '      while IFS= read -r sdir; do',
-    '        [ -d "$sdir" ] || continue',
+    '        [ -d "$sdir" ] && [ ! -L "$sdir" ] || continue',
     '        app_parent="$(dirname "$sdir")"',
-    '        if gc_is_deploy_locked "$app_parent"; then continue; fi',
-    '        if rm -rf "$sdir" 2>/dev/null; then GC_CLEANED_STAGING=$((GC_CLEANED_STAGING + 1)); fi',
+    '        if ! gc_try_acquire_dir_lock "$app_parent"; then continue; fi',
+    '        if [ -d "$sdir" ] && rm -rf "$sdir" 2>/dev/null; then GC_CLEANED_STAGING=$((GC_CLEANED_STAGING + 1)); fi',
+    '        gc_release_dir_lock',
     '      done < <(find "$HTML_DIR" -maxdepth 3 -type d \\( -name ".yuyan-retiring-*" -o -name ".yuyan-trash-*" \\) -mmin +60 2>/dev/null)',
     '    fi',
-    '    # 3. 外置仓 CAS 对象池 Mark-and-Sweep GC（加 .gc.lock 防并发 + 宽限期保护在途发布）',
+    '    # 3. 外置仓 CAS 对象池 Mark-and-Sweep GC（.gc.lock 互斥 + .cas-users 活跃租约检查 + awk O(N+M) 线性过滤）',
     '    if [ -d "$STATE_DIR/objects" ]; then',
     '      GC_LOCK="$STATE_DIR/.gc.lock"',
+    '      CAS_USERS_DIR="$STATE_DIR/.cas-users"',
     '      if [ -d "$GC_LOCK" ]; then',
     '        lm="$(gc_file_mtime "$GC_LOCK")"',
     '        [[ "$lm" =~ ^[0-9]+$ ]] || lm=0',
@@ -1710,35 +1700,56 @@ export function renderRuntimeScript() {
     '        fi',
     '      fi',
     '      if mkdir "$GC_LOCK" 2>/dev/null; then',
+    '        GC_CAS_LOCK="$GC_LOCK"',
     '        printf "pid=%s at=%s\\n" "$$" "$NOW_EPOCH" > "$GC_LOCK/owner" 2>/dev/null || true',
-    '        tmp_live_raw="$(mktemp)"',
-    '        tmp_live="$(mktemp)"',
-    '        if [ -d "$STATE_DIR/targets" ]; then',
-    '          find "$STATE_DIR/targets" -type f \\( -name ".cas-index.tsv" -o -name ".cas-index.tsv.tmp.*" \\) 2>/dev/null | while IFS= read -r idxf; do',
-    '            awk -F"\\t" \'$1=="f" && $4!="" { print $4 }\' "$idxf" >> "$tmp_live_raw" 2>/dev/null || true',
+    '        active_users=0',
+    '        if [ -d "$CAS_USERS_DIR" ]; then',
+    '          for udir in "$CAS_USERS_DIR"/*; do',
+    '            [ -d "$udir" ] || continue',
+    '            um="$(gc_file_mtime "$udir")"',
+    '            [[ "$um" =~ ^[0-9]+$ ]] || um=0',
+    '            if [ "$um" -gt 0 ] && [ $((NOW_EPOCH - um)) -gt 1800 ]; then',
+    '              rmdir "$udir" 2>/dev/null || true',
+    '            else',
+    '              active_users=$((active_users + 1))',
+    '            fi',
     '          done',
     '        fi',
-    '        if [ -s "$tmp_live_raw" ]; then sort -u "$tmp_live_raw" > "$tmp_live"; else : > "$tmp_live"; fi',
-    '        while IFS= read -r objf; do',
-    '          [ -f "$objf" ] || continue',
-    '          oname="$(basename "$objf")"',
-    '          omtime="$(gc_file_mtime "$objf")"',
-    '          [[ "$omtime" =~ ^[0-9]+$ ]] || omtime=0',
-    '          oage=$((NOW_EPOCH - omtime))',
-    '          [ "$oage" -lt 0 ] && oage=0',
-    '          case "$oname" in',
-    '            .tmp.*) [ "$oage" -gt 3600 ] && rm -f "$objf" 2>/dev/null || true; continue ;;',
-    '            *[!0-9a-fA-F]*) continue ;;',
-    '          esac',
-    '          [ "${#oname}" -eq 64 ] || continue',
-    '          if [ -s "$tmp_live" ] && grep -Fxq "$oname" "$tmp_live"; then continue; fi',
-    '          if [ "$GRACE_SEC" -gt 0 ] && [ "$oage" -lt "$GRACE_SEC" ]; then continue; fi',
-    '          chmod u+w "$objf" 2>/dev/null || true',
-    '          if rm -f "$objf" 2>/dev/null; then GC_DELETED_OBJECTS=$((GC_DELETED_OBJECTS + 1)); fi',
-    '        done < <(find "$STATE_DIR/objects" -mindepth 2 -maxdepth 2 -type f 2>/dev/null)',
-    '        find "$STATE_DIR/objects" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | while IFS= read -r sd; do rmdir "$sd" 2>/dev/null || true; done',
-    '        rm -f "$tmp_live_raw" "$tmp_live" "$GC_LOCK/owner" 2>/dev/null || true',
+    '        if [ "$active_users" -eq 0 ]; then',
+    '          tmp_live_raw="$(mktemp)"',
+    '          tmp_live="$(mktemp)"',
+    '          tmp_obj_list="$(mktemp)"',
+    '          tmp_candidates="$(mktemp)"',
+    '          GC_TMP_FILES="$tmp_live_raw $tmp_live $tmp_obj_list $tmp_candidates"',
+    '          if [ -d "$STATE_DIR/targets" ]; then',
+    '            find "$STATE_DIR/targets" -type f \\( -name ".cas-index.tsv" -o -name ".cas-index.tsv.tmp.*" \\) 2>/dev/null | while IFS= read -r idxf; do',
+    '              awk -F"\\t" \'$1=="f" && $4!="" { print $4 }\' "$idxf" >> "$tmp_live_raw" 2>/dev/null || true',
+    '            done',
+    '          fi',
+    '          if [ -s "$tmp_live_raw" ]; then sort -u "$tmp_live_raw" > "$tmp_live"; else : > "$tmp_live"; fi',
+    '          find "$STATE_DIR/objects" -mindepth 2 -maxdepth 2 -type f 2>/dev/null > "$tmp_obj_list" || true',
+    '          awk -v live_file="$tmp_live" \'FILENAME == live_file { live[$0] = 1; next } { n = split($0, p, "/"); b = p[n]; if (substr(b, 1, 5) == ".tmp.") { print "TMP\\t" $0; next } if (length(b) == 64 && b ~ /^[0-9a-fA-F]+$/) { if (!(b in live)) { print "ORPHAN\\t" $0 } } }\' "$tmp_live" "$tmp_obj_list" > "$tmp_candidates"',
+    '          while IFS="$TAB" read -r okind objf; do',
+    '            [ -n "$objf" ] && [ -f "$objf" ] || continue',
+    '            omtime="$(gc_file_mtime "$objf")"',
+    '            [[ "$omtime" =~ ^[0-9]+$ ]] || omtime=0',
+    '            oage=$((NOW_EPOCH - omtime))',
+    '            [ "$oage" -lt 0 ] && oage=0',
+    '            if [ "$okind" = "TMP" ]; then',
+    '              [ "$oage" -gt 3600 ] && rm -f "$objf" 2>/dev/null || true',
+    '              continue',
+    '            fi',
+    '            if [ "$GRACE_SEC" -gt 0 ] && [ "$oage" -lt "$GRACE_SEC" ]; then continue; fi',
+    '            chmod u+w "$objf" 2>/dev/null || true',
+    '            if rm -f "$objf" 2>/dev/null; then GC_DELETED_OBJECTS=$((GC_DELETED_OBJECTS + 1)); fi',
+    '          done < "$tmp_candidates"',
+    '          find "$STATE_DIR/objects" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | while IFS= read -r sd; do rmdir "$sd" 2>/dev/null || true; done',
+    '          rm -f "$tmp_live_raw" "$tmp_live" "$tmp_obj_list" "$tmp_candidates" 2>/dev/null || true',
+    '          GC_TMP_FILES=""',
+    '        fi',
+    '        rm -f "$GC_LOCK/owner" 2>/dev/null || true',
     '        rmdir "$GC_LOCK" 2>/dev/null || true',
+    '        GC_CAS_LOCK=""',
     '      fi',
     '    fi',
     '    echo "gc_backups_ok=1 deleted_backups=$GC_DELETED_BACKUPS deleted_objects=$GC_DELETED_OBJECTS cleaned_staging=$GC_CLEANED_STAGING reclaimed_targets=$GC_RECLAIMED_TARGETS"',
@@ -2067,6 +2078,12 @@ export function renderSiteConfigBody(target) {
     '',
     `    root ${deployRoot};`,
     '    index index.html index.htm;',
+    '',
+    '    location ~ /\\.(?!well-known) {',
+    '        deny all;',
+    '        access_log off;',
+    '        log_not_found off;',
+    '    }',
     '',
     '    location ~* \\.html$ {',
     '        expires -1;',
@@ -3221,36 +3238,113 @@ export async function getNginxInstanceArchiveSites(instanceId) {
 }
 
 /**
- * 流式导出 Nginx 实例运行包或配置/站点（支持托管与已有实例）。
- * @param {number} instanceId - Nginx 实例 ID
- * @param {string} type - 下载类型 ('all' | 'html' | 'conf')
- * @param {import('node:stream').Writable} output - 输出流
- * @param {(meta: Object) => void} onReady - 响应头准备回调
+ * 批量探测远端路径的真实物理路径（仅用于归档纯净导出解析，不引入 deploy-service 循环依赖，#63）。
+ * @param {Object|null} conn - SSH 连接
+ * @param {string[]} paths - 待解析路径列表
+ * @param {boolean} [useSudo=false] - 是否使用 sudo
+ * @returns {Promise<Map<string, string>>} normalizedInput -> realPath 映射
+ */
+async function detectRealPathsForArchive(conn, paths = [], useSudo = false) {
+  const uniquePaths = [...new Set((paths || []).map((p) => normalizePosixAbsPath(p)).filter(Boolean))];
+  const result = new Map();
+  for (const p of uniquePaths) {
+    result.set(p, p);
+  }
+  if (!conn || uniquePaths.length === 0) return result;
+
+  const sudo = useSudo ? 'sudo -n ' : '';
+  const inner = [
+    'for p in "$@"; do',
+    '  rp="$p"',
+    '  if [ -d "$p" ]; then',
+    '    resolved=$(cd -P "$p" 2>/dev/null && pwd -P 2>/dev/null || true)',
+    '    [ -n "$resolved" ] && rp="$resolved"',
+    '  elif [ -L "$p" ] && command -v readlink >/dev/null 2>&1; then',
+    '    resolved=$(readlink -f "$p" 2>/dev/null || true)',
+    '    [ -n "$resolved" ] && rp="$resolved"',
+    '  fi',
+    '  printf "%s\\t%s\\n" "$p" "$rp"',
+    'done',
+  ].join('\n');
+  const cmd = `${sudo}sh -c ${shellQuote(inner)} -- ${uniquePaths.map(shellQuote).join(' ')}`;
+  const execRes = await execSsh(conn, cmd, { label: '解析归档导出真实路径', allowFailure: true }).catch(() => null);
+  if (execRes?.code === 0 && execRes.stdout) {
+    for (const line of String(execRes.stdout).split(/\r?\n/)) {
+      if (!line.includes('\t')) continue;
+      const [rawP, realP] = line.split('\t');
+      const key = normalizePosixAbsPath(rawP);
+      const val = normalizePosixAbsPath(realP);
+      if (key && val) result.set(key, val);
+    }
+  }
+  return result;
+}
+
 /**
  * 解析纯净迁移导出模式所需的各微应用清单过滤范围（按 current.txt 剥离带哈希目录中的历史回滚 chunk）。
+ * 统一解析远端真实路径、目标持久化 stateRoot 与全部祖先候选外置仓，防止粘性仓漏读导致误剥离线上 chunk（#63）。
+ * @param {Object|null} conn - SSH 连接
  * @param {Object} instance - Nginx 实例
  * @param {number} serverId - 服务器 ID
  * @param {string[]} exportedRoots - 本次导出涵盖的根目录列表
- * @returns {Promise<Array<{ rootPath: string, manifestDir: string, legacyManifestDir: string, hashedDirs: string[] }>>}
+ * @param {boolean} [useSudo=false] - 是否使用 sudo
+ * @returns {Promise<Array<{ rootPath: string, manifestDir: string, manifestDirs: string[], legacyManifestDir: string, hashedDirs: string[] }>>}
  */
-async function resolveArchiveCleanManifestScopes(instance, serverId, exportedRoots = []) {
-  const roots = (exportedRoots || []).filter(Boolean);
+async function resolveArchiveCleanManifestScopes(conn, instance, serverId, exportedRoots = [], useSudo = false) {
+  const roots = (exportedRoots || []).map((r) => normalizePosixAbsPath(r)).filter(Boolean);
   if (!roots.length) return [];
-  const allTargets = await listTargets({ serverId }).catch(() => []);
+  const allTargets = await listPhysicalServerTargets({ serverId }).catch(async () => listTargets({ serverId }).catch(() => []));
+  const frontendTargets = (allTargets || []).filter((t) => t && t.projectType !== 'backend' && t.deployRoot);
+  if (!frontendTargets.length) return [];
+
+  const pathsToResolve = [
+    ...roots,
+    instance?.baseRoot || '',
+    instance?.htmlRoot || '',
+    ...frontendTargets.map((t) => t.deployRoot),
+  ].filter(Boolean);
+  const realMap = await detectRealPathsForArchive(conn, pathsToResolve, useSudo);
+  const resolveReal = (p) => {
+    const norm = normalizePosixAbsPath(p);
+    return norm ? (realMap.get(norm) || norm) : '';
+  };
+
+  const realBaseRoot = resolveReal(instance?.baseRoot || '');
+  const realHtmlRoot = resolveReal(instance?.htmlRoot || '');
+  const realExportedRoots = roots.map(resolveReal).filter(Boolean);
+  const allFrontendRealRoots = frontendTargets.map((t) => resolveReal(t.deployRoot)).filter(Boolean);
+
   const scopes = [];
-  const seenRoots = new Set();
-  for (const target of allTargets) {
-    if (!target || target.projectType === 'backend' || !target.deployRoot) continue;
-    const belongs = roots.some((r) => isSameOrSubPath(target.deployRoot, r));
-    if (!belongs) continue;
-    if (seenRoots.has(target.deployRoot)) continue;
-    seenRoots.add(target.deployRoot);
-    const layout = resolveDeployStateLocation({ realRoot: target.deployRoot, nginxInstance: instance });
+  const seenArchiveRoots = new Set();
+  for (const target of frontendTargets) {
+    const configuredRoot = normalizePosixAbsPath(target.deployRoot);
+    const realRoot = resolveReal(configuredRoot);
+    if (!configuredRoot || !realRoot) continue;
+    const matchedConfigured = roots.some((r) => isSameOrSubPath(configuredRoot, r));
+    const matchedReal = realExportedRoots.some((r) => isSameOrSubPath(realRoot, r));
+    if (!matchedConfigured && !matchedReal) continue;
+
+    // tar 按 exportedRoots 路径打包，若 configuredRoot 位于 exportedRoots 下则以 configuredRoot 对齐 --anchored 排除前缀
+    const archiveRootPath = matchedConfigured ? configuredRoot : realRoot;
+    if (seenArchiveRoots.has(archiveRootPath)) continue;
+    seenArchiveRoots.add(archiveRootPath);
+
+    const otherTargetRoots = allFrontendRealRoots.filter((r) => r !== realRoot);
+    const candidates = resolveCandidateDeployStateLocations({
+      realRoot,
+      nginxInstance: instance,
+      realBaseRoot,
+      realHtmlRoot,
+      otherTargetRoots,
+      pinnedStateRoot: target.stateRoot || '',
+    });
+    const manifestDirs = [...new Set(candidates.allExternal.map((loc) => loc.manifestDir).filter(Boolean))];
     const policy = resolveDeployRetentionPolicy(target);
     scopes.push({
-      rootPath: target.deployRoot,
-      manifestDir: layout.manifestDir,
-      legacyManifestDir: layout.legacyManifestDir,
+      rootPath: archiveRootPath,
+      manifestDir: candidates.primary.manifestDir,
+      manifestDirs,
+      legacyManifestDir: `${archiveRootPath}/.yuyan-manifests`,
       hashedDirs: policy.hashedAssetDirs,
     });
   }
@@ -3364,7 +3458,7 @@ export async function streamNginxInstanceArchive(instanceId, type = 'all', outpu
         ? selected.roots
         : (type === 'html' ? [config.webRoot].filter(Boolean) : [config.webRoot || config.baseRoot].filter(Boolean));
       const cleanManifestScopes = cleanExport
-        ? await resolveArchiveCleanManifestScopes(instance, server.id, cleanRoots)
+        ? await resolveArchiveCleanManifestScopes(conn, instance, server.id, cleanRoots, config.useSudo)
         : [];
       const archiveOptions = { whitelist, includeHidden, cleanManifestScopes };
 
@@ -3523,7 +3617,7 @@ export async function saveNginxInstanceArchiveToPath(instanceId, type = 'all', f
           ? [config.webRoot].filter(Boolean)
           : [config.webRoot || config.baseRoot].filter(Boolean);
         const cleanManifestScopes = cleanExport
-          ? await resolveArchiveCleanManifestScopes(instance, server.id, cleanRoots)
+          ? await resolveArchiveCleanManifestScopes(conn, instance, server.id, cleanRoots, config.useSudo)
           : [];
         if (cleanExport && cleanManifestScopes.length > 0) {
           emit({ stage: 'packing', message: `纯净迁移模式：按当前发布清单剥离 ${cleanManifestScopes.length} 个应用的历史静态资源` });

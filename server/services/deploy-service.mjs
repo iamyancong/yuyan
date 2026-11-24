@@ -26,6 +26,7 @@ import {
   updateTargetBuildMemoryMb,
   updateTargetBuildPeakMb,
   updateTargetCleanupConfirmed,
+  updateTargetStateRoot,
   getManagedNginxInstanceByServerId,
   getJdk,
 } from './deploy-store.mjs';
@@ -35,10 +36,13 @@ import {
   DEPLOY_RECORD_KEEP_PER_PROJECT,
 } from '../config/constants.mjs';
 import {
+  backupPathBelongsToDeployRoot,
   DEFAULT_HASHED_ASSET_DIRS,
   LEGACY_BACKUP_DIR_NAME,
   LEGACY_MANIFEST_DIR_NAME,
+  normalizePosixAbsPath,
   parseExternalBackupPath,
+  resolveCandidateDeployStateLocations,
   resolveDeployRetentionPolicy,
   resolveDeployStateLocation,
   toInlineStateLayout,
@@ -1932,12 +1936,19 @@ export async function assertDeployTargetSafety(target, options = {}) {
  * @returns {string} 远程命令
  */
 export function buildDetectDeployRootCommand(deployRoot, ensureDir = true, useSudo = false, options = {}) {
-  const externalManifestDir = String(options.externalManifestDir || '');
+  const externalManifestDirs = [
+    ...new Set([
+      String(options.externalManifestDir || '').trim(),
+      ...(Array.isArray(options.externalManifestDirs)
+        ? options.externalManifestDirs.map((d) => String(d || '').trim())
+        : []),
+    ].filter(Boolean)),
+  ];
   const script = [
     'set -eu',
     'root="$1"',
     'ensure_dir="$2"',
-    'ext_manifest_dir="$3"',
+    'shift 2',
     'if [ "$ensure_dir" = "0" ] && [ ! -d "$root" ] && [ ! -L "$root" ]; then',
     '  echo "===EXISTS===0"',
     '  exit 0',
@@ -1966,14 +1977,16 @@ export function buildDetectDeployRootCommand(deployRoot, ensureDir = true, useSu
     '    if [ -n "$latest" ] && [ -f "$latest" ]; then current_manifest="$latest"; fi',
     '  fi',
     '}',
-    'if [ -n "$ext_manifest_dir" ]; then pick_manifest "$ext_manifest_dir"; fi',
+    'for ext_manifest_dir in "$@"; do',
+    '  if [ -z "$current_manifest" ] && [ -n "$ext_manifest_dir" ]; then pick_manifest "$ext_manifest_dir"; fi',
+    'done',
     `if [ -z "$current_manifest" ]; then pick_manifest "$real_root/${DEPLOY_MANIFEST_DIR_NAME}"; fi`,
     'if [ -n "$current_manifest" ] && [ -f "$current_manifest" ]; then',
     '  cat "$current_manifest"',
     'fi',
   ].join('\n');
 
-  return buildRemoteShellCommand(script, [deployRoot, ensureDir ? '1' : '0', externalManifestDir], useSudo);
+  return buildRemoteShellCommand(script, [deployRoot, ensureDir ? '1' : '0', ...externalManifestDirs], useSudo);
 }
 
 /**
@@ -2056,7 +2069,14 @@ export function parseDetectDeployRootOutput(raw, deployRoot, options = {}) {
  * @returns {Promise<{ exists: boolean, realRoot: string, existingNames: string[], manifestText: string }>} 探测结果
  */
 export async function detectDeployRoot(conn, deployRoot, useSudo = false, options = {}) {
-  const { ensureDir = true, log = null, nginxInstance = null, externalManifestDir = '' } = options;
+  const {
+    ensureDir = true,
+    log = null,
+    nginxInstance = null,
+    externalManifestDir = '',
+    otherTargetRoots = [],
+    pinnedStateRoot = '',
+  } = options;
 
   if (ensureDir) {
     await execSsh(conn, buildRemoteMkdirCommand(deployRoot, useSudo), {
@@ -2064,16 +2084,25 @@ export async function detectDeployRoot(conn, deployRoot, useSudo = false, option
     });
   }
 
-  let candidateExtManifestDir = externalManifestDir;
-  if (!candidateExtManifestDir && nginxInstance) {
-    const preLayout = resolveDeployStateLocation({ realRoot: deployRoot, nginxInstance });
-    if (preLayout.mode === 'external') {
-      candidateExtManifestDir = preLayout.manifestDir;
+  const checkedExtManifestDirs = [];
+  if (externalManifestDir) {
+    checkedExtManifestDirs.push(externalManifestDir);
+  } else {
+    const { allExternal } = resolveCandidateDeployStateLocations({
+      realRoot: deployRoot,
+      nginxInstance,
+      otherTargetRoots,
+      pinnedStateRoot,
+    });
+    for (const lay of allExternal) {
+      if (lay.manifestDir && !checkedExtManifestDirs.includes(lay.manifestDir)) {
+        checkedExtManifestDirs.push(lay.manifestDir);
+      }
     }
   }
 
   const cmd = buildDetectDeployRootCommand(deployRoot, ensureDir, useSudo, {
-    externalManifestDir: candidateExtManifestDir,
+    externalManifestDirs: checkedExtManifestDirs,
   });
   const result = await execSsh(conn, cmd, {
     label: '探测部署根目录与清单',
@@ -2084,10 +2113,29 @@ export async function detectDeployRoot(conn, deployRoot, useSudo = false, option
 
   const parsed = parseDetectDeployRootOutput(String(result.stdout || ''), deployRoot, { log });
 
-  // 若部署目录为软链接且解析后的真实路径对应不同的外置仓 slug，则按 realRoot 补查一次外置清单
-  if (parsed.exists && !parsed.manifestText && parsed.realRoot && parsed.realRoot !== deployRoot) {
-    const realLayout = resolveDeployStateLocation({ realRoot: parsed.realRoot, nginxInstance });
-    if (realLayout.mode === 'external' && realLayout.manifestDir !== candidateExtManifestDir) {
+  // 若部署根目录是软链（realRoot !== deployRoot），补充探测基于 realRoot 计算的外置候选清单，且优先于可能过期的内嵌清单（#63）
+  const resolvedDiffers = Boolean(
+    parsed.exists &&
+    parsed.realRoot &&
+    normalizePosixAbsPath(parsed.realRoot) !== normalizePosixAbsPath(deployRoot)
+  );
+  if (parsed.exists && (resolvedDiffers || !parsed.manifestText)) {
+    const alreadyChecked = new Set(checkedExtManifestDirs);
+    const extraDirs = new Set();
+    if (parsed.realRoot) {
+      const { allExternal } = resolveCandidateDeployStateLocations({
+        realRoot: parsed.realRoot,
+        nginxInstance,
+        otherTargetRoots,
+        pinnedStateRoot,
+      });
+      for (const lay of allExternal) {
+        if (lay.manifestDir && !alreadyChecked.has(lay.manifestDir)) {
+          extraDirs.add(lay.manifestDir);
+        }
+      }
+    }
+    for (const mdir of extraDirs) {
       const readManifestScript = [
         'mdir="$1"',
         `if [ -f "$mdir/${DEPLOY_CURRENT_MANIFEST_NAME}" ]; then`,
@@ -2097,12 +2145,13 @@ export async function detectDeployRoot(conn, deployRoot, useSudo = false, option
         '  if [ -n "$latest" ] && [ -f "$latest" ]; then cat "$latest"; fi',
         'fi',
       ].join('\n');
-      const fallbackRes = await execSsh(conn, buildRemoteShellCommand(readManifestScript, [realLayout.manifestDir], useSudo), {
+      const fallbackRes = await execSsh(conn, buildRemoteShellCommand(readManifestScript, [mdir], useSudo), {
         allowFailure: true,
         label: '读取外置仓发布清单',
       }).catch(() => ({ code: 1, stdout: '' }));
       if (fallbackRes.code === 0 && String(fallbackRes.stdout || '').trim()) {
         parsed.manifestText = String(fallbackRes.stdout || '').trim();
+        break;
       }
     }
   }
@@ -2111,42 +2160,89 @@ export async function detectDeployRoot(conn, deployRoot, useSudo = false, option
 }
 
 /**
- * 探测并解析当前部署目标生效的状态仓布局（优先托管 Nginx 平级外置仓，无权限时自动降级回内嵌目录）。
- * @param {Object} conn - SSH 连接
- * @param {Object} params - 探测参数
- * @param {string} params.realRoot - 目标真实部署根目录
- * @param {Object|null} [params.nginxInstance=null] - 关联的 Nginx 实例
- * @param {boolean} [params.useSudo=false] - 是否 sudo
- * @param {(level: string, message: string, stage?: string) => void} [params.log] - 日志函数
- * @returns {Promise<{ layout: Object, casSupported: boolean, sameFs: boolean, hashTool: string }>}
+ * 探测并解析当前部署目标生效的状态仓布局（优先目标持久化 stateRoot → 粘性旧仓 → 新仓；
+ * 确认外置仓可写后自动将 stateRoot 固化写入数据库目标记录，彻底根治增删父目标导致漂移，#63）。
  */
-export async function resolveActiveDeployStateLayout(conn, { realRoot, nginxInstance = null, useSudo = false, log = null } = {}) {
-  let realBaseRoot = '';
-  let realHtmlRoot = '';
-  if (nginxInstance) {
+export async function resolveActiveDeployStateLayout(
+  conn,
+  {
+    realRoot,
+    nginxInstance = null,
+    realBaseRoot: providedRealBaseRoot = '',
+    realHtmlRoot: providedRealHtmlRoot = '',
+    useSudo = false,
+    log = null,
+    otherTargetRoots = [],
+    target = null,
+    pinnedStateRoot = '',
+    persistStateRoot = true,
+    readOnly = false,
+  } = {}
+) {
+  let realBaseRoot = providedRealBaseRoot || '';
+  let realHtmlRoot = providedRealHtmlRoot || '';
+  if (nginxInstance && (!realBaseRoot || !realHtmlRoot)) {
     const toResolve = [];
-    if (nginxInstance.baseRoot) toResolve.push(nginxInstance.baseRoot);
-    if (nginxInstance.htmlRoot) toResolve.push(nginxInstance.htmlRoot);
+    if (nginxInstance.baseRoot && !realBaseRoot) toResolve.push(nginxInstance.baseRoot);
+    if (nginxInstance.htmlRoot && !realHtmlRoot) toResolve.push(nginxInstance.htmlRoot);
     if (toResolve.length > 0) {
       const resolved = await batchDetectRealRoots(conn, toResolve, useSudo).catch(() => toResolve);
       let idx = 0;
-      if (nginxInstance.baseRoot) {
+      if (nginxInstance.baseRoot && !realBaseRoot) {
         realBaseRoot = resolved[idx] || nginxInstance.baseRoot;
         idx += 1;
       }
-      if (nginxInstance.htmlRoot) {
+      if (nginxInstance.htmlRoot && !realHtmlRoot) {
         realHtmlRoot = resolved[idx] || nginxInstance.htmlRoot;
       }
     }
   }
 
-  const candidate = resolveDeployStateLocation({ realRoot, nginxInstance, realBaseRoot, realHtmlRoot });
-  if (candidate.mode !== 'external') {
+  const effectivePinned = String(pinnedStateRoot || target?.stateRoot || '').trim();
+  const layoutParams = {
+    realRoot,
+    nginxInstance,
+    realBaseRoot,
+    realHtmlRoot,
+    otherTargetRoots,
+  };
+  const { primary, legacyCandidates, allExternal } = resolveCandidateDeployStateLocations({
+    ...layoutParams,
+    pinnedStateRoot: effectivePinned,
+  });
+
+  // 迁移后的目标只沿用含当前真实目录 slug 的仓，避免在旧目录的固定仓里创建新目标。
+  const hasPinnedLayout = primary.source === 'pinned-target-state';
+  let candidate = hasPinnedLayout ? resolveDeployStateLocation(layoutParams) : primary;
+  if (hasPinnedLayout || legacyCandidates.length > 0) {
+    const stickyScript = [
+      'for ldir in "$@"; do',
+      '  if [ -d "$ldir" ]; then printf "USE_EXISTING\\t%s\\n" "$ldir"; exit 0; fi',
+      'done',
+      'exit 0',
+    ].join('\n');
+    const stickyRes = await execSsh(
+      conn,
+      buildRemoteShellCommand(
+        stickyScript,
+        allExternal.map((layout) => layout.targetStateDir),
+        useSudo
+      ),
+      { allowFailure: true, label: '检测历史外置状态仓归属' }
+    ).catch((error) => ({ code: 1, stderr: error.message }));
+    if (stickyRes.code !== 0 && hasPinnedLayout) {
+      throw new Error(`无法确认固定状态仓归属：${stickyRes.stderr || `退出码 ${stickyRes.code}`}`);
+    }
+    const matchedDir = stickyRes.code === 0 && String(stickyRes.stdout || '').match(/^USE_EXISTING\t(.+)$/m)?.[1];
+    candidate = allExternal.find((layout) => layout.targetStateDir === matchedDir) || candidate;
+  }
+  if (candidate.mode !== 'external' || readOnly) {
     return {
       layout: candidate,
       casSupported: false,
       sameFs: true,
       hashTool: 'none',
+      allExternalCandidates: allExternal,
     };
   }
 
@@ -2162,6 +2258,7 @@ export async function resolveActiveDeployStateLayout(conn, { realRoot, nginxInst
       casSupported: false,
       sameFs: true,
       hashTool: 'none',
+      allExternalCandidates: allExternal,
     };
   }
 
@@ -2173,6 +2270,7 @@ export async function resolveActiveDeployStateLayout(conn, { realRoot, nginxInst
       casSupported: false,
       sameFs: true,
       hashTool: parsed.hashTool,
+      allExternalCandidates: allExternal,
     };
   }
 
@@ -2180,11 +2278,21 @@ export async function resolveActiveDeployStateLayout(conn, { realRoot, nginxInst
     log?.('warn', `外置状态仓已启用（${candidate.stateRoot}），但目标机缺少 sha256 工具，本次备份将回退普通复制模式`, 'upload');
   }
 
+  // 首次建仓或发现粘性旧仓后，立即固化写入 deploy_targets.state_root，后续增删父目标均绝不漂移（#63）
+  const targetId = Number(target?.id || 0);
+  if (persistStateRoot && targetId > 0 && candidate.stateRoot && candidate.stateRoot !== effectivePinned) {
+    await updateTargetStateRoot(targetId, candidate.stateRoot).catch(() => {});
+    if (target && typeof target === 'object') {
+      target.stateRoot = candidate.stateRoot;
+    }
+  }
+
   return {
     layout: candidate,
     casSupported: parsed.casSupported,
     sameFs: parsed.sameFs,
     hashTool: parsed.hashTool,
+    allExternalCandidates: allExternal,
   };
 }
 
@@ -2196,7 +2304,7 @@ export async function resolveActiveDeployStateLayout(conn, { realRoot, nginxInst
  * @param {boolean} [useSudo=false] - 是否使用 sudo
  * @returns {Promise<string[]>} 解析后的真实路径列表（与输入顺序严格对应）
  */
-export async function batchDetectRealRoots(conn, paths = [], useSudo = false) {
+export async function batchDetectRealRoots(conn, paths = [], useSudo = false, options = {}) {
   if (!paths || !paths.length) return [];
   const script = [
     'idx=0',
@@ -2231,6 +2339,7 @@ export async function batchDetectRealRoots(conn, paths = [], useSudo = false) {
   ].join('\n');
   const result = await execSsh(conn, buildRemoteShellCommand(script, paths, useSudo), {
     allowFailure: true,
+    signal: options?.signal,
     label: '批量探测路径真实映射',
   });
   if (result.code !== 0) {
@@ -2250,6 +2359,104 @@ export async function batchDetectRealRoots(conn, paths = [], useSudo = false) {
     }
   }
   return paths.map((original, i) => resultMap.get(i) || original);
+}
+
+/**
+ * 统一计算同物理服务器上任意目录对应的最外层部署锁根（发布、回滚、存储治理、孤儿清理共用，#63）。
+ * @description
+ * 1. 查询同物理机（host:port）全部团队的前端部署目标（`listPhysicalServerTargets`）；
+ * 2. 经 `batchDetectRealRoots` 穿透软链接，统一使用真实规范路径参与祖先关系比对；
+ * 3. 严格仅从「当前真实目录 ∪ 同物理机已纳管目标真实目录」中选取最外层锁根，不再混入非目标 htmlRoot，
+ *    确保发布、回滚、存储治理对同一目录计算出 100% 一致的 lockRoot，同时保留无嵌套兄弟应用的并发发布能力。
+ * @param {Object} conn - SSH 连接
+ * @param {Object} params - 参数
+ * @param {string} params.currentRoot - 当前待加锁目录（可为配置路径或已穿透真实路径）
+ * @param {number} params.serverId - 服务器 ID
+ * @param {number} [params.currentTargetId=0] - 当前目标 ID（可选，用于排除自身并输出 otherRealRootsMap）
+ * @param {boolean} [params.useSudo=false] - 是否 sudo
+ * @param {boolean} [params.alreadyResolved=false] - currentRoot 是否已穿透软链
+ * @param {Array<Object>|null} [params.preloadedHostTargets=null] - 预加载的物理机目标列表（批量场景复用）
+ * @param {Map<number, string>|null} [params.preloadedRealRootsMap=null] - 预加载的 targetId -> realRoot 映射
+ * @param {Function|null} [params.log=null] - 日志函数
+ * @param {string} [params.logStage='upload'] - 日志阶段
+ * @param {AbortSignal} [params.signal] - 中止信号
+ * @returns {Promise<{
+ *   realRoot: string,
+ *   lockRoot: string,
+ *   candidateRoots: string[],
+ *   allHostTargets: Array<Object>,
+ *   otherRealRootsMap: Map<number, string>
+ * }>}
+ */
+export async function resolveServerLockRoot(conn, params = {}) {
+  const {
+    currentRoot,
+    serverId,
+    currentTargetId = 0,
+    useSudo = false,
+    alreadyResolved = false,
+    preloadedHostTargets = null,
+    preloadedRealRootsMap = null,
+    log = null,
+    logStage = 'upload',
+    signal,
+  } = params;
+
+  let allHostTargets = Array.isArray(preloadedHostTargets) ? preloadedHostTargets : [];
+  if (!Array.isArray(preloadedHostTargets) && serverId) {
+    try {
+      allHostTargets = await listPhysicalServerTargets({ serverId });
+    } catch (err) {
+      log?.('warn', `查询物理服务器同宿主目标失败，降级使用逻辑服务器目标：${err.message || err}`, logStage);
+      allHostTargets = await listTargets({ serverId }).catch(() => []);
+    }
+  }
+
+  const otherTargets = allHostTargets.filter(
+    (t) => t?.deployRoot && Number(t.id) !== Number(currentTargetId) && t.projectType !== 'backend'
+  );
+  const otherRealRootsMap = new Map();
+  let realCurrentRoot = currentRoot;
+
+  if (preloadedRealRootsMap instanceof Map && alreadyResolved) {
+    otherTargets.forEach((t) => {
+      otherRealRootsMap.set(t.id, preloadedRealRootsMap.get(t.id) || t.deployRoot);
+    });
+  } else {
+    const toDetect = [];
+    if (!alreadyResolved && currentRoot) toDetect.push(currentRoot);
+    const otherStartIdx = toDetect.length;
+    otherTargets.forEach((t) => toDetect.push(t.deployRoot));
+
+    if (toDetect.length > 0) {
+      try {
+        const detected = await batchDetectRealRoots(conn, toDetect, useSudo, { signal });
+        if (!alreadyResolved && currentRoot) {
+          realCurrentRoot = detected[0] || currentRoot;
+        }
+        otherTargets.forEach((t, i) => {
+          const rPath = detected[otherStartIdx + i] || t.deployRoot;
+          otherRealRootsMap.set(t.id, rPath);
+        });
+      } catch (err) {
+        if (signal?.aborted) throw err;
+        log?.('warn', `批量探测其他目标真实路径失败：${err.message || err}`, logStage);
+        otherTargets.forEach((t) => {
+          otherRealRootsMap.set(t.id, t.deployRoot);
+        });
+      }
+    }
+  }
+
+  const candidateRoots = [realCurrentRoot, ...otherRealRootsMap.values()].filter(Boolean);
+  const lockRoot = resolveTopmostLockRoot(realCurrentRoot, candidateRoots);
+  return {
+    realRoot: realCurrentRoot,
+    lockRoot,
+    candidateRoots,
+    allHostTargets,
+    otherRealRootsMap,
+  };
 }
 
 /**
@@ -2344,6 +2551,7 @@ export function isStaleLocalDeployLockOwner(ownerInfo) {
  * @returns {Promise<{ok: boolean, ownerInfo: string}>}
  */
 async function tryAcquireRemoteDeployLockOnce(conn, lockDir, ownerToken, useSudo, signal) {
+  const maxDescDepth = Math.max(6, Math.min(32, Number(process.env.YUYAN_REMOTE_LOCK_MAX_DEPTH || 12)));
   const script = [
     '# yuyan:deploy-lock',
     'set -u',
@@ -2357,13 +2565,21 @@ async function tryAcquireRemoteDeployLockOnce(conn, lockDir, ownerToken, useSudo
     '  exit 3',
     'fi',
     '',
+    '# 判断任意锁目录是否仍活跃（未超过 120 分钟过期阈值）',
+    'is_lock_stale() {',
+    '  _l="$1"',
+    '  _of="$_l/owner"',
+    '  if [ -f "$_of" ]; then',
+    '    find "$_of" -maxdepth 0 -mmin +120 2>/dev/null | grep -q .',
+    '    return $?',
+    '  fi',
+    '  find "$_l" -maxdepth 0 -mmin +120 2>/dev/null | grep -q .',
+    '  return $?',
+    '}',
+    '',
     'if [ -d "$lock" ]; then',
-    '  # 检查 owner 文件是否存在且超过 120 分钟未修改（使用 find 检查 mtime）',
-    '  if [ -f "$owner_file" ] && find "$owner_file" -maxdepth 0 -mmin +120 2>/dev/null | grep -q .; then',
-    '    # 说明仍有极小竞争窗口：并发下两个进程可能同时判定过期，但随后的 mkdir 保证原子性',
+    '  if is_lock_stale "$lock"; then',
     '    rm -f "$owner_file" 2>/dev/null || true',
-    '    rmdir "$lock" 2>/dev/null || true',
-    '  elif [ ! -f "$owner_file" ] && find "$lock" -maxdepth 0 -mmin +120 2>/dev/null | grep -q .; then',
     '    rmdir "$lock" 2>/dev/null || true',
     '  fi',
     'fi',
@@ -2374,6 +2590,59 @@ async function tryAcquireRemoteDeployLockOnce(conn, lockDir, ownerToken, useSudo
     '    rmdir "$lock" 2>/dev/null || true',
     '    echo "LOCK_UNAVAILABLE: 写入持有者信息失败（请检查目录写权限）" >&2',
     '    exit 3',
+    '  fi',
+    '  # 双向父子锁互斥复查（#63）：跨进程或 cron 持祖先/子孙目录锁时自动退让并重试',
+    '  conflict_lock=""',
+    '  conflict_owner=""',
+    '  # 1) 向上检查祖先目录（不含根目录 /）',
+    '  anc=$(dirname "$parent_dir")',
+    '  depth=0',
+    '  while [ -n "$anc" ] && [ "$anc" != "/" ] && [ "$anc" != "$parent_dir" ] && [ "$depth" -lt 16 ]; do',
+    '    anc_lock="$anc/.yuyan-deploy.lock"',
+    '    if [ -d "$anc_lock" ]; then',
+    '      if is_lock_stale "$anc_lock"; then',
+    '        rm -f "$anc_lock/owner" 2>/dev/null || true',
+    '        rmdir "$anc_lock" 2>/dev/null || true',
+    '      else',
+    '        conflict_lock="$anc_lock"',
+    '        conflict_owner=$(cat "$anc_lock/owner" 2>/dev/null || echo "祖先目录锁")',
+    '        break',
+    '      fi',
+    '    fi',
+    '    next_anc=$(dirname "$anc")',
+    '    [ "$next_anc" = "$anc" ] && break',
+    '    anc="$next_anc"',
+    '    depth=$((depth + 1))',
+    '  done',
+    '  # 2) 向下检查子孙目录（跳过隐藏元数据仓与 node_modules；若 mktemp 不可用绝不静默放行，立即释放锁退让）',
+    '  if [ -z "$conflict_lock" ]; then',
+    '    tmp_desc=$(mktemp 2>/dev/null || echo "")',
+    '    if [ -z "$tmp_desc" ]; then',
+    '      rm -f "$owner_file" 2>/dev/null || true',
+    '      rmdir "$lock" 2>/dev/null || true',
+    '      echo "LOCK_UNAVAILABLE: 无法创建子目录锁检查临时文件（/tmp 可能已满或只读），已拒绝并发加锁" >&2',
+    '      exit 3',
+    '    fi',
+    `    find "$parent_dir" -mindepth 2 -maxdepth ${maxDescDepth} \\( -name ".yuyan-backups" -o -name ".yuyan-manifests" -o -name ".yuyan-state" -o -name "node_modules" \\) -prune -o -type d -name ".yuyan-deploy.lock" -print 2>/dev/null > "$tmp_desc" || true`,
+    '    while IFS= read -r dlock; do',
+    '      [ -n "$dlock" ] && [ -d "$dlock" ] || continue',
+    '      [ "$dlock" = "$lock" ] && continue',
+    '      if is_lock_stale "$dlock"; then',
+    '        rm -f "$dlock/owner" 2>/dev/null || true',
+    '        rmdir "$dlock" 2>/dev/null || true',
+    '      else',
+    '        conflict_lock="$dlock"',
+    '        conflict_owner=$(cat "$dlock/owner" 2>/dev/null || echo "子目录锁")',
+    '        break',
+    '      fi',
+    '    done < "$tmp_desc"',
+    '    rm -f "$tmp_desc" 2>/dev/null || true',
+    '  fi',
+    '  if [ -n "$conflict_lock" ]; then',
+    '    rm -f "$owner_file" 2>/dev/null || true',
+    '    rmdir "$lock" 2>/dev/null || true',
+    '    echo "LOCK_CONFLICT_NESTED: ${conflict_owner} (${conflict_lock})" >&2',
+    '    exit 1',
     '  fi',
     '  exit 0',
     'elif [ -d "$lock" ]; then',
@@ -2391,25 +2660,30 @@ async function tryAcquireRemoteDeployLockOnce(conn, lockDir, ownerToken, useSudo
     signal,
     label: '获取远程部署目录锁',
   });
-  if (result.code === 0) return { ok: true, retryable: false, ownerInfo: '', reason: '' };
+  if (result.code === 0) return { ok: true, retryable: false, nestedConflict: false, ownerInfo: '', reason: '' };
   const stderr = String(result.stderr || '').trim();
   const unavailableMatch = stderr.match(/LOCK_UNAVAILABLE:\s*(.+)/);
   if (unavailableMatch || result.code === 3) {
     return {
       ok: false,
       retryable: false,
+      nestedConflict: false,
       ownerInfo: '',
       reason: unavailableMatch ? unavailableMatch[1].trim() : (stderr || `远程锁目录不可用（退出码 ${result.code}）`),
     };
   }
+  const nestedMatch = stderr.match(/LOCK_CONFLICT_NESTED:\s*(.+)/);
+  if (nestedMatch) {
+    return { ok: false, retryable: true, nestedConflict: true, ownerInfo: nestedMatch[1].trim(), reason: '' };
+  }
   const match = stderr.match(/LOCK_FAILED:\s*(.+)/);
   if (match) {
-    return { ok: false, retryable: true, ownerInfo: match[1].trim(), reason: '' };
+    return { ok: false, retryable: true, nestedConflict: false, ownerInfo: match[1].trim(), reason: '' };
   }
-  // 其他非预期失败（如 sudo 失败、权限拒绝、SSH 命令异常等）直接快速失败，避免误入长时间等待
   return {
     ok: false,
     retryable: false,
+    nestedConflict: false,
     ownerInfo: '',
     reason: stderr || String(result.stdout || '').trim() || `远程锁命令失败（退出码 ${result.code}）`,
   };
@@ -2498,7 +2772,7 @@ export async function acquireFrontendDeployLock(conn, deployRoot, useSudo = fals
       );
     }
     const ownerInfo = attempt.ownerInfo;
-    if (!staleCleared && isStaleLocalDeployLockOwner(ownerInfo)) {
+    if (!attempt.nestedConflict && !staleCleared && isStaleLocalDeployLockOwner(ownerInfo)) {
       staleCleared = true;
       log?.('warn', `远程部署目录锁由本机已结束的旧任务遗留（${ownerInfo}），已清理后重新获取`, 'upload');
       await releaseFrontendDeployLock(conn, deployRoot, ownerInfo, useSudo, log).catch(() => {});
@@ -2516,7 +2790,8 @@ export async function acquireFrontendDeployLock(conn, deployRoot, useSudo = fals
         options.onWait?.(ownerInfo);
       } catch {}
     }
-    await sleepWithSignal(delay, options.signal);
+    const jitterMs = Math.floor(Math.random() * Math.min(200, delay));
+    await sleepWithSignal(delay + jitterMs, options.signal);
     delay = Math.min(retryMaxMs, delay * 2);
   }
 }
@@ -3453,21 +3728,27 @@ export function buildPreflightCheckRollbackCommand(target, backupPath, hashedDir
 }
 
 /**
- * 远程回滚前预检：校验 entry-only 备份所依赖的静态资源是否完好存在于部署根目录。
+ * 回滚前校验备份归属与资源完整性，部署目标须传入已解析的真实路径。
  * @param {Object} conn - SSH 连接
  * @param {Object} target - 部署目标
  * @param {string} backupPath - 备份目录
  * @param {(level: string, message: string, stage?: string) => void} log - 日志函数
  * @param {boolean} [useSudo=false] - 是否使用 sudo
  * @param {string[]} [hashedDirs=DEFAULT_HASHED_ASSET_DIRS] - 带哈希目录
+ * @param {Object} [options={}] - 预检选项
+ * @param {string[]} [options.extraInlineRoots=[]] - 兼容早期内嵌备份的当前配置路径
  * @returns {Promise<{ passed: boolean, kind: string, missingCount: number }>}
  */
 export async function preflightCheckRollback(conn, target, backupPath, log, useSudo = false, hashedDirs = null, options = {}) {
+  if (!backupPathBelongsToDeployRoot(backupPath, target.deployRoot, options.extraInlineRoots)) {
+    throw new Error('回滚预检失败：备份不属于当前部署目录，请选择当前目录的发布记录');
+  }
+
   const effectiveHashedDirs = Array.isArray(hashedDirs) && hashedDirs.length > 0
     ? hashedDirs
     : resolveDeployRetentionPolicy(target || {}).hashedAssetDirs;
   const extInfo = parseExternalBackupPath(backupPath);
-  const objectsDir = options.objectsDir || options.stateLayout?.objectsDir || extInfo.objectsDir || '';
+  const objectsDir = options.objectsDir || extInfo.objectsDir || options.stateLayout?.objectsDir || '';
 
   log('info', `正在执行回滚前静态资源完整性预检：${backupPath}`, 'validate');
   const command = objectsDir
@@ -4381,39 +4662,19 @@ async function deployTargetInLease(targetId, payload, emit) {
         label: '创建部署目录',
       });
 
-      // 1. 先做只读探测以获取初始 realRoot，并探测同物理服务器目标以计算最外层 lockRoot
+      // 1. 先做只读探测以获取初始 realRoot，并通过统一锁根函数探测同物理服务器目标以计算最外层 lockRoot
       const initialProbe = await detectDeployRoot(conn, target.deployRoot, deployUseSudo, { ensureDir: false, nginxInstance });
       const currentRealRoot = initialProbe.realRoot || target.deployRoot;
-      const candidateRoots = [currentRealRoot];
-
-      let allHostTargets = [];
-      try {
-        allHostTargets = await listPhysicalServerTargets({ serverId: target.serverId });
-      } catch (err) {
-        log('warn', `查询物理服务器同宿主目标失败，降级使用逻辑服务器目标：${err.message || err}`, 'upload');
-        allHostTargets = await listTargets({ serverId: target.serverId }).catch(() => [target]);
-      }
-      const otherTargets = allHostTargets.filter((t) => Number(t.id) !== Number(target.id));
-      let otherRealRootsMap = new Map();
-      if (otherTargets.length > 0) {
-        const otherPaths = otherTargets.map((t) => t.deployRoot);
-        try {
-          const detectedOthers = await batchDetectRealRoots(conn, otherPaths, deployUseSudo);
-          otherTargets.forEach((t, i) => {
-            const rPath = detectedOthers[i] || otherPaths[i];
-            otherRealRootsMap.set(t.id, rPath);
-            candidateRoots.push(rPath);
-          });
-        } catch (err) {
-          log('warn', `批量探测其他目标真实路径失败：${err.message || err}`, 'upload');
-          otherTargets.forEach((t) => {
-            otherRealRootsMap.set(t.id, t.deployRoot);
-            candidateRoots.push(t.deployRoot);
-          });
-        }
-      }
-
-      const lockRoot = resolveTopmostLockRoot(currentRealRoot, candidateRoots);
+      const { lockRoot, otherRealRootsMap } = await resolveServerLockRoot(conn, {
+        currentRoot: currentRealRoot,
+        serverId: target.serverId,
+        currentTargetId: target.id,
+        useSudo: deployUseSudo,
+        alreadyResolved: true,
+        log,
+        logStage: 'upload',
+        signal,
+      });
       // 同服务器嵌套目录的远程写入在这里排队等待，而不是撞锁失败（#61）；等待期间仍可停止
       const deployRootLock = await acquireDeployRootLocks(conn, {
         server,
@@ -4441,17 +4702,23 @@ async function deployTargetInLease(targetId, payload, emit) {
           // 拿到锁之后、探测之前，清理过期的暂存与垃圾箱目录（超过 60 分钟）
           await cleanupExpiredStagingAndTrash(conn, currentRealRoot, deployUseSudo, log);
 
-          // 加锁后重新探测部署根目录的真实路径与顶层条目（优先读取外置仓清单）
-          const probe = await detectDeployRoot(conn, target.deployRoot, deployUseSudo, { nginxInstance });
+          // 加锁后重新探测部署根目录的真实路径与顶层条目（优先读取固定/外置仓清单，同步传入 otherTargetRoots）
+          const probe = await detectDeployRoot(conn, target.deployRoot, deployUseSudo, {
+            nginxInstance,
+            otherTargetRoots: [...otherRealRootsMap.values()],
+            pinnedStateRoot: target.stateRoot || '',
+          });
           realRoot = probe.realRoot || target.deployRoot;
           releasePath = realRoot;
 
-          // 解析当前目标生效的状态仓布局（优先托管 Nginx 平级外置仓，无权限自动降级）
+          // 解析当前目标生效的状态仓布局（优先固定 stateRoot → 粘性旧仓 → 新仓，首次建仓自动固化落库）
           const stateState = await resolveActiveDeployStateLayout(conn, {
             realRoot,
             nginxInstance,
             useSudo: deployUseSudo,
             log,
+            otherTargetRoots: [...otherRealRootsMap.values()],
+            target,
           });
           activeStateLayout = stateState.layout;
           activeCasSupported = stateState.casSupported;
@@ -5102,29 +5369,17 @@ async function restoreRecordVersion(recordId, payload, emit, action) {
         log('info', `检测到部署目录为软链接或存在重定向，真实路径为 ${realRoot}（配置路径为 ${target.deployRoot}），后续操作将在真实路径下执行`, 'validate');
       }
 
-      // 计算 lockRoot 并加锁（需求 6）
-      let allHostTargets = [];
-      try {
-        allHostTargets = await listPhysicalServerTargets({ serverId: target.serverId });
-      } catch (err) {
-        log('warn', `查询物理服务器同宿主目标失败，降级使用逻辑服务器目标：${err.message || err}`, 'rollback');
-        allHostTargets = await listTargets({ serverId: target.serverId }).catch(() => [target]);
-      }
-      const otherTargets = allHostTargets.filter((t) => Number(t.id) !== Number(target.id));
-      const candidateRoots = [realRoot];
-      if (otherTargets.length > 0) {
-        const otherPaths = otherTargets.map((t) => t.deployRoot);
-        try {
-          const detectedOthers = await batchDetectRealRoots(conn, otherPaths, deployUseSudo);
-          otherTargets.forEach((t, i) => {
-            const rPath = detectedOthers[i] || otherPaths[i];
-            candidateRoots.push(rPath);
-          });
-        } catch (err) {
-          otherTargets.forEach((t) => candidateRoots.push(t.deployRoot));
-        }
-      }
-      const lockRoot = resolveTopmostLockRoot(realRoot, candidateRoots);
+      // 通过统一锁根函数计算 lockRoot 并加锁（需求 6 / #63）
+      const { lockRoot, otherRealRootsMap } = await resolveServerLockRoot(conn, {
+        currentRoot: realRoot,
+        serverId: target.serverId,
+        currentTargetId: target.id,
+        useSudo: deployUseSudo,
+        alreadyResolved: true,
+        log,
+        logStage: 'rollback',
+        signal: payload.signal,
+      });
       const deployRootLock = await acquireDeployRootLocks(conn, {
         server,
         lockRoot,
@@ -5150,21 +5405,23 @@ async function restoreRecordVersion(recordId, payload, emit, action) {
           throw new Error(`探测到的真实部署根目录 ${realRoot} 存在高危风险（${realRootRisk.reason}），操作已中止`);
         }
 
-        // 解析当前目标生效的状态仓布局（优先托管 Nginx 平级外置仓）
+        const retentionPolicy = resolveDeployRetentionPolicy(target);
+        const hashedDirs = retentionPolicy.hashedAssetDirs;
+        await preflightCheckRollback(conn, { ...target, deployRoot: realRoot }, sourceRecord.backupPath, log, deployUseSudo, hashedDirs, {
+          extraInlineRoots: [normalizeDeployRootPath(target.deployRoot)],
+        });
+
+        // 解析当前目标生效的状态仓布局（优先固定 stateRoot → 粘性旧仓 → 新仓，首次自动固化落库）
         const stateState = await resolveActiveDeployStateLayout(conn, {
           realRoot,
           nginxInstance,
           useSudo: deployUseSudo,
           log,
+          otherTargetRoots: [...otherRealRootsMap.values()],
+          target,
         });
         activeStateLayout = stateState.layout;
         activeCasSupported = stateState.casSupported;
-        const retentionPolicy = resolveDeployRetentionPolicy(target);
-        const hashedDirs = retentionPolicy.hashedAssetDirs;
-
-        await preflightCheckRollback(conn, { ...target, deployRoot: realRoot }, sourceRecord.backupPath, log, deployUseSudo, hashedDirs, {
-          stateLayout: activeStateLayout,
-        });
 
         // 先算 restorePlan，再备份待变更项，kind 与 restorePlan.kind 对齐
         const restorePlan = await detectBackupRestorePlan(
