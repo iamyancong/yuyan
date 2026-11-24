@@ -262,3 +262,72 @@ test('acquireDeployRootLocks：两个嵌套目标同时上传依次进行，不�
     await fs.rm(tmp, { recursive: true, force: true });
   }
 });
+
+test('远程锁：父目录不存在时立即快速失败，绝不进入长时间重试循环', async () => {
+  const missingRoot = path.join(os.tmpdir(), `yuyan-nonexistent-lock-parent-${Date.now()}`);
+  const startedAt = Date.now();
+  await assert.rejects(
+    acquireFrontendDeployLock(fakeConn, missingRoot, false, {
+      recordId: 77,
+      waitTimeoutMs: 30_000,
+      retryBaseMs: 50,
+    }),
+    /目录不存在/
+  );
+  const elapsedMs = Date.now() - startedAt;
+  assert.ok(elapsedMs < 3000, `父目录不存在应立即失败，实际耗时 ${elapsedMs}ms`);
+});
+
+test('acquireDeployRootLocks：严格透传并遵守 waitTimeoutMs（含进程内排队与远程锁等待）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'yuyan-root-lock-timeout-'));
+  try {
+    const lockRoot = path.join(tmp, 'html');
+    await fs.mkdir(lockRoot, { recursive: true });
+    const server = { host: '10.0.0.99', port: 22 };
+
+    // 1. 进程内锁占用时，第二个调用按 waitTimeoutMs 快速超时
+    const lockA = await acquireDeployRootLocks(fakeConn, {
+      server,
+      lockRoot,
+      useSudo: false,
+      recordId: 2001,
+      owner: { projectName: '长任务A' },
+    });
+    const t1 = Date.now();
+    await assert.rejects(
+      acquireDeployRootLocks(fakeConn, {
+        server,
+        lockRoot,
+        useSudo: false,
+        recordId: 2002,
+        owner: { projectName: '清理任务B' },
+        waitTimeoutMs: 80,
+      }),
+      /等待同服务器目录锁超时/
+    );
+    assert.ok(Date.now() - t1 < 2000, '进程内排队应按 waitTimeoutMs 及时超时');
+    await lockA.release();
+
+    // 2. 远程锁被其他实例占用时，waitTimeoutMs 准确透传到 acquireFrontendDeployLock
+    const lockDir = path.join(lockRoot, '.yuyan-deploy.lock');
+    await fs.mkdir(lockDir);
+    await fs.writeFile(path.join(lockDir, 'owner'), 'host=remote-other pid=999 record=88 at=2026-11-23T00:00:00.000Z\n');
+    const t2 = Date.now();
+    await assert.rejects(
+      acquireDeployRootLocks(fakeConn, {
+        server,
+        lockRoot,
+        useSudo: false,
+        recordId: 2003,
+        owner: { projectName: '清理任务C' },
+        waitTimeoutMs: 90,
+        retryBaseMs: 25,
+        retryMaxMs: 30,
+      }),
+      /无法获取远程部署目录锁/
+    );
+    assert.ok(Date.now() - t2 < 2000, '远程锁等待应按透传的 waitTimeoutMs 及时超时');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});

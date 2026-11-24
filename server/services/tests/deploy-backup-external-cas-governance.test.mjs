@@ -19,8 +19,11 @@ import {
   buildCasObjectPoolGcCommand,
   buildCasPreflightCheckRollbackCommand,
   buildCasRestoreDeployRootCommand,
+  buildClearRetiredMarkerCommand,
+  buildMarkTargetRetiredCommand,
   buildProbeStateRootCommand,
   buildPruneBackupsCommand,
+  buildWriteTargetStateMetaCommand,
   CAS_BACKUP_KINDS,
   CAS_INDEX_FILE_NAME,
   parseCasBackupOutput,
@@ -769,6 +772,429 @@ test('deploy-store: 4 个备份策略列读写（含 0 与 null 区分）以及�
     else process.env.DEPLOY_DB_PATH = prevDb;
     if (prevData === undefined) delete process.env.DEPLOY_DATA_DIR;
     else process.env.DEPLOY_DATA_DIR = prevData;
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('target.json 目标级保留策略写入、onlyIfExists 同步与 .retired 退役标记全生命周期', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yuyan-meta-retire-'));
+  try {
+    const baseRoot = path.join(tmpDir, 'frontend');
+    const htmlRoot = path.join(baseRoot, 'html');
+    const appDir = path.join(htmlRoot, 'demo-app');
+    await fs.mkdir(path.join(appDir, '.yuyan-backups'), { recursive: true });
+
+    const layout = resolveDeployStateLocation({
+      realRoot: appDir,
+      nginxInstance: { instanceType: 'managed', baseRoot, htmlRoot },
+    });
+
+    // 1. target.json 尚未创建时，onlyIfExists=true 应跳过写入，不提前建目录
+    const skipRes = await runShell(
+      buildWriteTargetStateMetaCommand(
+        layout,
+        {
+          projectName: 'demo-app',
+          targetId: 101,
+          envName: 'prod',
+          uploadStrategy: 'overlayKeepAssets',
+          retention: { backupKeepCount: 4, backupMaxSizeMb: 0, backupTtlDays: 30 },
+        },
+        false,
+        { onlyIfExists: true }
+      )
+    );
+    assert.match(skipRes.stdout, /target_meta_skipped=not_exists/);
+    assert.equal(await fs.stat(layout.targetMetaFilePath).catch(() => null), null);
+
+    // 2. 首次发布写入 target.json，包含扁平数字策略字段（含 0）
+    const writeRes = await runShell(
+      buildWriteTargetStateMetaCommand(layout, {
+        projectName: 'demo-app',
+        targetId: 101,
+        envName: 'prod',
+        uploadStrategy: 'overlayKeepAssets',
+        retention: { backupKeepCount: 4, backupMaxSizeMb: 0, backupTtlDays: 30 },
+      })
+    );
+    assert.match(writeRes.stdout, /target_meta_written=1/);
+    const meta1 = JSON.parse(await fs.readFile(layout.targetMetaFilePath, 'utf8'));
+    assert.equal(meta1.realRoot, appDir);
+    assert.equal(meta1.retentionKeepCount, 4);
+    assert.equal(meta1.retentionMaxSizeMb, 0);
+    assert.equal(meta1.retentionTtlDays, 30);
+
+    // 3. 标记退役（外置仓 + 内嵌目录双落标），重复调用幂等不覆盖 retired_at
+    const markRes = await runShell(
+      buildMarkTargetRetiredCommand({
+        targetStateDir: layout.targetStateDir,
+        legacyBackupRoot: layout.legacyBackupRoot,
+        realRoot: appDir,
+        reason: 'target-deleted',
+      })
+    );
+    assert.match(markRes.stdout, /retired_marked=2/);
+    const extRetiredPath = path.join(layout.targetStateDir, '.retired');
+    const inlineRetiredPath = path.join(layout.legacyBackupRoot, '.retired');
+    const retiredContent1 = await fs.readFile(extRetiredPath, 'utf8');
+    assert.match(retiredContent1, /reason=target-deleted/);
+    const markRes2 = await runShell(
+      buildMarkTargetRetiredCommand({
+        targetStateDir: layout.targetStateDir,
+        legacyBackupRoot: layout.legacyBackupRoot,
+        realRoot: appDir,
+        reason: 'root-changed',
+      })
+    );
+    assert.match(markRes2.stdout, /retired_marked=0/);
+    assert.equal(await fs.readFile(extRetiredPath, 'utf8'), retiredContent1, '已存在的 .retired 不应被覆盖');
+
+    // 4. 重新发布（或 onlyIfExists 更新）会自动清除外置仓和内嵌目录的 .retired 并更新策略
+    const syncRes = await runShell(
+      buildWriteTargetStateMetaCommand(
+        layout,
+        {
+          projectName: 'demo-app',
+          targetId: 101,
+          envName: 'prod',
+          uploadStrategy: 'cleanReplace',
+          retention: { backupKeepCount: 2, backupMaxSizeMb: 120, backupTtlDays: 7 },
+        },
+        false,
+        { onlyIfExists: true }
+      )
+    );
+    assert.match(syncRes.stdout, /target_meta_written=1/);
+    assert.equal(await fs.stat(extRetiredPath).catch(() => null), null, '外置仓 .retired 应被自动清除');
+    assert.equal(await fs.stat(inlineRetiredPath).catch(() => null), null, '内嵌 .retired 应被自动清除');
+    const meta2 = JSON.parse(await fs.readFile(layout.targetMetaFilePath, 'utf8'));
+    assert.equal(meta2.retentionKeepCount, 2);
+    assert.equal(meta2.retentionMaxSizeMb, 120);
+    assert.equal(meta2.retentionTtlDays, 7);
+
+    // 5. 单独测试内嵌模式清除 .retired
+    await fs.writeFile(inlineRetiredPath, 'retired_at=100\nreason=target-deleted\n');
+    await runShell(buildClearRetiredMarkerCommand(layout.legacyBackupRoot));
+    assert.equal(await fs.stat(inlineRetiredPath).catch(() => null), null);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('yuyan-nginx.sh gc-backups v5：按 target.json 目标级策略执行，并整份回收超期退役/目录已删的孤儿目标及其 CAS 对象', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yuyan-ngx-gc-v5-'));
+  try {
+    const baseRoot = path.join(tmpDir, 'frontend');
+    const nginxDir = path.join(baseRoot, 'nginx');
+    const htmlDir = path.join(baseRoot, 'html');
+    const stateDir = path.join(baseRoot, '.yuyan-state');
+    const scriptPath = path.join(nginxDir, 'yuyan-nginx.sh');
+    await fs.mkdir(nginxDir, { recursive: true });
+    await fs.mkdir(htmlDir, { recursive: true });
+    await fs.writeFile(scriptPath, renderRuntimeScript(), { mode: 0o755 });
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    const daysAgoEpoch = (days) => nowSec - days * 86400;
+    const daysAgoDate = (days) => new Date(daysAgoEpoch(days) * 1000);
+
+    const writeCasBackup = async (targetDir, releaseName, ageDays, objHash) => {
+      const bdir = path.join(targetDir, 'backups', releaseName);
+      await fs.mkdir(bdir, { recursive: true });
+      const epoch = daysAgoEpoch(ageDays);
+      await fs.writeFile(
+        path.join(bdir, '.backup-meta.json'),
+        JSON.stringify({ releaseName, createdAtEpoch: epoch })
+      );
+      if (objHash) {
+        const objPath = path.join(stateDir, 'objects', objHash.slice(0, 2), objHash);
+        await fs.mkdir(path.dirname(objPath), { recursive: true });
+        await fs.writeFile(objPath, `payload-${objHash}`);
+        await fs.utimes(objPath, daysAgoDate(ageDays), daysAgoDate(ageDays));
+        await fs.writeFile(path.join(bdir, '.cas-index.tsv'), `f\tindex.html\t100\t${objHash}\t644\t\n`);
+      }
+      await fs.utimes(bdir, daysAgoDate(ageDays), daysAgoDate(ageDays));
+      return bdir;
+    };
+
+    // 场景 A：活跃目标自定义 retentionKeepCount=2, retentionTtlDays=30（比全局 14 天宽、比全局 6 份严）
+    const appA = path.join(htmlDir, 'app-custom-policy');
+    await fs.mkdir(appA, { recursive: true });
+    const tdirA = path.join(stateDir, 'targets', 'app-custom-a11111111111');
+    await fs.mkdir(tdirA, { recursive: true });
+    await fs.writeFile(
+      path.join(tdirA, 'target.json'),
+      JSON.stringify({ realRoot: appA, retentionKeepCount: 2, retentionMaxSizeMb: 0, retentionTtlDays: 30 }, null, 2)
+    );
+    const bkA1 = await writeCasBackup(tdirA, '20261122000001', 1, '1'.repeat(64));
+    const bkA2 = await writeCasBackup(tdirA, '20261103000001', 20, '2'.repeat(64)); // 20天 > 全局14天，但 < 目标30天，应保留
+    const bkA3 = await writeCasBackup(tdirA, '20261102000001', 21, '3'.repeat(64)); // 第3份 > 目标keepCount=2，应删除
+
+    // 场景 B：活跃目标自定义 retentionTtlDays=0（不限过期）
+    const appB = path.join(htmlDir, 'app-unlimited-ttl');
+    await fs.mkdir(appB, { recursive: true });
+    const tdirB = path.join(stateDir, 'targets', 'app-unlimited-b22222222222');
+    await fs.mkdir(tdirB, { recursive: true });
+    await fs.writeFile(
+      path.join(tdirB, 'target.json'),
+      JSON.stringify({ realRoot: appB, retentionKeepCount: 6, retentionMaxSizeMb: 0, retentionTtlDays: 0 }, null, 2)
+    );
+    const bkB1 = await writeCasBackup(tdirB, '20261122000001', 1, '4'.repeat(64));
+    const bkB2 = await writeCasBackup(tdirB, '20261025000001', 28, '5'.repeat(64)); // 28天，但目标 ttl=0，应保留
+
+    // 场景 C：已标记 .retired 仅 2 天（仍在 14 天宽限期内），最后 1 份备份仍应受保护
+    const appC = path.join(htmlDir, 'app-retired-grace');
+    await fs.mkdir(appC, { recursive: true });
+    const tdirC = path.join(stateDir, 'targets', 'app-retired-grace-c33333333333');
+    await fs.mkdir(tdirC, { recursive: true });
+    await fs.writeFile(path.join(tdirC, 'target.json'), JSON.stringify({ realRoot: appC }));
+    await fs.writeFile(path.join(tdirC, '.retired'), `retired_at=${daysAgoEpoch(2)}\nreason=target-deleted\n`);
+    const bkC1 = await writeCasBackup(tdirC, '20261101000001', 22, '6'.repeat(64));
+
+    // 场景 D：已标记 .retired 超过 20 天（即使原目标 ttl=0，退役后也按全局 14 天回收），最后 1 份 + 目录 + CAS 对象应整份清理
+    const appD = path.join(htmlDir, 'app-retired-expired');
+    await fs.mkdir(appD, { recursive: true });
+    const tdirD = path.join(stateDir, 'targets', 'app-retired-expired-d44444444444');
+    await fs.mkdir(tdirD, { recursive: true });
+    await fs.writeFile(
+      path.join(tdirD, 'target.json'),
+      JSON.stringify({ realRoot: appD, retentionKeepCount: 6, retentionMaxSizeMb: 0, retentionTtlDays: 0 })
+    );
+    await fs.writeFile(path.join(tdirD, '.retired'), `retired_at=${daysAgoEpoch(20)}\nreason=target-deleted\n`);
+    const hashD = '7'.repeat(64);
+    await writeCasBackup(tdirD, '20261101000001', 22, hashD);
+
+    // 场景 E：内嵌 .yuyan-backups 标记 .retired 超过 20 天，最后 1 份与空壳目录应一起清掉
+    const appE = path.join(htmlDir, 'app-inline-retired');
+    const inlineE = path.join(appE, '.yuyan-backups');
+    const inlineEBk = path.join(inlineE, '20261101000001');
+    await fs.mkdir(inlineEBk, { recursive: true });
+    await fs.utimes(inlineEBk, daysAgoDate(20), daysAgoDate(20));
+    await fs.writeFile(path.join(inlineE, '.retired'), `retired_at=${daysAgoEpoch(20)}\nreason=target-deleted\n`);
+
+    // 场景 F：未标 .retired，但 mapped_root 已在磁盘上被删除且超过 20 天，应整份回收
+    const missingRootF = path.join(htmlDir, 'deleted-from-disk-old');
+    const tdirF = path.join(stateDir, 'targets', 'deleted-old-f55555555555');
+    await fs.mkdir(tdirF, { recursive: true });
+    await fs.writeFile(path.join(tdirF, 'target.json'), JSON.stringify({ realRoot: missingRootF }));
+    await fs.utimes(path.join(tdirF, 'target.json'), daysAgoDate(20), daysAgoDate(20));
+    const hashF = '8'.repeat(64);
+    await writeCasBackup(tdirF, '20261101000001', 20, hashF);
+
+    // 场景 G：mapped_root 刚在磁盘删除，但最后备份仅 3 天前，宽限期内继续保留防误删
+    const missingRootG = path.join(htmlDir, 'deleted-from-disk-recent');
+    const tdirG = path.join(stateDir, 'targets', 'deleted-recent-g66666666666');
+    await fs.mkdir(tdirG, { recursive: true });
+    await fs.writeFile(path.join(tdirG, 'target.json'), JSON.stringify({ realRoot: missingRootG }));
+    const bkG1 = await writeCasBackup(tdirG, '20261120000001', 3, '9'.repeat(64));
+
+    const out = execFileSync('bash', [scriptPath, 'gc-backups', '14', '200', '6', '10'], { encoding: 'utf8' });
+    assert.match(out, /gc_backups_ok=1/);
+    assert.match(out, /deleted_backups=4/); // bkA3 + bkD1 + inlineEBk + bkF1
+    assert.match(out, /reclaimed_targets=3/); // tdirD + inlineE + tdirF
+    assert.match(out, /deleted_objects=3/); // hash3 + hashD + hashF
+
+    // 校验场景 A
+    assert.ok(await fs.stat(bkA1).catch(() => null), '场景 A 最新备份应保留');
+    assert.ok(await fs.stat(bkA2).catch(() => null), '场景 A 20 天备份应按目标 30 天 TTL 保留');
+    assert.equal(await fs.stat(bkA3).catch(() => null), null, '场景 A 第 3 份备份应按目标 keepCount=2 淘汰');
+
+    // 校验场景 B
+    assert.ok(await fs.stat(bkB1).catch(() => null));
+    assert.ok(await fs.stat(bkB2).catch(() => null), '场景 B ttl=0 应保留 28 天备份');
+
+    // 校验场景 C
+    assert.ok(await fs.stat(bkC1).catch(() => null), '场景 C 退役未满 14 天应保留最后 1 份');
+
+    // 校验场景 D
+    assert.equal(await fs.stat(tdirD).catch(() => null), null, '场景 D 超期退役目标目录应整份回收');
+    assert.equal(
+      await fs.stat(path.join(stateDir, 'objects', hashD.slice(0, 2), hashD)).catch(() => null),
+      null,
+      '场景 D 孤儿 CAS 对象应在同一次 GC 中回收'
+    );
+
+    // 校验场景 E
+    assert.equal(await fs.stat(inlineE).catch(() => null), null, '场景 E 超期退役内嵌 .yuyan-backups 应整份清除');
+
+    // 校验场景 F
+    assert.equal(await fs.stat(tdirF).catch(() => null), null, '场景 F 目录已删且超期目标应整份回收');
+    assert.equal(
+      await fs.stat(path.join(stateDir, 'objects', hashF.slice(0, 2), hashF)).catch(() => null),
+      null,
+      '场景 F 孤儿 CAS 对象应在同一次 GC 中回收'
+    );
+
+    // 校验场景 G
+    assert.ok(await fs.stat(bkG1).catch(() => null), '场景 G 目录已删但备份仍在 14 天内应继续保留');
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('storage-governance: retireTargetBackupState 共享目录防误伤与 syncTargetRetentionMeta 同步策略', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yuyan-retire-svc-'));
+  const verifyScript = `
+    import assert from 'node:assert/strict';
+    import fs from 'node:fs/promises';
+    import path from 'node:path';
+    import { exec } from 'node:child_process';
+    import { promisify } from 'node:util';
+    import {
+      createServer,
+      createNginxInstance,
+      createTarget,
+      deleteTarget,
+      closeDeployDb,
+    } from './server/services/deploy-store.mjs';
+    import { __setTestHooks, __resetTestHooks } from './server/services/test-hooks.mjs';
+    import {
+      retireTargetBackupState,
+      syncTargetRetentionMeta,
+    } from './server/services/storage-governance-service.mjs';
+    import { resolveDeployStateLocation } from './server/services/deploy-state-layout.mjs';
+
+    const execAsync = promisify(exec);
+    const tmpRoot = await fs.realpath(process.env.TEST_TMP_ROOT);
+    const baseRoot = path.join(tmpRoot, 'frontend');
+    const htmlRoot = path.join(baseRoot, 'html');
+    const appDir = path.join(htmlRoot, 'shared-app');
+    const appDirLink = path.join(htmlRoot, 'shared-app-link');
+    await fs.mkdir(path.join(appDir, '.yuyan-backups'), { recursive: true });
+    await fs.symlink(appDir, appDirLink);
+
+    const server = await createServer({
+      name: 'retire-test-srv',
+      host: '10.0.0.22',
+      port: 22,
+      username: 'app',
+      authType: 'password',
+      password: 'secret',
+    });
+    const inst = await createNginxInstance(server.id, {
+      name: 'managed-main',
+      instanceType: 'managed',
+      baseRoot,
+      htmlRoot,
+      nginxRoot: path.join(baseRoot, 'nginx'),
+      sitesDir: path.join(baseRoot, 'nginx/conf/conf.d'),
+      defaultNginxConfPath: path.join(baseRoot, 'nginx/conf/nginx.conf'),
+    });
+    const t1 = await createTarget({
+      projectId: 2001,
+      projectSource: 'ops',
+      projectName: 'shared-app-a',
+      projectPath: 'group/shared-app-a',
+      repositoryUrl: 'http://git.local/group/shared-app-a.git',
+      defaultBranch: 'main',
+      projectType: 'frontend',
+      envName: 'prod',
+      serverId: server.id,
+      nginxInstanceId: inst.id,
+      deployRoot: appDir,
+      nginxConfPath: path.join(baseRoot, 'nginx/conf/nginx.conf'),
+      enableNginxTest: false,
+      enableNginxReload: false,
+      installCommand: 'pnpm i',
+      buildCommand: 'pnpm build',
+      artifactDir: 'dist',
+      uploadStrategy: 'overlayKeepAssets',
+      backupKeepCount: 3,
+      backupMaxSizeMb: 150,
+      backupTtlDays: 21,
+    });
+    const t2 = await createTarget({
+      projectId: 2002,
+      projectSource: 'ops',
+      projectName: 'shared-app-b',
+      projectPath: 'group/shared-app-b',
+      repositoryUrl: 'http://git.local/group/shared-app-b.git',
+      defaultBranch: 'main',
+      projectType: 'frontend',
+      envName: 'prod',
+      serverId: server.id,
+      nginxInstanceId: inst.id,
+      deployRoot: appDirLink,
+      nginxConfPath: path.join(baseRoot, 'nginx/conf/nginx.conf'),
+      enableNginxTest: false,
+      enableNginxReload: false,
+      installCommand: 'pnpm i',
+      buildCommand: 'pnpm build',
+      artifactDir: 'dist',
+    });
+
+    const fakeConn = {
+      exec(cmd, cb) {
+        const listeners = {};
+        const stderrListeners = {};
+        const stream = {
+          on(ev, fn) { (listeners[ev] ||= []).push(fn); return this; },
+          stderr: { on(ev, fn) { (stderrListeners[ev] ||= []).push(fn); return this; } },
+        };
+        cb(null, stream);
+        execAsync(cmd, { maxBuffer: 10 * 1024 * 1024 })
+          .then(({ stdout, stderr }) => {
+            if (stdout) (listeners.data || []).forEach((fn) => fn(Buffer.from(stdout)));
+            if (stderr) (stderrListeners.data || []).forEach((fn) => fn(Buffer.from(stderr)));
+            (listeners.close || []).forEach((fn) => fn(0));
+          })
+          .catch((err) => {
+            if (err.stdout) (listeners.data || []).forEach((fn) => fn(Buffer.from(err.stdout)));
+            if (err.stderr) (stderrListeners.data || []).forEach((fn) => fn(Buffer.from(err.stderr)));
+            (listeners.close || []).forEach((fn) => fn(err.code || 1));
+          });
+      },
+    };
+
+    __setTestHooks({
+      withSsh: async (_srv, fn) => fn(fakeConn),
+    });
+
+    const layout = resolveDeployStateLocation({ realRoot: appDir, nginxInstance: inst });
+    await fs.mkdir(layout.targetStateDir, { recursive: true });
+    await fs.writeFile(layout.targetMetaFilePath, JSON.stringify({ realRoot: appDir }));
+
+    // 1. 同步目标保留策略到已存在的 target.json
+    const syncRes = await syncTargetRetentionMeta({ target: t1, server, nginxInstance: inst });
+    assert.equal(syncRes.written, true);
+    const updatedMeta = JSON.parse(await fs.readFile(layout.targetMetaFilePath, 'utf8'));
+    assert.equal(updatedMeta.retentionKeepCount, 3);
+    assert.equal(updatedMeta.retentionMaxSizeMb, 150);
+    assert.equal(updatedMeta.retentionTtlDays, 21);
+
+    // 2. 删除 t1 时，因 t2 仍指向同一目录，retireTargetBackupState 必须跳过，不能误写 .retired
+    await deleteTarget(t1.id);
+    const skipRetire = await retireTargetBackupState({ target: t1, server, nginxInstance: inst });
+    assert.equal(skipRetire.skipped, true);
+    assert.equal(skipRetire.reason, 'shared-by-other-target');
+    assert.equal(await fs.stat(path.join(layout.targetStateDir, '.retired')).catch(() => null), null);
+
+    // 3. 删除 t2 后，已无其他目标共享该目录，retireTargetBackupState 应成功在双处写入 .retired
+    await deleteTarget(t2.id);
+    const doRetire = await retireTargetBackupState({ target: t2, server, nginxInstance: inst });
+    assert.equal(doRetire.skipped, false);
+    assert.equal(doRetire.marked, 2);
+    assert.ok(await fs.stat(path.join(layout.targetStateDir, '.retired')).catch(() => null));
+    assert.ok(await fs.stat(path.join(layout.legacyBackupRoot, '.retired')).catch(() => null));
+
+    __resetTestHooks();
+    await closeDeployDb();
+    console.log('RETIRE_SVC_OK');
+  `;
+
+  try {
+    const out = execFileSync(process.execPath, ['--input-type=module', '-e', verifyScript], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        YUYAN_ALLOW_TEST_HOOKS: '1',
+        TEST_TMP_ROOT: tmpDir,
+        DEPLOY_DATA_DIR: tmpDir,
+        DEPLOY_DB_PATH: path.join(tmpDir, 'deploy.sqlite'),
+      },
+      encoding: 'utf8',
+    });
+    assert.match(out, /RETIRE_SVC_OK/);
+  } finally {
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
 });

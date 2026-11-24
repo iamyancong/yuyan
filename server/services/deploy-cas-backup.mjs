@@ -19,6 +19,7 @@ import {
   STATE_OBJECTS_DIR_NAME,
   STATE_TARGETS_DIR_NAME,
   TARGET_META_FILE_NAME,
+  TARGET_RETIRED_MARKER_NAME,
 } from './deploy-state-layout.mjs';
 
 /** 备份类型常量（兼容历史 full/entry-only 与新 CAS 类型） */
@@ -174,13 +175,16 @@ export function parseProbeStateRootOutput(stdout) {
 }
 
 /**
- * 构建写入 target.json 归属元信息的远程命令（便于运维排查与孤儿识别）。
+ * 构建写入 target.json 归属元信息的远程命令（便于运维排查、目标级定时策略与孤儿识别）。
  * @param {Object} layout - 外置仓布局
- * @param {Object} meta - 目标元数据
+ * @param {Object} meta - 目标元数据（可含 retention 保留策略）
  * @param {boolean} [useSudo=false] - 是否 sudo
+ * @param {{ onlyIfExists?: boolean }} [options] - 仅当 target.json 已存在时更新（用于目标配置编辑同步）
  * @returns {string} 远程命令
  */
-export function buildWriteTargetStateMetaCommand(layout, meta = {}, useSudo = false) {
+export function buildWriteTargetStateMetaCommand(layout, meta = {}, useSudo = false, options = {}) {
+  const onlyIfExists = Boolean(options?.onlyIfExists);
+  const retention = normalizeTargetMetaRetention(meta.retention);
   const payload = JSON.stringify(
     {
       realRoot: layout.realRoot,
@@ -190,6 +194,15 @@ export function buildWriteTargetStateMetaCommand(layout, meta = {}, useSudo = fa
       envName: String(meta.envName || ''),
       uploadStrategy: String(meta.uploadStrategy || ''),
       updatedAt: new Date().toISOString(),
+      updatedAtEpoch: Math.floor(Date.now() / 1000),
+      // 目标级保留策略：服务器 gc-backups 定时任务优先按此执行（扁平数字字段，便于 sed 解析）
+      ...(retention
+        ? {
+            retentionKeepCount: retention.keepCount,
+            retentionMaxSizeMb: retention.maxSizeMb,
+            retentionTtlDays: retention.ttlDays,
+          }
+        : {}),
     },
     null,
     2
@@ -198,13 +211,100 @@ export function buildWriteTargetStateMetaCommand(layout, meta = {}, useSudo = fa
     'set -eu',
     'meta_path="$1"',
     'content="$2"',
+    'legacy_root="$3"',
+    'only_if_exists="$4"',
     'dir=$(dirname "$meta_path")',
+    'if [ "$only_if_exists" = "1" ] && [ ! -f "$meta_path" ]; then',
+    '  echo "target_meta_skipped=not_exists"',
+    '  exit 0',
+    'fi',
     'mkdir -p "$dir"',
     'tmp="${meta_path}.tmp.$$"',
     'printf "%s\\n" "$content" > "$tmp"',
     'mv "$tmp" "$meta_path"',
+    '# 重新发布或更新配置即表示目标仍在使用：清除可能残留的退役标记，避免被定时任务整份回收',
+    `rm -f "$dir/${TARGET_RETIRED_MARKER_NAME}" 2>/dev/null || true`,
+    `if [ -n "$legacy_root" ] && [ -f "$legacy_root/${TARGET_RETIRED_MARKER_NAME}" ]; then rm -f "$legacy_root/${TARGET_RETIRED_MARKER_NAME}" 2>/dev/null || true; fi`,
+    'echo "target_meta_written=1"',
   ].join('\n');
-  return buildPosixShellCommand(script, [layout.targetMetaFilePath, payload], useSudo);
+  return buildPosixShellCommand(
+    script,
+    [layout.targetMetaFilePath, payload, layout.legacyBackupRoot || '', onlyIfExists ? '1' : '0'],
+    useSudo
+  );
+}
+
+/**
+ * 规范化写入 target.json 的目标级保留策略（非法值返回 null，表示不写入、由定时任务使用全局默认）。
+ * @param {{ backupKeepCount?: number, backupMaxSizeMb?: number, backupTtlDays?: number }|null|undefined} retention - 解析后的保留策略
+ * @returns {{ keepCount: number, maxSizeMb: number, ttlDays: number } | null}
+ */
+export function normalizeTargetMetaRetention(retention) {
+  if (!retention || typeof retention !== 'object') return null;
+  const keepCount = Number(retention.backupKeepCount);
+  const maxSizeMb = Number(retention.backupMaxSizeMb);
+  const ttlDays = Number(retention.backupTtlDays);
+  if (!Number.isInteger(keepCount) || keepCount < 1) return null;
+  if (!Number.isInteger(maxSizeMb) || maxSizeMb < 0) return null;
+  if (!Number.isInteger(ttlDays) || ttlDays < 0) return null;
+  return { keepCount, maxSizeMb, ttlDays };
+}
+
+/**
+ * 构建清除内嵌模式退役标记的远程命令（降级内嵌模式下重新发布时调用）。
+ * @param {string} backupRoot - 内嵌 .yuyan-backups 目录
+ * @param {boolean} [useSudo=false] - 是否 sudo
+ * @returns {string} 远程命令
+ */
+export function buildClearRetiredMarkerCommand(backupRoot, useSudo = false) {
+  const script = [
+    'set -eu',
+    'broot="$1"',
+    `if [ -n "$broot" ] && [ -f "$broot/${TARGET_RETIRED_MARKER_NAME}" ]; then rm -f "$broot/${TARGET_RETIRED_MARKER_NAME}"; fi`,
+  ].join('\n');
+  return buildPosixShellCommand(script, [backupRoot || ''], useSudo);
+}
+
+/**
+ * 构建为已删除 / 已改路径的部署目标写入退役标记的远程命令。
+ * @description 仅写标记不删数据：服务器端 gc-backups 在宽限期过后才整份回收，期间重新发布会自动清除标记。
+ * @param {Object} params - 参数
+ * @param {string} params.targetStateDir - 外置仓 targets/<slug> 目录（可为空）
+ * @param {string} params.legacyBackupRoot - 内嵌 .yuyan-backups 目录（可为空）
+ * @param {string} params.realRoot - 目标真实部署目录（写入标记便于排查）
+ * @param {string} [params.reason='target-deleted'] - 退役原因
+ * @param {boolean} [params.useSudo=false] - 是否 sudo
+ * @returns {string} 远程命令
+ */
+export function buildMarkTargetRetiredCommand({
+  targetStateDir = '',
+  legacyBackupRoot = '',
+  realRoot = '',
+  reason = 'target-deleted',
+  useSudo = false,
+}) {
+  const safeReason = String(reason || 'target-deleted').replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 40) || 'target-deleted';
+  const script = [
+    'set -eu',
+    'state_dir="$1"',
+    'legacy_root="$2"',
+    'real_root="$3"',
+    'reason="$4"',
+    'now_epoch=$(date +%s)',
+    'marked=0',
+    'write_marker() {',
+    '  mfile="$1"',
+    '  [ -f "$mfile" ] && return 0',
+    '  mtmp="$mfile.tmp.$$"',
+    '  printf "retired_at=%s\\nreason=%s\\nreal_root=%s\\n" "$now_epoch" "$reason" "$real_root" > "$mtmp"',
+    '  mv "$mtmp" "$mfile"',
+    '  marked=$((marked + 1))',
+    '}',
+    `if [ -n "$state_dir" ] && [ -d "$state_dir" ]; then write_marker "$state_dir/${TARGET_RETIRED_MARKER_NAME}"; fi`,
+    `if [ -n "$legacy_root" ] && [ -d "$legacy_root" ]; then write_marker "$legacy_root/${TARGET_RETIRED_MARKER_NAME}"; fi`,
+    'echo "retired_marked=$marked"',
+  ].join('\n');
+  return buildPosixShellCommand(script, [targetStateDir || '', legacyBackupRoot || '', realRoot || '', safeReason], useSudo);
 }
 
 /**
@@ -954,8 +1054,10 @@ export function buildCasObjectPoolGcCommand(stateRoot, options = {}) {
     'fi',
     'tmp_live_raw=$(mktemp)',
     'tmp_live=$(mktemp)',
+    'tmp_obj_list=$(mktemp)',
+    'tmp_candidates=$(mktemp)',
     'cleanup() {',
-    '  rm -f "$tmp_live_raw" "$tmp_live" "$gc_lock/owner" 2>/dev/null || true',
+    '  rm -f "$tmp_live_raw" "$tmp_live" "$tmp_obj_list" "$tmp_candidates" "$gc_lock/owner" 2>/dev/null || true',
     '  rmdir "$gc_lock" 2>/dev/null || true',
     '}',
     'trap cleanup EXIT',
@@ -974,40 +1076,32 @@ export function buildCasObjectPoolGcCommand(stateRoot, options = {}) {
     'fi',
     'live_count=$(wc -l < "$tmp_live" | tr -d " ")',
     '',
-    '# 2. Sweep：扫描对象池并清理孤儿对象与超时临时文件',
+    '# 2. Sweep：一次性 awk 哈希过滤活跃对象（O(N+M)），仅对孤儿候选与临时文件执行 stat 与清理',
     'scanned=0',
     'deleted=0',
     'freed_bytes=0',
     'skipped_grace=0',
-    'tmp_obj_list=$(mktemp)',
+    'TAB=$(printf \'\\t\')',
     'find "$objects_dir" -mindepth 2 -maxdepth 2 -type f 2>/dev/null > "$tmp_obj_list" || true',
-    'while IFS= read -r obj_file; do',
+    'awk -v live_file="$tmp_live" \'FILENAME == live_file { live[$0] = 1; next } { n = split($0, p, "/"); b = p[n]; if (substr(b, 1, 5) == ".tmp.") { print "TMP\\t" $0; next } if (length(b) == 64 && b ~ /^[0-9a-fA-F]+$/) { sc++; if (!(b in live)) { print "ORPHAN\\t" $0 } } } END { print "SCANNED\\t" (sc + 0) }\' "$tmp_live" "$tmp_obj_list" > "$tmp_candidates"',
+    'while IFS="$TAB" read -r kind obj_file; do',
+    '  if [ "$kind" = "SCANNED" ]; then',
+    '    scanned="$obj_file"',
+    '    continue',
+    '  fi',
     '  [ -n "$obj_file" ] || continue',
-    '  bname=$(basename "$obj_file")',
     '  obj_mtime=$(yuyan_file_mtime "$obj_file")',
     '  case "$obj_mtime" in ""|*[!0-9]*) obj_mtime=0 ;; esac',
     '  age=$((now_epoch - obj_mtime))',
     '  if [ "$age" -lt 0 ]; then age=0; fi',
-    '  case "$bname" in',
-    '    .tmp.*)',
-    '      if [ "$age" -gt 3600 ]; then',
-    '        sz=$(yuyan_file_size "$obj_file")',
-    '        case "$sz" in ""|*[!0-9]*) sz=0 ;; esac',
-    '        if rm -f "$obj_file" 2>/dev/null; then',
-    '          freed_bytes=$((freed_bytes + sz))',
-    '        fi',
+    '  if [ "$kind" = "TMP" ]; then',
+    '    if [ "$age" -gt 3600 ]; then',
+    '      sz=$(yuyan_file_size "$obj_file")',
+    '      case "$sz" in ""|*[!0-9]*) sz=0 ;; esac',
+    '      if rm -f "$obj_file" 2>/dev/null; then',
+    '        freed_bytes=$((freed_bytes + sz))',
     '      fi',
-    '      continue',
-    '      ;;',
-    '    *[!0-9a-fA-F]*)',
-    '      continue',
-    '      ;;',
-    '  esac',
-    '  if [ "${#bname}" -ne 64 ]; then',
-    '    continue',
-    '  fi',
-    '  scanned=$((scanned + 1))',
-    '  if [ -s "$tmp_live" ] && grep -Fxq "$bname" "$tmp_live"; then',
+    '    fi',
     '    continue',
     '  fi',
     '  if [ "$grace_seconds" -gt 0 ] && [ "$age" -lt "$grace_seconds" ]; then',
@@ -1021,8 +1115,7 @@ export function buildCasObjectPoolGcCommand(stateRoot, options = {}) {
     '    deleted=$((deleted + 1))',
     '    freed_bytes=$((freed_bytes + sz))',
     '  fi',
-    'done < "$tmp_obj_list"',
-    'rm -f "$tmp_obj_list"',
+    'done < "$tmp_candidates"',
     'find "$objects_dir" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | while IFS= read -r sdir; do rmdir "$sdir" 2>/dev/null || true; done',
     'echo "gc_status=ok scanned_objects=$scanned live_objects=$live_count deleted_objects=$deleted freed_bytes=$freed_bytes skipped_grace=$skipped_grace"',
   ].join('\n');

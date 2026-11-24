@@ -52,6 +52,7 @@ import {
   buildCasObjectPoolGcCommand,
   buildCasPreflightCheckRollbackCommand,
   buildCasRestoreDeployRootCommand,
+  buildClearRetiredMarkerCommand,
   buildProbeStateRootCommand,
   buildPruneBackupsCommand,
   buildWriteTargetStateMetaCommand,
@@ -2336,13 +2337,19 @@ export function isStaleLocalDeployLockOwner(ownerInfo) {
  * @param {boolean} useSudo 是否 sudo
  * @returns {Promise<{ok: boolean, ownerInfo: string}>}
  */
-async function tryAcquireRemoteDeployLockOnce(conn, lockDir, ownerToken, useSudo) {
+async function tryAcquireRemoteDeployLockOnce(conn, lockDir, ownerToken, useSudo, signal) {
   const script = [
     '# yuyan:deploy-lock',
     'set -u',
     'lock="$1"',
     'owner_str="$2"',
     'owner_file="$lock/owner"',
+    'parent_dir=$(dirname "$lock")',
+    '',
+    'if [ ! -d "$parent_dir" ]; then',
+    '  echo "LOCK_UNAVAILABLE: 锁父目录不存在 ($parent_dir)" >&2',
+    '  exit 3',
+    'fi',
     '',
     'if [ -d "$lock" ]; then',
     '  # 检查 owner 文件是否存在且超过 120 分钟未修改（使用 find 检查 mtime）',
@@ -2355,28 +2362,51 @@ async function tryAcquireRemoteDeployLockOnce(conn, lockDir, ownerToken, useSudo
     '  fi',
     'fi',
     '',
-    'if mkdir "$lock" 2>/dev/null; then',
+    'mk_err=""',
+    'if mk_err=$(mkdir "$lock" 2>&1); then',
     '  if ! printf \'%s\\n\' "$owner_str" > "$owner_file"; then',
     '    rmdir "$lock" 2>/dev/null || true',
-    '    echo "LOCK_FAILED: 写入持有者信息失败" >&2',
-    '    exit 1',
+    '    echo "LOCK_UNAVAILABLE: 写入持有者信息失败（请检查目录写权限）" >&2',
+    '    exit 3',
     '  fi',
     '  exit 0',
-    'else',
+    'elif [ -d "$lock" ]; then',
     '  cur_owner=$(cat "$owner_file" 2>/dev/null || echo "未知持有者")',
     '  echo "LOCK_FAILED: $cur_owner" >&2',
     '  exit 1',
+    'else',
+    '  echo "LOCK_UNAVAILABLE: ${mk_err:-无法创建锁目录}" >&2',
+    '  exit 3',
     'fi',
   ].join('\n');
 
   const result = await execSsh(conn, buildRemoteShellCommand(script, [lockDir, ownerToken], useSudo), {
     allowFailure: true,
+    signal,
     label: '获取远程部署目录锁',
   });
-  if (result.code === 0) return { ok: true, ownerInfo: '' };
-  const stderr = String(result.stderr || '');
+  if (result.code === 0) return { ok: true, retryable: false, ownerInfo: '', reason: '' };
+  const stderr = String(result.stderr || '').trim();
+  const unavailableMatch = stderr.match(/LOCK_UNAVAILABLE:\s*(.+)/);
+  if (unavailableMatch || result.code === 3) {
+    return {
+      ok: false,
+      retryable: false,
+      ownerInfo: '',
+      reason: unavailableMatch ? unavailableMatch[1].trim() : (stderr || `远程锁目录不可用（退出码 ${result.code}）`),
+    };
+  }
   const match = stderr.match(/LOCK_FAILED:\s*(.+)/);
-  return { ok: false, ownerInfo: match ? match[1].trim() : '未知持有者' };
+  if (match) {
+    return { ok: false, retryable: true, ownerInfo: match[1].trim(), reason: '' };
+  }
+  // 其他非预期失败（如 sudo 失败、权限拒绝、SSH 命令异常等）直接快速失败，避免误入长时间等待
+  return {
+    ok: false,
+    retryable: false,
+    ownerInfo: '',
+    reason: stderr || String(result.stdout || '').trim() || `远程锁命令失败（退出码 ${result.code}）`,
+  };
 }
 
 /**
@@ -2440,10 +2470,26 @@ export async function acquireFrontendDeployLock(conn, deployRoot, useSudo = fals
   let waitingNotified = false;
 
   for (;;) {
-    const attempt = await tryAcquireRemoteDeployLockOnce(conn, lockDir, ownerToken, useSudo);
+    if (options.signal?.aborted) {
+      throw options.signal.reason || createDeployStoppedError(options.signal);
+    }
+    let attempt;
+    try {
+      attempt = await tryAcquireRemoteDeployLockOnce(conn, lockDir, ownerToken, useSudo, options.signal);
+    } catch (error) {
+      if (options.signal?.aborted) {
+        throw options.signal.reason || createDeployStoppedError(options.signal);
+      }
+      throw error;
+    }
     if (attempt.ok) {
       heldRemoteDeployLockTokens.add(ownerToken);
       return ownerToken;
+    }
+    if (!attempt.retryable) {
+      throw new Error(
+        `无法获取远程部署目录锁（${lockDir}）：${attempt.reason || '目录不存在或无写权限'}。请检查目标部署目录及 SSH 用户权限`
+      );
     }
     const ownerInfo = attempt.ownerInfo;
     if (!staleCleared && isStaleLocalDeployLockOwner(ownerInfo)) {
@@ -2481,6 +2527,9 @@ export async function acquireFrontendDeployLock(conn, deployRoot, useSudo = fals
  * @param {number|string} params.recordId 记录 ID
  * @param {Object} params.owner 持有者信息（projectName、targetId、operator、actionLabel）
  * @param {AbortSignal} [params.signal] 停止信号
+ * @param {number} [params.waitTimeoutMs] 等待目录锁的最长时间（毫秒；未传时远程锁沿用默认 10 分钟）
+ * @param {number} [params.retryBaseMs] 远程锁首次重试间隔（毫秒）
+ * @param {number} [params.retryMaxMs] 远程锁最大重试间隔（毫秒）
  * @param {Function} [params.log] 日志函数
  * @param {string} [params.logStage='upload'] 日志阶段
  * @param {string} [params.waitHint] 等待提示补充说明
@@ -2488,10 +2537,27 @@ export async function acquireFrontendDeployLock(conn, deployRoot, useSudo = fals
  * @returns {Promise<{waited: boolean, release: () => Promise<void>}>}
  */
 export async function acquireDeployRootLocks(conn, params) {
-  const { server, lockRoot, useSudo, recordId, owner, signal, log, logStage = 'upload', waitHint, onWait } = params;
+  const {
+    server,
+    lockRoot,
+    useSudo,
+    recordId,
+    owner,
+    signal,
+    waitTimeoutMs,
+    retryBaseMs,
+    retryMaxMs,
+    log,
+    logStage = 'upload',
+    waitHint,
+    onWait,
+  } = params;
   const key = buildDeployRootLockKey(server, lockRoot);
   let waited = false;
   let lastHolderKey = '';
+  const hasExplicitTimeout = waitTimeoutMs !== undefined && waitTimeoutMs !== null && Number.isFinite(Number(waitTimeoutMs));
+  const normalizedWaitTimeoutMs = hasExplicitTimeout ? Math.max(0, Number(waitTimeoutMs)) : undefined;
+  const startedAt = Date.now();
   const notifyWait = (holder, position) => {
     waited = true;
     const formatted = formatDeployRootLockWait({ holder, position, lockRoot, hint: waitHint });
@@ -2505,24 +2571,52 @@ export async function acquireDeployRootLocks(conn, params) {
     } catch {}
   };
   let releaseLocal;
+  let localTimeoutController = null;
+  let localTimeoutTimer = null;
+  let onExternalAbort = null;
   try {
+    let localSignal = signal;
+    if (hasExplicitTimeout) {
+      localTimeoutController = new AbortController();
+      if (signal?.aborted) {
+        localTimeoutController.abort(signal.reason);
+      } else {
+        onExternalAbort = () => localTimeoutController.abort(signal?.reason);
+        signal?.addEventListener?.('abort', onExternalAbort, { once: true });
+        localTimeoutTimer = setTimeout(() => {
+          localTimeoutController.abort(
+            new Error(`等待同服务器目录锁超时（${lockRoot}，已超过 ${Math.ceil(normalizedWaitTimeoutMs / 1000)} 秒），请待其他任务完成后重试`)
+          );
+        }, normalizedWaitTimeoutMs);
+      }
+      localSignal = localTimeoutController.signal;
+    }
     releaseLocal = await acquireDeployRootLock(key, {
       owner,
-      signal,
+      signal: localSignal,
       onWait: ({ holder, position }) => notifyWait(holder, position),
     });
   } catch (error) {
     if (signal?.aborted) throw createDeployStoppedError(signal);
     throw error;
+  } finally {
+    if (localTimeoutTimer) clearTimeout(localTimeoutTimer);
+    if (onExternalAbort) signal?.removeEventListener?.('abort', onExternalAbort);
   }
   let lockToken = '';
   try {
     throwIfDeployStopped(signal);
     if (waited) log?.('info', `已获得同服务器目录锁（${lockRoot}），继续执行`, logStage);
+    const remainingRemoteTimeoutMs = hasExplicitTimeout
+      ? Math.max(0, normalizedWaitTimeoutMs - (Date.now() - startedAt))
+      : undefined;
     lockToken = await acquireFrontendDeployLock(conn, lockRoot, useSudo, {
       recordId,
       log,
       signal,
+      ...(remainingRemoteTimeoutMs !== undefined ? { waitTimeoutMs: remainingRemoteTimeoutMs } : {}),
+      ...(retryBaseMs !== undefined ? { retryBaseMs } : {}),
+      ...(retryMaxMs !== undefined ? { retryMaxMs } : {}),
       onWait: (ownerInfo) => notifyWait({ projectName: `其他雨燕实例（${ownerInfo}）` }, 1),
     });
   } catch (error) {
@@ -4353,11 +4447,18 @@ async function deployTargetInLease(targetId, payload, emit) {
                   targetId: target.id,
                   envName: target.envName,
                   uploadStrategy,
+                  retention: resolveDeployRetentionPolicy({ ...target, uploadStrategy }),
                 },
                 deployUseSudo
               ),
               { allowFailure: true, label: '写入外置状态仓目标元信息' }
             ).catch(() => {});
+          } else if (activeStateLayout.backupRoot) {
+            // 降级内嵌模式下重新发布：清除可能残留的退役标记，避免旧备份被定时任务整份回收
+            await execSsh(conn, buildClearRetiredMarkerCommand(activeStateLayout.backupRoot, deployUseSudo), {
+              allowFailure: true,
+              label: '清除内嵌备份退役标记',
+            }).catch(() => {});
           }
           let normConfig = target.deployRoot;
           try { normConfig = normalizeDeployRootPath(target.deployRoot); } catch {}

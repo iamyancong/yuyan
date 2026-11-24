@@ -34,6 +34,13 @@ export const STATE_META_FILE_NAME = 'state-meta.json';
 /** 单目标状态归属元信息文件名 */
 export const TARGET_META_FILE_NAME = 'target.json';
 
+/**
+ * 退役标记文件名（目标已删除 / 已改路径 / 部署目录已消失时写入）。
+ * @description 由雨燕在删除目标或修改部署目录时写入外置仓 targets/<slug>/ 与内嵌 .yuyan-backups/，
+ * 服务器端 gc-backups 定时任务在宽限期（默认等于 TTL 天数）过后整份回收；再次发布会自动清除该标记。
+ */
+export const TARGET_RETIRED_MARKER_NAME = '.retired';
+
 /** 历史内嵌备份目录名 */
 export const LEGACY_BACKUP_DIR_NAME = '.yuyan-backups';
 

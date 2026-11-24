@@ -6,8 +6,9 @@
  * 当前 yuyan-nginx.sh 脚本协议版本。远端缺标记或版本低于此值时应刷新脚本。
  * v3（#42）：rotate-logs 支持按大小轮转，定时任务改为每小时检查。
  * v4：新增 gc-backups 备份三维巡检与外置 CAS 对象池定时回收。
+ * v5：gc-backups 支持读取 target.json 目标级保留策略，并在过期后整份回收已退役/目录已删的孤儿目标。
  */
-export const YUYAN_NGINX_SCRIPT_VERSION = 4;
+export const YUYAN_NGINX_SCRIPT_VERSION = 5;
 
 /**
  * 脚本中的版本标记前缀。

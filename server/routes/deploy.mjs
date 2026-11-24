@@ -28,6 +28,10 @@ import {
   handleGetNextNginxInstancePort,
   handleInspectNginxInstanceStorage,
   handlePruneNginxInstanceBackups,
+  handleStartNginxStoragePruneJob,
+  handleGetLatestNginxStoragePruneJob,
+  handleGetNginxStoragePruneJob,
+  handleCancelNginxStoragePruneJob,
   handlePreviewTargetOrphanAssets,
   handleCleanTargetOrphanAssets,
   handleGetTargetDeployProgress,
@@ -183,6 +187,10 @@ router.post('/nginx-instances/:id/actions/:action', handleRunNginxInstanceAction
 router.get('/nginx-instances/:id/next-port', handleGetNextNginxInstancePort);
 router.get('/nginx-instances/:id/storage/inspect', handleInspectNginxInstanceStorage);
 router.post('/nginx-instances/:id/storage/prune-backups', handlePruneNginxInstanceBackups);
+router.post('/nginx-instances/:id/storage/prune-jobs', handleStartNginxStoragePruneJob);
+router.get('/nginx-instances/:id/storage/prune-jobs/latest', handleGetLatestNginxStoragePruneJob);
+router.get('/nginx-instances/:id/storage/prune-jobs/:jobId', handleGetNginxStoragePruneJob);
+router.post('/nginx-instances/:id/storage/prune-jobs/:jobId/cancel', handleCancelNginxStoragePruneJob);
 
 router.get('/targets', handleListTargets);
 router.get('/targets/runtime-snapshots', handleListTargetRuntimeSnapshots);

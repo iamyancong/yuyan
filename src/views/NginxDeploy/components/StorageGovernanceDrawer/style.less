@@ -75,6 +75,66 @@
   }
 }
 
+.sg-progress-banner {
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--primary-color) 32%, transparent);
+  background: color-mix(in srgb, var(--primary-color) 6%, transparent);
+
+  &--succeeded {
+    border-color: color-mix(in srgb, var(--success-color, #52c41a) 35%, transparent);
+    background: color-mix(in srgb, var(--success-color, #52c41a) 6%, transparent);
+  }
+
+  &--failed {
+    border-color: color-mix(in srgb, var(--error-color, #ff4d4f) 38%, transparent);
+    background: color-mix(in srgb, var(--error-color, #ff4d4f) 6%, transparent);
+  }
+
+  &--cancelled {
+    border-color: color-mix(in srgb, var(--warning-color, #faad14) 38%, transparent);
+    background: color-mix(in srgb, var(--warning-color, #faad14) 6%, transparent);
+  }
+
+  &__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 6px;
+  }
+
+  &__title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  &__phase {
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  &__meta {
+    font-size: 12px;
+    opacity: 0.72;
+  }
+
+  &__actions {
+    flex-shrink: 0;
+  }
+
+  &__error {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--error-color, #ff4d4f);
+    word-break: break-word;
+  }
+}
+
 .sg-table-wrap {
   margin-top: 4px;
 }

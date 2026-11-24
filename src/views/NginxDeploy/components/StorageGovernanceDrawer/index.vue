@@ -2,6 +2,7 @@
 import { ClearOutlined, DatabaseOutlined, ReloadOutlined } from '@ant-design/icons-vue';
 import { YButton, YTable } from '@yss-ui/components/lite';
 import OrphanAssetsPreviewModal from './components/OrphanAssetsPreviewModal.vue';
+import StoragePruneProgressBanner from './components/StoragePruneProgressBanner.vue';
 import StorageSummaryCards from './components/StorageSummaryCards.vue';
 import {
   formatStorageBytes,
@@ -20,8 +21,11 @@ const {
   actionConfig,
   applyRetentionPolicy,
   apps,
+  cancelPruneBackups,
   cleaning,
+  cleaningAll,
   confirmCleanOrphanAssets,
+  dismissPruneBanner,
   executePruneBackups,
   inlineAction,
   inspecting,
@@ -31,6 +35,7 @@ const {
   orphanMinAgeDays,
   orphanModalOpen,
   orphanPreview,
+  pruneJob,
   reloadOrphanPreview,
   report,
   runCasGc,
@@ -72,7 +77,7 @@ const {
             cancel-text="取消"
             @confirm="executePruneBackups()"
           >
-            <YButton type="primary" :loading="cleaning" :disabled="inspecting">
+            <YButton type="primary" :loading="cleaningAll" :disabled="inspecting || cleaning">
               <template #icon><ClearOutlined /></template>
               一键安全瘦身
             </YButton>
@@ -80,9 +85,19 @@ const {
         </a-space>
       </div>
 
+      <StoragePruneProgressBanner
+        v-if="pruneJob"
+        :job="pruneJob"
+        @cancel="cancelPruneBackups"
+        @dismiss="dismissPruneBanner"
+      />
+
       <div v-if="report?.stateRoot?.path" class="sg-path-bar">
         <span><DatabaseOutlined /> 外置状态仓：<code>{{ report.stateRoot.path }}</code></span>
-        <span v-if="report.htmlRoot?.path">运行根目录：<code>{{ report.htmlRoot.path }}</code></span>
+        <span v-if="report.htmlRoot?.path">
+          运行根目录：<code>{{ report.htmlRoot.path }}</code>
+          <span v-if="!report.htmlRoot.exists" class="sg-muted">（未创建，已按实际应用目录汇总）</span>
+        </span>
       </div>
 
       <div class="sg-table-wrap">

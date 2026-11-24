@@ -83,13 +83,21 @@ import {
   diffCleanupScope,
   RESERVED_DEPLOY_ENTRIES,
 } from '../services/deploy-cleanup-policy.mjs';
-import { normalizeHashedAssetDirsInput } from '../services/deploy-state-layout.mjs';
+import { normalizeHashedAssetDirsInput, normalizePosixAbsPath } from '../services/deploy-state-layout.mjs';
 import {
   cleanTargetOrphanAssets,
   inspectNginxInstanceStorage,
   previewTargetOrphanAssets,
   pruneNginxInstanceBackups,
+  scheduleRetireTargetBackupState,
+  scheduleSyncTargetRetentionMeta,
 } from '../services/storage-governance-service.mjs';
+import {
+  cancelNginxStoragePruneJob,
+  getLatestNginxStoragePruneJob,
+  getNginxStoragePruneJob,
+  startNginxStoragePruneJob,
+} from '../services/storage-prune-jobs.mjs';
 import {
   getNextNginxRuntimePort,
   getNextNginxInstancePort,
@@ -1626,8 +1634,10 @@ export async function handleCreateTarget(req, res) {
 export async function handleUpdateTarget(req, res) {
   try {
     await validateTargetPayload(req.body);
+    const targetId = Number(req.params.id);
+    const prevContext = await getTargetContext(targetId).catch(() => null);
     const isBackend = req.body.projectType === 'backend';
-    const target = await updateTarget(Number(req.params.id), {
+    const target = await updateTarget(targetId, {
       ...req.body,
       projectSource: req.body.projectSource === 'gitlab' ? 'gitlab' : 'ops',
       envName: req.body.envName || '测试',
@@ -1646,6 +1656,28 @@ export async function handleUpdateTarget(req, res) {
       enableNginxReload: Boolean(req.body.enableNginxReload),
     });
     if (!target) return sendError(res, new Error('部署目标不存在'), 404);
+    // 异步维护远端备份状态：修改路径/服务器时标记旧目录退役；修改保留策略时同步 target.json
+    if (prevContext?.target && prevContext.target.projectType !== 'backend') {
+      const prevRoot = normalizePosixAbsPath(prevContext.target.deployRoot || '');
+      const nextRoot = normalizePosixAbsPath(target.deployRoot || '');
+      const rootOrServerChanged =
+        prevRoot !== nextRoot || Number(prevContext.target.serverId) !== Number(target.serverId);
+      if (rootOrServerChanged) {
+        scheduleRetireTargetBackupState(prevContext, { reason: 'root-changed' });
+      } else if (target.projectType !== 'backend') {
+        const retentionChanged =
+          prevContext.target.backupKeepCount !== target.backupKeepCount ||
+          prevContext.target.backupMaxSizeMb !== target.backupMaxSizeMb ||
+          prevContext.target.backupTtlDays !== target.backupTtlDays ||
+          prevContext.target.uploadStrategy !== target.uploadStrategy ||
+          Number(prevContext.target.nginxInstanceId || 0) !== Number(target.nginxInstanceId || 0);
+        if (retentionChanged) {
+          getTargetContext(target.id)
+            .then((nextContext) => scheduleSyncTargetRetentionMeta(nextContext))
+            .catch(() => {});
+        }
+      }
+    }
     /** 进程模式、端口、运行目录等配置变化后，旧的状态探测结果不再可信 */
     invalidateBackendStatus(getRequestTeamId(), target.id);
     publishDeployEvent({ teamId: getRequestTeamId(), domains: ['targets', 'backend-status'], targetIds: [target.id] });
@@ -1661,7 +1693,11 @@ export async function handleUpdateTarget(req, res) {
 export async function handleDeleteTarget(req, res) {
   try {
     const targetId = Number(req.params.id);
+    const prevContext = await getTargetContext(targetId).catch(() => null);
     const result = await deleteTarget(targetId, { rejectRunning: String(req.query?.safe || '') === '1' });
+    if (result?.deletedTargets > 0 && prevContext?.target && prevContext.target.projectType !== 'backend') {
+      scheduleRetireTargetBackupState(prevContext, { reason: 'target-deleted' });
+    }
     invalidateBackendStatus(getRequestTeamId(), targetId);
     publishDeployEvent({ teamId: getRequestTeamId(), domains: ['targets', 'records', 'backend-status'], targetIds: [targetId] });
     res.json({ success: true, data: result });
@@ -3260,9 +3296,18 @@ export async function handleInspectNginxInstanceStorage(req, res) {
 }
 
 /**
- * 执行 Nginx 实例级存量内嵌备份清理、三维策略瘦身与 CAS 对象池 GC。
+ * 执行 Nginx 实例级存量内嵌备份清理、三维策略瘦身与 CAS 对象池 GC（同步兼容接口，支持客户端断连中止）。
  */
 export async function handlePruneNginxInstanceBackups(req, res) {
+  const abortController = new AbortController();
+  const handleClose = () => {
+    if (!res.writableEnded && !abortController.signal.aborted) {
+      abortController.abort(
+        Object.assign(new Error('客户端连接已断开，已中止存储清理'), { name: 'AbortError', code: 'ERR_CANCELED' })
+      );
+    }
+  };
+  res.on('close', handleClose);
   try {
     const body = req.body || {};
     const operator = String(body.operator || req.headers['x-yuyan-operator'] || '').trim();
@@ -3273,10 +3318,74 @@ export async function handlePruneNginxInstanceBackups(req, res) {
       gcGraceMinutes: body.gcGraceMinutes,
       targetRoots: Array.isArray(body.targetRoots) ? body.targetRoots : [],
       operator,
+      signal: abortController.signal,
     });
     if (data.clearedDbRecords > 0 || data.deletedBackups > 0) {
       publishDeployEvent({ teamId: getRequestTeamId(), domains: ['records'] });
     }
+    if (!res.writableEnded) {
+      res.json({ success: true, data });
+    }
+  } catch (error) {
+    if (!res.writableEnded) {
+      sendError(res, error, Number(error?.statusCode || error?.status || 400));
+    }
+  } finally {
+    res.off('close', handleClose);
+  }
+}
+
+/**
+ * 启动 Nginx 实例存储备份后台异步清理任务（立即返回 jobId，彻底消除 HTTP 超时）。
+ */
+export async function handleStartNginxStoragePruneJob(req, res) {
+  try {
+    const body = req.body || {};
+    const operator = String(body.operator || req.headers['x-yuyan-operator'] || '').trim();
+    const data = startNginxStoragePruneJob(Number(req.params.id), {
+      inlineAction: body.inlineAction,
+      applyRetentionPolicy: body.applyRetentionPolicy,
+      runCasGc: body.runCasGc,
+      gcGraceMinutes: body.gcGraceMinutes,
+      targetRoots: Array.isArray(body.targetRoots) ? body.targetRoots : [],
+      operator,
+    });
+    res.json({ success: true, data });
+  } catch (error) {
+    sendError(res, error, Number(error?.statusCode || error?.status || 400));
+  }
+}
+
+/**
+ * 查询 Nginx 实例当前运行中（或近期刚结束）的异步存储清理任务快照。
+ */
+export async function handleGetLatestNginxStoragePruneJob(req, res) {
+  try {
+    const data = getLatestNginxStoragePruneJob(Number(req.params.id));
+    res.json({ success: true, data });
+  } catch (error) {
+    sendError(res, error, Number(error?.statusCode || error?.status || 400));
+  }
+}
+
+/**
+ * 查询指定异步存储清理任务的最新阶段与进度快照。
+ */
+export async function handleGetNginxStoragePruneJob(req, res) {
+  try {
+    const data = getNginxStoragePruneJob(Number(req.params.id), req.params.jobId);
+    res.json({ success: true, data });
+  } catch (error) {
+    sendError(res, error, Number(error?.statusCode || error?.status || 400));
+  }
+}
+
+/**
+ * 取消正在运行中的异步存储清理任务（触发中止并释放目录锁）。
+ */
+export async function handleCancelNginxStoragePruneJob(req, res) {
+  try {
+    const data = cancelNginxStoragePruneJob(Number(req.params.id), req.params.jobId);
     res.json({ success: true, data });
   } catch (error) {
     sendError(res, error, Number(error?.statusCode || error?.status || 400));

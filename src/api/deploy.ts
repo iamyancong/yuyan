@@ -1370,6 +1370,45 @@ export interface PruneNginxStorageBackupsResult {
   } | null;
 }
 
+/** 后台异步存储清理任务状态 */
+export type StoragePruneJobStatus = 'running' | 'succeeded' | 'failed' | 'cancelled';
+
+/** 后台异步存储清理阶段 */
+export type StoragePruneJobPhase =
+  | 'scanning'
+  | 'locking'
+  | 'deleting_inline'
+  | 'pruning_policy'
+  | 'cas_gc'
+  | 'syncing_db'
+  | 'done';
+
+/** 后台异步存储清理任务快照 */
+export interface StoragePruneJobSnapshot {
+  jobId: string;
+  instanceId: number;
+  scope: 'all' | 'single';
+  targetRoots: string[];
+  status: StoragePruneJobStatus;
+  cancelling: boolean;
+  phase: StoragePruneJobPhase;
+  phaseLabel: string;
+  percent: number;
+  totalApps: number;
+  completedApps: number;
+  currentAppName: string;
+  deletedBackups: number;
+  freedBytes: number;
+  clearedDbRecords: number;
+  casGc: PruneNginxStorageBackupsResult['casGc'];
+  result: PruneNginxStorageBackupsResult | null;
+  error: string;
+  startedAt: string;
+  updatedAt: string;
+  finishedAt: string | null;
+  reused?: boolean;
+}
+
 /** 无主历史静态资源候选文件 */
 export interface OrphanAssetCandidate {
   relativePath: string;
@@ -1406,9 +1445,25 @@ export interface CleanOrphanAssetsResult {
 export const inspectNginxInstanceStorage = (instanceId: number) =>
   client.get(`/nginx-instances/${instanceId}/storage/inspect`, { timeout: 60_000 }).then(unwrap<NginxStorageInspectionReport>);
 
-/** 执行 Nginx 实例级备份清理、策略瘦身与 CAS 对象池 GC */
+/** 执行 Nginx 实例级备份清理、策略瘦身与 CAS 对象池 GC（同步兼容接口） */
 export const pruneNginxInstanceBackups = (instanceId: number, payload: PruneNginxStorageBackupsPayload) =>
   client.post(`/nginx-instances/${instanceId}/storage/prune-backups`, payload, { timeout: 120_000 }).then(unwrap<PruneNginxStorageBackupsResult>);
+
+/** 启动 Nginx 实例后台异步存储清理任务（立即返回 jobId，彻底避免长连接超时） */
+export const startNginxStoragePruneJob = (instanceId: number, payload: PruneNginxStorageBackupsPayload) =>
+  client.post(`/nginx-instances/${instanceId}/storage/prune-jobs`, payload, { timeout: 15_000 }).then(unwrap<StoragePruneJobSnapshot>);
+
+/** 查询 Nginx 实例当前运行中（或极近期结束）的异步存储清理任务 */
+export const getLatestNginxStoragePruneJob = (instanceId: number) =>
+  client.get(`/nginx-instances/${instanceId}/storage/prune-jobs/latest`, { timeout: 15_000 }).then(unwrap<StoragePruneJobSnapshot | null>);
+
+/** 查询指定异步存储清理任务的最新阶段与进度 */
+export const getNginxStoragePruneJob = (instanceId: number, jobId: string) =>
+  client.get(`/nginx-instances/${instanceId}/storage/prune-jobs/${encodeURIComponent(jobId)}`, { timeout: 15_000 }).then(unwrap<StoragePruneJobSnapshot>);
+
+/** 取消正在运行中的异步存储清理任务 */
+export const cancelNginxStoragePruneJob = (instanceId: number, jobId: string) =>
+  client.post(`/nginx-instances/${instanceId}/storage/prune-jobs/${encodeURIComponent(jobId)}/cancel`, {}, { timeout: 15_000 }).then(unwrap<StoragePruneJobSnapshot>);
 
 /** 预览单个部署目标带哈希目录下的无主历史静态资源 */
 export const previewTargetOrphanAssets = (targetId: number, payload?: { minAgeDays?: number }) =>
