@@ -123,8 +123,11 @@ export async function verifyCiStatus({
       continue;
     }
 
-    // 取最新的一条 CI run
-    const latestCiRun = ciRuns.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+    // 按创建时间倒序排列，取最新的一条 CI run
+    const sortedCiRuns = [...ciRuns].sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+    const latestCiRun = sortedCiRuns[0];
     const { status, conclusion, html_url, id } = latestCiRun;
 
     if (status === 'completed') {
@@ -133,6 +136,18 @@ export async function verifyCiStatus({
         logger(`Run ID: ${id} | 详情查看: ${html_url}`);
         logger(`耗时等待: ${elapsedSeconds}s，立即进入桌面端构建与发版流程！`);
         return { success: true, run: latestCiRun };
+      }
+
+      // 若最新一次 CI 是被手动取消（如误触发后取消），且同一 Commit 存在已通过的 CI 门禁记录，则沿用该通过记录放行
+      if (conclusion === 'cancelled') {
+        const previousSuccessRun = sortedCiRuns.find(
+          (r) => r.status === 'completed' && r.conclusion === 'success'
+        );
+        if (previousSuccessRun) {
+          logger(`⚠️ 最新一次 CI 记录 (${id}) 已被取消，但当前 Commit 存在已通过的 CI 门禁记录 (${previousSuccessRun.id})，予以放行！`);
+          logger(`Run ID: ${previousSuccessRun.id} | 详情查看: ${previousSuccessRun.html_url}`);
+          return { success: true, run: previousSuccessRun };
+        }
       }
 
       const msg = `❌ 严正拦截：前置 CI 执行结果为 [${conclusion}]！\n详情日志: ${html_url}\n请先修复 CI 错误并重新构建成功后再进行发版，已自动终止发包。`;
