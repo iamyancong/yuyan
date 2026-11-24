@@ -90,6 +90,11 @@ test("prepareRuntimeNpmConfig 默认注入 CI 防御环境变量（跳过大型�
       assert.equal(envs.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD, "true", "应注入 PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true");
       assert.equal(envs.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD, "1", "应注入 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1");
       assert.equal(envs.ELECTRON_SKIP_BINARY_DOWNLOAD, "1", "应注入 ELECTRON_SKIP_BINARY_DOWNLOAD=1");
+      assert.equal(
+        envs.npm_config_manage_package_manager_versions,
+        "false",
+        "应关闭 pnpm 10+ 内置 manage-package-manager-versions 自下载"
+      );
       assert.equal(envs.npm_config_network_concurrency, "8", "应默认注入 pnpm network-concurrency=8");
       assert.equal(envs.npm_config_fetch_timeout, "120000", "应默认注入 pnpm fetch-timeout=120000");
       assert.equal(envs.npm_config_fetch_retries, "4", "应默认注入 pnpm fetch-retries=4");

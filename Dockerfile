@@ -7,12 +7,24 @@ WORKDIR /app
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 ENV PATH="/opt/pnpm/bin:$PATH"
 COPY package.json pnpm-lock.yaml ./.npmrc ./
-# 复用项目 .npmrc（含内网 Nexus 镜像与鉴权）安装与 packageManager 一致的 pnpm，
-# 避免 corepack 绕过 .npmrc 直连公网 registry.npmjs.org 导致内网 CI 超时
+# 复用项目 .npmrc（含内网 Nexus 镜像与鉴权）安装：
+# 1. 与雨燕自身 packageManager 一致的 pnpm 到 /opt/pnpm（用于构建雨燕自身与平台兜底）
+# 2. 预置常用业务微应用 pnpm 版本到 /opt/yuyan-toolchains/pnpm/<ver>（与雨燕自身解耦，离线 0 秒切换）
+# 避免 corepack / pnpm manage-package-manager-versions 绕过 .npmrc 直连公网 registry.npmjs.org 导致内网 CI 超时
+ARG PREINSTALLED_PNPM_VERSIONS="9.15.9 10.15.0"
 RUN set -e; \
-  PNPM_SPEC="$(node --input-type=commonjs -e "const pm = String(require('./package.json').packageManager || 'pnpm@9.15.9'); const m = pm.match(/^pnpm@([^+]+)/); console.log('pnpm@' + (m ? m[1] : '9.15.9'));")"; \
-  NPM_CONFIG_USERCONFIG=/app/.npmrc npm install -g --prefix /opt/pnpm --no-audit --no-fund "$PNPM_SPEC"; \
-  pnpm --version
+  SELF_VER="$(node --input-type=commonjs -e "const pm = String(require('./package.json').packageManager || 'pnpm@9.15.9'); const m = pm.match(/^pnpm@([^+]+)/); console.log(m ? m[1] : '9.15.9');")"; \
+  NPM_CONFIG_USERCONFIG=/app/.npmrc npm install -g --prefix /opt/pnpm --no-audit --no-fund "pnpm@${SELF_VER}"; \
+  npm_config_manage_package_manager_versions=false pnpm --version; \
+  mkdir -p /opt/yuyan-toolchains/pnpm; \
+  for ver in ${PREINSTALLED_PNPM_VERSIONS}; do \
+    if [ "$ver" = "$SELF_VER" ]; then \
+      cp -a /opt/pnpm "/opt/yuyan-toolchains/pnpm/${ver}"; \
+    else \
+      NPM_CONFIG_USERCONFIG=/app/.npmrc npm install -g --prefix "/opt/yuyan-toolchains/pnpm/${ver}" --no-audit --no-fund "pnpm@${ver}"; \
+    fi; \
+    npm_config_manage_package_manager_versions=false "/opt/yuyan-toolchains/pnpm/${ver}/bin/pnpm" --version; \
+  done
 RUN pnpm install --frozen-lockfile
 COPY . .
 # 仅执行 vite build 产出前端静态资源，跳过 vue-tsc 类型检查
@@ -56,8 +68,10 @@ RUN set -e; \
   /sbin/tini --version
 WORKDIR /app
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+ENV YUYAN_PREINSTALLED_TOOLCHAINS_DIR=/opt/yuyan-toolchains
 ENV PATH="/opt/pnpm/bin:$PATH"
 COPY --from=builder /opt/pnpm /opt/pnpm
+COPY --from=builder /opt/yuyan-toolchains /opt/yuyan-toolchains
 COPY --from=builder /app/package.json /app/pnpm-lock.yaml ./
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/server ./server

@@ -602,6 +602,16 @@ function classifyLine(lines, index) {
                 stage: 'install',
             };
         }
+        if (code === 'ERR_PNPM_LOCKFILE_CONFIG_MISMATCH') {
+            const configField = clean.match(/The current "([^"]+)" configuration/i)?.[1] || '';
+            return {
+                category: '锁文件不一致',
+                title: configField ? `锁文件 ${configField} 配置不一致或 pnpm 版本不匹配` : '锁文件配置不一致或 pnpm 版本不匹配',
+                violation: code,
+                suggestion: `当前项目的 ${configField || 'pnpm 配置'} 与 pnpm-lock.yaml 记录不一致，常见于本地与构建环境的 pnpm 大版本不同（例如 pnpm 9 / 10 / 11 对 overrides 等配置位置与校验规则存在差异），或修改配置后未刷新锁文件。\n请在根目录 package.json 通过 packageManager 固定精确版本（如 "pnpm@10.15.0"，雨燕将自动按该版本调度），并用同一版本在本地执行 pnpm install 后提交最新 pnpm-lock.yaml。`,
+                stage: 'install',
+            };
+        }
         return {
             category: '锁文件不一致',
             title: '锁文件与 package.json 不同步',

@@ -110,6 +110,7 @@ import { getTestHooks, __setTestHooks, __resetTestHooks } from './test-hooks.mjs
 export { __setTestHooks, __resetTestHooks };
 import { getSshFailureEventExtra, logOperationFailure } from './ssh-errors.mjs';
 import { deployBackendTarget, restoreBackendRecord } from './backend-runtime-service.mjs';
+import { resolveFrontendToolchain } from './frontend-toolchain-service.mjs';
 import { touchWorkspaceUsed, withTargetWorkspaceLease } from './workspace-cleanup-service.mjs';
 import {
   applyLowProcessPriority,
@@ -380,6 +381,7 @@ export async function prepareRuntimeNpmConfig(repoDir, log) {
     PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'true',
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1',
     ELECTRON_SKIP_BINARY_DOWNLOAD: '1',
+    npm_config_manage_package_manager_versions: 'false',
     ...pnpmNetwork.env,
   };
   log(
@@ -1323,9 +1325,10 @@ export function isStandardInstallCommand(command) {
  * @param {string} command - 安装命令
  * @param {string} cwd - 执行目录
  * @param {AbortSignal} signal - 停止信号
+ * @param {Record<string, string>} [env={}] - 子进程环境变量（含多版本工具链 PATH）
  * @returns {Promise<{packageManager: string, packageManagerVersion: string}>} 包管理器信息
  */
-async function resolvePackageManagerInfo(command, cwd, signal) {
+async function resolvePackageManagerInfo(command, cwd, signal, env = {}) {
   if (splitCommandList(command).length !== 1) return { packageManager: '', packageManagerVersion: 'unknown' };
   const packageManager = inferPackageManager(command);
   if (!packageManager) return { packageManager: '', packageManagerVersion: 'unknown' };
@@ -1333,6 +1336,7 @@ async function resolvePackageManagerInfo(command, cwd, signal) {
   const versionCommand = tokens[0] === 'corepack' ? `corepack ${packageManager} --version` : `${packageManager} --version`;
   const result = await runLocalCommand(versionCommand, {
     cwd,
+    env,
     label: `获取 ${packageManager} 版本`,
     signal,
   }).catch(() => null);
@@ -1373,13 +1377,14 @@ async function collectDependencyInputFiles(repoDir) {
  * @param {Object} options - 指纹参数
  * @param {string} options.repoDir - 仓库目录
  * @param {string} options.installCommand - 安装命令
+ * @param {Record<string, string>} [options.env] - 子进程环境变量（含工具链 PATH）
  * @param {AbortSignal} options.signal - 停止信号
  * @returns {Promise<Object>} 依赖指纹信息
  */
-async function createDependencyCacheFingerprint({ repoDir, installCommand, signal }) {
+async function createDependencyCacheFingerprint({ repoDir, installCommand, env, signal }) {
   const files = await collectDependencyInputFiles(repoDir);
   const runtimeNpmConfigHash = sha256(createRuntimeNpmrcContent());
-  const packageManagerInfo = await resolvePackageManagerInfo(installCommand, repoDir, signal);
+  const packageManagerInfo = await resolvePackageManagerInfo(installCommand, repoDir, signal, env);
   const header = {
     installCommand: normalizeInstallCommand(installCommand),
     nodeVersion: process.version,
@@ -1525,11 +1530,12 @@ export async function executeDependencyInstallWithHealing({ command, cwd, env, s
  * @param {string} options.branch - 分支
  * @param {string} options.commitSha - Commit SHA
  * @param {boolean} options.forceInstallDependencies - 是否强制重新安装
+ * @param {Record<string, string>} [options.env] - 子进程环境变量（含多版本工具链 PATH）
  * @param {AbortSignal} options.signal - 停止信号
  * @returns {Promise<Object>} 依赖安装计划
  */
-async function resolveDependencyInstallPlan({ repoDir, metaPath, target, branch, commitSha, forceInstallDependencies, signal }) {
-  const fingerprint = await createDependencyCacheFingerprint({ repoDir, installCommand: target.installCommand, signal });
+async function resolveDependencyInstallPlan({ repoDir, metaPath, target, branch, commitSha, forceInstallDependencies, env, signal }) {
+  const fingerprint = await createDependencyCacheFingerprint({ repoDir, installCommand: target.installCommand, env, signal });
   const cacheMeta = await readDependencyCacheMeta(metaPath);
   const nodeModulesReady = await hasUsableNodeModules(repoDir);
   const standardInstallCommand = isStandardInstallCommand(target.installCommand);
@@ -4145,6 +4151,22 @@ async function deployTargetInLease(targetId, payload, emit) {
       npmConfigEnv = await prepareRuntimeNpmConfig(repoDir, log);
 
       throwIfDeployStopped(signal);
+      const frontendToolchain = await resolveFrontendToolchain({
+        repoDir,
+        installCommand: target.installCommand,
+        buildCommand: target.buildCommand,
+        runtimeEnv: npmConfigEnv,
+        log,
+        signal,
+      });
+      if (frontendToolchain?.env && Object.keys(frontendToolchain.env).length > 0) {
+        npmConfigEnv = {
+          ...npmConfigEnv,
+          ...frontendToolchain.env,
+        };
+      }
+
+      throwIfDeployStopped(signal);
       installPlan = await resolveDependencyInstallPlan({
         repoDir,
         metaPath,
@@ -4152,6 +4174,7 @@ async function deployTargetInLease(targetId, payload, emit) {
         branch,
         commitSha,
         forceInstallDependencies: Boolean(payload.forceInstallDependencies),
+        env: npmConfigEnv,
         signal,
       });
     }

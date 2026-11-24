@@ -214,6 +214,19 @@ test('锁文件不一致：OUTDATED_LOCKFILE / BREAKING_CHANGE / npm ci', () => 
   const breaking = diagnose(buildFailureLogs({ chunks: [{ err: ' ERR_PNPM_LOCKFILE_BREAKING_CHANGE  Lockfile /x/pnpm-lock.yaml not compatible with current pnpm' }] }));
   assert.equal(breaking?.title, '锁文件格式与服务器 pnpm 版本不兼容');
 
+  const configMismatch = diagnose(buildFailureLogs({
+    label: '安装依赖',
+    stage: 'install',
+    chunks: [{
+      err: 'Scope: all 2 workspace projects\nERR_PNPM_LOCKFILE_CONFIG_MISMATCH Cannot proceed with the frozen installation. The current "overrides" configuration doesn\'t match the value found in the lockfile\nUpdate your lockfile using "pnpm install --no-frozen-lockfile"',
+    }],
+  }));
+  assert.equal(configMismatch?.category, '锁文件不一致');
+  assert.equal(configMismatch?.violation, 'ERR_PNPM_LOCKFILE_CONFIG_MISMATCH');
+  assert.equal(configMismatch?.title, '锁文件 overrides 配置不一致或 pnpm 版本不匹配');
+  assert.match(configMismatch!.suggestion!, /packageManager/);
+  assert.match(configMismatch!.suggestion!, /pnpm 9 \/ 10 \/ 11/);
+
   const npmCi = diagnose(buildFailureLogs({ chunks: [{ err: 'npm error code EUSAGE\nnpm error `npm ci` can only install packages when your package.json and package-lock.json or npm-shrinkwrap.json are in sync.' }] }));
   assert.equal(npmCi?.category, '锁文件不一致');
 });
