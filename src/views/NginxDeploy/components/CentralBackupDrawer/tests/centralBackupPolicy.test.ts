@@ -7,6 +7,7 @@ import {
   formatDuration,
   resolveBackupStatusTag,
   resolveCentralBackupPermissions,
+  shouldShowCentralBackupEntry,
   truncateSha256,
   validateBackupRemoteDirClient,
 } from '../centralBackupPolicy.ts';
@@ -86,3 +87,11 @@ test('formatDuration & formatBackupRunContext', () => {
   assert.equal(formatBackupRunContext('manual', ''), '手动');
   assert.equal(formatBackupRunContext('', ''), '');
 });
+
+test('shouldShowCentralBackupEntry: 仅系统管理员展示入口，未配置或非白名单均隐藏', () => {
+  assert.equal(shouldShowCentralBackupEntry(true), true);
+  assert.equal(shouldShowCentralBackupEntry(false), false);
+  assert.equal(shouldShowCentralBackupEntry(undefined), false);
+  assert.equal(shouldShowCentralBackupEntry(null), false);
+});
+

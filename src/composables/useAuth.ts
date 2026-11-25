@@ -7,6 +7,7 @@ import {
   updateGitLabClient,
 } from '@/api/gitlab';
 import { exchangeGitlabIdentity, logoutCentralSession, refreshCentralSession } from '@/api/centralIdentity';
+import { getCentralBackupAccess } from '@/api/deploy';
 import { decideCentralSessionInvalidAction, registerCentralSessionInvalidHandler } from '@/services/centralSessionGuard';
 import { classifyCentralAuthError, createSerialTaskQueue, recoverCentralSession } from '@/services/centralSessionRecovery';
 import { refreshCentralData } from '@/services/centralDataRefresh';
@@ -56,6 +57,8 @@ export interface AuthState {
   accessToken: string;
   accessExpiresAt: string;
   centralSessionReady: boolean;
+  /** 当前会话是否在系统管理员白名单中（用于隐藏「中央灾备」入口）。 */
+  isSystemAdmin: boolean;
 }
 
 const defaultHost = import.meta.env.VITE_GITLAB_HOST || '';
@@ -72,6 +75,7 @@ const authState = ref<AuthState>({
   accessToken: '',
   accessExpiresAt: '',
   centralSessionReady: false,
+  isSystemAdmin: false,
 });
 
 let hasInitialized = false;
@@ -115,7 +119,25 @@ function applySecureState(state: SecureAccountState, user?: User | null) {
     accessToken: state.accessToken,
     accessExpiresAt: state.accessExpiresAt,
     centralSessionReady: Boolean(state.accessToken && state.teamId && Date.parse(state.accessExpiresAt) > Date.now()),
+    isSystemAdmin: Boolean(authState.value.isSystemAdmin),
   };
+}
+
+/** 向中央服务探测当前会话是否为系统管理员；失败时按非管理员处理。 */
+async function refreshSystemAdminFlag() {
+  if (!authState.value.isAuthenticated) {
+    authState.value.isSystemAdmin = false;
+    return;
+  }
+  try {
+    const access = await getCentralBackupAccess();
+    if (!authState.value.isAuthenticated) return;
+    authState.value.isSystemAdmin = Boolean(access?.isSystemAdmin);
+  } catch {
+    if (authState.value.isAuthenticated) {
+      authState.value.isSystemAdmin = false;
+    }
+  }
 }
 
 /** 通知 Agent Gateway 立即清空或切换身份，避免内存残留旧 PAT。 */
@@ -386,6 +408,7 @@ const logout = async (silent = false, options: LogoutOptions = {}) => {
     accessToken: '',
     accessExpiresAt: '',
     centralSessionReady: false,
+    isSystemAdmin: false,
   };
   // 再加一代，丢掉登出过程中新启动、但仍拿着旧存储快照的 checkAuth
   ++authGeneration;
@@ -560,6 +583,16 @@ const setupWatchers = () => {
   if (hasSetupWatchers) return;
   hasSetupWatchers = true;
   watch(
+    () => `${authState.value.isAuthenticated}|${authState.value.accountId}|${authState.value.accessToken}`,
+    async () => {
+      if (!authState.value.isAuthenticated) {
+        authState.value.isSystemAdmin = false;
+        return;
+      }
+      await refreshSystemAdminFlag();
+    },
+  );
+  watch(
     () => `${authState.value.accountId}|${authState.value.teamId}|${authState.value.isAuthenticated}`,
     async (current, previous) => {
       if (current === previous) return;
@@ -610,6 +643,7 @@ export const useAuth = () => {
     currentUser: computed(() => authState.value.user),
     userAvatar: computed(() => authState.value.user?.avatar_url || ''),
     userName: computed(() => authState.value.user?.name || authState.value.user?.username || ''),
+    isSystemAdmin: computed(() => authState.value.isSystemAdmin),
     authLoading: computed(() => authState.value.loading),
     login,
     logout,

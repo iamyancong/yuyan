@@ -191,6 +191,7 @@ pnpm build
 | `APP_UPDATE_PRELOAD_INTERVAL_MS` | `300000` | 中央 API 主动检查并预热最新安装包的间隔（最低 60 秒） |
 | `APP_UPDATE_PRELOAD_INITIAL_DELAY_MS` | `2000` | 中央 API 启动后首次预热的延迟 |
 | `DEPLOY_SECRET_KEY` | 本机随机生成 | macOS 从应用本地加密保险库读取，Windows 从 Credential Manager 读取；非本机中央服务必须显式配置独立随机密钥，否则拒绝启动 |
+| `YUYAN_SYSTEM_ADMINS` | 空（拒绝所有人） | 系统管理员白名单，逗号分隔。填写雨燕登录所用的 GitLab 用户名（忽略大小写），也可同时填写邮箱或中央账号 ID。用于开放部署中心「中央灾备」抽屉及其四个接口；未配置时服务端默认拒绝所有人，页面不显示该入口。每日定时备份与巡检不受此变量影响。容器/内网部署时在运行时注入（`docker run -e` 或 compose `environment`），不要写进镜像 |
 | `DEPLOY_RECORD_KEEP_PER_PROJECT` | `20` | 每个项目保留的发布记录数 |
 | `DEPLOY_BACKUP_KEEP_PER_TARGET` | `8` | 每个目标保留的远端备份版本数 |
 | `YUYAN_PNPM_NETWORK_CONCURRENCY` | `8` | 发布安装依赖时 pnpm 同时下载的连接数，用于降低对内网私服的并发压力；非法值回退默认值 |

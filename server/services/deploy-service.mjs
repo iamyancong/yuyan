@@ -4066,7 +4066,7 @@ export async function readNginxConfig(targetId) {
 export async function getTargetNginxCentralSnapshot(targetId) {
   const { target, server, nginxInstance } = await getTargetContext(targetId);
   const confPath = requireEditableNginxConfPath(target, nginxInstance);
-  return readNginxConfigSnapshot({ serverId: server.id, filePath: confPath });
+  return readNginxConfigSnapshot({ serverId: server.id, filePath: confPath, teamId: target.team_id });
 }
 
 /**

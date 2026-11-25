@@ -235,7 +235,16 @@ export async function ensureCentralIdentitySchema() {
     CREATE INDEX IF NOT EXISTS idx_team_members_user ON team_members(user_id, status, team_id);
     CREATE INDEX IF NOT EXISTS idx_central_audit_team ON central_audit(team_id, id DESC);
   `);
+  const userColumns = db.prepare('PRAGMA table_info(users)').all().map((row) => row.name);
+  if (!userColumns.includes('email')) {
+    db.exec('ALTER TABLE users ADD COLUMN email TEXT');
+  }
   return db;
+}
+
+/** 从 GitLab 用户对象提取可持久化的邮箱（优先 email，其次 public_email / commit_email）。 */
+function resolveGitlabEmail(user) {
+  return String(user?.email || user?.public_email || user?.commit_email || '').trim();
 }
 
 /** 请求 GitLab 当前用户，PAT 不进入日志与数据库。 */
@@ -412,12 +421,15 @@ export async function exchangeGitlabIdentity(input) {
   const userId = buildAccountId(gitlabHost, gitlabUser.id);
   const db = await ensureCentralIdentitySchema();
   const timestamp = now();
+  const gitlabEmail = resolveGitlabEmail(gitlabUser);
   db.prepare(`
-    INSERT INTO users (id, display_name, username, avatar_url, status, created_at, updated_at)
-    VALUES (?, ?, ?, ?, 'active', ?, ?)
+    INSERT INTO users (id, display_name, username, avatar_url, email, status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
     ON CONFLICT(id) DO UPDATE SET display_name = excluded.display_name, username = excluded.username,
-      avatar_url = excluded.avatar_url, status = 'active', updated_at = excluded.updated_at
-  `).run(userId, String(gitlabUser.name || gitlabUser.username || userId), String(gitlabUser.username || ''), String(gitlabUser.avatar_url || ''), timestamp, timestamp);
+      avatar_url = excluded.avatar_url,
+      email = COALESCE(NULLIF(excluded.email, ''), users.email),
+      status = 'active', updated_at = excluded.updated_at
+  `).run(userId, String(gitlabUser.name || gitlabUser.username || userId), String(gitlabUser.username || ''), String(gitlabUser.avatar_url || ''), gitlabEmail, timestamp, timestamp);
   db.prepare(`
     INSERT INTO identity_links (user_id, provider, provider_host, external_user_id, external_username, created_at, updated_at)
     VALUES (?, 'gitlab', ?, ?, ?, ?, ?)

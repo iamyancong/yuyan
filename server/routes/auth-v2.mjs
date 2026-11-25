@@ -12,6 +12,7 @@ import {
   replaceAccountApprovalPolicy,
   revokeUserDevice,
 } from '../services/central-identity-service.mjs';
+import { resolveSystemAdminAccess } from '../services/system-admin-service.mjs';
 import { getRequestContext } from '../services/request-context.mjs';
 
 const router = express.Router();
@@ -55,16 +56,22 @@ router.post('/auth/logout', authorizeCentralV2, async (req, res) => {
   }
 });
 
-router.get('/me', authorizeCentralV2, (req, res) => {
-  const context = getRequestContext();
-  res.json({
-    success: true,
-    data: {
-      accountId: context.accountId,
-      userId: context.userId,
-      deviceId: context.deviceId,
-    },
-  });
+router.get('/me', authorizeCentralV2, async (req, res) => {
+  try {
+    const context = getRequestContext();
+    const access = await resolveSystemAdminAccess(req);
+    res.json({
+      success: true,
+      data: {
+        accountId: context.accountId,
+        userId: context.userId,
+        deviceId: context.deviceId,
+        isSystemAdmin: access.isSystemAdmin,
+      },
+    });
+  } catch (error) {
+    sendError(res, error);
+  }
 });
 
 router.get('/me/devices', authorizeCentralV2, async (_req, res) => {

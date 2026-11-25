@@ -1817,6 +1817,16 @@ export interface TargetNginxCentralSnapshot {
   certInfo?: Array<{ path: string; notAfter: string | null }>;
 }
 
+/** 中央灾备入口探测结果（始终 200，不触发 403）。 */
+export interface CentralBackupAccess {
+  configured: boolean;
+  isSystemAdmin: boolean;
+}
+
+/** 探测当前会话是否可使用「中央灾备」抽屉（前端隐藏入口仅作体验，门禁以服务端为准）。 */
+export const getCentralBackupAccess = () =>
+  client.get('/central-backup/access').then(unwrap<CentralBackupAccess>);
+
 /** 获取中央灾备配置与最近备份/巡检状态 */
 export const getCentralBackupStatus = () =>
   client.get('/central-backup').then(unwrap<CentralBackupStatus>);

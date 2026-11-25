@@ -101,6 +101,8 @@ import {
   handleCreateDeployEnvironment,
   handleUpdateDeployEnvironment,
   handleDeleteDeployEnvironment,
+  requireSystemAdmin,
+  handleGetCentralBackupAccess,
   handleGetCentralBackupStatus,
   handleUpdateCentralBackupSettings,
   handleRunCentralBackup,
@@ -228,10 +230,11 @@ router.get('/openapi-artifacts/:id/download', handleDownloadOpenApiArtifact);
 
 router.get('/metrics', handleGetRuntimeMetrics);
 
-router.get('/central-backup', handleGetCentralBackupStatus);
-router.put('/central-backup/settings', handleUpdateCentralBackupSettings);
-router.post('/central-backup/run', handleRunCentralBackup);
-router.post('/central-backup/patrol', handleRunNginxConfigPatrol);
+router.get('/central-backup/access', handleGetCentralBackupAccess);
+router.get('/central-backup', requireSystemAdmin, handleGetCentralBackupStatus);
+router.put('/central-backup/settings', requireSystemAdmin, handleUpdateCentralBackupSettings);
+router.post('/central-backup/run', requireSystemAdmin, handleRunCentralBackup);
+router.post('/central-backup/patrol', requireSystemAdmin, handleRunNginxConfigPatrol);
 
 router.get('/records', handleListRecords);
 router.get('/records/:id', handleGetRecord);

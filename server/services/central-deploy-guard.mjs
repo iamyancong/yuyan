@@ -3,6 +3,7 @@
 import { appendCentralAudit } from './central-identity-service.mjs';
 import { getDeployDb } from './deploy-store.mjs';
 import { getRequestContext } from './request-context.mjs';
+import { assertSystemAdminAccess, isPrivilegedCentralBackupPath } from './system-admin-service.mjs';
 
 /** 为中央前端发布获取跨进程目标租约（绑定任务生命周期，而非单次 HTTP 流生命周期）。 */
 export async function acquireTargetLease(context, targetId) {
@@ -101,6 +102,10 @@ export async function guardCentralDeployRequest(req, res, next) {
     if (req.method === 'POST' && /^\/targets\/\d+\/openapi\/generate$/.test(req.path)) {
       deny(res, 410, 'device_local_resource', 'OpenAPI 必须由发起设备构建并写入设备隔离缓存');
       return;
+    }
+    // 中央灾备是全局资源：v2 共享工作区会把角色抬升为 admin，必须按会话身份做白名单校验。
+    if (isPrivilegedCentralBackupPath(req.path)) {
+      await assertSystemAdminAccess(req);
     }
     const roles = getRequiredRoles(req.method, req.path);
     if (!roles.includes(context.role)) {

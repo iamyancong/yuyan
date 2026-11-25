@@ -5,11 +5,15 @@ import { YButton } from '@yss-ui/components/lite';
 import type { DeployServer, DeployTarget } from '@/api/deploy';
 import type { RuntimeAwareDeployTarget } from '../../types';
 import { useNginxDeployContext } from '../../hooks/useNginxDeployContext';
+import { shouldShowCentralBackupEntry } from '../CentralBackupDrawer/centralBackupPolicy';
 import { calcStep2Diagnostic } from './constant';
 
 defineOptions({ name: 'DeployHero' });
 
-const { projectType, setProjectType } = useNginxDeployContext();
+const { projectType, setProjectType, authState } = useNginxDeployContext();
+
+/** 是否展示「中央灾备」入口（前端隐藏仅作体验，门禁以服务端为准）。 */
+const showCentralBackup = computed(() => shouldShowCentralBackupEntry(Boolean(authState.value?.isSystemAdmin)));
 
 /**
  * 部署中心 Hero 组件属性
@@ -148,7 +152,7 @@ const handleStep3Click = () => {
             <template #icon><ThunderboltOutlined /></template>
             Nginx 管理
           </YButton>
-          <YButton class="hero-btn" @click="emit('centralBackup')">
+          <YButton v-if="showCentralBackup" class="hero-btn" @click="emit('centralBackup')">
             <template #icon><SafetyCertificateOutlined /></template>
             中央灾备
           </YButton>

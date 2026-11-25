@@ -198,3 +198,13 @@ export function formatBackupRunContext(trigger: string | undefined | null, opera
   if (triggerLabel && op) return `${triggerLabel} · ${op}`;
   return triggerLabel || op;
 }
+
+/**
+ * 是否在部署中心 Hero 展示「中央灾备」入口。
+ * @description 仅作前端体验隐藏；真正门禁由服务端 YUYAN_SYSTEM_ADMINS 白名单决定。
+ * @param isSystemAdmin 会话探测结果
+ */
+export function shouldShowCentralBackupEntry(isSystemAdmin: boolean | undefined | null): boolean {
+  return Boolean(isSystemAdmin);
+}
+

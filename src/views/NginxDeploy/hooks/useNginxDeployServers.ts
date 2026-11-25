@@ -14,6 +14,7 @@ import type { FormilyRef, RefreshActiveTabOptions } from '../types';
 import { createDefaultServerForm, getErrorMessage, getServerConnectionErrorMessage, getServerOrderErrorMessage } from '../utils';
 import { extractSshFailure, type SshFailureField, type SshFailureInfo } from '../sshFailureGuide';
 import { extractServerDuplicate, findServerDuplicate, type ServerDuplicateInfo } from '../serverDuplicatePolicy';
+import { shouldShowCentralBackupEntry } from '../components/CentralBackupDrawer/centralBackupPolicy';
 import { useNginxDeployContext } from './useNginxDeployContext';
 import { useNginxRuntimeDrawer } from './useNginxRuntimeDrawer';
 
@@ -39,6 +40,7 @@ export function useNginxDeployServers(params?: UseNginxDeployServersParams) {
     }
   };
   const context = getContext();
+  const authState = context?.authState;
 
   const ensureLoggedIn = params?.ensureLoggedIn ?? context?.ensureLoggedIn!;
   const refreshActiveTab = params?.refreshActiveTab ?? context?.refreshActiveTab!;
@@ -69,6 +71,10 @@ export function useNginxDeployServers(params?: UseNginxDeployServersParams) {
    */
   const openCentralBackupDrawer = () => {
     if (!ensureLoggedIn()) return;
+    if (!shouldShowCentralBackupEntry(Boolean(authState.value?.isSystemAdmin))) {
+      message.warning('当前账号不是系统管理员，无权使用中央灾备');
+      return;
+    }
     centralBackupDrawerOpen.value = true;
   };
 

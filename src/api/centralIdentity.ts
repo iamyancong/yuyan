@@ -31,6 +31,8 @@ export interface CentralMe {
   accountId: string;
   userId: string;
   deviceId: string;
+  /** 是否在 YUYAN_SYSTEM_ADMINS 白名单中（未配置时为 false）。 */
+  isSystemAdmin?: boolean;
 }
 
 export interface CentralAuditSnapshot {

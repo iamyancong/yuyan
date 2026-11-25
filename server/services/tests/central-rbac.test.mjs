@@ -18,6 +18,7 @@ test('viewer、operator、admin 权限矩阵覆盖查询、普通写入和管理
   assert.deepEqual(getRequiredRoles('PUT', '/environments/1'), ['admin']);
   assert.deepEqual(getRequiredRoles('DELETE', '/targets/1'), ['admin']);
   assert.deepEqual(getRequiredRoles('GET', '/central-backup'), ['viewer', 'operator', 'admin']);
+  assert.deepEqual(getRequiredRoles('GET', '/central-backup/access'), ['viewer', 'operator', 'admin']);
   assert.deepEqual(getRequiredRoles('GET', '/targets/1/nginx-conf/central-snapshot'), ['viewer', 'operator', 'admin']);
   assert.deepEqual(getRequiredRoles('PUT', '/central-backup/settings'), ['admin']);
   assert.deepEqual(getRequiredRoles('POST', '/central-backup/run'), ['operator', 'admin']);

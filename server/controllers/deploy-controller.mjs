@@ -50,6 +50,12 @@ import {
   updateCentralBackupSettings,
 } from '../services/central-backup-service.mjs';
 import {
+  assertSystemAdminAccess,
+  isPrivilegedCentralBackupPath,
+  resolveSystemAdminAccess,
+} from '../services/system-admin-service.mjs';
+
+import {
   patrolNginxConfigSnapshots,
 } from '../services/nginx-config-snapshot-service.mjs';
 import { getDeployTaskReconciliation } from '../services/deploy-task-reconciliation.mjs';
@@ -3494,6 +3500,41 @@ export async function handleCleanTargetOrphanAssets(req, res) {
 /**
  * 读取中央库备份配置与最近执行/巡检状态（不返回服务器凭据）。
  */
+/**
+ * 中央灾备四个特权接口的系统管理员白名单门禁（不含 /central-backup/access）。
+ * @description 未配置或当前会话不在 YUYAN_SYSTEM_ADMINS 中时返回 403。定时任务不经过本中间件。
+ */
+export async function requireSystemAdmin(req, res, next) {
+  try {
+    if (!isPrivilegedCentralBackupPath(req.path)) {
+      next();
+      return;
+    }
+    await assertSystemAdminAccess(req);
+    next();
+  } catch (error) {
+    sendError(res, error, 403);
+  }
+}
+
+/**
+ * 探测当前会话是否为系统管理员（始终 200，供前端决定是否展示「中央灾备」入口）。
+ */
+export async function handleGetCentralBackupAccess(req, res) {
+  try {
+    const access = await resolveSystemAdminAccess(req);
+    res.json({
+      success: true,
+      data: {
+        configured: access.configured,
+        isSystemAdmin: access.isSystemAdmin,
+      },
+    });
+  } catch (error) {
+    sendError(res, error);
+  }
+}
+
 export async function handleGetCentralBackupStatus(_req, res) {
   try {
     const data = await getCentralBackupStatus();

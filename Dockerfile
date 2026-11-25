@@ -78,6 +78,7 @@ COPY --from=builder /app/server ./server
 COPY --from=builder /app/dist ./dist
 ENV PORT=3100
 ENV HOST=0.0.0.0
+# DEPLOY_SECRET_KEY、YUYAN_SYSTEM_ADMINS 等运行时密钥/白名单请在 docker run -e 或 compose environment 中注入，不要写进镜像。
 EXPOSE 3100
 # 由 tini 托管 node：tini 只把信号转发给 node（不加 -g），构建子进程仍由 node 的 shutdown 流程负责收尾
 ENTRYPOINT ["/sbin/tini","--","node","server/index.mjs"]
