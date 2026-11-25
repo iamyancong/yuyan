@@ -1,6 +1,6 @@
 /** 雨燕中央 v2 身份与设备 API。 */
 
-import { getApiBase } from '@/utils/env';
+import { getApiBase, isTauri } from '@/utils/env';
 import { assertAllowedCentralUrl } from '@/utils/centralUrlPolicy';
 import type { DeviceIdentity, SecureAccountState } from '@/services/secureAuth';
 import { extractBearerToken, reportCentralSessionInvalid } from '@/services/centralSessionGuard';
@@ -152,5 +152,146 @@ export function revokeCentralDevice(state: SecureAccountState, deviceId: string)
   return requestCentral<{ revoked: boolean }>(`/api/v2/me/devices/${encodeURIComponent(deviceId)}`, {
     method: 'DELETE',
     headers: getIdentityHeaders(state),
+  });
+}
+
+export interface CentralUserSession {
+  sessionId: string;
+  deviceId: string;
+  deviceName: string;
+  platform: string;
+  status: 'active' | 'revoked';
+  lastSeenAt: string;
+  createdAt: string;
+  accessExpiresAt: string;
+  refreshExpiresAt: string;
+  isCurrent: boolean;
+}
+
+export interface CentralRecentDeployRecord {
+  id: number;
+  targetId: number;
+  projectId: number;
+  projectName: string;
+  envName: string;
+  branch: string;
+  commitSha: string;
+  commitMessage: string;
+  status: 'running' | 'success' | 'failed' | 'stopped' | string;
+  action: 'deploy' | 'rollback' | 'undoRollback' | string;
+  operator: string;
+  startedAt: string;
+  finishedAt: string;
+  createdAt: string;
+  serverName: string;
+}
+
+export interface CentralUserProfile {
+  accountId: string;
+  gitlab: {
+    id: number | null;
+    host: string;
+    username: string;
+    displayName: string;
+    avatarUrl: string;
+    email: string;
+    createdAt: string;
+    webUrl: string;
+  };
+  identity: {
+    team: { id: string; name: string } | null;
+    role: 'viewer' | 'operator' | 'admin' | '';
+    isSystemAdmin: boolean;
+    currentDeviceId: string;
+    currentSessionId: string;
+    authMode: 'central' | 'web_gitlab';
+    sessions: CentralUserSession[];
+    sessionCapabilities: {
+      canList: boolean;
+      canRevokeOthers: boolean;
+    };
+  };
+  activity: {
+    windowDays: number;
+    stats30d: {
+      totalCount: number;
+      successCount: number;
+      failedCount: number;
+      stoppedCount: number;
+      runningCount: number;
+      finishedCount: number;
+      successRate: number | null;
+    };
+    recentDeploys: CentralRecentDeployRecord[];
+  };
+}
+
+/** 构造个人资料接口完整地址（桌面端校验中央服务策略，网页端走同源相对路径）。 */
+function getProfileRequestUrl(path: string): string {
+  const customBase = typeof window !== 'undefined' ? window.localStorage.getItem('CUSTOM_API_BASE') : null;
+  if (isTauri() || customBase) {
+    return `${getCentralBase()}${path}`;
+  }
+  return getApiBase(path);
+}
+
+/** 根据当前可用凭据构造个人资料请求头（支持桌面端 Bearer 会话与网页端 GitLab PAT）。 */
+function getProfileHeaders(state: SecureAccountState): Record<string, string> {
+  const hasCentralToken = Boolean(
+    state.accessToken
+    && Number.isFinite(Date.parse(state.accessExpiresAt))
+    && Date.parse(state.accessExpiresAt) > Date.now()
+  );
+  if (hasCentralToken) {
+    return {
+      ...getIdentityHeaders(state),
+      ...(state.gitlabToken && state.gitlabHost
+        ? { 'X-GitLab-Token': state.gitlabToken, 'X-GitLab-Host': state.gitlabHost }
+        : {}),
+    };
+  }
+  return {
+    'X-Yuyan-Client': 'web',
+    ...(state.gitlabToken ? { 'X-GitLab-Token': state.gitlabToken } : {}),
+    ...(state.gitlabHost ? { 'X-GitLab-Host': state.gitlabHost } : {}),
+  };
+}
+
+/** 发起个人资料相关请求（兼容网页端相对路径与桌面端中央网关）。 */
+async function requestProfileApi<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const response = await fetch(getProfileRequestUrl(path), {
+    ...options,
+    cache: 'no-store',
+    headers: {
+      Accept: 'application/json',
+      'Cache-Control': 'no-cache, no-store',
+      Pragma: 'no-cache',
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(options.headers || {}),
+    },
+  });
+  const body = await response.json().catch(() => null);
+  if (!response.ok || !body?.success) {
+    const error = new Error(body?.error?.message || `雨燕中央服务返回 HTTP ${response.status}`) as Error & { code?: string; status?: number };
+    error.code = body?.error?.code;
+    error.status = response.status;
+    reportCentralSessionInvalid(error, extractBearerToken(options.headers));
+    throw error;
+  }
+  return body.data as T;
+}
+
+/** 获取当前登录用户的完整个人资料（GitLab 信息、雨燕身份与会话、近 30 天发布活动）。 */
+export function getCentralUserProfile(state: SecureAccountState) {
+  return requestProfileApi<CentralUserProfile>('/api/v2/me/profile', {
+    headers: getProfileHeaders(state),
+  });
+}
+
+/** 注销当前账号名下的其他活跃会话（不可注销当前会话）。 */
+export function revokeCentralSession(state: SecureAccountState, sessionId: string) {
+  return requestProfileApi<{ revoked: boolean; sessionId: string }>(`/api/v2/me/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'DELETE',
+    headers: getProfileHeaders(state),
   });
 }

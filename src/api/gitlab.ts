@@ -1,5 +1,5 @@
 import axios, { type AxiosResponse } from 'axios';
-import { resolveProjectsPageTotal } from './gitlabPaging';
+import { resolveProjectsPageTotal, resolveProjectsTotal } from './gitlabPaging';
 
 // GitLab 用户接口定义
 export interface GitLabUser {
@@ -425,6 +425,31 @@ export const getProjects = async (params: ProjectSearchParams = {}): Promise<Git
  * @param params 搜索参数
  * @returns 项目列表与全量匹配总数
  */
+/**
+ * 轻量查询当前用户可访问的 GitLab 项目总数（仅拉取 1 条简单记录并读取 x-total 响应头）。
+ * @returns 可访问项目数，不可用时返回 null
+ */
+export const getAccessibleProjectCount = async (): Promise<number | null> => {
+  try {
+    const response = await gitlabClient.get<GitLabProject[]>('/projects', {
+      params: { membership: true, simple: true, per_page: 1, page: 1 },
+      timeout: 5000,
+    });
+    const parsedTotal = resolveProjectsTotal(response.headers?.['x-total'], -1);
+    if (parsedTotal >= 0) return parsedTotal;
+    const rawNextPage = response.headers?.['x-next-page'];
+    const hasNextPage = typeof rawNextPage === 'string'
+      ? rawNextPage.trim().length > 0
+      : typeof rawNextPage === 'number' && Number.isFinite(rawNextPage) && rawNextPage > 0;
+    if (!hasNextPage && Array.isArray(response.data)) {
+      return response.data.length;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
 export const getProjectsWithTotal = async (
   params: ProjectSearchParams = {}
 ): Promise<{ items: GitLabProject[]; total: number }> => {

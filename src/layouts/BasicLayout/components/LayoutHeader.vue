@@ -36,6 +36,8 @@ const emit = defineEmits<{
   (e: 'openLogin'): void;
   /** 触发打开关于雨燕弹窗 */
   (e: 'openAbout'): void;
+  /** 触发打开用户资料抽屉 */
+  (e: 'openProfile'): void;
 }>();
 
 const { isLoggedIn, userName, userAvatar, logout, authLoading } = useAuth();
@@ -123,7 +125,7 @@ const handleLogout = async () => {
 
                 <a-menu-divider />
 
-                <a-menu-item key="profile" disabled>
+                <a-menu-item key="profile" @click="$emit('openProfile')">
                   <template #icon>
                     <UserOutlined />
                   </template>

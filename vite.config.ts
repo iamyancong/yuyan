@@ -137,6 +137,10 @@ export default defineConfig(({ mode }) => {
           target: appServerUrl,
           changeOrigin: true,
         },
+        '/api/v2': {
+          target: appServerUrl,
+          changeOrigin: true,
+        },
         '/api': {
           target: gitlabHostDefault,
           changeOrigin: true,

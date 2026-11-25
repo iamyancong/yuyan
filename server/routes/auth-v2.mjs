@@ -3,14 +3,17 @@
 import express from 'express';
 import {
   authorizeCentralV2,
+  authorizeProfileRequest,
   exchangeGitlabIdentity,
   getAccountApprovalPolicy,
   getCentralAuditSnapshot,
+  getUserProfile,
   listUserDevices,
   logoutCentralSession,
   refreshDeviceSession,
   replaceAccountApprovalPolicy,
   revokeUserDevice,
+  revokeUserSession,
 } from '../services/central-identity-service.mjs';
 import { resolveSystemAdminAccess } from '../services/system-admin-service.mjs';
 import { getRequestContext } from '../services/request-context.mjs';
@@ -51,6 +54,35 @@ router.post('/auth/logout', authorizeCentralV2, async (req, res) => {
   try {
     const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
     res.json({ success: true, data: await logoutCentralSession(bearer) });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+router.get('/me/profile', authorizeProfileRequest, async (req, res) => {
+  try {
+    const context = getRequestContext();
+    const systemAdminAccess = await resolveSystemAdminAccess(req);
+    const data = await getUserProfile(context, {
+      webGitlabUser: req.webGitlabUser,
+      webGitlabHost: req.webGitlabHost,
+      gitlabHost: String(req.headers['x-gitlab-host'] || '').trim(),
+      gitlabToken: String(req.headers['x-gitlab-token'] || '').trim(),
+      systemAdminAccess,
+    });
+    res.json({ success: true, data });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+router.delete('/me/sessions/:sessionId', authorizeProfileRequest, async (req, res) => {
+  try {
+    const context = getRequestContext();
+    res.json({
+      success: true,
+      data: await revokeUserSession(context.userId, req.params.sessionId, context.sessionId),
+    });
   } catch (error) {
     sendError(res, error);
   }

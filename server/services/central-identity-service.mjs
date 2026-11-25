@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { DEPLOY_SECRET_KEY } from '../config/constants.mjs';
 import { getDeployDb } from './deploy-store.mjs';
 import { assertGitlabHostAllowed } from './gitlab-host-policy.mjs';
-import { runRequestContext } from './request-context.mjs';
+import { runRequestContext, SHARED_DEPLOY_WORKSPACE_ID } from './request-context.mjs';
 import { abortCentralOperationsForDevice } from './central-operation-runtime.mjs';
 
 const ACCESS_TTL_MS = 15 * 60_000;
@@ -239,6 +239,13 @@ export async function ensureCentralIdentitySchema() {
   if (!userColumns.includes('email')) {
     db.exec('ALTER TABLE users ADD COLUMN email TEXT');
   }
+  const linkColumns = db.prepare('PRAGMA table_info(identity_links)').all().map((row) => row.name);
+  if (!linkColumns.includes('external_web_url')) {
+    db.exec('ALTER TABLE identity_links ADD COLUMN external_web_url TEXT');
+  }
+  if (!linkColumns.includes('external_created_at')) {
+    db.exec('ALTER TABLE identity_links ADD COLUMN external_created_at TEXT');
+  }
   return db;
 }
 
@@ -430,11 +437,17 @@ export async function exchangeGitlabIdentity(input) {
       email = COALESCE(NULLIF(excluded.email, ''), users.email),
       status = 'active', updated_at = excluded.updated_at
   `).run(userId, String(gitlabUser.name || gitlabUser.username || userId), String(gitlabUser.username || ''), String(gitlabUser.avatar_url || ''), gitlabEmail, timestamp, timestamp);
+  const gitlabWebUrl = String(gitlabUser.web_url || '').trim();
+  const gitlabCreatedAt = String(gitlabUser.created_at || '').trim();
   db.prepare(`
-    INSERT INTO identity_links (user_id, provider, provider_host, external_user_id, external_username, created_at, updated_at)
-    VALUES (?, 'gitlab', ?, ?, ?, ?, ?)
-    ON CONFLICT(provider, provider_host, external_user_id) DO UPDATE SET external_username = excluded.external_username, updated_at = excluded.updated_at
-  `).run(userId, gitlabHost, String(gitlabUser.id), String(gitlabUser.username || ''), timestamp, timestamp);
+    INSERT INTO identity_links (user_id, provider, provider_host, external_user_id, external_username, external_web_url, external_created_at, created_at, updated_at)
+    VALUES (?, 'gitlab', ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(provider, provider_host, external_user_id) DO UPDATE SET
+      external_username = excluded.external_username,
+      external_web_url = COALESCE(NULLIF(excluded.external_web_url, ''), identity_links.external_web_url),
+      external_created_at = COALESCE(NULLIF(excluded.external_created_at, ''), identity_links.external_created_at),
+      updated_at = excluded.updated_at
+  `).run(userId, gitlabHost, String(gitlabUser.id), String(gitlabUser.username || ''), gitlabWebUrl, gitlabCreatedAt, timestamp, timestamp);
   const existingDevice = db.prepare('SELECT public_key, status FROM devices WHERE device_id = ? AND user_id = ?')
     .get(parsed.device.deviceId, userId);
   if (existingDevice?.status === 'revoked') {
@@ -716,4 +729,406 @@ export async function getCentralAuditSnapshot(context, query = {}) {
     return { ...body, previousHash: row.previous_hash, entryHash: row.entry_hash };
   });
   return { items, total: rows.length, chain: { valid: !brokenAt, count: rows.length, ...(brokenAt ? { brokenAt } : {}) } };
+}
+
+/** 构造用于匹配部署记录 operator 的当前用户标识集合（忽略大小写与空白）。 */
+export function buildUserOperatorIdentifiers(values = []) {
+  const excluded = new Set(['', '未知操作人', 'legacy-disabled', 'system', 'legacy-device']);
+  const seen = new Set();
+  for (const raw of values) {
+    const normalized = String(raw || '').trim().toLowerCase();
+    if (!normalized || excluded.has(normalized)) continue;
+    seen.add(normalized);
+  }
+  return [...seen];
+}
+
+/** 读取指定账号已有的工作区与角色归属（只读，不自动创建新空间）。 */
+function findExistingMembership(db, userId, preferredTeamId = '') {
+  if (!userId) return null;
+  if (preferredTeamId) {
+    const row = db.prepare(`
+      SELECT t.id AS teamId, t.name AS teamName, tm.role AS role
+      FROM team_members tm
+      INNER JOIN teams t ON t.id = tm.team_id
+      WHERE tm.team_id = ? AND tm.user_id = ? AND tm.status = 'active' AND t.status = 'active'
+      LIMIT 1
+    `).get(preferredTeamId, userId);
+    if (row && ROLES.has(row.role)) return row;
+  }
+  const legacyRow = db.prepare(`
+    SELECT t.id AS teamId, t.name AS teamName, tm.role AS role
+    FROM team_members tm
+    INNER JOIN teams t ON t.id = tm.team_id
+    WHERE tm.team_id = ? AND tm.user_id = ? AND tm.status = 'active' AND t.status = 'active'
+    LIMIT 1
+  `).get(LEGACY_SCOPE_ID, userId);
+  if (legacyRow && ROLES.has(legacyRow.role)) return legacyRow;
+  const anyRow = db.prepare(`
+    SELECT t.id AS teamId, t.name AS teamName, tm.role AS role
+    FROM team_members tm
+    INNER JOIN teams t ON t.id = tm.team_id
+    WHERE tm.user_id = ? AND tm.status = 'active' AND t.status = 'active'
+    ORDER BY tm.updated_at DESC
+    LIMIT 1
+  `).get(userId);
+  return anyRow && ROLES.has(anyRow.role) ? anyRow : null;
+}
+
+/**
+ * 鉴权 /api/v2 个人资料与会话管理请求：支持桌面端中央 Bearer 会话及网页端 GitLab PAT。
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ * @param {import('express').NextFunction} next
+ */
+export async function authorizeProfileRequest(req, res, next) {
+  try {
+    const authHeader = String(req.headers.authorization || '').trim();
+    const bearer = authHeader.replace(/^Bearer\s+/i, '').trim();
+    if (bearer) {
+      const principal = await resolveAccessPrincipal(bearer);
+      if (!principal) {
+        res.status(401).json({ success: false, error: { code: 'session_invalid', message: '雨燕账号或设备会话已失效', retryable: true } });
+        return;
+      }
+      const requestId = String(req.headers['x-request-id'] || crypto.randomUUID()).slice(0, 128);
+      runRequestContext(
+        {
+          ...principal,
+          authMode: 'central',
+          client: String(req.headers['x-yuyan-client'] || 'desktop').slice(0, 32),
+          requestId,
+        },
+        next,
+      );
+      return;
+    }
+
+    const gitlabHost = String(req.headers['x-gitlab-host'] || '').trim();
+    const gitlabToken = String(req.headers['x-gitlab-token'] || '').trim();
+    if (gitlabHost && gitlabToken) {
+      let verified;
+      try {
+        verified = await verifyGitlabCredential({ gitlabHost, gitlabToken });
+      } catch (error) {
+        const status = Number(error?.status) === 502 ? 502 : 401;
+        res.status(status).json({
+          success: false,
+          error: {
+            code: String(error?.code || 'web_gitlab_auth_failed'),
+            message: String(error?.message || 'GitLab 会话验证失败'),
+            retryable: status >= 500,
+          },
+        });
+        return;
+      }
+      const userId = buildAccountId(verified.gitlabHost, verified.user.id);
+      const db = await ensureCentralIdentitySchema();
+      const membership = findExistingMembership(db, userId);
+      req.webGitlabUser = verified.user;
+      req.webGitlabHost = verified.gitlabHost;
+      const requestId = String(req.headers['x-request-id'] || crypto.randomUUID()).slice(0, 128);
+      runRequestContext(
+        {
+          accountId: userId,
+          userId,
+          deviceId: '',
+          teamId: membership?.teamId || '',
+          role: membership?.role || '',
+          sessionId: '',
+          authMode: 'web_gitlab',
+          client: 'web',
+          requestId,
+        },
+        next,
+      );
+      return;
+    }
+
+    res.status(401).json({
+      success: false,
+      error: { code: 'session_invalid', message: '请先登录雨燕账号', retryable: true },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * 列出当前账号的活跃会话（按当前会话优先、最近活跃倒序），不返回任何令牌摘要或设备公钥。
+ * @param {string} userId - 中央账号 ID
+ * @param {string} [currentSessionId] - 当前请求对应的会话 ID
+ */
+export async function listUserSessions(userId, currentSessionId = '') {
+  const db = await ensureCentralIdentitySchema();
+  const currentTime = Date.now();
+  const rows = db.prepare(`
+    SELECT s.id AS sessionId, s.device_id AS deviceId, s.status, s.last_seen_at AS lastSeenAt,
+      s.created_at AS createdAt, s.access_expires_at AS accessExpiresAt, s.refresh_expires_at AS refreshExpiresAt,
+      d.device_name AS deviceName, d.platform AS platform
+    FROM auth_sessions s
+    INNER JOIN devices d ON d.device_id = s.device_id AND d.user_id = s.user_id
+    WHERE s.user_id = ? AND s.status = 'active' AND d.status = 'active'
+    ORDER BY s.last_seen_at DESC, s.created_at DESC
+  `).all(userId);
+  return rows
+    .filter((row) => !row.refreshExpiresAt || Date.parse(row.refreshExpiresAt) > currentTime)
+    .map((row) => ({
+      sessionId: row.sessionId,
+      deviceId: row.deviceId,
+      deviceName: row.deviceName || row.platform || '未命名设备',
+      platform: row.platform || 'unknown',
+      status: row.status,
+      lastSeenAt: row.lastSeenAt,
+      createdAt: row.createdAt,
+      accessExpiresAt: row.accessExpiresAt,
+      refreshExpiresAt: row.refreshExpiresAt,
+      isCurrent: Boolean(currentSessionId && row.sessionId === currentSessionId),
+    }))
+    .sort((a, b) => Number(b.isCurrent) - Number(a.isCurrent));
+}
+
+/**
+ * 注销当前账号名下的其他活跃会话；禁止注销当前会话，也不可跨账号操作。
+ * @param {string} userId - 当前已鉴权账号 ID
+ * @param {string} sessionId - 待注销会话 ID
+ * @param {string} [currentSessionId] - 当前会话 ID
+ */
+export async function revokeUserSession(userId, sessionId, currentSessionId = '') {
+  const targetSessionId = String(sessionId || '').trim();
+  if (!targetSessionId) {
+    const error = new Error('会话 ID 不能为空');
+    error.code = 'invalid_request';
+    error.status = 400;
+    throw error;
+  }
+  if (currentSessionId && targetSessionId === currentSessionId) {
+    const error = new Error('不能注销当前正在使用的会话');
+    error.code = 'cannot_revoke_current_session';
+    error.status = 400;
+    throw error;
+  }
+  const db = await ensureCentralIdentitySchema();
+  const timestamp = now();
+  const result = db.prepare(`
+    UPDATE auth_sessions
+    SET status = 'revoked', revoked_at = ?, updated_at = ?
+    WHERE id = ? AND user_id = ? AND status = 'active'
+  `).run(timestamp, timestamp, targetSessionId, userId);
+  if (result.changes === 0) {
+    const error = new Error('会话不存在或已注销');
+    error.code = 'session_not_found';
+    error.status = 404;
+    throw error;
+  }
+  return { revoked: true, sessionId: targetSessionId };
+}
+
+/**
+ * 读取当前登录用户的完整个人资料（GitLab 信息、雨燕身份与会话、近 30 天发布活动）。
+ * @description 严格按 principal.userId 隔离，不泄露其他用户数据，不新增秘密持久化。
+ */
+export async function getUserProfile(principal, options = {}) {
+  const db = await ensureCentralIdentitySchema();
+  const userId = String(principal?.userId || '').trim();
+  const dbUser = userId
+    ? db.prepare(`
+        SELECT id, display_name, username, avatar_url, email, status, created_at, updated_at
+        FROM users WHERE id = ?
+      `).get(userId)
+    : null;
+  const link = userId
+    ? db.prepare(`
+        SELECT provider_host, external_user_id, external_username, external_web_url, external_created_at
+        FROM identity_links
+        WHERE user_id = ? AND provider = 'gitlab'
+        ORDER BY updated_at DESC
+        LIMIT 1
+      `).get(userId)
+    : null;
+
+  let liveUser = options.webGitlabUser && typeof options.webGitlabUser === 'object' ? options.webGitlabUser : null;
+  let resolvedHost = String(options.webGitlabHost || link?.provider_host || '').trim();
+
+  // 若本地尚未缓存 GitLab 创建时间或主页链接，且请求自带当前会话的 GitLab Token，则只读拉取一次并回填非敏感元数据
+  if (
+    !liveUser
+    && (!link?.external_created_at || !link?.external_web_url || !dbUser?.email)
+    && options.gitlabHost
+    && options.gitlabToken
+  ) {
+    try {
+      const normalizedHost = normalizeGitlabHost(options.gitlabHost);
+      assertGitlabHostAllowed(normalizedHost, { scene: '补充用户资料' });
+      const fetched = await fetchGitlabUser(normalizedHost, options.gitlabToken);
+      if (buildAccountId(normalizedHost, fetched.id) === userId) {
+        liveUser = fetched;
+        resolvedHost = normalizedHost;
+        const ts = now();
+        const email = resolveGitlabEmail(fetched);
+        if (dbUser) {
+          db.prepare(`
+            UPDATE users
+            SET display_name = ?, username = ?, avatar_url = ?,
+                email = COALESCE(NULLIF(?, ''), email), updated_at = ?
+            WHERE id = ?
+          `).run(
+            String(fetched.name || fetched.username || dbUser.display_name),
+            String(fetched.username || dbUser.username),
+            String(fetched.avatar_url || dbUser.avatar_url || ''),
+            email,
+            ts,
+            userId,
+          );
+        }
+        if (link) {
+          db.prepare(`
+            UPDATE identity_links
+            SET external_username = ?,
+                external_web_url = COALESCE(NULLIF(?, ''), external_web_url),
+                external_created_at = COALESCE(NULLIF(?, ''), external_created_at),
+                updated_at = ?
+            WHERE user_id = ? AND provider = 'gitlab' AND provider_host = ?
+          `).run(
+            String(fetched.username || link.external_username || ''),
+            String(fetched.web_url || '').trim(),
+            String(fetched.created_at || '').trim(),
+            ts,
+            userId,
+            link.provider_host,
+          );
+        }
+      }
+    } catch {
+      // GitLab 临时不可达或可选令牌过期时降级为已有本地字段
+    }
+  }
+
+  const gitlab = {
+    id: Number(liveUser?.id || link?.external_user_id || 0) || null,
+    host: resolvedHost,
+    username: String(liveUser?.username || dbUser?.username || link?.external_username || ''),
+    displayName: String(liveUser?.name || dbUser?.display_name || liveUser?.username || dbUser?.username || ''),
+    avatarUrl: String(liveUser?.avatar_url || dbUser?.avatar_url || ''),
+    email: resolveGitlabEmail(liveUser) || String(dbUser?.email || ''),
+    createdAt: String(liveUser?.created_at || link?.external_created_at || '').trim(),
+    webUrl: String(liveUser?.web_url || link?.external_web_url || '').trim(),
+  };
+
+  const membership = findExistingMembership(db, userId, principal?.teamId || '');
+  const sessions = userId ? await listUserSessions(userId, principal?.sessionId || '') : [];
+
+  const operatorCandidates = buildUserOperatorIdentifiers([
+    userId,
+    gitlab.username,
+    gitlab.displayName,
+    dbUser?.username,
+    dbUser?.display_name,
+    link?.external_username,
+  ]);
+  const teamIds = [...new Set([SHARED_DEPLOY_WORKSPACE_ID, membership?.teamId, principal?.teamId].filter(Boolean))];
+  const windowDays = 30;
+  const sinceIso = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000).toISOString();
+
+  let stats30d = {
+    totalCount: 0,
+    successCount: 0,
+    failedCount: 0,
+    stoppedCount: 0,
+    runningCount: 0,
+    finishedCount: 0,
+    successRate: null,
+  };
+  let recentDeploys = [];
+
+  if (operatorCandidates.length > 0 && teamIds.length > 0) {
+    const teamPlaceholders = teamIds.map(() => '?').join(', ');
+    const opPlaceholders = operatorCandidates.map(() => '?').join(', ');
+    const baseWhere = `
+      r.team_id IN (${teamPlaceholders})
+      AND TRIM(COALESCE(r.operator, '')) <> ''
+      AND LOWER(TRIM(r.operator)) IN (${opPlaceholders})
+    `;
+    const baseParams = [...teamIds, ...operatorCandidates];
+
+    const summary = db.prepare(`
+      SELECT
+        COUNT(*) AS totalCount,
+        SUM(CASE WHEN r.status = 'success' THEN 1 ELSE 0 END) AS successCount,
+        SUM(CASE WHEN r.status = 'failed' THEN 1 ELSE 0 END) AS failedCount,
+        SUM(CASE WHEN r.status = 'stopped' THEN 1 ELSE 0 END) AS stoppedCount,
+        SUM(CASE WHEN r.status = 'running' THEN 1 ELSE 0 END) AS runningCount
+      FROM deploy_records r
+      WHERE ${baseWhere}
+        AND COALESCE(NULLIF(r.started_at, ''), r.created_at) >= ?
+    `).get(...baseParams, sinceIso);
+
+    const totalCount = Number(summary?.totalCount || 0);
+    const successCount = Number(summary?.successCount || 0);
+    const failedCount = Number(summary?.failedCount || 0);
+    const stoppedCount = Number(summary?.stoppedCount || 0);
+    const runningCount = Number(summary?.runningCount || 0);
+    const finishedCount = successCount + failedCount + stoppedCount;
+    stats30d = {
+      totalCount,
+      successCount,
+      failedCount,
+      stoppedCount,
+      runningCount,
+      finishedCount,
+      successRate: finishedCount > 0 ? Math.round((successCount / finishedCount) * 1000) / 10 : null,
+    };
+
+    recentDeploys = db.prepare(`
+      SELECT r.id, r.target_id AS targetId, r.project_id AS projectId, r.project_name AS projectName,
+        r.env_name AS envName, r.branch, r.commit_sha AS commitSha, r.commit_message AS commitMessage,
+        r.status, r.action, r.operator, r.started_at AS startedAt, r.finished_at AS finishedAt,
+        r.created_at AS createdAt, s.name AS serverName
+      FROM deploy_records r
+      LEFT JOIN deploy_targets t ON t.id = r.target_id
+      LEFT JOIN deploy_servers s ON s.id = t.server_id
+      WHERE ${baseWhere}
+      ORDER BY COALESCE(NULLIF(r.started_at, ''), r.created_at) DESC, r.id DESC
+      LIMIT 10
+    `).all(...baseParams).map((row) => ({
+      id: row.id,
+      targetId: row.targetId,
+      projectId: row.projectId,
+      projectName: row.projectName || '',
+      envName: row.envName || '',
+      branch: row.branch || '',
+      commitSha: row.commitSha || '',
+      commitMessage: row.commitMessage || '',
+      status: row.status || '',
+      action: row.action || 'deploy',
+      operator: row.operator || '',
+      startedAt: row.startedAt || row.createdAt || '',
+      finishedAt: row.finishedAt || '',
+      createdAt: row.createdAt || '',
+      serverName: row.serverName || '',
+    }));
+  }
+
+  return {
+    accountId: userId,
+    gitlab,
+    identity: {
+      team: membership ? { id: membership.teamId, name: membership.teamName } : null,
+      role: membership?.role || '',
+      isSystemAdmin: Boolean(options.systemAdminAccess?.isSystemAdmin),
+      currentDeviceId: principal?.deviceId || '',
+      currentSessionId: principal?.sessionId || '',
+      authMode: principal?.authMode || 'central',
+      sessions,
+      sessionCapabilities: {
+        canList: true,
+        canRevokeOthers: true,
+      },
+    },
+    activity: {
+      windowDays,
+      stats30d,
+      recentDeploys,
+    },
+  };
 }

@@ -7,6 +7,7 @@ import { useAuth } from '@/composables/useAuth';
 import { useNavigation } from './hooks/useNavigation';
 import SettingsDrawer from '@/components/SettingsDrawer/index.vue';
 import AiIntegrationDrawer from '@/components/AiIntegrationDrawer/index.vue';
+import ProfileDrawer from '@/components/ProfileDrawer/index.vue';
 import LoginModal from '@/components/LoginModal.vue';
 import LayoutHeader from './components/LayoutHeader.vue';
 import LayoutSider from './components/LayoutSider/index.vue';
@@ -27,6 +28,9 @@ const openDrawer = ref(false);
 
 /** AI 控制中心抽屉可见性 */
 const openAiDrawer = ref(false);
+
+/** 用户资料抽屉可见性 */
+const openProfileDrawer = ref(false);
 
 /** 关于雨燕弹窗可见性 */
 const showAboutModal = ref(false);
@@ -154,6 +158,7 @@ onUnmounted(() => {
         @openContact="showContactModal = true"
         @openLogin="showLoginModal = true" 
         @openAbout="showAboutModal = true"
+        @openProfile="openProfileDrawer = true"
       />
       
       <!-- 主体内容区域 -->
@@ -175,6 +180,9 @@ onUnmounted(() => {
 
   <!-- AI 控制中心抽屉 -->
   <AiIntegrationDrawer v-model:open="openAiDrawer" />
+
+  <!-- 用户资料抽屉 -->
+  <ProfileDrawer v-model:open="openProfileDrawer" />
   
   <!-- 登录弹窗 -->
   <LoginModal v-model:visible="showLoginModal" @login-success="handleLoginSuccess" />
