@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
+import { CloudDownloadOutlined } from '@ant-design/icons-vue';
 import Modal from 'ant-design-vue/es/modal';
 import message from 'ant-design-vue/es/message';
 import { YMonaco, YMonacoDiff } from 'virtual:yss-heavy-components';
@@ -12,7 +13,9 @@ import NginxHistoryPopover from './components/NginxHistoryPopover/index.vue';
 import NginxHistoryDiffView from './components/NginxHistoryDiffView/index.vue';
 import NginxConfDownloadButton from './components/NginxConfDownloadButton/index.vue';
 import NginxConfChangedModal from './components/NginxConfChangedModal/index.vue';
+import CentralSnapshotDiffModal from './components/CentralSnapshotDiffModal/index.vue';
 import { DEFAULT_MONACO_OPTIONS, DIFF_MONACO_OPTIONS } from './constant';
+import { resolveCentralRestoreState } from './centralRestorePolicy';
 import { describeHistoryItem, describeSaveFailure, resolveRestoreHint, type NginxSaveFailureInfo } from './historyPolicy';
 import { useNginxConfig, type NginxConfConflictDetails, type NginxConfSaveDone } from './hooks/useNginxConfig';
 import { useNginxDiff } from './hooks/useNginxDiff';
@@ -48,7 +51,8 @@ const conflictOpen = ref(false);
 
 // 配置读取与保存 Hook
 const {
-  loading, saving, configPath, content, originalContent, encodingWarning, restoredLabel,
+  loading, saving, configPath, content, originalContent, baselineSha256, remoteExists,
+  centralSnapshot, centralSnapshotLoading, encodingWarning, restoredLabel,
   isRawDirty, isSemanticDirty, canSave, handleSave, discardChanges, refreshBaseline, applyRestore,
 } = useNginxConfig(props, emit, {
   onSaveError: (err) => {
@@ -120,11 +124,53 @@ const cleanupFullscreenDom = () => {
 };
 onBeforeUnmount(cleanupFullscreenDom);
 
+/** 中央备份恢复差异弹窗状态 */
+const centralDiffOpen = ref(false);
+const centralRestoreState = computed(() =>
+  resolveCentralRestoreState({
+    snapshot: centralSnapshot.value,
+    remoteExists: remoteExists.value,
+    remoteSha256: baselineSha256.value,
+  })
+);
+
+/** 从中央备份载入编辑器（不自动保存） */
+const doLoadCentralSnapshot = () => {
+  const snap = centralSnapshot.value;
+  if (!snap?.exists || typeof snap.content !== 'string') return;
+  applyRestore(
+    snap.content,
+    { content: originalContent.value, sha256: baselineSha256.value },
+    { name: 'central-snapshot', label: '中央备份' }
+  );
+  centralDiffOpen.value = false;
+  resetDiffState();
+  message.success('已载入中央备份，请检查后点保存，保存会执行 nginx -t 并重载');
+};
+
+/** 点击弹窗「载入编辑器」 */
+const handleLoadCentralSnapshot = () => {
+  if (props.readonly) return;
+  if (!isRawDirty.value) {
+    doLoadCentralSnapshot();
+    return;
+  }
+  Modal.confirm({
+    title: '覆盖未保存的修改？',
+    content: '编辑器里还有未保存的修改，载入中央备份会覆盖这些修改。',
+    okText: '覆盖并载入',
+    okButtonProps: { danger: true },
+    cancelText: '取消',
+    onOk: doLoadCentralSnapshot,
+  });
+};
+
 /** 执行抽屉关闭 */
 const handleCloseDrawer = () => {
   cleanupFullscreenDom();
   clearSaveFeedback();
   history.resetHistory();
+  centralDiffOpen.value = false;
   conflictOpen.value = false;
   emit('update:targetId', null);
 };
@@ -257,6 +303,17 @@ const handleConflictOverwrite = async () => {
               @revert-diff="handleRevertCurrentDiff"
             >
               <template #actions>
+                <a-tooltip :title="centralSnapshotLoading ? '正在检查中央备份…' : centralRestoreState.reason" placement="top">
+                  <button
+                    type="button"
+                    class="central-restore-trigger-btn"
+                    :disabled="loading || !configPath || centralSnapshotLoading || !centralRestoreState.available"
+                    @click="centralDiffOpen = true"
+                  >
+                    <CloudDownloadOutlined />
+                    <span>从中央备份恢复</span>
+                  </button>
+                </a-tooltip>
                 <NginxHistoryPopover
                   v-model:open="history.historyOpen.value"
                   :items="history.items.value"
@@ -342,6 +399,14 @@ const handleConflictOverwrite = async () => {
     :loading="saving"
     @keep-editing="handleConflictKeepEditing"
     @overwrite="handleConflictOverwrite"
+  />
+  <CentralSnapshotDiffModal
+    v-model:open="centralDiffOpen"
+    :snapshot="centralSnapshot"
+    :remote-content="originalContent"
+    :remote-exists="remoteExists"
+    :readonly="readonly"
+    @load-to-editor="handleLoadCentralSnapshot"
   />
 </template>
 

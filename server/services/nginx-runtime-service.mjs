@@ -59,6 +59,8 @@ import {
   withSsh,
   writeRemoteTextWithBackup,
 } from './ssh-service.mjs';
+import { getRequestContext } from './request-context.mjs';
+import { upsertNginxConfigSnapshot } from './nginx-config-snapshot-service.mjs';
 import {
   minimizeArchiveRoots,
   parseNginxArchiveSites,
@@ -2840,6 +2842,7 @@ export async function initializeNginxInstanceRuntime(instanceId, payload = {}, e
     const activeServer = server;
     const config = resolveRuntimeConfig(effectiveInstance);
     let activeInstance = effectiveInstance;
+    let capturedMainConfigContent = '';
 
     await withSsh(activeServer, async (conn) => {
       // ── 阶段 1：校验平台 ──
@@ -2857,6 +2860,7 @@ export async function initializeNginxInstanceRuntime(instanceId, payload = {}, e
       const sudo = config.useSudo ? 'sudo -n ' : '';
       const generatedBody = renderMainNginxConfigBody(config);
       const mainConfigContent = attachManagedInstanceHeader(generatedBody, effectiveInstance.id);
+      capturedMainConfigContent = mainConfigContent;
       const existingResult = await execSsh(conn, `${sudo}test -f ${shellQuote(config.mainConfPath)}`, {
         label: '检查主配置是否存在',
         allowFailure: true,
@@ -2978,6 +2982,22 @@ export async function initializeNginxInstanceRuntime(instanceId, payload = {}, e
         initializedAt: new Date().toISOString(),
       });
     });
+
+    if (capturedMainConfigContent) {
+      try {
+        await upsertNginxConfigSnapshot({
+          serverId: activeServer.id,
+          instanceId: activeInstance.id,
+          targetId: null,
+          filePath: config.mainConfPath,
+          content: capturedMainConfigContent,
+          source: 'init',
+          operator: getRequestContext()?.accountId || '',
+        });
+      } catch (snapshotError) {
+        console.warn('[nginx-config-snapshot] 初始化托管 Nginx 后写入中央快照失败:', snapshotError?.message || snapshotError);
+      }
+    }
 
     emit.stage?.('finish', 100, '初始化完成', config.installRoot);
     return getNginxInstanceStatus(activeInstance.id);
@@ -3798,6 +3818,19 @@ export async function syncTargetNginxSite(targetId, options = {}) {
       }
       const testResult = instance.instanceType === 'managed' ? await execRuntimeScript(conn, effectiveInstance, 'test') : await execExternalInstanceAction(conn, effectiveInstance, 'test');
       const reloadResult = instance.instanceType === 'managed' ? await execRuntimeScript(conn, effectiveInstance, 'reload') : await execExternalInstanceAction(conn, effectiveInstance, 'reload');
+      try {
+        await upsertNginxConfigSnapshot({
+          serverId: server.id,
+          instanceId: effectiveInstance.id,
+          targetId: target.id,
+          filePath: sitePath,
+          content: siteConfig,
+          source: 'sync',
+          operator: getRequestContext()?.accountId || '',
+        });
+      } catch (snapshotError) {
+        console.warn('[nginx-config-snapshot] 同步站点配置后写入中央快照失败:', snapshotError?.message || snapshotError);
+      }
       return {
         success: true,
         requireDiffConfirm: false,

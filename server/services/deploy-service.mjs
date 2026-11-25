@@ -110,6 +110,8 @@ import {
   resolveBackupLocation,
 } from './nginx-conf-history.mjs';
 import { getTestHooks, __setTestHooks, __resetTestHooks } from './test-hooks.mjs';
+import { getRequestContext } from './request-context.mjs';
+import { readNginxConfigSnapshot, upsertNginxConfigSnapshot } from './nginx-config-snapshot-service.mjs';
 
 export { __setTestHooks, __resetTestHooks };
 import { getSshFailureEventExtra, logOperationFailure } from './ssh-errors.mjs';
@@ -4057,6 +4059,17 @@ export async function readNginxConfig(targetId) {
 }
 
 /**
+ * 读取部署目标对应的 Nginx 配置中央快照（只读、不连 SSH，与 readNginxConfig 共用路径解析）。
+ * @param {number} targetId - 部署目标 ID
+ * @returns {Promise<Object>} 快照详情
+ */
+export async function getTargetNginxCentralSnapshot(targetId) {
+  const { target, server, nginxInstance } = await getTargetContext(targetId);
+  const confPath = requireEditableNginxConfPath(target, nginxInstance);
+  return readNginxConfigSnapshot({ serverId: server.id, filePath: confPath });
+}
+
+/**
  * 列出 Nginx 配置文件历史备份（路径只由服务端解析）。
  * @param {number} targetId - 部署目标 ID
  * @returns {Promise<Object>} 历史列表与当前文件摘要
@@ -4234,6 +4247,8 @@ export async function saveNginxConfig(targetId, payload) {
   const effectiveWithSsh = testHooks?.withSsh || withSsh;
   return effectiveWithSsh(server, async (conn) => {
     const result = await performNginxConfigSave(conn, { server, nginxInstance, confPath, payload });
+    let snapshotContent = typeof payload?.content === 'string' ? payload.content : '';
+    let finalSha256 = computeContentSha256(snapshotContent);
     // 内容相同被跳过时线上文件可能只是换行符不同，按线上实际内容返回摘要，避免下次保存误报 409
     if (result.skipped) {
       const current = await readRemoteTextSafe(conn, {
@@ -4242,9 +4257,25 @@ export async function saveNginxConfig(targetId, payload) {
         maxBytes: NGINX_CONF_MAX_BYTES,
         allowMissing: true,
       }).catch(() => null);
-      if (current?.sha256) return { ...result, sha256: current.sha256 };
+      if (current?.sha256) {
+        snapshotContent = current.content;
+        finalSha256 = current.sha256;
+      }
     }
-    return { ...result, sha256: computeContentSha256(typeof payload?.content === 'string' ? payload.content : '') };
+    try {
+      await upsertNginxConfigSnapshot({
+        serverId: server.id,
+        instanceId: nginxInstance?.id ?? null,
+        targetId: target.id,
+        filePath: confPath,
+        content: snapshotContent,
+        source: 'save',
+        operator: getRequestContext()?.accountId || '',
+      });
+    } catch (snapshotError) {
+      console.warn('[nginx-config-snapshot] 保存配置后写入中央快照失败:', snapshotError?.message || snapshotError);
+    }
+    return { ...result, sha256: finalSha256 };
   });
 }
 

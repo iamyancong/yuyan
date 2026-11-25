@@ -28,6 +28,7 @@ export function hasAnyVisibleOverlay(states?: OverlayStates | null): boolean {
     unref(serverState?.serverModalOpen) ||
       unref(serverState?.runtimeDrawerOpen) ||
       unref(serverState?.fsDrawerOpen) ||
+      unref(serverState?.centralBackupDrawerOpen) ||
       unref(targetState?.targetModalOpen) ||
       unref(targetState?.nginxTargetId) ||
       unref(targetState?.serviceLogOpen) ||

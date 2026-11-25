@@ -77,6 +77,8 @@ export function getRequiredRoles(method, pathname) {
     return ['viewer', 'operator', 'admin'];
   }
   if (method === 'DELETE') return ['admin'];
+  if (method === 'PUT' && pathname === '/central-backup/settings') return ['admin'];
+  if (method === 'POST' && /^\/central-backup\/(?:run|patrol)$/.test(pathname)) return ['operator', 'admin'];
   if (/^\/(?:servers|environments|jdks|nginx-instances|java-runtimes)(?:\/|$)/.test(pathname)) return ['admin'];
   return ['operator', 'admin'];
 }

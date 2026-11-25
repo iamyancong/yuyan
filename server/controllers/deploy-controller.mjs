@@ -44,6 +44,14 @@ import {
   updateDeployEnvironment,
   deleteDeployEnvironment,
 } from '../services/deploy-store.mjs';
+import {
+  getCentralBackupStatus,
+  runCentralBackup,
+  updateCentralBackupSettings,
+} from '../services/central-backup-service.mjs';
+import {
+  patrolNginxConfigSnapshots,
+} from '../services/nginx-config-snapshot-service.mjs';
 import { getDeployTaskReconciliation } from '../services/deploy-task-reconciliation.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -59,6 +67,7 @@ import { DEFAULT_SNAPSHOT_EVENT_TAIL, appendTaskEvent, getTaskEventTail, getTask
 import {
   deployTarget,
   readNginxConfig,
+  getTargetNginxCentralSnapshot,
   rollbackRecord,
   saveNginxConfig,
   listNginxConfigHistory,
@@ -3476,6 +3485,68 @@ export async function handleCleanTargetOrphanAssets(req, res) {
       relativePaths: Array.isArray(body.relativePaths) ? body.relativePaths : [],
       operator,
     });
+    res.json({ success: true, data });
+  } catch (error) {
+    sendError(res, error, Number(error?.statusCode || error?.status || 400));
+  }
+}
+
+/**
+ * 读取中央库备份配置与最近执行/巡检状态（不返回服务器凭据）。
+ */
+export async function handleGetCentralBackupStatus(_req, res) {
+  try {
+    const data = await getCentralBackupStatus();
+    res.json({ success: true, data });
+  } catch (error) {
+    sendError(res, error, Number(error?.statusCode || error?.status || 400));
+  }
+}
+
+/**
+ * 更新中央库备份设置（仅管理员可调用）。
+ */
+export async function handleUpdateCentralBackupSettings(req, res) {
+  try {
+    const operator = resolveGovernanceOperator(req);
+    const data = await updateCentralBackupSettings(req.body || {}, operator);
+    res.json({ success: true, data });
+  } catch (error) {
+    sendError(res, error, Number(error?.statusCode || error?.status || 400));
+  }
+}
+
+/**
+ * 手动触发一次中央库异地备份（进程内互斥，并发返回 409）。
+ */
+export async function handleRunCentralBackup(req, res) {
+  try {
+    const operator = resolveGovernanceOperator(req);
+    const data = await runCentralBackup({ trigger: 'manual', operator });
+    res.json({ success: true, data });
+  } catch (error) {
+    sendError(res, error, Number(error?.statusCode || error?.status || 400));
+  }
+}
+
+/**
+ * 手动触发一次纳管 Nginx 配置与证书到期巡检。
+ */
+export async function handleRunNginxConfigPatrol(_req, res) {
+  try {
+    const data = await patrolNginxConfigSnapshots();
+    res.json({ success: true, data });
+  } catch (error) {
+    sendError(res, error, Number(error?.statusCode || error?.status || 400));
+  }
+}
+
+/**
+ * 读取部署目标对应的 Nginx 配置中央快照（只读、不连 SSH）。
+ */
+export async function handleGetTargetNginxCentralSnapshot(req, res) {
+  try {
+    const data = await getTargetNginxCentralSnapshot(Number(req.params.id));
     res.json({ success: true, data });
   } catch (error) {
     sendError(res, error, Number(error?.statusCode || error?.status || 400));

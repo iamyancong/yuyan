@@ -53,6 +53,7 @@ const handleOpenNginxRuntime = async () => {
       :targets="targetState.targets.value"
       @create-server="serverState.openCreateServer"
       @nginx-manage="handleOpenNginxRuntime"
+      @central-backup="serverState.openCentralBackupDrawer"
       @create-target="targetState.openCreateTarget"
       @select-tab="lifecycleState.handleTabChange"
     />

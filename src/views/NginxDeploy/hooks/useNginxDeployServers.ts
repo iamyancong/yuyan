@@ -59,9 +59,18 @@ export function useNginxDeployServers(params?: UseNginxDeployServersParams) {
   const serverDuplicate = ref<ServerDuplicateInfo | null>(null);
 
   const fsDrawerOpen = ref(false);
+  const centralBackupDrawerOpen = ref(false);
   const fsDrawerServer = ref<DeployServer | null>(null);
   const fsDrawerInitialPath = ref<string>('');
   let fsDrawerSelectCallback: ((path: string) => void) | null = null;
+
+  /**
+   * 打开中央数据灾备抽屉。
+   */
+  const openCentralBackupDrawer = () => {
+    if (!ensureLoggedIn()) return;
+    centralBackupDrawerOpen.value = true;
+  };
 
   /**
    * 打开远程目录浏览抽屉。
@@ -325,6 +334,7 @@ export function useNginxDeployServers(params?: UseNginxDeployServersParams) {
     serverSaveFailure.value = null;
     serverDuplicate.value = null;
     fsDrawerOpen.value = false;
+    centralBackupDrawerOpen.value = false;
     fsDrawerServer.value = null;
     fsDrawerSelectCallback = null;
     runtimeState.clearNginxRuntimeDrawer();
@@ -344,6 +354,7 @@ export function useNginxDeployServers(params?: UseNginxDeployServersParams) {
     viewDuplicateServer,
     serverFocusRequest,
     fsDrawerOpen,
+    centralBackupDrawerOpen,
     fsDrawerServer,
     fsDrawerInitialPath,
     ...runtimeState,
@@ -351,6 +362,7 @@ export function useNginxDeployServers(params?: UseNginxDeployServersParams) {
     reorderServerList,
     openCreateServer,
     openEditServer,
+    openCentralBackupDrawer,
     openRemoteFsBrowse,
     handleFsDrawerSelectPath,
     saveServer,

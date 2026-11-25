@@ -101,6 +101,11 @@ import {
   handleCreateDeployEnvironment,
   handleUpdateDeployEnvironment,
   handleDeleteDeployEnvironment,
+  handleGetCentralBackupStatus,
+  handleUpdateCentralBackupSettings,
+  handleRunCentralBackup,
+  handleRunNginxConfigPatrol,
+  handleGetTargetNginxCentralSnapshot,
 } from '../controllers/deploy-controller.mjs';
 
 const router = express.Router();
@@ -203,6 +208,7 @@ router.post('/targets/:id/storage/orphan-assets/preview', handlePreviewTargetOrp
 router.post('/targets/:id/storage/orphan-assets/clean', handleCleanTargetOrphanAssets);
 router.post('/targets/:id/nginx-site/sync', handleSyncTargetNginxSite);
 router.get('/targets/:id/nginx-conf', handleReadNginxConfig);
+router.get('/targets/:id/nginx-conf/central-snapshot', handleGetTargetNginxCentralSnapshot);
 router.get('/targets/:id/nginx-conf/history', handleListNginxConfigHistory);
 router.get('/targets/:id/nginx-conf/history/:name', handleReadNginxConfigHistoryItem);
 router.put('/targets/:id/nginx-conf', handleSaveNginxConfig);
@@ -221,6 +227,11 @@ router.get('/openapi-artifacts/:id/content', handleReadOpenApiArtifact);
 router.get('/openapi-artifacts/:id/download', handleDownloadOpenApiArtifact);
 
 router.get('/metrics', handleGetRuntimeMetrics);
+
+router.get('/central-backup', handleGetCentralBackupStatus);
+router.put('/central-backup/settings', handleUpdateCentralBackupSettings);
+router.post('/central-backup/run', handleRunCentralBackup);
+router.post('/central-backup/patrol', handleRunNginxConfigPatrol);
 
 router.get('/records', handleListRecords);
 router.get('/records/:id', handleGetRecord);

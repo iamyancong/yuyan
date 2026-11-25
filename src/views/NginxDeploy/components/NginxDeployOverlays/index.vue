@@ -34,6 +34,7 @@ const ServerDeployOverlays = defineResilientAsyncComponent(() => import('../Serv
 const BackendDeployOverlays = defineResilientAsyncComponent(() => import('../BackendDeployOverlays/index.vue'));
 const BackendServiceProgressModal = defineResilientAsyncComponent(() => import('../BackendServiceProgressModal/index.vue'));
 const NginxConflictDiffModal = defineResilientAsyncComponent(() => import('../NginxConflictDiffModal/index.vue'));
+const CentralBackupDrawer = defineResilientAsyncComponent(() => import('../CentralBackupDrawer/index.vue'));
 
 /** 首次激活保活状态，未激活前零下载零挂载，关闭后保持保活避免重新渲染 */
 const serverOverlaysEverOpened = ref(false);
@@ -45,6 +46,7 @@ const nginxConfigEverOpened = ref(false);
 const recordLogEverOpened = ref(false);
 const backendOverlaysEverOpened = ref(false);
 const conflictDiffModalEverOpened = ref(false);
+const centralBackupEverOpened = ref(false);
 
 /** 当前进度对应的服务器 ID：优先使用失败详情，其次发布目标或回滚记录。 */
 const resolveProgressServerId = (failure: SshFailureInfo | null) => {
@@ -105,6 +107,14 @@ watch(
   () => Boolean(unref(props.targetState?.conflictModalOpen)),
   (val) => {
     if (val && !conflictDiffModalEverOpened.value) conflictDiffModalEverOpened.value = true;
+  },
+  { immediate: true }
+);
+
+watch(
+  () => Boolean(unref(props.serverState?.centralBackupDrawerOpen)),
+  (val) => {
+    if (val && !centralBackupEverOpened.value) centralBackupEverOpened.value = true;
   },
   { immediate: true }
 );
@@ -378,5 +388,12 @@ const updateTargetForm = (values: Partial<DeployTargetPayload>) => {
     :conflict-data="targetState.conflictData.value"
     :loading="targetState.conflictLoading.value"
     @confirm="targetState.handleConfirmConflictOverwrite"
+  />
+
+  <CentralBackupDrawer
+    v-if="centralBackupEverOpened"
+    v-model:open="serverState.centralBackupDrawerOpen.value"
+    :servers="serverState.servers.value"
+    :user-role="progressState.userRole?.value"
   />
 </template>

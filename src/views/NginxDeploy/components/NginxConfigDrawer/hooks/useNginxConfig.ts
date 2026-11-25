@@ -1,6 +1,12 @@
 import { computed, onScopeDispose, ref, watch } from 'vue';
 import message from 'ant-design-vue/es/message';
-import { readNginxConf, type NginxConfSaveOptions, type NginxConfSaveResult } from '@/api/deploy';
+import {
+  getTargetNginxCentralSnapshot,
+  readNginxConf,
+  type NginxConfSaveOptions,
+  type NginxConfSaveResult,
+  type TargetNginxCentralSnapshot,
+} from '@/api/deploy';
 import { getErrorMessage, normalizeNginxContent } from '../constant';
 import { describeSaveFailure } from '../historyPolicy';
 import { formatShortNginxErrorMessage, parseNginxError, scopeNginxErrorToFile } from '../utils/nginxErrorParser';
@@ -51,6 +57,11 @@ export function useNginxConfig(
   const originalContent = ref('');
   /** 线上基线内容摘要（打开或刷新基线时由后端返回），保存时作为乐观锁 */
   const baselineSha256 = ref('');
+  /** 线上文件是否存在 */
+  const remoteExists = ref(true);
+  /** 中央备份快照状态 */
+  const centralSnapshot = ref<TargetNginxCentralSnapshot | null>(null);
+  const centralSnapshotLoading = ref(false);
   /** 线上内容不是合法 UTF-8 */
   const encodingWarning = ref(false);
   /** 从历史版本恢复时记录的备份文件名与描述 */
@@ -76,12 +87,29 @@ export function useNginxConfig(
     restoredLabel.value = '';
   };
 
+  /** 加载当前目标的中央备份快照（失败不阻断编辑器打开） */
+  const loadCentralSnapshot = async (targetId = props.targetId, generation = loadGeneration) => {
+    if (!targetId) return;
+    centralSnapshotLoading.value = true;
+    try {
+      const snap = await getTargetNginxCentralSnapshot(targetId);
+      if (generation !== loadGeneration || props.targetId !== targetId) return;
+      centralSnapshot.value = snap;
+    } catch {
+      if (generation !== loadGeneration || props.targetId !== targetId) return;
+      centralSnapshot.value = null;
+    } finally {
+      if (generation === loadGeneration) centralSnapshotLoading.value = false;
+    }
+  };
+
   /** 加载远端 Nginx 配置文件 */
   const loadConfig = async () => {
     const targetId = props.targetId;
     if (!targetId) return;
     const currentGeneration = ++loadGeneration;
     loading.value = true;
+    void loadCentralSnapshot(targetId, currentGeneration);
     try {
       const result = await readNginxConf(targetId);
       if (currentGeneration !== loadGeneration || props.targetId !== targetId) return;
@@ -89,6 +117,7 @@ export function useNginxConfig(
       content.value = result.content;
       originalContent.value = result.content;
       baselineSha256.value = result.sha256 || '';
+      remoteExists.value = result.exists !== false;
       encodingWarning.value = Boolean(result.encodingWarning);
       clearRestoreMark();
     } catch (error: any) {
@@ -107,6 +136,9 @@ export function useNginxConfig(
     content.value = '';
     originalContent.value = '';
     baselineSha256.value = '';
+    remoteExists.value = true;
+    centralSnapshot.value = null;
+    centralSnapshotLoading.value = false;
     encodingWarning.value = false;
     clearRestoreMark();
     callbacks?.onReset?.();
@@ -177,7 +209,9 @@ export function useNginxConfig(
       });
       originalContent.value = savingContent;
       baselineSha256.value = result?.sha256 || '';
+      remoteExists.value = true;
       clearRestoreMark();
+      void loadCentralSnapshot();
       callbacks?.onSaveSuccess?.();
     } catch (error: any) {
       const failure = describeSaveFailure(error);
@@ -232,6 +266,9 @@ export function useNginxConfig(
     content,
     originalContent,
     baselineSha256,
+    remoteExists,
+    centralSnapshot,
+    centralSnapshotLoading,
     encodingWarning,
     restoredFrom,
     restoredLabel,
@@ -239,6 +276,7 @@ export function useNginxConfig(
     isSemanticDirty,
     canSave,
     loadConfig,
+    loadCentralSnapshot,
     resetConfig,
     discardChanges,
     refreshBaseline,

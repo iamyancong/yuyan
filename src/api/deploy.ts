@@ -1731,6 +1731,112 @@ export const readNginxConfHistoryItem = (targetId: number, name: string, signal?
     .get(`/targets/${targetId}/nginx-conf/history/${encodeURIComponent(name)}`, { signal })
     .then(unwrap<NginxConfHistoryContent>);
 
+/** 中央库备份配置 */
+export interface CentralBackupSettings {
+  serverId: number | null;
+  serverName: string;
+  serverHost: string;
+  serverPort: number | null;
+  remoteDir: string;
+  enabled: boolean;
+  scheduleTime: string;
+  updatedBy: string;
+  updatedAt: string;
+}
+
+/** 中央库最近一次备份执行记录 */
+export interface CentralBackupLastRun {
+  runAt: string;
+  status: 'success' | 'failed' | 'running' | '';
+  trigger: 'schedule' | 'manual' | '';
+  operator: string;
+  fileName: string;
+  fileSize: number;
+  sha256: string;
+  error: string;
+  durationMs: number;
+}
+
+/** 巡检发现的 SSL 证书到期条目 */
+export interface NginxConfigPatrolCert {
+  serverId: number;
+  serverName?: string;
+  path: string;
+  notAfter: string | null;
+}
+
+/** Nginx 配置巡检摘要 */
+export interface NginxConfigPatrolSummary {
+  startedAt: string;
+  finishedAt: string;
+  servers: number;
+  filesChecked: number;
+  filesUpdated: number;
+  filesSkipped: Array<{ path: string; reason: string }>;
+  failures: Array<{ serverId: number; serverName: string; error: string }>;
+  certs: NginxConfigPatrolCert[];
+}
+
+/** 中央灾备综合状态 */
+export interface CentralBackupStatus {
+  settings: CentralBackupSettings;
+  last: CentralBackupLastRun;
+  lastSuccessAt: string;
+  running: boolean;
+  patrolRunning: boolean;
+  patrol: NginxConfigPatrolSummary | null;
+}
+
+/** 中央库备份配置保存参数 */
+export interface CentralBackupSettingsPayload {
+  serverId: number | null;
+  remoteDir: string;
+  enabled: boolean;
+}
+
+/** 手动触发中央库备份结果 */
+export interface CentralBackupRunResult {
+  fileName: string;
+  fileSize: number;
+  sha256: string;
+  durationMs: number;
+  remoteDir: string;
+  warnings?: string[];
+}
+
+/** 部署目标 Nginx 配置中央快照 */
+export interface TargetNginxCentralSnapshot {
+  exists: boolean;
+  path: string;
+  content?: string;
+  sha256?: string;
+  size?: number;
+  source?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+  certInfo?: Array<{ path: string; notAfter: string | null }>;
+}
+
+/** 获取中央灾备配置与最近备份/巡检状态 */
+export const getCentralBackupStatus = () =>
+  client.get('/central-backup').then(unwrap<CentralBackupStatus>);
+
+/** 更新中央库备份配置（仅管理员） */
+export const updateCentralBackupSettings = (payload: CentralBackupSettingsPayload) =>
+  client.put('/central-backup/settings', payload).then(unwrap<CentralBackupStatus>);
+
+/** 手动触发一次中央库异地备份 */
+export const runCentralBackup = () =>
+  client.post('/central-backup/run', {}, { timeout: 600_000 }).then(unwrap<CentralBackupRunResult>);
+
+/** 手动触发一次 Nginx 配置与证书到期巡检 */
+export const runNginxConfigPatrol = () =>
+  client.post('/central-backup/patrol', {}, { timeout: 180_000 }).then(unwrap<NginxConfigPatrolSummary>);
+
+/** 获取部署目标 Nginx 配置中央快照（只读） */
+export const getTargetNginxCentralSnapshot = (targetId: number, signal?: AbortSignal) =>
+  client.get(`/targets/${targetId}/nginx-conf/central-snapshot`, { signal }).then(unwrap<TargetNginxCentralSnapshot>);
+
 /** 测试 Nginx 配置文件 */
 export const testNginxConf = (targetId: number) => client.post(`/targets/${targetId}/nginx-test`).then(unwrap<{ output: string }>);
 

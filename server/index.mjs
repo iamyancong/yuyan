@@ -27,6 +27,7 @@ import { startCleanupScheduler } from './utils/cleanup-scheduler.mjs';
 import { logGitlabHostPolicy, setLearnedGitlabHosts } from './services/gitlab-host-policy.mjs';
 import { startWorkspaceCleanupScheduler } from './services/workspace-cleanup-service.mjs';
 import { startDbRetentionScheduler } from './services/db-retention-service.mjs';
+import { startCentralBackupScheduler } from './services/central-backup-service.mjs';
 import { deployTaskScheduler } from './services/deploy-task-scheduler.mjs';
 import scaffoldRoutes from './routes/scaffold.mjs';
 import deployRoutes from './routes/deploy.mjs';
@@ -53,6 +54,7 @@ let httpServer = null;
 let stopCleanupScheduler = null;
 let stopWorkspaceCleanupScheduler = null;
 let stopDbRetentionScheduler = null;
+let stopCentralBackupScheduler = null;
 let stopUpdatePreloadScheduler = null;
 let shuttingDown = false;
 const activeSockets = new Set();
@@ -431,6 +433,8 @@ async function shutdown(reason = 'unknown') {
     stopWorkspaceCleanupScheduler = null;
     stopDbRetentionScheduler?.();
     stopDbRetentionScheduler = null;
+    stopCentralBackupScheduler?.();
+    stopCentralBackupScheduler = null;
   } catch (error) {
     console.warn('[shutdown] 停止清理任务失败:', error);
   }
@@ -543,6 +547,7 @@ async function bootstrap() {
     // 数据库过程数据按保留天数清理，不动发布记录与当前版本（#42 P2）
     stopDbRetentionScheduler = startDbRetentionScheduler();
     if (!isTauriSubprocess) {
+      stopCentralBackupScheduler = startCentralBackupScheduler();
       stopUpdatePreloadScheduler = startAppUpdatePreloadScheduler();
     }
 

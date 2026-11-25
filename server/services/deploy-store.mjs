@@ -45,6 +45,7 @@ const SHARED_DEPLOY_WORKSPACE_TABLES = [
   'deploy_environments',
   'backend_releases',
   'deploy_tasks',
+  'nginx_config_snapshots',
 ];
 
 /**
@@ -1538,6 +1539,95 @@ function applyMultiTenantSchemaMigration(db) {
 }
 
 /**
+ * 应用灾备一期数据迁移：中央库异地备份配置表与 Nginx 配置中央快照表（幂等）。
+ * @param {DatabaseSync} db 数据库实例
+ */
+function applyDisasterRecoverySchemaMigration(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS central_backup_settings (
+      id INTEGER PRIMARY KEY CHECK(id = 1),
+      server_id INTEGER,
+      remote_dir TEXT NOT NULL DEFAULT '/bak/wangyancong-yuyan',
+      enabled INTEGER NOT NULL DEFAULT 0,
+      last_run_at TEXT,
+      last_status TEXT NOT NULL DEFAULT '',
+      last_trigger TEXT,
+      last_file_name TEXT,
+      last_file_size INTEGER,
+      last_sha256 TEXT,
+      last_error TEXT,
+      last_duration_ms INTEGER,
+      last_success_at TEXT,
+      last_patrol_json TEXT,
+      last_operator TEXT,
+      updated_by TEXT,
+      updated_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS nginx_config_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      server_id INTEGER NOT NULL,
+      instance_id INTEGER,
+      target_id INTEGER,
+      file_path TEXT NOT NULL,
+      content TEXT NOT NULL,
+      sha256 TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      source TEXT NOT NULL,
+      cert_info_json TEXT,
+      team_id TEXT NOT NULL DEFAULT 'legacy-team',
+      updated_at TEXT NOT NULL,
+      updated_by TEXT,
+      UNIQUE(server_id, file_path)
+    );
+  `);
+
+  const backupColumns = getTableColumns(db, 'central_backup_settings');
+  const backupExtraColumns = [
+    ['server_id', 'INTEGER'],
+    ['remote_dir', "TEXT NOT NULL DEFAULT '/bak/wangyancong-yuyan'"],
+    ['enabled', 'INTEGER NOT NULL DEFAULT 0'],
+    ['last_run_at', 'TEXT'],
+    ['last_status', "TEXT NOT NULL DEFAULT ''"],
+    ['last_trigger', 'TEXT'],
+    ['last_file_name', 'TEXT'],
+    ['last_file_size', 'INTEGER'],
+    ['last_sha256', 'TEXT'],
+    ['last_error', 'TEXT'],
+    ['last_duration_ms', 'INTEGER'],
+    ['last_success_at', 'TEXT'],
+    ['last_patrol_json', 'TEXT'],
+    ['last_operator', 'TEXT'],
+    ['updated_by', 'TEXT'],
+    ['updated_at', 'TEXT'],
+  ];
+  for (const [colName, colType] of backupExtraColumns) {
+    if (!backupColumns.includes(colName)) {
+      db.exec(`ALTER TABLE central_backup_settings ADD COLUMN ${colName} ${colType}`);
+    }
+  }
+  db.prepare(
+    `INSERT OR IGNORE INTO central_backup_settings (id, remote_dir, enabled, last_status)
+     VALUES (1, '/bak/wangyancong-yuyan', 0, '')`
+  ).run();
+
+  const snapshotColumns = getTableColumns(db, 'nginx_config_snapshots');
+  const snapshotExtraColumns = [
+    ['instance_id', 'INTEGER'],
+    ['target_id', 'INTEGER'],
+    ['cert_info_json', 'TEXT'],
+    ['team_id', "TEXT NOT NULL DEFAULT 'legacy-team'"],
+    ['updated_by', 'TEXT'],
+  ];
+  for (const [colName, colType] of snapshotExtraColumns) {
+    if (!snapshotColumns.includes(colName)) {
+      db.exec(`ALTER TABLE nginx_config_snapshots ADD COLUMN ${colName} ${colType}`);
+    }
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_nginx_config_snapshots_team_server ON nginx_config_snapshots(team_id, server_id)');
+}
+
+/**
  * 为发布历史高频查询补齐复合索引（幂等，可重复执行）。
  * @description
  * - team_started：覆盖「共享工作区 + 时间倒序分页」的默认列表查询，避免全表扫描后排序；
@@ -1739,6 +1829,15 @@ async function reconcileInterruptedDeployExecutions(db) {
        SET status = 'failed', error_json = ?, updated_at = ?
        WHERE status IN ('queued', 'running')`
     ).run(CENTRAL_DEPLOY_INTERRUPTED_ERROR, interruptedAt);
+  }
+
+  // 服务重启时收口残留的中央库备份运行态，避免界面长期卡在「执行中」（不动配置 updated_at）
+  if (hasTable(db, 'central_backup_settings')) {
+    db.prepare(
+      `UPDATE central_backup_settings
+       SET last_status = 'failed', last_error = '服务重启中断'
+       WHERE last_status = 'running'`
+    ).run();
   }
 }
 
@@ -2102,6 +2201,7 @@ export async function getDeployDb() {
   applyNginxRuntimeFingerprintMigration(dbInstance);
   await backupDeployDbBeforeMultiTenantMigration(dbInstance);
   applyMultiTenantSchemaMigration(dbInstance);
+  applyDisasterRecoverySchemaMigration(dbInstance);
   ensureDeployRecordQueryIndexes(dbInstance);
   normalizeServerSortOrder(dbInstance);
   migrateExternalNginxSiteManagedTargets(dbInstance);
@@ -3240,6 +3340,14 @@ export async function deleteServer(id, options = {}) {
     const targetResult = db.prepare('DELETE FROM deploy_targets WHERE server_id = ?').run(serverId);
     const instanceResult = db.prepare('DELETE FROM nginx_instances WHERE server_id = ?').run(serverId);
     const runtimeResult = db.prepare('DELETE FROM nginx_runtimes WHERE server_id = ?').run(serverId);
+    // 清理该服务器关联的 Nginx 配置中央快照，并在灾备配置里解除该服务器引用及自动开关
+    if (hasTable(db, 'nginx_config_snapshots')) {
+      db.prepare('DELETE FROM nginx_config_snapshots WHERE server_id = ?').run(serverId);
+    }
+    if (hasTable(db, 'central_backup_settings')) {
+      db.prepare('UPDATE central_backup_settings SET server_id = NULL, enabled = 0, updated_at = ? WHERE server_id = ?')
+        .run(now(), serverId);
+    }
     const serverResult = db.prepare('DELETE FROM deploy_servers WHERE id = ? AND team_id = ?').run(serverId, teamId);
     db.exec('COMMIT');
     await Promise.all(recordRows.map((row) => deleteRecordLogFile(row.log_path)));

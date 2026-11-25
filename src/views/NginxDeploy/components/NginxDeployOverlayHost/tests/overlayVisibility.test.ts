@@ -36,6 +36,7 @@ test('hasAnyVisibleOverlay: 仅打开服务器远程目录浏览 fsDrawerOpen �
 test('hasAnyVisibleOverlay: 其他弹层或抽屉独立激活时均能正确判定', () => {
   assert.equal(hasAnyVisibleOverlay({ serverState: { serverModalOpen: true } }), true);
   assert.equal(hasAnyVisibleOverlay({ serverState: { runtimeDrawerOpen: true } }), true);
+  assert.equal(hasAnyVisibleOverlay({ serverState: { centralBackupDrawerOpen: true } }), true);
   assert.equal(hasAnyVisibleOverlay({ targetState: { targetModalOpen: true } }), true);
   assert.equal(hasAnyVisibleOverlay({ targetState: { nginxTargetId: 101 } }), true);
   assert.equal(hasAnyVisibleOverlay({ targetState: { serviceLogOpen: true } }), true);

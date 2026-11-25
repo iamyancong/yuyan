@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { CloudServerOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/icons-vue';
+import { CloudServerOutlined, PlusOutlined, SafetyCertificateOutlined, ThunderboltOutlined } from '@ant-design/icons-vue';
 import { YButton } from '@yss-ui/components/lite';
 import type { DeployServer, DeployTarget } from '@/api/deploy';
 import type { RuntimeAwareDeployTarget } from '../../types';
@@ -39,6 +39,8 @@ const emit = defineEmits<{
   (e: 'nginxManage'): void;
   /** 触发新增部署目标 */
   (e: 'createTarget'): void;
+  /** 触发中央灾备抽屉 */
+  (e: 'centralBackup'): void;
   /** 切换激活 Tab */
   (e: 'selectTab', tabKey: 'targets' | 'servers' | 'records'): void;
 }>();
@@ -145,6 +147,10 @@ const handleStep3Click = () => {
           <YButton class="hero-btn" @click="emit('nginxManage')">
             <template #icon><ThunderboltOutlined /></template>
             Nginx 管理
+          </YButton>
+          <YButton class="hero-btn" @click="emit('centralBackup')">
+            <template #icon><SafetyCertificateOutlined /></template>
+            中央灾备
           </YButton>
           <YButton class="hero-btn primary-hero-btn" type="primary" @click="emit('createTarget')">
             <template #icon><PlusOutlined /></template>
