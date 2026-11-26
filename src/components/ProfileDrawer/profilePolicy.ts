@@ -46,6 +46,34 @@ export interface ProfileStatsInput {
   successRate: number | null;
 }
 
+export interface ProfileLoadNotice {
+  type: 'info' | 'warning';
+  message: string;
+}
+
+/**
+ * 将加载个人资料的异常收敛为抽屉顶部提示条信息。
+ * 当连接的内网中央服务尚未发布个人资料接口（HTTP 404）时，降级为温和提示而非报错。
+ */
+export function resolveProfileLoadNotice(reason: unknown): ProfileLoadNotice {
+  const status = typeof (reason as { status?: unknown })?.status === 'number'
+    ? (reason as { status: number }).status
+    : undefined;
+  const rawMessage = reason instanceof Error ? reason.message : String(reason || '').trim();
+
+  if (status === 404 || /\b404\b/.test(rawMessage)) {
+    return {
+      type: 'info',
+      message: '当前连接的雨燕中央服务尚未发布个人资料接口（HTTP 404），以下暂仅展示 GitLab 与本地工作区信息。',
+    };
+  }
+
+  return {
+    type: 'warning',
+    message: rawMessage || '读取用户资料失败，请稍后重试',
+  };
+}
+
 /**
  * 合并服务端返回的 GitLab 资料与前端登录态缓存的 GitLab 用户信息，缺失字段优雅降级。
  */

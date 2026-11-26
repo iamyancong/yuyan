@@ -9,6 +9,7 @@ import {
   resolveDeployActionLabel,
   resolveDeployStatusMeta,
   resolvePlatformLabel,
+  resolveProfileLoadNotice,
   resolveRoleDisplay,
   shortenDeviceId,
 } from '../profilePolicy.ts';
@@ -91,4 +92,23 @@ test('formatSuccessRate, resolveDeployStatusMeta, resolveDeployActionLabel, shor
 
   assert.equal(shortenDeviceId('11111111-2222-3333-4444-555555555555'), '11111111...5555');
   assert.equal(shortenDeviceId('short-id'), 'short-id');
+});
+
+test('resolveProfileLoadNotice: HTTP 404 降级为温和提示，其他错误保留真实文案', () => {
+  const err404 = Object.assign(new Error('雨燕中央服务返回 HTTP 404'), { status: 404 });
+  assert.deepEqual(resolveProfileLoadNotice(err404), {
+    type: 'info',
+    message: '当前连接的雨燕中央服务尚未发布个人资料接口（HTTP 404），以下暂仅展示 GitLab 与本地工作区信息。',
+  });
+
+  const err500 = Object.assign(new Error('服务繁忙'), { status: 500 });
+  assert.deepEqual(resolveProfileLoadNotice(err500), {
+    type: 'warning',
+    message: '服务繁忙',
+  });
+
+  assert.deepEqual(resolveProfileLoadNotice(null), {
+    type: 'warning',
+    message: '读取用户资料失败，请稍后重试',
+  });
 });

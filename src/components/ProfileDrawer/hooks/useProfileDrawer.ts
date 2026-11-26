@@ -13,7 +13,9 @@ import {
   formatProfileDate,
   formatSuccessRate,
   mergeGitlabProfile,
+  resolveProfileLoadNotice,
   resolveRoleDisplay,
+  type ProfileLoadNotice,
 } from '../profilePolicy';
 
 /**
@@ -23,7 +25,7 @@ export function useProfileDrawer(open: Ref<boolean>) {
   const { authState, currentUser, isSystemAdmin, getCurrentUser } = useAuth();
 
   const loading = ref(false);
-  const errorMessage = ref('');
+  const notice = ref<ProfileLoadNotice | null>(null);
   const profile = ref<CentralUserProfile | null>(null);
   const projectCount = ref<number | null>(null);
   const projectCountLoading = ref(false);
@@ -57,10 +59,10 @@ export function useProfileDrawer(open: Ref<boolean>) {
   const successRateText = computed(() => formatSuccessRate(profile.value?.activity.stats30d));
 
   /** 加载个人资料、可访问 GitLab 项目数与缺失的 GitLab 补充字段。 */
-  const loadProfile = async () => {
+  const loadProfile = async (options: { manual?: boolean } = {}) => {
     const sequence = ++loadSequence;
     loading.value = true;
-    errorMessage.value = '';
+    notice.value = null;
     projectCountLoading.value = true;
 
     try {
@@ -71,7 +73,7 @@ export function useProfileDrawer(open: Ref<boolean>) {
       if (!account) {
         profile.value = null;
         projectCount.value = null;
-        errorMessage.value = '当前尚未登录，请先登录后查看个人资料';
+        notice.value = { type: 'warning', message: '当前尚未登录，请先登录后查看个人资料' };
         return;
       }
 
@@ -86,11 +88,11 @@ export function useProfileDrawer(open: Ref<boolean>) {
 
       if (profileResult.status === 'fulfilled') {
         profile.value = profileResult.value;
+        if (options.manual) {
+          message.success('已刷新用户资料');
+        }
       } else {
-        errorMessage.value =
-          profileResult.reason instanceof Error
-            ? profileResult.reason.message
-            : '读取用户资料失败，请稍后重试';
+        notice.value = resolveProfileLoadNotice(profileResult.reason);
       }
 
       if (countResult.status === 'fulfilled') {
@@ -104,6 +106,14 @@ export function useProfileDrawer(open: Ref<boolean>) {
         projectCountLoading.value = false;
       }
     }
+  };
+
+  /** 手动刷新用户资料。 */
+  const handleRefresh = () => loadProfile({ manual: true });
+
+  /** 关闭顶部提示条。 */
+  const dismissNotice = () => {
+    notice.value = null;
   };
 
   /** 注销当前账号下的其他活跃会话。 */
@@ -153,7 +163,7 @@ export function useProfileDrawer(open: Ref<boolean>) {
 
   return {
     loading,
-    errorMessage,
+    notice,
     profile,
     gitlabProfile,
     displayInitial,
@@ -165,6 +175,8 @@ export function useProfileDrawer(open: Ref<boolean>) {
     successRateText,
     revokingSessionId,
     loadProfile,
+    handleRefresh,
+    dismissNotice,
     handleRevokeSession,
     handleOpenGitlab,
   };

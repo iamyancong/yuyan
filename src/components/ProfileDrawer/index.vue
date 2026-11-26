@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { Empty } from 'ant-design-vue';
 import {
   CalendarOutlined,
   CloseOutlined,
@@ -56,7 +57,7 @@ const drawerRootClass = computed(
 
 const {
   loading,
-  errorMessage,
+  notice,
   profile,
   gitlabProfile,
   displayInitial,
@@ -67,7 +68,8 @@ const {
   projectCountLoading,
   successRateText,
   revokingSessionId,
-  loadProfile,
+  handleRefresh,
+  dismissNotice,
   handleRevokeSession,
   handleOpenGitlab,
 } = useProfileDrawer(computed(() => props.open));
@@ -103,18 +105,28 @@ const closeDrawer = () => {
           </div>
         </div>
         <div class="profile-drawer-header__actions">
-          <YButton size="small" :loading="loading" @click="loadProfile">
-            <template #icon><ReloadOutlined /></template>
-            刷新
-          </YButton>
-          <button
-            class="profile-drawer-header__close"
-            type="button"
-            aria-label="关闭用户资料"
-            @click="closeDrawer"
-          >
-            <CloseOutlined />
-          </button>
+          <a-tooltip :title="loading ? '正在刷新资料…' : '刷新资料'" placement="bottom">
+            <button
+              class="profile-drawer-header__icon-btn profile-drawer-header__icon-btn--refresh"
+              :class="{ 'is-loading': loading }"
+              type="button"
+              :disabled="loading"
+              aria-label="刷新用户资料"
+              @click="handleRefresh"
+            >
+              <ReloadOutlined :spin="loading" />
+            </button>
+          </a-tooltip>
+          <a-tooltip title="关闭" placement="bottom">
+            <button
+              class="profile-drawer-header__icon-btn profile-drawer-header__icon-btn--close"
+              type="button"
+              aria-label="关闭用户资料"
+              @click="closeDrawer"
+            >
+              <CloseOutlined />
+            </button>
+          </a-tooltip>
         </div>
       </div>
     </template>
@@ -123,11 +135,13 @@ const closeDrawer = () => {
       <a-spin :spinning="loading && !profile">
         <div class="profile-drawer-body">
           <a-alert
-            v-if="errorMessage"
-            type="warning"
+            v-if="notice"
+            :type="notice.type"
             show-icon
-            :message="errorMessage"
+            closable
+            :message="notice.message"
             class="profile-alert"
+            @close="dismissNotice"
           />
 
           <!-- 1. GitLab 信息 -->
@@ -204,7 +218,8 @@ const closeDrawer = () => {
                     <strong>{{ profile.identity.team.name }}</strong>
                     <code class="profile-code-chip">{{ profile.identity.team.id }}</code>
                   </template>
-                  <span v-else class="is-muted">网页临时会话（未绑定中央工作区）</span>
+                  <span v-else-if="profile" class="is-muted">网页临时会话（未绑定中央工作区）</span>
+                  <span v-else class="is-muted">暂未获取到中央工作区信息</span>
                 </div>
               </div>
 
@@ -278,7 +293,11 @@ const closeDrawer = () => {
               </div>
 
               <div v-else class="profile-empty-note">
-                暂无活跃桌面设备会话（仅在雨燕桌面端登录后登记设备会话）。
+                {{
+                  !profile && notice
+                    ? '暂未获取到设备会话（待中央服务个人资料接口就绪后展示）。'
+                    : '暂无活跃桌面设备会话（仅在雨燕桌面端登录后登记设备会话）。'
+                }}
               </div>
             </div>
           </section>
@@ -356,10 +375,14 @@ const closeDrawer = () => {
                 </article>
               </div>
 
+              <div v-else-if="!profile && notice" class="profile-empty-note">
+                暂未获取到发布记录（待中央服务个人资料接口就绪后展示）。
+              </div>
+
               <a-empty
                 v-else
                 description="暂无由当前账号发起的发布记录"
-                :image="undefined"
+                :image="Empty.PRESENTED_IMAGE_SIMPLE"
               />
             </div>
           </section>
