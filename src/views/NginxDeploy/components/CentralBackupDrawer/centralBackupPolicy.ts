@@ -102,15 +102,29 @@ export function classifyCertExpiry(notAfter: string | null | undefined, now = Da
 }
 
 /**
- * 解析当前角色在中央灾备抽屉中的操作权限。
- * @param role 用户角色
+ * 解析中央灾备抽屉中的操作权限。
+ * @description 系统管理员白名单是唯一门禁；网页版 GitLab 登录没有中央团队角色，
+ * 不能仅凭 role === 'admin' 判断。角色矩阵仅在尚未拿到白名单标记时作为兜底。
+ * @param role 中央团队角色（网页版通常为空）
+ * @param isSystemAdmin 是否命中 YUYAN_SYSTEM_ADMINS
  */
-export function resolveCentralBackupPermissions(role: string | undefined | null): {
+export function resolveCentralBackupPermissions(
+  role: string | undefined | null,
+  isSystemAdmin?: boolean | null
+): {
   canEditSettings: boolean;
   canTriggerBackup: boolean;
   canTriggerPatrol: boolean;
   readonlyReason: string;
 } {
+  if (isSystemAdmin) {
+    return {
+      canEditSettings: true,
+      canTriggerBackup: true,
+      canTriggerPatrol: true,
+      readonlyReason: '',
+    };
+  }
   const normalized = String(role || '').trim();
   const isViewer = normalized === 'viewer';
   return {

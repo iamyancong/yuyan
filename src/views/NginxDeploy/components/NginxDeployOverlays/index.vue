@@ -395,5 +395,6 @@ const updateTargetForm = (values: Partial<DeployTargetPayload>) => {
     v-model:open="serverState.centralBackupDrawerOpen.value"
     :servers="serverState.servers.value"
     :user-role="progressState.userRole?.value"
+    :is-system-admin="Boolean(progressState.isSystemAdmin?.value)"
   />
 </template>

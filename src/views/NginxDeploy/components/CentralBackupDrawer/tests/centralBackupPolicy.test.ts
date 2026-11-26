@@ -63,6 +63,33 @@ test('resolveCentralBackupPermissions: 角色权限矩阵', () => {
   });
 });
 
+test('resolveCentralBackupPermissions: 系统管理员白名单优先于角色，网页版空角色也可配置', () => {
+  assert.deepEqual(resolveCentralBackupPermissions('', true), {
+    canEditSettings: true,
+    canTriggerBackup: true,
+    canTriggerPatrol: true,
+    readonlyReason: '',
+  });
+  assert.deepEqual(resolveCentralBackupPermissions('viewer', true), {
+    canEditSettings: true,
+    canTriggerBackup: true,
+    canTriggerPatrol: true,
+    readonlyReason: '',
+  });
+  assert.deepEqual(resolveCentralBackupPermissions('', false), {
+    canEditSettings: false,
+    canTriggerBackup: true,
+    canTriggerPatrol: true,
+    readonlyReason: '',
+  });
+  assert.deepEqual(resolveCentralBackupPermissions('', undefined), {
+    canEditSettings: false,
+    canTriggerBackup: true,
+    canTriggerPatrol: true,
+    readonlyReason: '',
+  });
+});
+
 test('validateBackupRemoteDirClient: 与后端一致的目录校验正反例', () => {
   assert.equal(validateBackupRemoteDirClient('/bak/wangyancong-yuyan/').valid, true);
   assert.equal(validateBackupRemoteDirClient('/bak/wangyancong-yuyan/').normalized, '/bak/wangyancong-yuyan');

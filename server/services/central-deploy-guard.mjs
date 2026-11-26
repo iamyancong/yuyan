@@ -103,14 +103,17 @@ export async function guardCentralDeployRequest(req, res, next) {
       deny(res, 410, 'device_local_resource', 'OpenAPI 必须由发起设备构建并写入设备隔离缓存');
       return;
     }
-    // 中央灾备是全局资源：v2 共享工作区会把角色抬升为 admin，必须按会话身份做白名单校验。
+    // 中央灾备是全局资源：以 YUYAN_SYSTEM_ADMINS 白名单为唯一门禁。
+    // 网页版 GitLab 会话没有中央团队角色（context.role 可能是空或默认 viewer），
+    // 白名单通过后不再用团队角色拦截，否则系统管理员 PUT/run/patrol 会被误拒。
     if (isPrivilegedCentralBackupPath(req.path)) {
       await assertSystemAdminAccess(req);
-    }
-    const roles = getRequiredRoles(req.method, req.path);
-    if (!roles.includes(context.role)) {
-      deny(res, 403, 'forbidden_role', `当前 ${context.role} 角色无权执行此操作`);
-      return;
+    } else {
+      const roles = getRequiredRoles(req.method, req.path);
+      if (!roles.includes(context.role)) {
+        deny(res, 403, 'forbidden_role', `当前 ${context.role} 角色无权执行此操作`);
+        return;
+      }
     }
     const lookup = resolveResourceLookup(req.path);
     if (lookup) {

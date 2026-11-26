@@ -16,9 +16,9 @@ import {
 
 /**
  * 中央灾备抽屉状态与操作 Hook。
- * @param props 抽屉属性（open、userRole）
+ * @param props 抽屉属性（open、userRole、isSystemAdmin）
  */
-export function useCentralBackup(props: { open: boolean; userRole?: string }) {
+export function useCentralBackup(props: { open: boolean; userRole?: string; isSystemAdmin?: boolean }) {
   const loading = ref(false);
   const saving = ref(false);
   const runningBackup = ref(false);
@@ -36,7 +36,7 @@ export function useCentralBackup(props: { open: boolean; userRole?: string }) {
     enabled: false,
   });
 
-  const permissions = computed(() => resolveCentralBackupPermissions(props.userRole));
+  const permissions = computed(() => resolveCentralBackupPermissions(props.userRole, props.isSystemAdmin));
   const dirValidation = computed(() => validateBackupRemoteDirClient(form.remoteDir));
 
   const syncFormFromStatus = (data: CentralBackupStatus) => {
@@ -59,7 +59,7 @@ export function useCentralBackup(props: { open: boolean; userRole?: string }) {
     }
   };
 
-  /** 保存中央备份配置（仅 admin） */
+  /** 保存中央备份配置（系统管理员或中央 admin 角色） */
   const handleSaveSettings = async () => {
     if (!permissions.value.canEditSettings) return;
     if (!dirValidation.value.valid) {

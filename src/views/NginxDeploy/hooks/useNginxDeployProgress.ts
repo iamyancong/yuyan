@@ -85,6 +85,7 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
   const authState = params?.authState ?? context?.authState!;
   const userName = params?.userName ?? context?.userName!;
   const userRole = params?.userRole ?? context?.userRole ?? computed(() => authState?.value?.role || '');
+  const isSystemAdmin = computed(() => Boolean(authState?.value?.isSystemAdmin));
   const activeRecord = params?.activeRecord ?? context?.activeRecord!;
   const setTargetRuntimeSnapshot = params?.setTargetRuntimeSnapshot ?? context?.setTargetRuntimeSnapshot!;
   const clearTargetRuntimeSnapshot = params?.clearTargetRuntimeSnapshot ?? context?.clearTargetRuntimeSnapshot!;
@@ -1055,5 +1056,6 @@ export function useNginxDeployProgress(params?: UseNginxDeployProgressParams) {
     clearProgressData,
     userName,
     userRole,
+    isSystemAdmin,
   };
 }

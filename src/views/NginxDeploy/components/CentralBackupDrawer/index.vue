@@ -28,11 +28,14 @@ interface Props {
   open: boolean;
   servers: DeployServer[];
   userRole?: string;
+  /** 是否命中系统管理员白名单（网页版无中央团队角色时据此开放配置） */
+  isSystemAdmin?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   servers: () => [],
   userRole: '',
+  isSystemAdmin: false,
 });
 
 const emit = defineEmits<{
@@ -248,7 +251,7 @@ const patrolCertRows = computed(() => {
             </div>
           </div>
           <div v-else class="readonly-settings-tip">
-            仅管理员（admin）可修改备份服务器、远端目录与定时备份开关。
+            仅系统管理员可修改备份服务器、远端目录与定时备份开关。
           </div>
           <div v-if="status?.settings?.updatedAt || status?.settings?.updatedBy" class="settings-updated-meta">
             最后修改：{{ status?.settings?.updatedBy || '未知' }} 于 {{ formatBackupDateTime(status?.settings?.updatedAt) }}
