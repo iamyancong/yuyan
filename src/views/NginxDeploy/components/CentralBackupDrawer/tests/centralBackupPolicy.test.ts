@@ -7,6 +7,7 @@ import {
   formatDuration,
   resolveBackupStatusTag,
   resolveCentralBackupPermissions,
+  readSystemAdminFlag,
   shouldShowCentralBackupEntry,
   truncateSha256,
   validateBackupRemoteDirClient,
@@ -95,3 +96,18 @@ test('shouldShowCentralBackupEntry: 仅系统管理员展示入口，未配置�
   assert.equal(shouldShowCentralBackupEntry(null), false);
 });
 
+test('readSystemAdminFlag: 缺失或空的 authState 不得抛错，并视为非管理员', () => {
+  assert.equal(readSystemAdminFlag(undefined), false);
+  assert.equal(readSystemAdminFlag(null), false);
+  assert.equal(readSystemAdminFlag({}), false);
+  assert.equal(readSystemAdminFlag({ value: undefined }), false);
+  assert.equal(readSystemAdminFlag({ value: null }), false);
+  assert.equal(readSystemAdminFlag({ value: {} }), false);
+  assert.equal(readSystemAdminFlag({ value: { isSystemAdmin: false } }), false);
+});
+
+test('readSystemAdminFlag: 仅在 authState.value.isSystemAdmin 为 true 时返回 true', () => {
+  assert.equal(readSystemAdminFlag({ value: { isSystemAdmin: true } }), true);
+  assert.equal(shouldShowCentralBackupEntry(readSystemAdminFlag(undefined)), false);
+  assert.equal(shouldShowCentralBackupEntry(readSystemAdminFlag({ value: { isSystemAdmin: true } })), true);
+});

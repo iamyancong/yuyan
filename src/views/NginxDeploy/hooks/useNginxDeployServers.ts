@@ -1,4 +1,4 @@
-import { nextTick, reactive, ref } from 'vue';
+import { nextTick, reactive, ref, type Ref } from 'vue';
 import message from 'ant-design-vue/es/message';
 import {
   createDeployServer,
@@ -14,7 +14,7 @@ import type { FormilyRef, RefreshActiveTabOptions } from '../types';
 import { createDefaultServerForm, getErrorMessage, getServerConnectionErrorMessage, getServerOrderErrorMessage } from '../utils';
 import { extractSshFailure, type SshFailureField, type SshFailureInfo } from '../sshFailureGuide';
 import { extractServerDuplicate, findServerDuplicate, type ServerDuplicateInfo } from '../serverDuplicatePolicy';
-import { shouldShowCentralBackupEntry } from '../components/CentralBackupDrawer/centralBackupPolicy';
+import { readSystemAdminFlag, shouldShowCentralBackupEntry } from '../components/CentralBackupDrawer/centralBackupPolicy';
 import { useNginxDeployContext } from './useNginxDeployContext';
 import { useNginxRuntimeDrawer } from './useNginxRuntimeDrawer';
 
@@ -22,6 +22,8 @@ import { useNginxRuntimeDrawer } from './useNginxRuntimeDrawer';
 interface UseNginxDeployServersParams {
   ensureLoggedIn: () => boolean;
   refreshActiveTab: (options?: RefreshActiveTabOptions) => Promise<void>;
+  /** 登录态。index 在 provide 之前调用本 Hook，必须显式传入，不能依赖当时尚未提供的 context。 */
+  authState?: Readonly<Ref<{ isSystemAdmin?: boolean }>>;
 }
 
 /**
@@ -40,7 +42,7 @@ export function useNginxDeployServers(params?: UseNginxDeployServersParams) {
     }
   };
   const context = getContext();
-  const authState = context?.authState;
+  const authState = params?.authState ?? context?.authState;
 
   const ensureLoggedIn = params?.ensureLoggedIn ?? context?.ensureLoggedIn!;
   const refreshActiveTab = params?.refreshActiveTab ?? context?.refreshActiveTab!;
@@ -71,7 +73,7 @@ export function useNginxDeployServers(params?: UseNginxDeployServersParams) {
    */
   const openCentralBackupDrawer = () => {
     if (!ensureLoggedIn()) return;
-    if (!shouldShowCentralBackupEntry(Boolean(authState.value?.isSystemAdmin))) {
+    if (!shouldShowCentralBackupEntry(readSystemAdminFlag(authState))) {
       message.warning('当前账号不是系统管理员，无权使用中央灾备');
       return;
     }

@@ -79,7 +79,7 @@ const refreshActiveTab = async (options: RefreshActiveTabOptions = {}) => {
  */
 const ensureLoggedIn = () => ensureLoggedInBase();
 
-const serverState = useNginxDeployServers({ ensureLoggedIn, refreshActiveTab });
+const serverState = useNginxDeployServers({ ensureLoggedIn, refreshActiveTab, authState });
 const targetState = useNginxDeployTargets({
   project,
   ensureLoggedIn,

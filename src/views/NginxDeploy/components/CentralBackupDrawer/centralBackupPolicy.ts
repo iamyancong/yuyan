@@ -208,3 +208,15 @@ export function shouldShowCentralBackupEntry(isSystemAdmin: boolean | undefined 
   return Boolean(isSystemAdmin);
 }
 
+/**
+ * 从可选的 authState 安全读取系统管理员标记。
+ * @description useNginxDeployServers 在 provideNginxDeployContext 之前调用时，context.authState 可能不存在；
+ * 直接访问 `authState.value` 会抛错，导致「中央灾备」按钮点击无反应。
+ * @param authState 登录态引用，允许缺失
+ */
+export function readSystemAdminFlag(
+  authState?: { value?: { isSystemAdmin?: boolean } | null } | null
+): boolean {
+  return Boolean(authState?.value?.isSystemAdmin);
+}
+
